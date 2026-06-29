@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>天统AI云中台 - 登录</title>
+  <style>
+    body { margin:0; font-family: Arial, "Microsoft YaHei", sans-serif; background:#0f172a; }
+    .box { width:380px; margin:120px auto; background:white; border-radius:16px; padding:32px; box-shadow:0 10px 30px rgba(0,0,0,.25); }
+    h1 { margin:0 0 10px; }
+    p { color:#64748b; }
+    input { width:100%; box-sizing:border-box; padding:14px; margin:10px 0; border:1px solid #cbd5e1; border-radius:10px; font-size:16px; }
+    button { width:100%; padding:14px; background:#0f172a; color:white; border:none; border-radius:10px; font-size:16px; cursor:pointer; }
+    .err { color:#dc2626; margin-top:12px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>天统AI云中台</h1>
+    <p>老板驾驶舱 / 员工登录 / 京东数据中心</p>
+    <input id="username" placeholder="用户名">
+    <input id="password" type="password" placeholder="密码">
+    <button onclick="login()">登录</button>
+    <div id="err" class="err"></div>
+  </div>
+
+  <script>
+    async function login() {
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      const err = document.getElementById('err');
+      err.innerText = '';
+
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          credentials: 'include',
+          body: JSON.stringify({username, password})
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          err.innerText = data.detail || '登录失败';
+          return;
+        }
+
+        location.href = '/';
+      } catch (e) {
+        err.innerText = '服务器连接失败';
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>老板控制中心 - 天统AI云中台</title>
+  <style>
+    body { font-family: Arial, "Microsoft YaHei", sans-serif; background:#f5f7fb; margin:0; }
+    .header { background:#101827; color:white; padding:24px 40px; display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding:30px 40px; }
+    .card { background:white; border-radius:12px; padding:22px; box-shadow:0 4px 16px rgba(0,0,0,.06); margin-bottom:20px; }
+    input, select { padding:12px; border:1px solid #cbd5e1; border-radius:8px; margin-right:8px; }
+    button { padding:10px 14px; border:0; border-radius:8px; cursor:pointer; background:#101827; color:white; }
+    table { width:100%; border-collapse:collapse; background:white; }
+    th, td { padding:14px; border-bottom:1px solid #e5e7eb; text-align:left; }
+    .green { color:#16a34a; font-weight:bold; }
+    .red { color:#dc2626; font-weight:bold; }
+    .tip { color:#64748b; }
+    .password { background:#fff7ed; padding:12px; border-radius:8px; margin-top:12px; color:#c2410c; font-weight:bold; }
+    a { color:white; margin-left:16px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>老板控制中心</h1>
+      <p>员工账号 / 权限角色 / 店铺分配 / AI工作流控制</p>
+    </div>
+    <div>
+      <span id="me">加载中...</span>
+      <a href="/">返回驾驶舱</a>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <h2>新增员工账号</h2>
+      <p class="tip">新增后会自动生成初始密码，请复制保存好，不要截图发给别人。</p>
+      <input id="username" placeholder="用户名，例如 operator02">
+      <input id="display_name" placeholder="姓名，例如 运营小李">
+      <select id="role">
+        <option value="operator">运营</option>
+        <option value="service">客服</option>
+        <option value="designer">美工</option>
+        <option value="ads">广告投手</option>
+        <option value="boss">老板/管理</option>
+      </select>
+      <button onclick="createUser()">创建账号</button>
+      <div id="newPassword"></div>
+    </div>
+
+    <div class="card">
+      <h2>员工账号列表</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>用户名</th>
+            <th>姓名</th>
+            <th>角色</th>
+            <th>状态</th>
+            <th>创建时间</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="users"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    async function api(url, options={}) {
+      const res = await fetch(url, {credentials:'include', ...options});
+      if (res.status === 401) {
+        location.href = '/login.html';
+        return;
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || '操作失败');
+      }
+      return await res.json();
+    }
+
+    async function loadMe() {
+      const me = await api('/api/me');
+      document.getElementById('me').innerText = me.display_name + '｜' + me.role;
+      if (!['owner', 'boss'].includes(me.role)) {
+        alert('没有老板控制权限');
+        location.href = '/';
+      }
+    }
+
+    function roleName(role) {
+      const map = {
+        owner: '老板总控',
+        boss: '老板/管理',
+        operator: '运营',
+        service: '客服',
+        designer: '美工',
+        ads: '广告投手'
+      };
+      return map[role] || role;
+    }
+
+    async function loadUsers() {
+      const users = await api('/api/users');
+      const tbody = document.getElementById('users');
+      tbody.innerHTML = users.map(u => `
+        <tr>
+          <td>${u.id}</td>
+          <td>${u.username}</td>
+          <td>${u.display_name}</td>
+          <td>${roleName(u.role)}</td>
+          <td>${u.active ? '<span class="green">启用</span>' : '<span class="red">停用</span>'}</td>
+          <td>${u.created_at ? u.created_at.slice(0,19).replace('T',' ') : ''}</td>
+          <td>
+            <button onclick="resetPassword(${u.id})">重置密码</button>
+            <button onclick="toggleUser(${u.id})">${u.active ? '停用' : '启用'}</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function createUser() {
+      const username = document.getElementById('username').value.trim();
+      const display_name = document.getElementById('display_name').value.trim();
+      const role = document.getElementById('role').value;
+
+      try {
+        const data = await api('/api/users', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({username, display_name, role})
+        });
+
+        document.getElementById('newPassword').innerHTML =
+          `<div class="password">新账号：${data.username}<br>初始密码：${data.password}<br>请马上复制保存。</div>`;
+
+        loadUsers();
+      } catch(e) {
+        alert(e.message);
+      }
+    }
+
+    async function resetPassword(id) {
+      if (!confirm('确定要重置这个账号密码吗？')) return;
+
+      try {
+        const data = await api(`/api/users/${id}/reset-password`, {method:'POST'});
+        alert(`用户名：${data.username}\\n新密码：${data.password}\\n请复制保存。`);
+      } catch(e) {
+        alert(e.message);
+      }
+    }
+
+    async function toggleUser(id) {
+      try {
+        await api(`/api/users/${id}/toggle`, {method:'POST'});
+        loadUsers();
+      } catch(e) {
+        alert(e.message);
+      }
+    }
+
+    loadMe().then(loadUsers);
+  </script>
+</body>
+</html>

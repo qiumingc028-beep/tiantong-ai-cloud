@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>天统AI云中台</title>
+  <style>
+    body { font-family: Arial, "Microsoft YaHei", sans-serif; background:#f5f7fb; margin:0; }
+    .header { background:#101827; color:white; padding:24px 40px; display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding:30px 40px; }
+    .grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:18px; }
+    .card { background:white; border-radius:12px; padding:22px; box-shadow:0 4px 16px rgba(0,0,0,.06); }
+    .num { font-size:32px; font-weight:bold; margin-top:12px; }
+    .modules { margin-top:28px; display:grid; grid-template-columns: repeat(4, 1fr); gap:18px; }
+    .module { background:white; border-radius:12px; padding:22px; }
+    .ok { color:#16a34a; font-weight:bold; }
+    .user { font-size:14px; color:#cbd5e1; }
+    button { padding:8px 14px; border:0; border-radius:8px; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>天统AI云中台</h1>
+      <p>老板驾驶舱 / 员工登录 / 京东数据中心 / AI素材中心</p>
+    </div>
+    <div class="user">
+      <div id="userInfo">加载中...</div>
+      <button onclick="logout()">退出登录</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <h2>老板驾驶舱</h2>
+    <p class="ok" id="status">系统检测中...</p>
+
+    <div class="grid">
+      <div class="card">今日成交<div class="num" id="sales">-</div></div>
+      <div class="card">今日利润<div class="num" id="profit">-</div></div>
+      <div class="card">广告花费<div class="num" id="ad">-</div></div>
+      <div class="card">ROI<div class="num" id="roi">-</div></div>
+      <div class="card">订单数<div class="num" id="orders">-</div></div>
+      <div class="card">退款数<div class="num" id="refunds">-</div></div>
+      <div class="card">售后数<div class="num" id="afterSales">-</div></div>
+      <div class="card">店铺数<div class="num" id="stores">-</div></div>
+    </div>
+
+    <h2 style="margin-top:34px;">系统模块</h2>
+    <div class="modules">
+      <div class="module"><a href="/control.html" style="color:#111;text-decoration:none;">老板控制中心</a></div>
+      <div class="module"><a href="/stores.html" style="color:#111;text-decoration:none;">京东60店数据中心</a></div>
+      <div class="module"><a href="/metrics.html" style="color:#111;text-decoration:none;">今日数据录入中心</a></div><div class="module"><a href="/import.html" style="color:#111;text-decoration:none;">Excel批量导入</a></div><div class="module">AI素材中心</div>
+      <div class="module"><a href="/jd-integrations.html" style="color:#111;text-decoration:none;">京东数据接入中心</a></div><div class="module">AI工作流中心</div>
+    </div>
+  </div>
+
+  <script>
+    async function checkLogin() {
+      const res = await fetch('/api/me', {credentials:'include'});
+      if (!res.ok) {
+        location.href = '/login.html';
+        return null;
+      }
+      return await res.json();
+    }
+
+    async function loadDashboard() {
+      const me = await checkLogin();
+      if (!me) return;
+
+      document.getElementById('userInfo').innerText =
+        me.display_name + '｜角色：' + me.role;
+
+      const health = await fetch('/api/health').then(r => r.json());
+      document.getElementById('status').innerText =
+        '服务器正常｜数据库：' + health.database + '｜Redis：' + health.redis;
+
+      const data = await fetch('/api/jd/metrics/summary', {credentials:'include'}).then(r => r.json());
+      document.getElementById('sales').innerText = '￥' + data.today_sales;
+      document.getElementById('profit').innerText = '￥' + data.today_profit;
+      document.getElementById('ad').innerText = '￥' + data.ad_spend;
+      document.getElementById('roi').innerText = data.roi;
+      document.getElementById('orders').innerText = data.orders;
+      document.getElementById('refunds').innerText = data.refunds;
+      document.getElementById('afterSales').innerText = data.after_sales;
+      document.getElementById('stores').innerText = data.stores || '60';
+    }
+
+    async function logout() {
+      await fetch('/api/logout', {method:'POST', credentials:'include'});
+      location.href = '/login.html';
+    }
+
+    loadDashboard();
+  </script>
+</body>
+</html>

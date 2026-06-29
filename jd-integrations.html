@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>京东数据接入中心 - 天统AI云中台</title>
+  <style>
+    body { font-family: Arial, "Microsoft YaHei", sans-serif; background:#f5f7fb; margin:0; }
+    .header { background:#101827; color:white; padding:24px 40px; display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding:30px 40px; }
+    .card { background:white; border-radius:12px; padding:22px; box-shadow:0 4px 16px rgba(0,0,0,.06); margin-bottom:20px; }
+    input, select { padding:12px; border:1px solid #cbd5e1; border-radius:8px; margin:6px 8px 6px 0; min-width:180px; }
+    button { padding:10px 14px; border:0; border-radius:8px; cursor:pointer; background:#101827; color:white; margin-right:6px; }
+    table { width:100%; border-collapse:collapse; background:white; }
+    th, td { padding:14px; border-bottom:1px solid #e5e7eb; text-align:left; }
+    .green { color:#16a34a; font-weight:bold; }
+    .red { color:#dc2626; font-weight:bold; }
+    .yellow { color:#ca8a04; font-weight:bold; }
+    .tip { color:#64748b; line-height:1.8; }
+    a { color:white; margin-left:16px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>京东数据接入中心</h1>
+      <p>京东商智 / 京准通 / 京东开放平台 / 手动导入 / 浏览器自动采集</p>
+    </div>
+    <div>
+      <span id="me">加载中...</span>
+      <a href="/">返回驾驶舱</a>
+      <a href="/stores.html">店铺管理</a>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <h2>新增数据接入</h2>
+      <p class="tip">
+        注意：这里先不要填写京东登录密码。正式接入时优先用官方授权/API；没有接口的数据，再评估浏览器自动采集或手动导入。
+      </p>
+
+      <select id="store_id"></select>
+
+      <select id="source_type">
+        <option value="jd_sz">京东商智：成交/访客/转化</option>
+        <option value="jd_jzt">京准通：广告费/ROI/投流</option>
+        <option value="jd_open">京东开放平台：订单/商品/售后</option>
+        <option value="manual_import">手动导入：Excel/CSV</option>
+        <option value="browser_auto">浏览器自动采集：待开发</option>
+      </select>
+
+      <select id="connection_mode">
+        <option value="pending">待配置</option>
+        <option value="official_api">官方API授权</option>
+        <option value="browser_auto">浏览器自动采集</option>
+        <option value="excel_import">Excel导入</option>
+      </select>
+
+      <input id="merchant_id" placeholder="商家ID/店铺ID，可不填">
+      <input id="app_key" placeholder="AppKey，可不填">
+      <input id="notes" placeholder="备注，例如：需要商智成交数据">
+      <button onclick="createIntegration()">新增接入</button>
+    </div>
+
+    <div class="card">
+      <h2>接入列表</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>店铺</th>
+            <th>数据来源</th>
+            <th>接入方式</th>
+            <th>商家ID</th>
+            <th>AppKey</th>
+            <th>状态</th>
+            <th>备注</th>
+            <th>启用</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="integrations"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+async function api(url, options={}) {
+  const res = await fetch(url, {credentials:'include', ...options});
+  if (res.status === 401) {
+    location.href = '/login.html';
+    return;
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || '操作失败');
+  }
+  return await res.json();
+}
+
+function sourceName(v) {
+  const map = {
+    jd_sz: '京东商智',
+    jd_jzt: '京准通',
+    jd_open: '京东开放平台',
+    manual_import: '手动导入',
+    browser_auto: '浏览器自动采集'
+  };
+  return map[v] || v;
+}
+
+function modeName(v) {
+  const map = {
+    pending: '待配置',
+    official_api: '官方API授权',
+    browser_auto: '浏览器自动采集',
+    excel_import: 'Excel导入'
+  };
+  return map[v] || v;
+}
+
+function statusHtml(v) {
+  if (v === 'authorized') return '<span class="green">已授权</span>';
+  if (v === 'error') return '<span class="red">异常</span>';
+  if (v === 'disabled') return '<span class="red">停用</span>';
+  return '<span class="yellow">待接入</span>';
+}
+
+async function loadMe() {
+  const me = await api('/api/me');
+  document.getElementById('me').innerText = me.display_name + '｜' + me.role;
+  if (!['owner', 'boss'].includes(me.role)) {
+    alert('没有数据接入权限');
+    location.href = '/';
+  }
+}
+
+async function loadStores() {
+  const stores = await api('/api/stores');
+  const select = document.getElementById('store_id');
+  select.innerHTML = stores.map(s => `<option value="${s.id}">${s.store_code}｜${s.store_name}</option>`).join('');
+}
+
+async function loadIntegrations() {
+  const list = await api('/api/jd/integrations');
+  const tbody = document.getElementById('integrations');
+
+  tbody.innerHTML = list.map(i => `
+    <tr>
+      <td>${i.id}</td>
+      <td>${i.store_code}｜${i.store_name}</td>
+      <td>${sourceName(i.source_type)}</td>
+      <td>${modeName(i.connection_mode)}</td>
+      <td>${i.merchant_id || ''}</td>
+      <td>${i.app_key || ''}</td>
+      <td>${statusHtml(i.status)}</td>
+      <td>${i.notes || ''}</td>
+      <td>${i.active ? '<span class="green">启用</span>' : '<span class="red">停用</span>'}</td>
+      <td>
+        <button onclick="setStatus(${i.id}, 'authorized')">标记已授权</button>
+        <button onclick="setStatus(${i.id}, 'error')">标记异常</button>
+        <button onclick="toggleIntegration(${i.id})">${i.active ? '停用' : '启用'}</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function createIntegration() {
+  const data = {
+    store_id: Number(document.getElementById('store_id').value),
+    source_type: document.getElementById('source_type').value,
+    connection_mode: document.getElementById('connection_mode').value,
+    merchant_id: document.getElementById('merchant_id').value.trim(),
+    app_key: document.getElementById('app_key').value.trim(),
+    notes: document.getElementById('notes').value.trim()
+  };
+
+  try {
+    await api('/api/jd/integrations', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(data)
+    });
+    alert('接入记录已新增');
+    await loadIntegrations();
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
+async function setStatus(id, status) {
+  try {
+    await api(`/api/jd/integrations/${id}/status`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({status})
+    });
+    await loadIntegrations();
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
+async function toggleIntegration(id) {
+  try {
+    await api(`/api/jd/integrations/${id}/toggle`, {method:'POST'});
+    await loadIntegrations();
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
+loadMe().then(loadStores).then(loadIntegrations);
+</script>
+</body>
+</html>
