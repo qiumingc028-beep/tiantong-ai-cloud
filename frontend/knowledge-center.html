@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>澶╄棌锛氱煡璇嗚祫浜т腑蹇?- 澶╃粺AI浜戜腑鍙?/title>
+  <style>
+    :root{--bg:#f4f6f8;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--brand:#0f766e;--dark:#111827;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.main{min-width:0}.topbar{height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:0 24px;gap:16px}.top-title{font-weight:700}.top-meta{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px}.ok{color:var(--good)}button{border:0;background:var(--dark);color:#fff;border-radius:8px;padding:9px 13px;cursor:pointer;white-space:nowrap}button.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}button.good{background:var(--brand)}button.warn{background:var(--warn)}button:disabled{opacity:.55;cursor:not-allowed}.content{padding:24px}.page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;margin-bottom:16px}h1{font-size:26px;margin:0}.sub{color:var(--muted);margin-top:6px}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}.tabs button{background:#fff;color:var(--ink);border:1px solid var(--line)}.tabs button.active{background:var(--brand);border-color:var(--brand);color:white}.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(320px,.8fr);gap:16px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}.toolbar input,.toolbar select{height:38px;border:1px solid var(--line);border-radius:8px;padding:0 10px;background:white;min-width:150px}.upload{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}.upload input{border:1px solid var(--line);border-radius:8px;padding:8px;background:#fff}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px 14px;color:var(--muted);margin-bottom:14px}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px}table{width:100%;border-collapse:collapse;background:white;min-width:760px}th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;vertical-align:top}th{background:#f8fafc;color:#475569;font-weight:700}.row-actions{display:flex;gap:6px;flex-wrap:wrap}.badge{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:12px;background:#f8fafc}.badge.published{color:var(--good);border-color:#bbf7d0;background:#f0fdf4}.badge.review{color:var(--warn);border-color:#fde68a;background:#fffbeb}.detail h2{font-size:18px;margin:0 0 10px}.detail pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px;line-height:1.55;max-height:520px;overflow:auto}.empty{color:var(--muted);padding:20px;text-align:center}.mini-list{display:grid;gap:10px}.mini-item{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff}.mini-item strong{display:block;margin-bottom:8px}.mini-item p{margin:0;color:#475569;line-height:1.5;font-size:13px;white-space:pre-wrap}.auth-pending .sidebar,.auth-pending .main{visibility:hidden}@media(max-width:1000px){.app{grid-template-columns:1fr}.layout{grid-template-columns:1fr}.topbar,.page-head{align-items:flex-start;flex-direction:column;height:auto;padding:14px 18px}.content{padding:18px}}
+  </style>
+</head>
+<body class="auth-pending">
+<script>
+(function(){
+  const ALL_ACCESS=null;
+  const ROLE_ACCESS={owner:ALL_ACCESS,boss:ALL_ACCESS,admin:['/index.html','/control.html','/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/ai-employees.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html','/ai-assets.html','/settings.html'],operation:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html'],operator:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html'],ops:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html'],customer_service:['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],service:['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],designer:['/ai-assets.html','/workflows.html'],editor:['/ai-assets.html','/workflows.html'],finance:['/jd-dashboard.html','/metrics.html','/import.html']};
+  const ROLE_ALIASES={boss:'owner',owner:'owner',administrator:'admin',ads:'operation',operator:'operation',ops:'operation',service:'customer_service'};
+  const rawFetch=window.fetch.bind(window);let currentUser=null,redirecting=false;
+  function normalizeRole(user){const raw=String((user&&(user.role_code||user.role))||'').trim();return ROLE_ALIASES[raw]||raw||'guest'}
+  function canOpen(role,href){const access=role==='owner'?ALL_ACCESS:(Object.prototype.hasOwnProperty.call(ROLE_ACCESS,role)?ROLE_ACCESS[role]:['/jd-dashboard.html']);return access===ALL_ACCESS||access.includes(href==='/'?'/index.html':href)}
+  function safeRedirect(url){if(redirecting)return;redirecting=true;setTimeout(()=>location.href=url,300)}
+  function applyRoleUI(user){currentUser=user||currentUser;const role=normalizeRole(currentUser);document.querySelectorAll('.menu a').forEach(a=>{const ok=canOpen(role,a.getAttribute('href')||'');a.style.display=ok?'':'none'});if(!canOpen(role,location.pathname)){safeRedirect('/index.html');return}document.body.classList.remove('auth-pending')}
+  window.fetch=async function(input,init){const res=await rawFetch(input,init);const url=typeof input==='string'?input:(input&&input.url)||'';if(url.includes('/api/')&&res.status===401)safeRedirect('/login.html');if(url.includes('/api/')&&res.status===403){alert('娌℃湁璁块棶鏉冮檺');safeRedirect('/login.html')}return res};
+  window.secureLogout=async function(){try{await rawFetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'};
+  rawFetch('/api/me',{credentials:'include'}).then(r=>r.ok?r.json():Promise.reject()).then(applyRoleUI).catch(()=>safeRedirect('/login.html'));
+})();
+</script>
+<div class="app">
+  <aside class="sidebar"><div class="brand">澶╃粺AI浜戜腑鍙?/div><nav id="menu" class="menu"></nav></aside>
+  <main class="main">
+    <header class="topbar">
+      <div class="top-title">澶╄棌锛氱煡璇嗚祫浜т腑蹇?/div>
+      <div class="top-meta"><span id="currentTime" class="pill">--:--:--</span><span id="systemStatus" class="pill">绯荤粺妫�鏌ヤ腑</span><span id="userInfo" class="pill">鍔犺浇涓?/span><button onclick="secureLogout()">閫�鍑虹櫥褰?/button></div>
+    </header>
+    <section class="content">
+      <div class="page-head">
+        <div><h1>澶╄棌锛氱煡璇嗚祫浜т腑蹇?/h1><div class="sub">涓婁紶璧勬枡锛岃嚜鍔ㄦ�荤粨銆佸垎绫汇�佺敓鎴愮煡璇嗘枃绔犲拰鍙鐢ㄨ祫浜э紝骞跺彂甯冨埌鍚庡彴鐭ヨ瘑搴?/div></div>
+        <button class="secondary" onclick="loadAll()">鍒锋柊</button>
+      </div>
+      <div class="tabs" id="tabs"></div>
+      <div class="layout">
+        <section class="panel">
+          <div class="upload">
+            <input id="fileInput" type="file">
+            <button class="good" onclick="uploadFile()">涓婁紶璧勬枡</button>
+            <button class="secondary" onclick="summarizeSelected()" id="sumBtn" disabled>AI鎬荤粨</button>
+            <button class="secondary" onclick="classifySelected()" id="clsBtn" disabled>AI鍒嗙被</button>
+            <button onclick="generateSelected()" id="genBtn" disabled>鐢熸垚鐭ヨ瘑鏂囩珷</button>
+            <button class="warn" onclick="publishSelected()" id="pubBtn" disabled>涓�閿彂甯?/button>
+          </div>
+          <div class="toolbar">
+            <input id="q" placeholder="鎼滅储鏍囬銆佹憳瑕併�佹鏂?>
+            <select id="category"><option value="">鍏ㄩ儴鍒嗙被</option><option>鐭ヨ瘑搴?/option><option>SOP</option><option>Prompt</option><option>Bug妗堜緥</option><option>璇剧▼</option><option>骞垮憡</option><option>瀹㈡湇</option><option>杩愯惀</option></select>
+            <select id="status"><option value="">鍏ㄩ儴鐘舵�?/option><option value="鑽夌ǹ">鑽夌ǹ</option><option value="宸插彂甯?>宸插彂甯?/option><option value="寰呭鏍?>寰呭鏍?/option></select>
+            <button class="secondary" onclick="loadAll()">鎼滅储/绛涢�?/button>
+          </div>
+          <div id="notice" class="state">姝ｅ湪鍔犺浇鐭ヨ瘑璧勪骇...</div>
+          <div id="mainList"></div>
+        </section>
+        <aside class="panel detail">
+          <h2 id="detailTitle">AI鎬荤粨缁撴灉</h2>
+          <pre id="detailBody">閫夋嫨璧勬枡鍚庯紝鍙煡鐪嬫�荤粨銆佸垎绫诲拰鐢熸垚缁撴灉銆?/pre>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['?????','/index.html'],['??????','/control.html'],['????','/stores.html'],['??60?????','/jd-dashboard.html'],['??????','/jd-integrations.html'],['????','/ads.html'],['??????','/metrics.html'],['Excel??','/import.html'],['AI????','/ai-assets.html'],['AI?????','/workflows.html'],['AI????','/ai-employees.html'],['??????','/account-center.html'],['????','/template-center.html'],['????','/brands.html'],['????','/store-groups.html'],['?????????','/knowledge-center.html'],['????','/settings.html']];
+const tabs=[['articles','鐭ヨ瘑搴?],['sops','SOP涓績'],['prompts','Prompt搴?],['bugs','Bug妗堜緥搴?],['courses','璇剧▼涓績'],['ppt','PPT璇句欢'],['publish','鑷姩鍙戝竷璁板綍']];
+let activeTab='articles',files=[],articles=[],assets={sops:[],prompts:[],bugs:[],courses:[]},selectedFile=null,selectedArticle=null,lastGenerated=null;
+function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/knowledge-center.html'?'active':''}" href="${h}">${l}</a>`).join('')}
+function renderTabs(){tabsEl=tabs.map(([k,l])=>`<button class="${activeTab===k?'active':''}" onclick="switchTab('${k}')">${l}</button>`).join('');document.getElementById('tabs').innerHTML=tabsEl}
+function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function initShell(){renderMenu();renderTabs();tick();setInterval(tick,1000);const me=await fetch('/api/me',{credentials:'include'});if(!me.ok)return;const u=await me.json();userInfo.innerText=`${u.display_name} 路 ${u.role_label||u.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`鏈嶅姟鍣ㄦ甯?路 鏁版嵁搴?${h.database} 路 Redis ${h.redis}`:'绯荤粺鐘舵�佽幏鍙栧け璐?;if(h)systemStatus.classList.add('ok')}
+function params(){const p=new URLSearchParams();if(q.value)p.set('q',q.value);if(category.value)p.set('category',category.value);if(status.value)p.set('status',status.value);return p.toString()}
+async function loadAll(){try{notice.className='state';notice.innerText='姝ｅ湪鍔犺浇鐭ヨ瘑璧勪骇...';const qs=params();files=await fetch('/api/knowledge/files?'+qs,{credentials:'include'}).then(r=>r.json());articles=await fetch('/api/knowledge/articles?'+qs,{credentials:'include'}).then(r=>r.json());assets.sops=await fetch('/api/knowledge/sops?'+qs,{credentials:'include'}).then(r=>r.json());assets.prompts=await fetch('/api/knowledge/prompts?'+qs,{credentials:'include'}).then(r=>r.json());assets.bugs=await fetch('/api/knowledge/bug-cases?'+qs,{credentials:'include'}).then(r=>r.json());assets.courses=await fetch('/api/knowledge/courses?'+qs,{credentials:'include'}).then(r=>r.json());notice.innerText=`宸插姞杞?${files.length} 浠借祫鏂欍�?{articles.length} 绡囩煡璇嗘枃绔燻;renderMain()}catch(e){notice.className='state error';notice.innerText='鐭ヨ瘑璧勪骇鍔犺浇澶辫触'}}
+function switchTab(tab){activeTab=tab;renderTabs();renderMain()}
+function statusBadge(row){const cls=row.status==='published'?'published':(row.status==='review'?'review':'');return `<span class="badge ${cls}">${row.status_label||row.status||'鑽夌ǹ'}</span>`}
+function renderMain(){if(activeTab==='articles')return renderArticles();if(activeTab==='ppt'||activeTab==='publish')return renderPlaceholder();renderAsset(activeTab)}
+function renderArticles(){const rows=articles.map(a=>`<tr><td><strong>${esc(a.title)}</strong><div class="sub">${esc(a.summary||'')}</div></td><td>${esc(a.category||'-')}</td><td>${statusBadge(a)}</td><td>${a.created_at?new Date(a.created_at).toLocaleString('zh-CN',{hour12:false}):'-'}</td><td><div class="row-actions"><button class="secondary" onclick="selectArticle(${a.id})">鏌ョ湅</button><button onclick="publishArticle(${a.id})">鍙戝竷</button></div></td></tr>`).join('');mainList.innerHTML=`<div class="table-wrap"><table><thead><tr><th>鐭ヨ瘑鏂囩珷</th><th>鍒嗙被</th><th>鐘舵�?/th><th>鍒涘缓鏃堕棿</th><th>鎿嶄綔</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="empty">鏆傛棤鐭ヨ瘑鏂囩珷锛岃鍏堜笂浼犺祫鏂欏苟鐢熸垚</td></tr>'}</tbody></table></div><h2 style="font-size:18px;margin:18px 0 10px">璧勬枡搴?/h2>${renderFiles()}`}
+function renderFiles(){const rows=files.map(f=>`<tr><td><strong>${esc(f.filename)}</strong><div class="sub">${Math.ceil((f.file_size||0)/1024)} KB</div></td><td>${esc(f.category||'-')}</td><td>${statusBadge(f)}</td><td>${esc(f.summary||'鏈�荤粨')}</td><td><div class="row-actions"><button class="secondary" onclick="selectFile(${f.id})">閫夋嫨</button><button class="secondary" onclick="summarizeFile(${f.id})">鎬荤粨</button><button class="secondary" onclick="classifyFile(${f.id})">鍒嗙被</button><button onclick="generateFile(${f.id})">鐢熸垚</button></div></td></tr>`).join('');return `<div class="table-wrap"><table><thead><tr><th>璧勬枡</th><th>鍒嗙被</th><th>鐘舵�?/th><th>AI鎬荤粨</th><th>鎿嶄綔</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="empty">鏆傛棤璧勬枡</td></tr>'}</tbody></table></div>`}
+function renderAsset(tab){const map={sops:['SOP','steps'],prompts:['Prompt','prompt_text'],bugs:['Bug妗堜緥','solution'],courses:['璇剧▼','outline']};const [label,field]=map[tab];const rows=(assets[tab]||[]).map(item=>`<div class="mini-item"><strong>${esc(item.title)}</strong><p>${esc(item[field]||'')}</p><div style="margin-top:8px">${statusBadge(item)}</div></div>`).join('');mainList.innerHTML=`<div class="mini-list">${rows||`<div class="empty">鏆傛棤${label}鍐呭锛岃鍏堢敓鎴愮煡璇嗘枃绔?/div>`}</div>`}
+function renderPlaceholder(){mainList.innerHTML='<div class="empty">MVP闃舵宸查鐣欏叆鍙ｏ紝涓嬩竴闃舵鎺ュ叆PPT璇句欢鐢熸垚鍜岃嚜鍔ㄥ彂甯冩棩蹇椼�?/div>'}
+function selectFile(id){selectedFile=files.find(f=>f.id===id);selectedArticle=null;lastGenerated=null;sumBtn.disabled=clsBtn.disabled=genBtn.disabled=false;pubBtn.disabled=true;detailTitle.innerText=selectedFile.filename;detailBody.innerText=selectedFile.summary||'璇ヨ祫鏂欏皻鏈敓鎴怉I鎬荤粨銆?}
+function selectArticle(id){selectedArticle=articles.find(a=>a.id===id);selectedFile=null;sumBtn.disabled=clsBtn.disabled=genBtn.disabled=true;pubBtn.disabled=false;detailTitle.innerText=selectedArticle.title;detailBody.innerText=selectedArticle.content}
+async function uploadFile(){if(!fileInput.files.length){alert('璇烽�夋嫨鏂囦欢');return}const fd=new FormData();fd.append('file',fileInput.files[0]);const res=await fetch('/api/knowledge/files',{method:'POST',body:fd,credentials:'include'});if(!res.ok){alert('涓婁紶澶辫触');return}const row=await res.json();await loadAll();selectFile(row.id)}
+async function summarizeSelected(){if(selectedFile)await summarizeFile(selectedFile.id)}
+async function classifySelected(){if(selectedFile)await classifyFile(selectedFile.id)}
+async function generateSelected(){if(selectedFile)await generateFile(selectedFile.id)}
+async function publishSelected(){if(selectedArticle)await publishArticle(selectedArticle.id);else if(lastGenerated)await publishArticle(lastGenerated.article.id)}
+async function summarizeFile(id){const data=await fetch(`/api/knowledge/files/${id}/summarize`,{method:'POST',credentials:'include'}).then(r=>r.json());detailTitle.innerText='AI鎬荤粨缁撴灉';detailBody.innerText=JSON.stringify(data.result,null,2);await loadAll();selectFile(id)}
+async function classifyFile(id){const data=await fetch(`/api/knowledge/files/${id}/classify`,{method:'POST',credentials:'include'}).then(r=>r.json());detailTitle.innerText='AI鍒嗙被缁撴灉';detailBody.innerText=JSON.stringify(data.result,null,2);await loadAll();selectFile(id)}
+async function generateFile(id){lastGenerated=await fetch(`/api/knowledge/files/${id}/article`,{method:'POST',credentials:'include'}).then(r=>r.json());selectedArticle=lastGenerated.article;pubBtn.disabled=false;detailTitle.innerText='鐢熸垚缁撴灉';detailBody.innerText=JSON.stringify(lastGenerated,null,2);await loadAll()}
+async function publishArticle(id){const data=await fetch(`/api/knowledge/articles/${id}/publish`,{method:'POST',credentials:'include'}).then(r=>r.json());detailTitle.innerText='鍙戝竷缁撴灉';detailBody.innerText=JSON.stringify(data.article,null,2);await loadAll()}
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+initShell().then(loadAll);
+</script>
+</body>
+</html>

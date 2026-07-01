@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>模板中心 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#111827;--brand:#0f766e;--good:#15803d;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.main{min-width:0}.topbar{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:16px}.top-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:13px}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px}.ok{color:var(--good)}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f766e,#111827);color:white;border-radius:8px;padding:22px;margin-bottom:16px}.hero h1{margin:0;font-size:26px}.hero p{margin:8px 0 0;color:#d1fae5}.card{background:white;border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:16px}.form-grid{display:grid;grid-template-columns:1fr 2fr 150px;gap:12px;align-items:end}label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}input{width:100%;height:38px;border:1px solid #cbd5e1;border-radius:8px;padding:0 10px;background:white}button{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer}button.secondary{background:white;color:var(--ink);border:1px solid var(--line)}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.toolbar input{width:260px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px 14px;color:var(--muted);margin-bottom:12px}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.table-wrap{overflow:auto;background:white;border:1px solid var(--line);border-radius:8px}table{width:100%;border-collapse:collapse;min-width:820px}th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:14px}th{background:#f8fafc;color:#475569}.fields{color:var(--muted);line-height:1.7}@media(max-width:760px){.app{grid-template-columns:1fr}.topbar{align-items:flex-start;flex-direction:column}.content{padding:18px}.form-grid{grid-template-columns:1fr}.toolbar input{width:100%}}
+  .auth-pending .sidebar,.auth-pending .main,.auth-pending main{visibility:hidden}</style>
+</head>
+<body class="auth-pending">
+<script>
+(function(){
+  if (window.__tiantongFrontSecurity) return;
+  window.__tiantongFrontSecurity = true;
+  const ALL_ACCESS = null;
+  const ROLE_ACCESS = {
+    owner: ALL_ACCESS,
+    boss: ALL_ACCESS,
+    admin:,
+    operation: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+    operator: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+    ops: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+    customer_service: ['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],
+    service: ['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],
+    designer: ['/ai-assets.html','/workflows.html'],
+    editor: ['/ai-assets.html','/workflows.html'],
+    finance: ['/jd-dashboard.html','/metrics.html','/import.html']
+  };
+  const ROLE_ALIASES = {boss:'owner', owner:'owner', administrator:'admin', ads:'operation', operator:'operation', ops:'operation', service:'customer_service'};
+  const rawFetch = window.fetch.bind(window);
+  let currentUser = null;
+  let redirecting = false;
+
+  function normalizeRole(user){
+    const raw = String((user && (user.role_code || user.role)) || '').trim();
+    return ROLE_ALIASES[raw] || raw || 'guest';
+  }
+  function accessFor(role){
+    if (role === 'owner') return ALL_ACCESS;
+    return Object.prototype.hasOwnProperty.call(ROLE_ACCESS, role) ? ROLE_ACCESS[role] : ['/jd-dashboard.html'];
+  }
+  function canOpen(role, href){
+    if (!href || href === '#' || href.startsWith('/api/')) return true;
+    const normalizedHref = href === '/' ? '/index.html' : href;
+    const access = accessFor(role);
+    return access === ALL_ACCESS || access.includes(normalizedHref);
+  }
+  function firstAllowed(role){
+    const access = accessFor(role);
+    return access === ALL_ACCESS ? '/index.html' : (access[0] || '/login.html');
+  }
+  function currentPath(){
+    return location.pathname === '/' ? '/index.html' : location.pathname;
+  }
+  function clearClientAuth(){
+    try { localStorage.removeItem('token'); localStorage.removeItem('tiantong_token'); localStorage.removeItem('session'); localStorage.removeItem('tiantong_session'); sessionStorage.clear(); } catch(e) {}
+  }
+  function friendlyText(status, detail){
+    if (status === 401) return detail || '????????????';
+    if (status === 403) return detail || '??????????????????';
+    return detail || '???????????';
+  }
+  function safeRedirect(url){
+    if (redirecting) return;
+    redirecting = true;
+    setTimeout(function(){ location.href = url; }, 450);
+  }
+  function applyRoleUI(user){
+    currentUser = user || currentUser;
+    const role = normalizeRole(currentUser);
+    document.querySelectorAll('.menu a, .quick a').forEach(function(link){
+      const href = link.getAttribute('href') || '';
+      const allowed = canOpen(role, href);
+      link.style.display = allowed ? '' : 'none';
+      link.setAttribute('aria-hidden', allowed ? 'false' : 'true');
+    });
+    const path = currentPath();
+    if (path !== '/login.html' && !canOpen(role, path)) {
+      alert('???????????????????????????');
+      safeRedirect(firstAllowed(role));
+      return;
+    }
+    document.body.classList.remove('auth-pending');
+  }
+  async function verifyLogin(){
+    try {
+      const res = await rawFetch('/api/me', {credentials:'include'});
+      if (res.status === 401) {
+        clearClientAuth();
+        safeRedirect('/login.html');
+        return;
+      }
+      if (!res.ok) throw new Error('????????');
+      const user = await res.json();
+      applyRoleUI(user);
+    } catch(e) {
+      document.body.classList.remove('auth-pending');
+      const box = document.getElementById('notice') || document.getElementById('pageState') || document.getElementById('state');
+      if (box) { box.className = 'state error'; box.innerText = '??????????????????'; }
+    }
+  }
+  window.fetch = async function(input, init){
+    const res = await rawFetch(input, init);
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (url.includes('/api/me') && res.ok) {
+      res.clone().json().then(applyRoleUI).catch(function(){});
+    }
+    if (url.includes('/api/') && res.status === 401) {
+      clearClientAuth();
+      alert('????????????');
+      safeRedirect('/login.html');
+    }
+    if (url.includes('/api/') && res.status === 403) {
+      res.clone().json().then(function(data){ alert(friendlyText(403, data.detail)); }).catch(function(){ alert(friendlyText(403)); });
+      clearClientAuth();
+      safeRedirect('/login.html');
+    }
+    return res;
+  };
+  window.secureLogout = async function(){
+    clearClientAuth();
+    try { await rawFetch('/api/logout', {method:'POST', credentials:'include'}); } catch(e) {}
+    location.href = '/login.html';
+  };
+  const keepLogoutSafe = setInterval(function(){ window.logout = window.secureLogout; }, 50);
+  setTimeout(function(){ clearInterval(keepLogoutSafe); window.logout = window.secureLogout; }, 3000);
+  document.addEventListener('DOMContentLoaded', function(){ if (currentUser) applyRoleUI(currentUser); });
+  new MutationObserver(function(){ if (currentUser) applyRoleUI(currentUser); }).observe(document.body, {childList:true, subtree:true});
+  verifyLogin();
+})();
+</script>
+<div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main class="main">
+    <header class="topbar"><strong>模板中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero"><h1>模板中心</h1><p>维护京东60店账号资料 Excel 字段模板，统一批量导入标准。</p></div>
+      <div class="card">
+        <h2>新增模板</h2>
+        <div class="form-grid">
+          <div><label>模板名称</label><input id="template_name" placeholder="京东60店账号资料模板"></div>
+          <div><label>说明</label><input id="description" placeholder="适用于账号资料批量导入"></div>
+          <button onclick="createTemplate()">保存模板</button>
+        </div>
+        <p class="fields">默认字段：店铺编号、店铺名称、品牌、负责人、手机号、登录账号、Cookie状态、登录状态、最后登录时间、备注、标签。</p>
+      </div>
+      <div class="card"><h2>模板列表</h2><div class="toolbar"><input id="search" placeholder="搜索模板名称/说明/字段" oninput="renderRows()"><button class="secondary" onclick="loadTemplates()">刷新表格</button></div></div>
+      <div id="pageState" class="state">正在加载模板...</div>
+      <div class="table-wrap"><table><thead><tr><th>ID</th><th>模板名称</th><th>说明</th><th>字段</th></tr></thead><tbody id="rows"></tbody></table></div>
+    </section>
+  </main></div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];let tableRows=[];
+function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/template-center.html'?'active':''}" href="${h}">${l}</a>`).join('')}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,options={}){const res=await fetch(url,{credentials:'include',...options});if(res.status===401){location.href='/login.html';return}if(!res.ok)throw new Error((await res.json().catch(()=>({}))).detail||'操作失败');return res.json()}async function init(){renderMenu();tick();setInterval(tick,1000);const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
+async function loadTemplates(){try{pageState.className='state';pageState.innerText='正在加载模板...';tableRows=await api('/api/templates');renderRows()}catch(e){pageState.className='state error';pageState.innerText=e.message||'模板加载失败';rows.innerHTML='<tr><td colspan="4">加载失败，请刷新重试</td></tr>'}}
+function renderRows(){const q=search.value.trim().toLowerCase();const list=tableRows.filter(t=>!q||[t.template_name,t.description,(t.fields||[]).join(' ')].join(' ').toLowerCase().includes(q));pageState.innerText=list.length?`已显示 ${list.length} / ${tableRows.length} 个模板。`:'暂无符合条件的模板。';rows.innerHTML=list.length?list.map(t=>`<tr><td>${t.id}</td><td>${t.template_name}</td><td>${t.description||''}</td><td class="fields">${(t.fields||[]).join('、')}</td></tr>`).join(''):'<tr><td colspan="4">暂无模板</td></tr>'}
+async function createTemplate(){try{await api('/api/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({template_name:template_name.value.trim(),description:description.value.trim()})});template_name.value='';description.value='';await loadTemplates()}catch(e){alert(e.message)}}
+init().then(loadTemplates).catch(e=>{pageState.className='state error';pageState.innerText=e.message||'页面加载失败'});
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+

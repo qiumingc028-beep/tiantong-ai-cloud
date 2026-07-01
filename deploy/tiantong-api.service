@@ -1,0 +1,22 @@
+[Unit]
+Description=Tiantong AI Cloud API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/data/apps/tiantong-ai-cloud
+EnvironmentFile=-/data/apps/tiantong-ai-cloud/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/data/apps/tiantong-ai-cloud/venv/bin/alembic upgrade head
+ExecStart=/data/apps/tiantong-ai-cloud/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+LogsDirectory=tiantong-ai
+StandardOutput=append:/var/log/tiantong-ai/api.log
+StandardError=append:/var/log/tiantong-ai/api.log
+
+[Install]
+WantedBy=multi-user.target

@@ -81,8 +81,54 @@ AI店长与任务：
 - 采集任务进入 Redis Queue。
 - worker 从队列消费任务。
 - 采集结果写入 `jd_daily_metrics`、`jd_ads`、`jd_orders`、`jd_products`。
+- 采集状态写入 Redis 任务状态列表。
+- 采集日志写入 `jd_sync_logs`。
+- 采集失败会按任务 `max_retries` 自动重试。
 
 真实京东接口授权、Cookie 登录或浏览器自动化采集逻辑应继续接入到 `JdSmartCollector` 和 `JztCollector` 中。未授权时系统不会伪造数据。
+
+### jd_accounts 字段
+
+`jd_accounts` 用于管理京东商智和京准通账号：
+
+- `store_id`
+- `account_name`
+- `platform`
+- `account_type`
+- `login_status`
+- `cookie_status`
+- `last_login_at`
+- `last_sync_at`
+- `remark`
+
+### 采集任务
+
+单店采集接口：
+
+```text
+POST /api/jd/sync/store/{store_id}
+```
+
+全店采集接口：
+
+```text
+POST /api/jd/sync/all
+```
+
+每个店铺会进入 4 类 Redis Queue 任务：
+
+- `sync_jd_smart`：京东商智，写入 `jd_daily_metrics`
+- `sync_jzt`：京准通，写入 `jd_ads`
+- `sync_jd_orders`：订单，写入 `jd_orders`
+- `sync_jd_products`：商品，写入 `jd_products`
+
+同步状态接口：
+
+```text
+GET /api/jd/sync/status
+```
+
+返回 Redis 最近任务状态和数据库采集日志。
 
 ## Redis Queue
 
@@ -130,7 +176,7 @@ alembic upgrade head
 当前 Alembic head：
 
 ```text
-0004_jd_sync_runtime
+0002_jd_collection_tables
 ```
 
 ## 环境变量
@@ -163,8 +209,10 @@ python -m pytest -q
 - 京东账号配置
 - 京东采集任务入队
 - AI店长分析与入队
-- 账号中心模板和导入
-- worker 队列消费
+
+## 说明
+
+本阶段没有新增任何 HTML 页面，没有部署服务器，也没有操作阿里云。只修改仓库代码。
 
 ## 生产部署：阿里云 Ubuntu 24.04
 
@@ -186,7 +234,7 @@ python -m pytest -q
 ```bash
 cd /data/apps/tiantong-ai-cloud
 cp .env.example .env
-chmod +x deploy.sh rollback.sh scripts/*.sh
+chmod +x deploy.sh scripts/*.sh
 ./deploy.sh
 docker compose ps
 CHECK_DOCKER_INFRA=1 scripts/healthcheck.sh
@@ -205,7 +253,7 @@ CHECK_DOCKER_INFRA=1 scripts/healthcheck.sh
 ```bash
 cd /data/apps/tiantong-ai-cloud
 cp .env.example .env
-chmod +x deploy.sh rollback.sh scripts/*.sh
+chmod +x deploy.sh scripts/*.sh
 DEPLOY_MODE=systemd ./deploy.sh
 scripts/healthcheck.sh
 BASE_URL=http://127.0.0.1:8000 CHECK_PAGES=0 scripts/healthcheck.sh

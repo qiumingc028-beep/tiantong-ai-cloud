@@ -1,0 +1,21 @@
+[Unit]
+Description=Tiantong AI Cloud Worker
+After=network-online.target tiantong-api.service
+Wants=network-online.target
+Requires=tiantong-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/data/apps/tiantong-ai-cloud
+EnvironmentFile=-/data/apps/tiantong-ai-cloud/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/data/apps/tiantong-ai-cloud/venv/bin/python -m backend.worker
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+LogsDirectory=tiantong-ai
+StandardOutput=append:/var/log/tiantong-ai/worker.log
+StandardError=append:/var/log/tiantong-ai/worker.log
+
+[Install]
+WantedBy=multi-user.target

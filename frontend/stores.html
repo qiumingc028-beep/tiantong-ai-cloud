@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>店铺管理 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--brand:#0f766e;--dark:#111827;--good:#15803d;--bad:#b91c1c}*{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:#fff;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.menu a.disabled{opacity:.5}.main{min-width:0}.topbar{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:16px}.top-title{font-weight:700}.top-meta{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px}.ok{color:var(--good)}.content{padding:24px}.page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;margin-bottom:16px}h1{font-size:26px;margin:0}.sub,.tip{color:var(--muted)}.card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:16px}.form-row,.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}input,select{height:38px;border:1px solid #cbd5e1;border-radius:8px;padding:0 10px;background:#fff}button{border:0;background:var(--dark);color:#fff;border-radius:8px;padding:9px 13px;cursor:pointer}button.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}.table-wrap{overflow:auto;background:white;border:1px solid var(--line);border-radius:8px}table{width:100%;border-collapse:collapse;min-width:980px}th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;vertical-align:middle}th{background:#f8fafc;color:#475569}.green{color:var(--good);font-weight:700}.red{color:var(--bad);font-weight:700}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px 14px;color:var(--muted);margin-bottom:12px}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}@media(max-width:760px){.app{grid-template-columns:1fr}.topbar,.page-head{align-items:flex-start;flex-direction:column}.content{padding:18px}}
+  .auth-pending .sidebar,.auth-pending .main,.auth-pending main{visibility:hidden}</style>
+</head>
+<body class="auth-pending">
+<script>
+(function(){
+  if (window.__tiantongFrontSecurity) return;
+  window.__tiantongFrontSecurity = true;
+  const ALL_ACCESS = null;
+  const ROLE_ACCESS = {
+    owner: ALL_ACCESS,
+    boss: ALL_ACCESS,
+    admin:,
+    operation: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+    operator: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+    ops: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+    customer_service: ['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],
+    service: ['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],
+    designer: ['/ai-assets.html','/workflows.html'],
+    editor: ['/ai-assets.html','/workflows.html'],
+    finance: ['/jd-dashboard.html','/metrics.html','/import.html']
+  };
+  const ROLE_ALIASES = {boss:'owner', owner:'owner', administrator:'admin', ads:'operation', operator:'operation', ops:'operation', service:'customer_service'};
+  const rawFetch = window.fetch.bind(window);
+  let currentUser = null;
+  let redirecting = false;
+
+  function normalizeRole(user){
+    const raw = String((user && (user.role_code || user.role)) || '').trim();
+    return ROLE_ALIASES[raw] || raw || 'guest';
+  }
+  function accessFor(role){
+    if (role === 'owner') return ALL_ACCESS;
+    return Object.prototype.hasOwnProperty.call(ROLE_ACCESS, role) ? ROLE_ACCESS[role] : ['/jd-dashboard.html'];
+  }
+  function canOpen(role, href){
+    if (!href || href === '#' || href.startsWith('/api/')) return true;
+    const normalizedHref = href === '/' ? '/index.html' : href;
+    const access = accessFor(role);
+    return access === ALL_ACCESS || access.includes(normalizedHref);
+  }
+  function firstAllowed(role){
+    const access = accessFor(role);
+    return access === ALL_ACCESS ? '/index.html' : (access[0] || '/login.html');
+  }
+  function currentPath(){
+    return location.pathname === '/' ? '/index.html' : location.pathname;
+  }
+  function clearClientAuth(){
+    try { localStorage.removeItem('token'); localStorage.removeItem('tiantong_token'); localStorage.removeItem('session'); localStorage.removeItem('tiantong_session'); sessionStorage.clear(); } catch(e) {}
+  }
+  function friendlyText(status, detail){
+    if (status === 401) return detail || '????????????';
+    if (status === 403) return detail || '??????????????????';
+    return detail || '???????????';
+  }
+  function safeRedirect(url){
+    if (redirecting) return;
+    redirecting = true;
+    setTimeout(function(){ location.href = url; }, 450);
+  }
+  function applyRoleUI(user){
+    currentUser = user || currentUser;
+    const role = normalizeRole(currentUser);
+    document.querySelectorAll('.menu a, .quick a').forEach(function(link){
+      const href = link.getAttribute('href') || '';
+      const allowed = canOpen(role, href);
+      link.style.display = allowed ? '' : 'none';
+      link.setAttribute('aria-hidden', allowed ? 'false' : 'true');
+    });
+    const path = currentPath();
+    if (path !== '/login.html' && !canOpen(role, path)) {
+      alert('???????????????????????????');
+      safeRedirect(firstAllowed(role));
+      return;
+    }
+    document.body.classList.remove('auth-pending');
+  }
+  async function verifyLogin(){
+    try {
+      const res = await rawFetch('/api/me', {credentials:'include'});
+      if (res.status === 401) {
+        clearClientAuth();
+        safeRedirect('/login.html');
+        return;
+      }
+      if (!res.ok) throw new Error('????????');
+      const user = await res.json();
+      applyRoleUI(user);
+    } catch(e) {
+      document.body.classList.remove('auth-pending');
+      const box = document.getElementById('notice') || document.getElementById('pageState') || document.getElementById('state');
+      if (box) { box.className = 'state error'; box.innerText = '??????????????????'; }
+    }
+  }
+  window.fetch = async function(input, init){
+    const res = await rawFetch(input, init);
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (url.includes('/api/me') && res.ok) {
+      res.clone().json().then(applyRoleUI).catch(function(){});
+    }
+    if (url.includes('/api/') && res.status === 401) {
+      clearClientAuth();
+      alert('????????????');
+      safeRedirect('/login.html');
+    }
+    if (url.includes('/api/') && res.status === 403) {
+      res.clone().json().then(function(data){ alert(friendlyText(403, data.detail)); }).catch(function(){ alert(friendlyText(403)); });
+      clearClientAuth();
+      safeRedirect('/login.html');
+    }
+    return res;
+  };
+  window.secureLogout = async function(){
+    clearClientAuth();
+    try { await rawFetch('/api/logout', {method:'POST', credentials:'include'}); } catch(e) {}
+    location.href = '/login.html';
+  };
+  const keepLogoutSafe = setInterval(function(){ window.logout = window.secureLogout; }, 50);
+  setTimeout(function(){ clearInterval(keepLogoutSafe); window.logout = window.secureLogout; }, 3000);
+  document.addEventListener('DOMContentLoaded', function(){ if (currentUser) applyRoleUI(currentUser); });
+  new MutationObserver(function(){ if (currentUser) applyRoleUI(currentUser); }).observe(document.body, {childList:true, subtree:true});
+  verifyLogin();
+})();
+</script>
+<div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main class="main">
+    <header class="topbar"><div class="top-title">店铺管理</div><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="userInfo" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="page-head"><div><h1>店铺管理</h1><div class="sub">60家京东店铺档案、负责人分配和状态维护</div></div><button class="secondary" onclick="loadAll()">刷新</button></div>
+      <div class="card">
+        <h2>新增店铺</h2><p class="tip">只维护真实店铺档案；京东60店可先生成占位档案，再逐步补齐负责人和接入状态。</p>
+        <div class="form-row"><select id="platform"><option value="jd">京东</option><option value="tmall">天猫</option><option value="taobao">淘宝</option><option value="pdd">拼多多</option><option value="douyin">抖音</option><option value="tiktok">TikTok</option></select><input id="store_code" placeholder="店铺编号"><input id="store_name" placeholder="店铺名称"><input id="notes" placeholder="备注"><button onclick="createStore()">新增店铺</button><button class="secondary" onclick="seedStores()">生成京东60店档案</button></div>
+      </div>
+      <div class="card">
+        <div class="toolbar"><input id="search" placeholder="搜索编号/名称/负责人" oninput="renderStores()"><select id="platformFilter" onchange="renderStores()"><option value="">全部平台</option><option value="jd">京东</option><option value="tmall">天猫</option><option value="taobao">淘宝</option><option value="pdd">拼多多</option><option value="douyin">抖音</option><option value="tiktok">TikTok</option></select><select id="statusFilter" onchange="renderStores()"><option value="">全部状态</option><option value="active">启用</option><option value="inactive">停用</option></select><button class="secondary" onclick="loadAll()">刷新表格</button></div>
+      </div>
+      <div id="pageState" class="state">正在加载店铺...</div>
+      <div class="table-wrap"><table><thead><tr><th>ID</th><th>平台</th><th>编号</th><th>店铺名称</th><th>负责人</th><th>状态</th><th>备注</th><th>操作</th></tr></thead><tbody id="stores"></tbody></table></div>
+    </section></main></div>
+  <script>
+    const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];let users=[],storeRows=[];
+    function renderMenu(active){menu.innerHTML=menus.map(([l,h])=>`<a class="${h===active?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'onclick="return disabledEntry()"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu('/stores.html');tick();setInterval(tick,1000);const me=await api('/api/me');userInfo.innerText=`${me.display_name} · ${me.role_label||me.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
+    function platformName(p){return {jd:'京东',tmall:'天猫',taobao:'淘宝',pdd:'拼多多',douyin:'抖音',tiktok:'TikTok'}[p]||p}function userOptions(id){return '<option value="">未分配</option>'+users.map(u=>`<option value="${u.id}" ${id===u.id?'selected':''}>${u.display_name}（${u.username}）</option>`).join('')}
+    async function loadAll(){try{pageState.className='state';pageState.innerText='正在加载店铺...';users=await api('/api/store-users');storeRows=await api('/api/stores');renderStores()}catch(e){pageState.className='state error';pageState.innerText=e.message||'店铺加载失败';stores.innerHTML='<tr><td colspan="8">加载失败，请稍后刷新</td></tr>'}}
+    function renderStores(){const q=search.value.trim().toLowerCase(),pf=platformFilter.value,sf=statusFilter.value;const rows=storeRows.filter(s=>(!pf||s.platform===pf)&&(!sf||(sf==='active'?s.active:!s.active))&&(!q||[s.store_code,s.store_name,s.notes,s.manager&&s.manager.display_name].join(' ').toLowerCase().includes(q)));pageState.innerText=rows.length?`已显示 ${rows.length} / ${storeRows.length} 家店铺。`:'没有符合条件的店铺。';stores.innerHTML=rows.length?rows.map(s=>`<tr><td>${s.id}</td><td>${platformName(s.platform)}</td><td>${s.store_code}</td><td>${s.store_name}</td><td><select onchange="assignStore(${s.id},this.value)">${userOptions(s.manager?s.manager.id:null)}</select></td><td>${s.active?'<span class="green">启用</span>':'<span class="red">停用</span>'}</td><td>${s.notes||''}</td><td><button onclick="toggleStore(${s.id})">${s.active?'停用':'启用'}</button></td></tr>`).join(''):'<tr><td colspan="8">暂无数据</td></tr>'}
+    async function createStore(){try{await api('/api/stores',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({platform:platform.value,store_code:store_code.value.trim(),store_name:store_name.value.trim(),notes:notes.value.trim()})});await loadAll();alert('店铺已新增')}catch(e){alert(e.message)}}async function seedStores(){if(!confirm('确定生成京东60个店铺档案吗？已存在的不会重复创建。'))return;try{const r=await api('/api/stores/seed-jd',{method:'POST'});alert(r.message);await loadAll()}catch(e){alert(e.message)}}async function assignStore(id,managerUserId){try{await api(`/api/stores/${id}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({manager_user_id:managerUserId?Number(managerUserId):null})});await loadAll()}catch(e){alert(e.message)}}async function toggleStore(id){try{await api(`/api/stores/${id}/toggle`,{method:'POST'});await loadAll()}catch(e){alert(e.message)}}
+    init().then(loadAll).catch(e=>{pageState.className='state error';pageState.innerText=e.message||'页面加载失败'});
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+

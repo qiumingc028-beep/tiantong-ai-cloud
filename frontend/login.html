@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>天统AI云中台 - 登录</title>
+  <style>
+    body { margin:0; min-height:100vh; font-family:Arial, "Microsoft YaHei", sans-serif; background:#111827; display:grid; place-items:center; }
+    .box { width:min(390px, calc(100vw - 32px)); background:white; border-radius:12px; padding:32px; box-shadow:0 16px 48px rgba(0,0,0,.28); }
+    h1 { margin:0 0 8px; color:#111827; }
+    p { margin:0 0 22px; color:#64748b; }
+    input { width:100%; box-sizing:border-box; padding:13px 14px; margin:9px 0; border:1px solid #cbd5e1; border-radius:8px; font-size:16px; }
+    button { width:100%; margin-top:12px; padding:13px; background:#0f766e; color:white; border:none; border-radius:8px; font-size:16px; cursor:pointer; }
+    .err { min-height:20px; color:#dc2626; margin-top:12px; font-size:14px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>天统AI云中台</h1>
+    <p>员工登录 · 老板驾驶舱 · 京东数据中心</p>
+    <input id="username" placeholder="用户名" autocomplete="username">
+    <input id="password" type="password" placeholder="密码" autocomplete="current-password">
+    <button onclick="login()">登录</button>
+    <div id="err" class="err"></div>
+  </div>
+
+  <script>
+    async function login() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const err = document.getElementById('err');
+      err.innerText = '';
+
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          credentials: 'include',
+          body: JSON.stringify({username, password})
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          err.innerText = data.detail || '登录失败';
+          return;
+        }
+
+        location.href = '/index.html';
+      } catch (e) {
+        err.innerText = '服务器连接失败';
+      }
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') login();
+    });
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>天藏：知识资产中心 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#111827;--brand:#0f766e;--good:#15803d;--warn:#b45309}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.main{min-width:0}.topbar{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:16px}.top-meta{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px}.ok{color:var(--good)}.content{padding:24px}.page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;margin-bottom:16px}h1{font-size:26px;margin:0}.sub{color:var(--muted);margin-top:6px}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}.tabs button{background:#fff;color:var(--ink);border:1px solid var(--line)}.tabs button.active{background:var(--dark);color:#fff;border-color:var(--dark)}button{border:0;background:var(--dark);color:#fff;border-radius:8px;padding:9px 13px;cursor:pointer}button.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}button.good{background:var(--brand)}button:disabled{opacity:.5;cursor:not-allowed}input,select{border:1px solid var(--line);border-radius:8px;padding:9px 10px;background:#fff;min-height:38px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}.state{border:1px solid #dbeafe;background:#eff6ff;color:#1e40af;border-radius:8px;padding:11px 13px;margin-bottom:14px}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px;background:white}table{width:100%;border-collapse:collapse;min-width:880px}th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;vertical-align:top}th{background:#f8fafc;color:#475569;font-weight:700}.summary{max-width:320px;color:#475569;line-height:1.5}.actions{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;border-radius:999px;padding:4px 8px;background:#f1f5f9;color:#475569;font-size:12px}.empty{color:var(--muted);padding:24px;text-align:center}.placeholder{min-height:220px;display:grid;align-content:center;gap:8px}.hidden{display:none}.auth-pending .sidebar,.auth-pending .main{visibility:hidden}@media(max-width:760px){.app{grid-template-columns:1fr}.topbar,.page-head{align-items:flex-start;flex-direction:column}.content{padding:18px}.toolbar input,.toolbar select{width:100%}}
+  </style>
+</head>
+<body class="auth-pending">
+<div class="app">
+  <aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main class="main">
+    <header class="topbar"><strong>天藏：知识资产中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="secureLogout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="page-head"><div><h1>天藏：知识资产中心</h1><div class="sub">资料、SOP、Prompt、Bug案例和课程沉淀的统一入口。</div></div><button class="secondary" onclick="refreshActive()">刷新</button></div>
+      <div class="tabs" id="tabs"></div>
+      <section id="knowledgeView">
+        <div id="notice" class="state">正在加载知识库资料...</div>
+        <div class="panel">
+          <div class="toolbar">
+            <input id="uploadInput" type="file">
+            <button class="good" onclick="uploadFile()">上传文件</button>
+            <input id="fileQ" placeholder="搜索文件或摘要">
+            <select id="fileCategory"><option value="">全部分类</option><option>AI知识库</option><option>SOP</option><option>Prompt</option><option>Bug案例</option><option>课程</option></select>
+            <select id="fileStatus"><option value="">全部状态</option><option value="draft">草稿</option><option value="pending">待审核</option><option value="published">已发布</option></select>
+            <button class="secondary" onclick="loadFiles()">搜索</button>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>文件</th><th>分类</th><th>状态</th><th>AI总结</th><th>标签</th><th>操作</th></tr></thead><tbody id="fileRows"></tbody></table></div>
+        </div>
+        <div class="panel">
+          <div class="toolbar">
+            <input id="articleQ" placeholder="搜索文章">
+            <select id="articleStatus"><option value="">全部文章状态</option><option value="draft">草稿</option><option value="pending">待审核</option><option value="published">已发布</option></select>
+            <button class="secondary" onclick="loadArticles()">搜索文章</button>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>文章</th><th>分类</th><th>状态</th><th>摘要</th><th>操作</th></tr></thead><tbody id="articleRows"></tbody></table></div>
+        </div>
+      </section>
+      <section id="simpleView" class="hidden"><div class="panel"><div class="toolbar" id="simpleFilters"></div><div class="table-wrap"><table><thead id="simpleHead"></thead><tbody id="simpleRows"></tbody></table></div></div></section>
+      <section id="placeholderView" class="hidden"><div class="panel placeholder"><h2 id="placeholderTitle"></h2><div class="sub" id="placeholderText"></div></div></section>
+    </section>
+  </main>
+</div>
+<script>
+const ALL_ACCESS=null;
+const ROLE_ACCESS={owner:ALL_ACCESS,boss:ALL_ACCESS,admin:};
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
+const tabDefs=[['knowledge','知识库'],['sops','SOP中心'],['prompts','Prompt库'],['bugs','Bug案例库'],['courses','课程中心'],['ppt','PPT课件'],['publish','自动发布记录']];
+let activeTab='knowledge';
+function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/tiancang.html'?'active':''}" href="${h}">${l}</a>`).join('')}
+function renderTabs(){tabs.innerHTML=tabDefs.map(([k,l])=>`<button class="${k===activeTab?'active':''}" onclick="switchTab('${k}')">${l}</button>`).join('')}
+function roleOf(u){const r=String((u&&(u.role_code||u.role))||'').trim();return r==='boss'?'owner':r}
+function canOpen(r,href){if(!href||href.startsWith('/api/'))return true;const a=ROLE_ACCESS[r]||['/jd-dashboard.html'];return a===ALL_ACCESS||a.includes(href==='/'?'/index.html':href)}
+function applyUser(u){const r=roleOf(u);document.querySelectorAll('.menu a').forEach(a=>{a.style.display=canOpen(r,a.getAttribute('href'))?'':'none'});if(!canOpen(r,location.pathname))location.href='/index.html';document.body.classList.remove('auth-pending')}
+function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+function setNotice(text,warn=false){notice.className=warn?'state warn':'state';notice.innerText=text}
+function statusText(s){return {draft:'草稿',pending:'待审核',published:'已发布'}[s]||s||'-'}
+function tags(v){return (v||[]).map(x=>`<span class="badge">${esc(x)}</span>`).join(' ')}
+function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+window.secureLogout=async function(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+async function init(){renderMenu();renderTabs();tick();setInterval(tick,1000);const r=await fetch('/api/me',{credentials:'include'});if(r.status===401){location.href='/login.html';return}const u=await r.json();applyUser(u);me.innerText=`${u.display_name} · ${u.role_label||u.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok');loadFiles();loadArticles()}
+function switchTab(tab){activeTab=tab;renderTabs();knowledgeView.classList.toggle('hidden',tab!=='knowledge');simpleView.classList.toggle('hidden',!['sops','prompts','bugs','courses'].includes(tab));placeholderView.classList.toggle('hidden',!['ppt','publish'].includes(tab));refreshActive()}
+function refreshActive(){if(activeTab==='knowledge'){loadFiles();loadArticles()}else if(activeTab==='sops')loadSimple('sops');else if(activeTab==='prompts')loadSimple('prompts');else if(activeTab==='bugs')loadSimple('bugs');else if(activeTab==='courses')loadSimple('courses');else showPlaceholder(activeTab)}
+async function uploadFile(){const f=uploadInput.files[0];if(!f){setNotice('请选择文件后再上传。',true);return}const fd=new FormData();fd.append('file',f);const r=await fetch('/api/tiancang/files/upload',{method:'POST',body:fd,credentials:'include'});if(!r.ok){setNotice('上传失败，请稍后重试。',true);return}uploadInput.value='';setNotice('上传成功。');loadFiles()}
+async function loadFiles(){const p=new URLSearchParams();if(fileQ.value)p.set('q',fileQ.value);if(fileCategory.value)p.set('category',fileCategory.value);if(fileStatus.value)p.set('status',fileStatus.value);const rows=await fetch('/api/tiancang/files?'+p.toString(),{credentials:'include'}).then(r=>r.json());fileRows.innerHTML=rows.length?rows.map(row=>`<tr><td><strong>${esc(row.original_name)}</strong><br><span class="sub">${esc(row.file_type||'未知类型')} · ${row.file_size||0} bytes</span></td><td>${esc(row.category||'-')}</td><td>${statusText(row.status)}</td><td class="summary">${esc(row.summary||'暂无总结')}</td><td>${tags(row.ai_tags)}</td><td><div class="actions"><button class="secondary" onclick="summarize(${row.id})">AI总结</button><button class="secondary" onclick="classifyFile(${row.id})">AI分类</button><button onclick="generateArticle(${row.id})">生成文章</button></div></td></tr>`).join(''):`<tr><td colspan="6" class="empty">暂无资料</td></tr>`;setNotice(`已加载 ${rows.length} 份资料。`)}
+async function summarize(id){const d=await fetch(`/api/tiancang/files/${id}/summarize`,{method:'POST',credentials:'include'}).then(r=>r.json());setNotice(`AI总结完成，当前使用 ${d.provider}。`);loadFiles()}
+async function classifyFile(id){const d=await fetch(`/api/tiancang/files/${id}/classify`,{method:'POST',credentials:'include'}).then(r=>r.json());setNotice(`AI分类完成：${d.category}。`);loadFiles()}
+async function generateArticle(id){const d=await fetch(`/api/tiancang/files/${id}/generate-article`,{method:'POST',credentials:'include'}).then(r=>r.json());setNotice(`已生成文章：${d.article.title}`);loadArticles()}
+async function loadArticles(){const p=new URLSearchParams();if(articleQ.value)p.set('q',articleQ.value);if(articleStatus.value)p.set('status',articleStatus.value);const rows=await fetch('/api/tiancang/articles/search?'+p.toString(),{credentials:'include'}).then(r=>r.json());articleRows.innerHTML=rows.length?rows.map(row=>`<tr><td><strong>${esc(row.title)}</strong><br><span class="sub">来源文件 ID：${row.source_file_id||row.file_id||'-'}</span></td><td>${esc(row.category||'-')}</td><td>${statusText(row.status)}</td><td class="summary">${esc(row.summary||row.content||'')}</td><td><button ${row.status==='published'?'disabled':''} onclick="publishArticle(${row.id})">发布</button></td></tr>`).join(''):`<tr><td colspan="5" class="empty">暂无文章</td></tr>`}
+async function publishArticle(id){await fetch(`/api/tiancang/articles/${id}/publish`,{method:'POST',credentials:'include'});setNotice('文章已发布。');loadArticles()}
+async function loadSimple(kind){const map={sops:['/api/tiancang/sops','SOP标题','部门','分类'],prompts:['/api/tiancang/prompts','Prompt标题','类型','模型'],bugs:['/api/tiancang/bugs','Bug标题','影响范围','原因'],courses:['/api/tiancang/courses','课程标题','课程','排序']};const cfg=map[kind];simpleFilters.innerHTML=`<input id="simpleQ" placeholder="搜索"><select id="simpleStatus"><option value="">全部状态</option><option value="draft">草稿</option><option value="pending">待审核</option><option value="published">已发布</option></select><button class="secondary" onclick="loadSimple('${kind}')">搜索</button>`;const p=new URLSearchParams();if(simpleQ&&simpleQ.value)p.set('q',simpleQ.value);if(simpleStatus&&simpleStatus.value&&kind!=='prompts')p.set('status',simpleStatus.value);const rows=await fetch(cfg[0]+'?'+p.toString(),{credentials:'include'}).then(r=>r.json());simpleHead.innerHTML=`<tr><th>${cfg[1]}</th><th>${cfg[2]}</th><th>${cfg[3]}</th><th>状态</th><th>内容</th></tr>`;simpleRows.innerHTML=rows.length?rows.map(row=>`<tr><td><strong>${esc(row.title)}</strong></td><td>${esc(row.department||row.prompt_type||row.impact_scope||row.course_name||'-')}</td><td>${esc(row.category||row.model||row.reason||row.lesson_order||'-')}</td><td>${statusText(row.status)}</td><td class="summary">${esc(row.content||row.prompt_text||row.description||row.symptom||row.outline||row.solution||'暂无内容')}</td></tr>`).join(''):`<tr><td colspan="5" class="empty">暂无数据</td></tr>`}
+function showPlaceholder(tab){placeholderTitle.innerText=tab==='ppt'?'PPT课件':'自动发布记录';placeholderText.innerText='第一阶段先做占位页面，后续接入自动生成和发布流水。'}
+init();
+</script>
+</body>
+</html>

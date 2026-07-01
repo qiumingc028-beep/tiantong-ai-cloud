@@ -1,0 +1,550 @@
+<!doctype html>
+
+<html lang="zh-CN">
+
+<head>
+
+  <meta charset="utf-8">
+
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>账号资料中心 - 天统AI云中台</title>
+
+  <style>
+
+    :root { --bg:#f4f6f8; --ink:#111827; --muted:#64748b; --line:#e5e7eb; --dark:#101827; --good:#15803d; --bad:#b91c1c; --warn:#b45309; }
+
+    * { box-sizing:border-box; }
+
+    body { margin:0; font-family:Arial, "Microsoft YaHei", sans-serif; background:var(--bg); color:var(--ink); }
+
+    .app { min-height:100vh; display:grid; grid-template-columns:248px 1fr; }
+
+    .sidebar { background:var(--dark); color:#cbd5e1; padding:18px 14px; }
+
+    .brand { height:56px; color:white; font-size:19px; font-weight:700; display:flex; align-items:center; padding:0 10px; border-bottom:1px solid rgba(255,255,255,.08); }
+
+    .menu { display:flex; flex-direction:column; gap:4px; margin-top:14px; }
+
+    .menu a { color:#cbd5e1; text-decoration:none; padding:10px 12px; border-radius:8px; font-size:14px; }
+
+    .menu a.active, .menu a:hover { background:#1f2937; color:white; }
+
+    .main { min-width:0; }
+
+    .topbar { min-height:64px; background:white; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; padding:12px 24px; gap:16px; }
+
+    .top-meta { display:flex; gap:10px; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:13px; }
+
+    .pill { border:1px solid var(--line); background:#f8fafc; border-radius:999px; padding:5px 9px; }
+
+    .content { padding:24px; }
+
+    .card { background:white; border:1px solid var(--line); border-radius:8px; padding:18px; margin-bottom:16px; }
+
+    .grid { display:grid; grid-template-columns:repeat(5, minmax(150px, 1fr)); gap:10px; align-items:end; }
+
+    label { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
+
+    input, select, textarea { width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:10px; background:white; }
+
+    textarea { min-height:42px; resize:vertical; }
+
+    button { border:0; background:var(--dark); color:white; border-radius:8px; padding:9px 13px; cursor:pointer; }
+
+    button.secondary { background:#475569; }
+
+    button.danger { background:#b91c1c; }
+
+    .links { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+
+    .links a { color:#0f172a; text-decoration:none; border:1px solid var(--line); background:#f8fafc; border-radius:8px; padding:9px 12px; }
+
+    .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:8px; background:white; }
+
+    table { width:100%; border-collapse:collapse; min-width:1060px; }
+
+    th, td { padding:11px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:14px; }
+
+    th { background:#f8fafc; color:#475569; }
+
+    .actions { display:flex; gap:6px; flex-wrap:wrap; }
+
+    .state, .sub { color:var(--muted); line-height:1.7; }
+
+    .tag { display:inline-block; padding:3px 8px; border-radius:999px; background:#e2e8f0; font-size:12px; }
+
+    .tag.good { color:var(--good); background:#dcfce7; }
+
+    .tag.bad { color:var(--bad); background:#fee2e2; }
+
+    .tag.warn { color:var(--warn); background:#fef3c7; }
+
+    @media(max-width:980px){ .app{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,minmax(140px,1fr))}.topbar{align-items:flex-start;flex-direction:column}.content{padding:18px} }
+
+  .auth-pending .sidebar,.auth-pending .main,.auth-pending main{visibility:hidden}</style>
+
+</head>
+
+<body class="auth-pending">
+
+<script>
+
+(function(){
+
+  if (window.__tiantongFrontSecurity) return;
+
+  window.__tiantongFrontSecurity = true;
+
+  const ALL_ACCESS = null;
+
+  const ROLE_ACCESS = {
+
+    owner: ALL_ACCESS,
+
+    boss: ALL_ACCESS,
+
+    admin:,
+
+    operation: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+
+    operator: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+
+    ops: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+
+    customer_service: ['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],
+
+    service: ['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],
+
+    designer: ['/ai-assets.html','/workflows.html'],
+
+    editor: ['/ai-assets.html','/workflows.html'],
+
+    finance: ['/jd-dashboard.html','/metrics.html','/import.html']
+
+  };
+
+  const ROLE_ALIASES = {boss:'owner', owner:'owner', administrator:'admin', ads:'operation', operator:'operation', ops:'operation', service:'customer_service'};
+
+  const rawFetch = window.fetch.bind(window);
+
+  let currentUser = null;
+
+  let redirecting = false;
+
+
+
+  function normalizeRole(user){
+
+    const raw = String((user && (user.role_code || user.role)) || '').trim();
+
+    return ROLE_ALIASES[raw] || raw || 'guest';
+
+  }
+
+  function accessFor(role){
+
+    if (role === 'owner') return ALL_ACCESS;
+
+    return Object.prototype.hasOwnProperty.call(ROLE_ACCESS, role) ? ROLE_ACCESS[role] : ['/jd-dashboard.html'];
+
+  }
+
+  function canOpen(role, href){
+
+    if (!href || href === '#' || href.startsWith('/api/')) return true;
+
+    const normalizedHref = href === '/' ? '/index.html' : href;
+
+    const access = accessFor(role);
+
+    return access === ALL_ACCESS || access.includes(normalizedHref);
+
+  }
+
+  function firstAllowed(role){
+
+    const access = accessFor(role);
+
+    return access === ALL_ACCESS ? '/index.html' : (access[0] || '/login.html');
+
+  }
+
+  function currentPath(){
+
+    return location.pathname === '/' ? '/index.html' : location.pathname;
+
+  }
+
+  function clearClientAuth(){
+
+    try { sessionStorage.clear(); } catch(e) {}
+
+  }
+
+  function friendlyText(status, detail){
+
+    if (status === 401) return detail || '????????????';
+
+    if (status === 403) return detail || '??????????????????';
+
+    return detail || '???????????';
+
+  }
+
+  function safeRedirect(url){
+
+    if (redirecting) return;
+
+    redirecting = true;
+
+    setTimeout(function(){ location.href = url; }, 450);
+
+  }
+
+  function applyRoleUI(user){
+
+    currentUser = user || currentUser;
+
+    const role = normalizeRole(currentUser);
+
+    document.querySelectorAll('.menu a, .quick a').forEach(function(link){
+
+      const href = link.getAttribute('href') || '';
+
+      const allowed = canOpen(role, href);
+
+      link.style.display = allowed ? '' : 'none';
+
+      link.setAttribute('aria-hidden', allowed ? 'false' : 'true');
+
+    });
+
+    const path = currentPath();
+
+    if (path !== '/login.html' && !canOpen(role, path)) {
+
+      alert('???????????????????????????');
+
+      safeRedirect(firstAllowed(role));
+
+      return;
+
+    }
+
+    document.body.classList.remove('auth-pending');
+
+  }
+
+  async function verifyLogin(){
+
+    try {
+
+      const res = await rawFetch('/api/me', {credentials:'include'});
+
+      if (res.status === 401) {
+
+        clearClientAuth();
+
+        safeRedirect('/login.html');
+
+        return;
+
+      }
+
+      if (!res.ok) throw new Error('????????');
+
+      const user = await res.json();
+
+      applyRoleUI(user);
+
+    } catch(e) {
+
+      document.body.classList.remove('auth-pending');
+
+      const box = document.getElementById('notice') || document.getElementById('pageState') || document.getElementById('state');
+
+      if (box) { box.className = 'state error'; box.innerText = '??????????????????'; }
+
+    }
+
+  }
+
+  window.fetch = async function(input, init){
+
+    const res = await rawFetch(input, init);
+
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+
+    if (url.includes('/api/me') && res.ok) {
+
+      res.clone().json().then(applyRoleUI).catch(function(){});
+
+    }
+
+    if (url.includes('/api/') && res.status === 401) {
+
+      clearClientAuth();
+
+      alert('????????????');
+
+      safeRedirect('/login.html');
+
+    }
+
+    if (url.includes('/api/') && res.status === 403) {
+
+      res.clone().json().then(function(data){ alert(friendlyText(403, data.detail)); }).catch(function(){ alert(friendlyText(403)); });
+
+      clearClientAuth();
+
+      safeRedirect('/login.html');
+
+    }
+
+    return res;
+
+  };
+
+  window.secureLogout = async function(){
+
+    clearClientAuth();
+
+    try { await rawFetch('/api/logout', {method:'POST', credentials:'include'}); } catch(e) {}
+
+    location.href = '/login.html';
+
+  };
+
+  const keepLogoutSafe = setInterval(function(){ window.logout = window.secureLogout; }, 50);
+
+  setTimeout(function(){ clearInterval(keepLogoutSafe); window.logout = window.secureLogout; }, 3000);
+
+  document.addEventListener('DOMContentLoaded', function(){ if (currentUser) applyRoleUI(currentUser); });
+
+  new MutationObserver(function(){ if (currentUser) applyRoleUI(currentUser); }).observe(document.body, {childList:true, subtree:true});
+
+  verifyLogin();
+
+})();
+
+</script>
+
+<div class="app">
+
+    <aside class="sidebar">
+
+      <div class="brand">天统AI云中台</div>
+
+      <nav id="menu" class="menu"></nav>
+
+    </aside>
+
+    <main class="main">
+
+      <header class="topbar">
+
+        <strong>账号资料中心</strong>
+
+        <div class="top-meta">
+
+          <span id="currentTime" class="pill"></span>
+
+          <span id="systemStatus" class="pill">系统检查中</span>
+
+          <span id="me" class="pill">加载中...</span>
+
+          <button onclick="logout()">退出登录</button>
+
+        </div>
+
+      </header>
+
+      <section class="content">
+
+        <div class="card">
+
+          <h1>京东60店账号资料中心</h1>
+
+          <div class="sub">管理店铺编号、店铺名称、品牌、负责人、手机号、登录账号、登录态状态、登录状态、备注和标签。敏感凭据不在页面展示或导出。</div>
+
+          <div class="links">
+
+            <a href="/account-center.html">账号资料中心</a>
+
+            <a href="/template-center.html">模板中心</a>
+
+            <a href="/brands.html">品牌中心</a>
+
+            <a href="/store-groups.html">店铺分组</a>
+
+          </div>
+
+        </div>
+
+
+
+        <div class="card">
+
+          <h2>新增/编辑账号资料</h2>
+
+          <input type="hidden" id="account_id">
+
+          <div class="grid">
+
+            <div><label>店铺编号</label><input id="store_code" placeholder="JD001"></div>
+
+            <div><label>店铺名称</label><input id="store_name" placeholder="京东旗舰店"></div>
+
+            <div><label>品牌</label><input id="brand" placeholder="品牌名称"></div>
+
+            <div><label>负责人</label><input id="owner" placeholder="张三"></div>
+
+            <div><label>手机号</label><input id="phone" placeholder="手机号"></div>
+
+            <div><label>登录账号</label><input id="login_account" placeholder="京东登录账号"></div>
+
+            <div><label>登录态状态</label><select id="cookie_status"><option>正常</option><option>异常</option><option>待登录</option><option value="Cookie过期">登录态过期</option><option>暂停采集</option></select></div>
+
+            <div><label>登录状态</label><select id="account_status"><option>正常</option><option>异常</option><option>待登录</option><option value="Cookie过期">登录态过期</option><option>暂停采集</option></select></div>
+
+            <div><label>最后登录时间</label><input id="last_login_at" placeholder="2026-06-30 18:00:00"></div>
+
+            <div><label>标签</label><input id="tags" placeholder="重点、活动店"></div>
+
+            <div style="grid-column:span 4"><label>备注</label><textarea id="notes" placeholder="权限、登录异常说明"></textarea></div>
+
+            <div class="actions"><button onclick="saveAccount()">保存</button><button class="secondary" onclick="resetForm()">清空</button></div>
+
+          </div>
+
+        </div>
+
+
+
+        <div class="card">
+
+          <h2>Excel批量导入/导出</h2>
+
+          <div class="grid">
+
+            <div style="grid-column:span 2"><label>上传 xlsx</label><input id="import_file" type="file" accept=".xlsx"></div>
+
+            <div><button onclick="importAccounts()">导入账号资料</button></div>
+
+            <div><button class="secondary" onclick="location.href='/api/accounts/export'">导出账号资料</button></div>
+
+          </div>
+
+          <div class="state">账号资料导入使用 /api/accounts/import；原经营数据 Excel 导入仍使用 /api/metrics/import，互不影响。</div>
+
+        </div>
+
+
+
+        <div class="card">
+
+          <h2>筛选</h2>
+
+          <div class="grid">
+
+            <div><label>品牌</label><input id="filter_brand" placeholder="品牌"></div>
+
+            <div><label>负责人</label><input id="filter_owner" placeholder="负责人"></div>
+
+            <div><label>状态</label><select id="filter_status"><option value="">全部</option><option>正常</option><option>异常</option><option>待登录</option><option value="Cookie过期">登录态过期</option><option>暂停采集</option></select></div>
+
+            <div><button onclick="loadAccounts()">查询</button></div>
+
+          </div>
+
+        </div>
+
+
+
+        <div class="card">
+
+          <h2>账号资料列表</h2>
+
+          <div id="state" class="state">加载中...</div>
+
+          <div class="table-wrap">
+
+            <table>
+
+              <thead><tr><th>编号</th><th>店铺</th><th>品牌</th><th>负责人</th><th>登录账号</th><th>状态</th><th>最后登录</th><th>标签</th><th>备注</th><th>操作</th></tr></thead>
+
+              <tbody id="rows"></tbody>
+
+            </table>
+
+          </div>
+
+        </div>
+
+      </section>
+
+    </main>
+
+  </div>
+
+
+
+<script>
+
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];
+
+function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/account-center.html'?'active':''}" href="${h}">${l}</a>`).join('')}
+
+function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+
+async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}
+
+async function api(url, options={}){const res=await fetch(url,{credentials:'include',...options});if(res.status===401){location.href='/login.html';return}if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.detail||'操作失败')}const type=res.headers.get('content-type')||'';return type.includes('json')?res.json():res}
+
+async function init(){renderMenu();tick();setInterval(tick,1000);const u=await api('/api/me');me.innerText=`${u.display_name} · ${u.role_label||u.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';await loadAccounts()}
+
+function stateText(value){return value==='Cookie过期'?'登录态过期':(value||'待登录')}
+
+function statusTag(status){const cls=status==='正常'?'good':(status==='异常'||status==='Cookie过期'?'bad':'warn');return `<span class="tag ${cls}">${stateText(status)}</span>`}
+
+async function loadAccounts(){const params=new URLSearchParams();['brand','owner','status'].forEach(k=>{const el=document.getElementById(`filter_${k}`);if(el&&el.value.trim())params.set(k,el.value.trim())});const list=await api(`/api/accounts?${params.toString()}`);state.innerText=`共 ${list.length} 条账号资料`;rows.innerHTML=list.map(row=>`<tr><td>${row.store_code}</td><td>${row.store_name}</td><td>${row.brand||''}</td><td>${row.owner||''}<br>${row.phone||''}</td><td>${row.login_account||''}</td><td>${statusTag(row.account_status)}<br><span class="state">登录态：${stateText(row.cookie_status)}</span></td><td>${row.last_login_at||''}</td><td>${row.tags||''}</td><td>${row.notes||''}</td><td class="actions"><button onclick='editAccount(${JSON.stringify(row)})'>编辑</button><button class="danger" onclick="deleteAccount(${row.id})">删除</button></td></tr>`).join('')||'<tr><td colspan="10">暂无账号资料</td></tr>'}
+
+function readForm(){return{store_code:store_code.value.trim(),store_name:store_name.value.trim(),brand:brand.value.trim(),owner:owner.value.trim(),phone:phone.value.trim(),login_account:login_account.value.trim(),cookie_status:cookie_status.value,account_status:account_status.value,last_login_at:last_login_at.value.trim(),tags:tags.value.trim(),notes:notes.value.trim()}}
+
+async function saveAccount(){const id=account_id.value;await api(id?`/api/accounts/${id}`:'/api/accounts',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(readForm())});resetForm();await loadAccounts()}
+
+function editAccount(row){account_id.value=row.id;store_code.value=row.store_code||'';store_name.value=row.store_name||'';brand.value=row.brand||'';owner.value=row.owner||'';phone.value=row.phone||'';login_account.value=row.login_account||'';cookie_status.value=row.cookie_status||'待登录';account_status.value=row.account_status||'待登录';last_login_at.value=row.last_login_at||'';tags.value=row.tags||'';notes.value=row.notes||'';scrollTo({top:0,behavior:'smooth'})}
+
+async function deleteAccount(id){if(!confirm('确认删除账号中心里的这条资料吗？不会物理删除采集数据。'))return;await api(`/api/accounts/${id}`,{method:'DELETE'});await loadAccounts()}
+
+async function importAccounts(){const file=import_file.files[0];if(!file){alert('请选择 xlsx 文件');return}const form=new FormData();form.append('file',file);const result=await api('/api/accounts/import',{method:'POST',body:form});alert(`导入完成：${result.imported} 条`);await loadAccounts()}
+
+function resetForm(){document.querySelectorAll('input,textarea').forEach(el=>{if(el.type!=='file')el.value=''});cookie_status.value='正常';account_status.value='正常'}
+
+init().catch(e=>alert(e.message));
+
+</script>
+
+</body>
+
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

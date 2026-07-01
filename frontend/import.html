@@ -1,0 +1,317 @@
+<!doctype html>
+
+<html lang="zh-CN">
+
+<head>
+
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Excel导入 - 天统AI云中台</title>
+
+  <style>
+
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#111827;--good:#15803d}*{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.menu a.disabled{opacity:.5}.main{min-width:0}.topbar{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:16px}.top-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:13px}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px}.ok{color:var(--good)}.content{padding:24px}.card{background:white;border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:16px}h1{margin:0;font-size:26px}.sub,.tip{color:var(--muted);line-height:1.7}input{height:38px;border:1px solid #cbd5e1;border-radius:8px;padding:7px 10px;background:white}button{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer}button.secondary{background:white;color:var(--ink);border:1px solid var(--line)}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.table-wrap{overflow:auto;background:white;border:1px solid var(--line);border-radius:8px}table{width:100%;border-collapse:collapse;min-width:900px}th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}th{background:#f8fafc;color:#475569}.result{white-space:pre-wrap;border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px 14px;color:var(--muted);margin-top:12px}.result.ok{background:#f0fdf4;border-color:#bbf7d0;color:#166534}.result.error{background:#fef2f2;border-color:#fecaca;color:#991b1b}@media(max-width:760px){.app{grid-template-columns:1fr}.topbar{align-items:flex-start;flex-direction:column}.content{padding:18px}}
+
+  .auth-pending .sidebar,.auth-pending .main,.auth-pending main{visibility:hidden}</style>
+
+</head>
+
+<body class="auth-pending">
+
+<script>
+
+(function(){
+
+  if (window.__tiantongFrontSecurity) return;
+
+  window.__tiantongFrontSecurity = true;
+
+  const ALL_ACCESS = null;
+
+  const ROLE_ACCESS = {
+
+    owner: ALL_ACCESS,
+
+    boss: ALL_ACCESS,
+
+    admin:,
+
+    operation: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+
+    operator: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+
+    ops: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+
+    customer_service: ['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],
+
+    service: ['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],
+
+    designer: ['/ai-assets.html','/workflows.html'],
+
+    editor: ['/ai-assets.html','/workflows.html'],
+
+    finance: ['/jd-dashboard.html','/metrics.html','/import.html']
+
+  };
+
+  const ROLE_ALIASES = {boss:'owner', owner:'owner', administrator:'admin', ads:'operation', operator:'operation', ops:'operation', service:'customer_service'};
+
+  const rawFetch = window.fetch.bind(window);
+
+  let currentUser = null;
+
+  let redirecting = false;
+
+
+
+  function normalizeRole(user){
+
+    const raw = String((user && (user.role_code || user.role)) || '').trim();
+
+    return ROLE_ALIASES[raw] || raw || 'guest';
+
+  }
+
+  function accessFor(role){
+
+    if (role === 'owner') return ALL_ACCESS;
+
+    return Object.prototype.hasOwnProperty.call(ROLE_ACCESS, role) ? ROLE_ACCESS[role] : ['/jd-dashboard.html'];
+
+  }
+
+  function canOpen(role, href){
+
+    if (!href || href === '#' || href.startsWith('/api/')) return true;
+
+    const normalizedHref = href === '/' ? '/index.html' : href;
+
+    const access = accessFor(role);
+
+    return access === ALL_ACCESS || access.includes(normalizedHref);
+
+  }
+
+  function firstAllowed(role){
+
+    const access = accessFor(role);
+
+    return access === ALL_ACCESS ? '/index.html' : (access[0] || '/login.html');
+
+  }
+
+  function currentPath(){
+
+    return location.pathname === '/' ? '/index.html' : location.pathname;
+
+  }
+
+  function clearClientAuth(){
+
+    try { localStorage.removeItem('token'); localStorage.removeItem('tiantong_token'); localStorage.removeItem('session'); localStorage.removeItem('tiantong_session'); sessionStorage.clear(); } catch(e) {}
+
+  }
+
+  function friendlyText(status, detail){
+
+    if (status === 401) return detail || '????????????';
+
+    if (status === 403) return detail || '??????????????????';
+
+    return detail || '???????????';
+
+  }
+
+  function safeRedirect(url){
+
+    if (redirecting) return;
+
+    redirecting = true;
+
+    setTimeout(function(){ location.href = url; }, 450);
+
+  }
+
+  function applyRoleUI(user){
+
+    currentUser = user || currentUser;
+
+    const role = normalizeRole(currentUser);
+
+    document.querySelectorAll('.menu a, .quick a').forEach(function(link){
+
+      const href = link.getAttribute('href') || '';
+
+      const allowed = canOpen(role, href);
+
+      link.style.display = allowed ? '' : 'none';
+
+      link.setAttribute('aria-hidden', allowed ? 'false' : 'true');
+
+    });
+
+    const path = currentPath();
+
+    if (path !== '/login.html' && !canOpen(role, path)) {
+
+      alert('???????????????????????????');
+
+      safeRedirect(firstAllowed(role));
+
+      return;
+
+    }
+
+    document.body.classList.remove('auth-pending');
+
+  }
+
+  async function verifyLogin(){
+
+    try {
+
+      const res = await rawFetch('/api/me', {credentials:'include'});
+
+      if (res.status === 401) {
+
+        clearClientAuth();
+
+        safeRedirect('/login.html');
+
+        return;
+
+      }
+
+      if (!res.ok) throw new Error('????????');
+
+      const user = await res.json();
+
+      applyRoleUI(user);
+
+    } catch(e) {
+
+      document.body.classList.remove('auth-pending');
+
+      const box = document.getElementById('notice') || document.getElementById('pageState') || document.getElementById('state');
+
+      if (box) { box.className = 'state error'; box.innerText = '??????????????????'; }
+
+    }
+
+  }
+
+  window.fetch = async function(input, init){
+
+    const res = await rawFetch(input, init);
+
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+
+    if (url.includes('/api/me') && res.ok) {
+
+      res.clone().json().then(applyRoleUI).catch(function(){});
+
+    }
+
+    if (url.includes('/api/') && res.status === 401) {
+
+      clearClientAuth();
+
+      alert('????????????');
+
+      safeRedirect('/login.html');
+
+    }
+
+    if (url.includes('/api/') && res.status === 403) {
+
+      res.clone().json().then(function(data){ alert(friendlyText(403, data.detail)); }).catch(function(){ alert(friendlyText(403)); });
+
+      clearClientAuth();
+
+      safeRedirect('/login.html');
+
+    }
+
+    return res;
+
+  };
+
+  window.secureLogout = async function(){
+
+    clearClientAuth();
+
+    try { await rawFetch('/api/logout', {method:'POST', credentials:'include'}); } catch(e) {}
+
+    location.href = '/login.html';
+
+  };
+
+  const keepLogoutSafe = setInterval(function(){ window.logout = window.secureLogout; }, 50);
+
+  setTimeout(function(){ clearInterval(keepLogoutSafe); window.logout = window.secureLogout; }, 3000);
+
+  document.addEventListener('DOMContentLoaded', function(){ if (currentUser) applyRoleUI(currentUser); });
+
+  new MutationObserver(function(){ if (currentUser) applyRoleUI(currentUser); }).observe(document.body, {childList:true, subtree:true});
+
+  verifyLogin();
+
+})();
+
+</script>
+
+<div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main class="main">
+
+    <header class="topbar"><strong>Excel导入</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+
+    <section class="content">
+
+      <div class="card"><h1>Excel批量导入</h1><p class="sub">上传真实Excel/CSV数据，后端采集服务完成前作为临时真实数据来源。</p></div>
+
+      <div class="card"><h2>字段要求</h2><p class="tip">Excel 第一行必须按下面表头填写。店铺编号要对应系统里的真实店铺编号。</p><div class="toolbar"><input id="fieldSearch" placeholder="搜索字段" oninput="filterFields()"><button class="secondary" onclick="filterFields()">刷新字段表</button></div></div>
+
+      <div class="table-wrap"><table><thead><tr><th>店铺编号</th><th>日期</th><th>今日成交</th><th>今日利润</th><th>广告花费</th><th>ROI</th><th>订单数</th><th>访客数</th><th>退款数</th><th>售后数</th></tr></thead><tbody id="fieldRows"><tr><td>真实店铺编号</td><td>真实日期</td><td>真实成交金额</td><td>真实利润金额</td><td>真实广告花费</td><td>真实ROI</td><td>真实订单数</td><td>真实访客数</td><td>真实退款数</td><td>真实售后数</td></tr></tbody></table></div>
+
+      <div class="card" style="margin-top:16px"><h2>上传Excel</h2><p class="tip">支持 .xlsx 和 .csv。上传后会自动覆盖同一天、同一个店铺的数据。接口开发中 / 等待后端采集服务完成时，可先用这里导入真实数据。</p><div class="toolbar"><input id="file" type="file" accept=".xlsx,.csv"><button onclick="upload()">上传导入</button><button class="secondary" onclick="clearResult()">刷新状态</button></div><div id="result" class="result">请选择真实数据文件后上传。</div></div>
+
+    </section></main></div>
+
+  <script>
+
+    const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];
+
+    function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/import.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'onclick="return disabledEntry()"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function init(){renderMenu();tick();setInterval(tick,1000);const r=await fetch('/api/me',{credentials:'include'});if(r.status===401){location.href='/login.html';return}const u=await r.json();me.innerText=`${u.display_name} · ${u.role_label||u.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
+
+    function filterFields(){const q=fieldSearch.value.trim().toLowerCase();fieldRows.style.display=q&&!fieldRows.innerText.toLowerCase().includes(q)?'none':''}function clearResult(){result.className='result';result.innerText='请选择真实数据文件后上传。'}
+
+    async function upload(){const f=file.files[0];if(!f){alert('请先选择文件');return}const form=new FormData();form.append('file',f);result.className='result';result.innerText='正在上传导入...';const res=await fetch('/api/metrics/import',{method:'POST',credentials:'include',body:form});if(res.status===401){location.href='/login.html';return}const data=await res.json().catch(()=>({}));if(!res.ok){result.className='result error';result.innerText='导入失败：'+(data.detail||'未知错误');return}result.className='result ok';result.innerText='导入成功：'+data.imported+' 行\\n\\n'+(data.errors&&data.errors.length?'错误：\\n'+data.errors.join('\\n'):'无错误')}
+
+    init().catch(()=>{systemStatus.innerText='页面初始化失败'});
+
+  </script>
+
+</body>
+
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
