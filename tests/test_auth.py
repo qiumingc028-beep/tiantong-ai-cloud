@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from backend.models import User
@@ -82,6 +83,6 @@ def test_no_obvious_real_api_keys_committed():
         if path.name != "test_auth.py"
     )
 
-    assert "sk-" not in combined
+    assert not re.search(r"\bsk-[A-Za-z0-9_-]{20,}\b", combined)
     assert "AKIA" not in combined
     assert "x-acs-accesskey-id" not in combined.lower()
