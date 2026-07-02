@@ -17,6 +17,11 @@ def test_deploy_center_requires_login(client):
     assert response.status_code == 401
 
 
+def test_deploy_center_page_is_whitelisted(client):
+    response = client.get("/deploy-center.html")
+    assert response.status_code == 200
+
+
 def test_deploy_center_rejects_non_privileged_roles(client):
     for username in ["operator", "customer_service", "designer", "editor", "viewer"]:
         response = client.get("/api/deploy-center/status", headers=auth_headers(client, username))
