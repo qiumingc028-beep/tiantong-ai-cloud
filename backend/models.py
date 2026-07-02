@@ -200,6 +200,75 @@ class AiTask(Base):
     owner: Mapped[User | None] = relationship()
 
 
+class TaskCenterTask(Base):
+    __tablename__ = "task_center_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(50), default="created", nullable=False, index=True)
+    priority: Mapped[str] = mapped_column(String(50), default="normal", nullable=False)
+    source: Mapped[str] = mapped_column(String(50), default="boss", nullable=False)
+    parent_task_id: Mapped[int | None] = mapped_column(ForeignKey("task_center_tasks.id", ondelete="SET NULL"))
+    assigned_ai_employee_code: Mapped[str | None] = mapped_column(String(50), index=True)
+    assigned_ai_employee_name: Mapped[str | None] = mapped_column(String(100))
+    split_plan: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_by: Mapped[User | None] = relationship(foreign_keys=[created_by_id])
+    updated_by: Mapped[User | None] = relationship(foreign_keys=[updated_by_id])
+    parent_task: Mapped["TaskCenterTask | None"] = relationship(remote_side=[id])
+
+
+class TaskCenterResult(Base):
+    __tablename__ = "task_center_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("task_center_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    ai_employee_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    ai_employee_name: Mapped[str | None] = mapped_column(String(100))
+    result_content: Mapped[str] = mapped_column(Text, nullable=False)
+    attachments_json: Mapped[str | None] = mapped_column(Text)
+    submitted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    task: Mapped[TaskCenterTask] = relationship()
+    submitted_by: Mapped[User | None] = relationship()
+
+
+class TaskCenterReview(Base):
+    __tablename__ = "task_center_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("task_center_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    review_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    review_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text)
+    reviewer_role: Mapped[str | None] = mapped_column(String(50))
+    reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    task: Mapped[TaskCenterTask] = relationship()
+    reviewer: Mapped[User | None] = relationship()
+
+
+class TaskCenterAuditLog(Base):
+    __tablename__ = "task_center_audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("task_center_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(50))
+    to_status: Mapped[str | None] = mapped_column(String(50))
+    detail: Mapped[str | None] = mapped_column(Text)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    actor_role: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    task: Mapped[TaskCenterTask] = relationship()
+    actor: Mapped[User | None] = relationship()
+
+
 class JdIntegration(Base):
     __tablename__ = "jd_integrations"
 
@@ -453,4 +522,3 @@ class CourseLesson(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     article: Mapped[KnowledgeArticle | None] = relationship()
-
