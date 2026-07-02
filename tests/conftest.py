@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from backend.auth import hash_password
 from backend.database import Base, get_db
 from backend.main import app
-from backend.models import AiTask, Permission, Role, Store, User
+from backend.models import AiEmployee, AiTask, Permission, Role, Store, User
 
 
 class FakeRedis:
@@ -143,10 +143,16 @@ def seed_database(session_factory):
             Permission(code="task_center.execute", name="Task Center Execute"),
             Permission(code="task_center.review", name="Task Center Review"),
             Permission(code="task_center.audit", name="Task Center Audit"),
+            Permission(code="ai_employees.read", name="AI Employees Read"),
+            Permission(code="ai_employees.manage", name="AI Employees Manage"),
         ]
         owner_role = Role(code="owner", name="Owner", permissions=permissions)
         admin_role = Role(code="admin", name="Admin", permissions=permissions)
-        operator_permissions = [p for p in permissions if not p.code.startswith("task_center.")]
+        operator_permissions = [
+            p
+            for p in permissions
+            if not p.code.startswith("task_center.") and not p.code.startswith("ai_employees.")
+        ]
         operator_role = Role(code="operator", name="Operator", permissions=operator_permissions)
         customer_service_role = Role(code="customer_service", name="Customer Service", permissions=[])
         designer_role = Role(code="designer", name="Designer", permissions=[])
@@ -222,6 +228,43 @@ def seed_database(session_factory):
                 today_task="Check store metrics",
                 execution_log="",
             )
+        )
+        db.add_all(
+            [
+                AiEmployee(
+                    employee_code="tiantong",
+                    employee_name="天统：AI总指挥",
+                    legion="研发交付军团",
+                    duty="统筹任务拆分、分配、汇总与推进",
+                    status="active",
+                    task_types='["command", "summary"]',
+                    default_permissions='["task_center.manage"]',
+                    is_legacy=False,
+                    sort_order=10,
+                ),
+                AiEmployee(
+                    employee_code="tianwang",
+                    employee_name="天王：后端开发中心",
+                    legion="研发交付军团",
+                    duty="后端 API、数据库模型、迁移、权限和测试",
+                    status="active",
+                    task_types='["backend"]',
+                    default_permissions='["task_center.execute"]',
+                    is_legacy=False,
+                    sort_order=30,
+                ),
+                AiEmployee(
+                    employee_code="legacy_operator",
+                    employee_name="Legacy Operator",
+                    legion="legacy",
+                    duty="Legacy placeholder",
+                    status="active",
+                    task_types='["legacy"]',
+                    default_permissions="[]",
+                    is_legacy=True,
+                    sort_order=999,
+                ),
+            ]
         )
         db.commit()
     finally:
