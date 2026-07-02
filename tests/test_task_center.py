@@ -47,7 +47,7 @@ def test_task_center_mvp_flow_writes_audit_logs(client, owner_headers):
     assigned = client.post(
         f"/api/task-center/tasks/{task_id}/assign",
         headers=owner_headers,
-        json={"ai_employee_code": "ai_operator"},
+        json={"ai_employee_code": "tianwang"},
     )
     assert assigned.status_code == 200
     assert assigned.json()["task"]["status"] == "assigned"
