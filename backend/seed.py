@@ -89,3 +89,19 @@ PERMISSIONS.extend([
 PERMISSIONS.extend([("menu.knowledge_center", "\u5929\u85cf\uff1a\u77e5\u8bc6\u8d44\u4ea7\u4e2d\u5fc3"), ("knowledge.read", "read knowledge assets"), ("knowledge.manage", "manage knowledge assets")])
 for role_code in ("owner", "admin", "operator"):
     ROLE_PERMISSIONS.setdefault(role_code, []).extend(["menu.knowledge_center", "knowledge.read", "knowledge.manage"])
+
+PERMISSIONS.extend([
+    ("task_center.read", "read task center"),
+    ("task_center.manage", "manage task center"),
+    ("task_center.execute", "execute task center tasks"),
+    ("task_center.review", "review task center tasks"),
+    ("task_center.audit", "audit task center tasks"),
+])
+for role_code in ("owner", "admin"):
+    ROLE_PERMISSIONS.setdefault(role_code, []).extend([
+        "task_center.read",
+        "task_center.manage",
+        "task_center.execute",
+        "task_center.review",
+        "task_center.audit",
+    ])
