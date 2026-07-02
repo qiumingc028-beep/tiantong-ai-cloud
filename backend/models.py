@@ -483,3 +483,59 @@ class SopLibrary(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     article: Mapped[KnowledgeArticle | None] = relationship()
+
+
+class PromptLibrary(Base):
+    __tablename__ = "prompt_library"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    article_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_articles.id", ondelete="SET NULL"))
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    prompt_type: Mapped[str | None] = mapped_column(String(100))
+    category: Mapped[str | None] = mapped_column(String(100), index=True)
+    content: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(100))
+    version: Mapped[str | None] = mapped_column(String(50))
+    prompt_text: Mapped[str | None] = mapped_column(Text)
+    usage_notes: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    article: Mapped[KnowledgeArticle | None] = relationship()
+
+
+class BugCase(Base):
+    __tablename__ = "bug_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    article_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_articles.id", ondelete="SET NULL"))
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    impact_scope: Mapped[str | None] = mapped_column(String(255))
+    category: Mapped[str | None] = mapped_column(String(100), index=True)
+    symptom: Mapped[str | None] = mapped_column(Text)
+    root_cause: Mapped[str | None] = mapped_column(Text)
+    solution: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    article: Mapped[KnowledgeArticle | None] = relationship()
+
+
+class CourseLesson(Base):
+    __tablename__ = "course_lessons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    article_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_articles.id", ondelete="SET NULL"))
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    course_name: Mapped[str | None] = mapped_column(String(255))
+    category: Mapped[str | None] = mapped_column(String(100), index=True)
+    outline: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[str | None] = mapped_column(Text)
+    lesson_order: Mapped[int] = mapped_column(Integer, default=0)
+    target_audience: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    article: Mapped[KnowledgeArticle | None] = relationship()
