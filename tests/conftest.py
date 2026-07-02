@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from backend.auth import hash_password
 from backend.database import Base, get_db
+from backend.deploy_models import DeployRecord
 from backend.main import app
 from backend.models import AiEmployee, AiTask, Permission, Role, Store, User
 
@@ -78,6 +79,7 @@ def test_db(monkeypatch):
     monkeypatch.setattr("backend.queue.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.routers.metrics.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.routers.ai_employees.get_redis", lambda: fake_redis)
+    monkeypatch.setattr("backend.routers.deploy_center.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.main.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.main.engine", engine)
     monkeypatch.setattr("backend.main.ensure_tables", lambda: None)
@@ -145,13 +147,17 @@ def seed_database(session_factory):
             Permission(code="task_center.audit", name="Task Center Audit"),
             Permission(code="ai_employees.read", name="AI Employees Read"),
             Permission(code="ai_employees.manage", name="AI Employees Manage"),
+            Permission(code="deploy_center.read", name="Deploy Center Read"),
+            Permission(code="deploy_center.manage", name="Deploy Center Manage"),
         ]
         owner_role = Role(code="owner", name="Owner", permissions=permissions)
         admin_role = Role(code="admin", name="Admin", permissions=permissions)
         operator_permissions = [
             p
             for p in permissions
-            if not p.code.startswith("task_center.") and not p.code.startswith("ai_employees.")
+            if not p.code.startswith("task_center.")
+            and not p.code.startswith("ai_employees.")
+            and not p.code.startswith("deploy_center.")
         ]
         operator_role = Role(code="operator", name="Operator", permissions=operator_permissions)
         customer_service_role = Role(code="customer_service", name="Customer Service", permissions=[])
@@ -220,6 +226,15 @@ def seed_database(session_factory):
             ]
         )
         db.add(Store(platform="jd", store_code="JD01", store_name="JD Store 01", active=True))
+        db.add(
+            DeployRecord(
+                deploy_version="Sprint 3 MVP",
+                branch="main",
+                operator="tiandun",
+                status="initialized",
+                note="Deploy Center MVP initialized",
+            )
+        )
         db.add(
             AiTask(
                 ai_employee_code="ai_operator",
