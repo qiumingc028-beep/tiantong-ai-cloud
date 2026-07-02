@@ -106,6 +106,21 @@ def viewer_headers(client):
     return login_headers(client, "viewer", "password")
 
 
+@pytest.fixture()
+def admin_headers(client):
+    return login_headers(client, "admin", "password")
+
+
+@pytest.fixture()
+def boss_headers(client):
+    return login_headers(client, "boss", "password")
+
+
+@pytest.fixture()
+def operator_headers(client):
+    return login_headers(client, "operator", "password")
+
+
 def login_headers(client: TestClient, username: str, password: str):
     response = client.post("/api/login", json={"username": username, "password": password})
     assert response.status_code == 200
@@ -123,10 +138,21 @@ def seed_database(session_factory):
             Permission(code="data.metrics.write", name="Metrics Write"),
             Permission(code="ai.tasks.manage", name="AI Tasks Manage"),
             Permission(code="ai.tasks.read", name="AI Tasks Read"),
+            Permission(code="task_center.read", name="Task Center Read"),
+            Permission(code="task_center.manage", name="Task Center Manage"),
+            Permission(code="task_center.execute", name="Task Center Execute"),
+            Permission(code="task_center.review", name="Task Center Review"),
+            Permission(code="task_center.audit", name="Task Center Audit"),
         ]
         owner_role = Role(code="owner", name="Owner", permissions=permissions)
+        admin_role = Role(code="admin", name="Admin", permissions=permissions)
+        operator_permissions = [p for p in permissions if not p.code.startswith("task_center.")]
+        operator_role = Role(code="operator", name="Operator", permissions=operator_permissions)
+        customer_service_role = Role(code="customer_service", name="Customer Service", permissions=[])
+        designer_role = Role(code="designer", name="Designer", permissions=[])
+        editor_role = Role(code="editor", name="Editor", permissions=[])
         viewer_role = Role(code="viewer", name="Viewer", permissions=[])
-        db.add_all([owner_role, viewer_role])
+        db.add_all([owner_role, admin_role, operator_role, customer_service_role, designer_role, editor_role, viewer_role])
         db.add_all(
             [
                 User(
@@ -134,6 +160,48 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="owner",
                     display_name="Owner",
+                    active=True,
+                ),
+                User(
+                    username="admin",
+                    password_hash=hash_password("password"),
+                    role="admin",
+                    display_name="Admin",
+                    active=True,
+                ),
+                User(
+                    username="boss",
+                    password_hash=hash_password("password"),
+                    role="boss",
+                    display_name="Boss",
+                    active=True,
+                ),
+                User(
+                    username="operator",
+                    password_hash=hash_password("password"),
+                    role="operator",
+                    display_name="Operator",
+                    active=True,
+                ),
+                User(
+                    username="customer_service",
+                    password_hash=hash_password("password"),
+                    role="customer_service",
+                    display_name="Customer Service",
+                    active=True,
+                ),
+                User(
+                    username="designer",
+                    password_hash=hash_password("password"),
+                    role="designer",
+                    display_name="Designer",
+                    active=True,
+                ),
+                User(
+                    username="editor",
+                    password_hash=hash_password("password"),
+                    role="editor",
+                    display_name="Editor",
                     active=True,
                 ),
                 User(
