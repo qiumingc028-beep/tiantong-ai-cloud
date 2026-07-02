@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>天盾 Deploy Center - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#0f766e;--brand2:#0ea5e9;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.auth-pending .sidebar,.auth-pending .main{visibility:hidden}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.main{min-width:0}.topbar{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:16px}.top-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:13px}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px}.ok{color:var(--good)}button{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;font-family:inherit}button.secondary{background:white;color:var(--ink);border:1px solid var(--line)}button:disabled{background:#e5e7eb;color:#94a3b8;border:1px solid #cbd5e1;cursor:not-allowed}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f172a 0%,#0f766e 58%,#0ea5e9 100%);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:18px;align-items:flex-end}.hero h1{font-size:28px;margin:0}.hero p{margin:8px 0 0;color:#d1fae5;line-height:1.6}.hero-note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);border-radius:8px;padding:10px 12px;color:#e0f2fe;font-size:13px;white-space:nowrap}.grid{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:12px;margin-bottom:16px}.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px}.status-card{min-height:118px}.label{font-size:12px;color:var(--muted);margin-bottom:8px}.value{font-size:22px;font-weight:800}.muted{color:var(--muted);line-height:1.7}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:5px 10px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569}.badge.healthy{background:#dcfce7;color:#166534}.badge.degraded{background:#fef3c7;color:#92400e}.badge.unhealthy{background:#fee2e2;color:#991b1b}.badge.unknown{background:#f1f5f9;color:#475569}.section-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.section-head h2{font-size:18px;margin:0}.kv{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px 12px;font-size:14px}.kv div:nth-child(odd){color:var(--muted)}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px 14px;color:var(--muted);margin-bottom:12px}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px;background:white}table{width:100%;border-collapse:collapse;min-width:980px}th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;vertical-align:top}th{background:#f8fafc;color:#475569}.danger-box{display:flex;justify-content:space-between;align-items:center;gap:16px}.danger-actions{display:flex;gap:10px;flex-wrap:wrap}.mono{font-family:Consolas,monospace}.migration-ok{border:1px solid #bbf7d0;background:#f0fdf4;color:#166534;border-radius:8px;padding:10px 12px;margin-top:10px;font-weight:700}@media(max-width:1200px){.grid{grid-template-columns:repeat(3,1fr)}.section-grid{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}.hero-note{white-space:normal}}@media(max-width:760px){.app{grid-template-columns:1fr}.content{padding:18px}.topbar{align-items:flex-start;flex-direction:column}.grid{grid-template-columns:1fr}.kv{grid-template-columns:1fr}.danger-box{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body class="auth-pending">
+<script>
+(function(){
+  if (window.__tiantongFrontSecurity) return;
+  window.__tiantongFrontSecurity = true;
+  const rawFetch = window.fetch.bind(window);
+  let currentUser = null;
+  let redirecting = false;
+  function normalizeRole(user){const raw=String((user&&(user.role_code||user.role))||'').trim();return ({boss:'owner',owner:'owner',administrator:'admin'}[raw]||raw||'guest')}
+  function canOpenDeploy(user){return ['owner','boss','admin'].includes(normalizeRole(user))}
+  function clearClientAuth(){try{localStorage.removeItem('token');localStorage.removeItem('tiantong_token');localStorage.removeItem('session');localStorage.removeItem('tiantong_session');sessionStorage.clear()}catch(e){}}
+  function safeRedirect(url){if(redirecting)return;redirecting=true;setTimeout(function(){location.href=url},700)}
+  function showAccessDenied(){document.body.classList.remove('auth-pending');const nav=document.getElementById('menu');if(nav)nav.innerHTML='';const box=document.getElementById('pageState');if(box){box.className='state error';box.innerText='无权限访问部署中心。请使用 boss / owner / admin 账号访问。'}}
+  function applyRoleUI(user){currentUser=user||currentUser;if(!canOpenDeploy(currentUser)){showAccessDenied();return}document.body.classList.remove('auth-pending')}
+  async function verifyLogin(){try{const res=await rawFetch('/api/me',{credentials:'include'});if(res.status===401){clearClientAuth();safeRedirect('/login.html');return}if(res.status===403){showAccessDenied();return}if(!res.ok)throw new Error('登录状态检查失败');applyRoleUI(await res.json())}catch(e){document.body.classList.remove('auth-pending');const box=document.getElementById('pageState');if(box){box.className='state error';box.innerText=e.message||'登录状态检查失败，请刷新或重新登录。'}}}
+  window.fetch=async function(input,init){const res=await rawFetch(input,init);const url=typeof input==='string'?input:((input&&input.url)||'');if(url.includes('/api/')&&res.status===401){clearClientAuth();alert('登录已失效，请重新登录。');safeRedirect('/login.html')}if(url.includes('/api/')&&res.status===403){const data=await res.clone().json().catch(()=>({}));const box=document.getElementById('pageState');if(box){box.className='state error';box.innerText=data.detail||'无权限访问部署中心。'}showAccessDenied()}return res};
+  window.secureLogout=async function(){clearClientAuth();try{await rawFetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'};
+  const keepLogoutSafe=setInterval(function(){window.logout=window.secureLogout},50);setTimeout(function(){clearInterval(keepLogoutSafe);window.logout=window.secureLogout},3000);
+  verifyLogin();
+})();
+</script>
+<div class="app">
+  <aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main class="main">
+    <header class="topbar"><strong>天盾 Deploy Center</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>天盾 Deploy Center</h1><p>查看系统部署状态、版本信息、数据库迁移、服务健康与最近部署记录。</p></div>
+        <div class="hero-note">只读状态监控，不执行部署命令</div>
+      </div>
+      <div id="pageState" class="state">正在加载部署中心状态...</div>
+      <section class="grid">
+        <div class="card status-card"><div class="label">总体状态</div><div id="overallStatus" class="value">-</div><div class="muted">overall_status</div></div>
+        <div class="card status-card"><div class="label">后端状态</div><div id="backendStatus" class="value">-</div><div class="muted">backend</div></div>
+        <div class="card status-card"><div class="label">数据库状态</div><div id="databaseStatus" class="value">-</div><div class="muted">database</div></div>
+        <div class="card status-card"><div class="label">Redis 状态</div><div id="redisStatus" class="value">-</div><div class="muted">redis</div></div>
+        <div class="card status-card"><div class="label">Nginx 状态</div><div id="nginxStatus" class="value">-</div><div id="nginxHint" class="muted">nginx</div></div>
+        <div class="card status-card"><div class="label">数据库迁移版本</div><div id="alembicStatus" class="value mono">-</div><div class="muted">alembic_version</div></div>
+      </section>
+      <section class="section-grid">
+        <div class="card">
+          <div class="section-head"><h2>版本信息</h2><span class="badge unknown">只读</span></div>
+          <div id="versionInfo" class="kv"></div>
+        </div>
+        <div class="card">
+          <div class="section-head"><h2>数据库迁移</h2><span id="migrationBadge" class="badge unknown">unknown</span></div>
+          <div id="migrationInfo" class="kv"></div>
+          <div id="migrationDone" class="migration-ok" style="display:none">已迁移到 Deploy Center 版本</div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="section-head"><h2>健康检查</h2><button id="healthCheckBtn" onclick="runHealthCheck()">手动健康检查</button></div>
+        <div id="healthInfo" class="kv"></div>
+      </section>
+      <section class="card">
+        <div class="section-head"><h2>最近部署记录</h2><button class="secondary" onclick="loadRecords()">刷新记录</button></div>
+        <div id="recordsState" class="state">正在加载部署记录...</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>版本</th><th>Commit</th><th>分支</th><th>操作人</th><th>状态</th><th>开始时间</th><th>完成时间</th><th>备注</th></tr></thead>
+            <tbody id="recordRows"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="card danger-box">
+        <div><h2>危险能力未开放</h2><div class="muted">Sprint 3 MVP 当前仅支持状态可视化和健康检查，不执行部署命令。</div></div>
+        <div class="danger-actions"><button disabled>一键部署：未开放</button><button disabled>一键回滚：未开放</button></div>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+  const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI任务中心','/task-center.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
+  const statusText={healthy:'正常',running:'正常',warning:'部分异常',degraded:'部分异常',unhealthy:'异常',up_to_date:'已是最新',outdated:'待迁移',unknown:'未知'};
+  let currentUser=null;
+
+  function pageRole(user){const raw=String((user&&(user.role_code||user.role))||'').trim();return ({boss:'owner',owner:'owner',administrator:'admin'}[raw]||raw||'guest')}
+  function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/deploy-center.html'?'active':''}" href="${h}">${l}</a>`).join('')}
+  function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+  async function logout(){await window.secureLogout()}
+  function blank(value){return value===undefined||value===null||value===''?'暂无':value}
+  function escapeHtml(text){return String(text??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+  function fmtTime(value){return value?String(value).slice(0,19).replace('T',' '):'暂无'}
+  function statusClass(status){const s=String(status||'unknown');if(s==='running'||s==='up_to_date')return 'healthy';if(s==='warning'||s==='outdated')return 'degraded';return s}
+  function itemStatus(item){return item&&typeof item==='object'?item.status:item}
+  function badge(status){const s=String(status||'unknown');return `<span class="badge ${escapeHtml(statusClass(s))}">${escapeHtml(statusText[s]||s)}</span>`}
+  function nginxBadge(status){const s=String(itemStatus(status)||'unknown');return s==='unknown'?'<span class="badge unknown">后端暂不检测 Nginx</span>':badge(s)}
+  async function api(url, options={}){const res=await fetch(url,{credentials:'include',...options});if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.detail||`${res.status} ${res.statusText}`)}return res.json()}
+  function kv(target, rows){target.innerHTML=rows.map(([k,v])=>`<div>${escapeHtml(k)}</div><div>${v}</div>`).join('')}
+
+  async function init(){
+    tick();setInterval(tick,1000);
+    try{
+      const user=await api('/api/me');currentUser=user;me.innerText=`${user.display_name} · ${user.role_label||user.role}`;
+      if(!['owner','admin'].includes(pageRole(user))){showAccessDenied();return}
+      renderMenu();
+      const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok');
+      await Promise.all([loadStatus(),loadVersion(),loadMigration(),loadHealth(),loadRecords()]);
+      pageState.className='state';pageState.innerText='部署中心状态已刷新。';
+    }catch(e){
+      pageState.className='state error';pageState.innerText=e.message||'页面加载失败，请稍后刷新。';
+    }
+  }
+
+  async function loadStatus(){
+    const data=await api('/api/deploy-center/status');
+    const migration=await api('/api/deploy-center/migration').catch(()=>({current_version:null}));
+    overallStatus.innerHTML=badge(data.overall_status);
+    backendStatus.innerHTML=badge(data.backend||data.service_status);
+    databaseStatus.innerHTML=badge(data.database||data.database_status);
+    redisStatus.innerHTML=badge(data.redis||data.redis_status);
+    nginxStatus.innerHTML=nginxBadge(data.nginx);
+    nginxHint.innerText=String(data.nginx||'unknown')==='unknown'?'后端暂不检测 Nginx':'nginx';
+    alembicStatus.innerText=blank(data.alembic_version||migration.current_version);
+  }
+
+  async function loadVersion(){
+    const data=await api('/api/deploy-center/version');
+    kv(versionInfo,[['branch',escapeHtml(blank(data.branch))],['commit_hash',`<span class="mono">${escapeHtml(blank(data.commit_hash))}</span>`],['commit_short',`<span class="mono">${escapeHtml(blank(data.commit_short))}</span>`],['deploy_version',escapeHtml(blank(data.deploy_version))],['alembic_version',`<span class="mono">${escapeHtml(blank(data.alembic_version))}</span>`],['build_time',escapeHtml(blank(data.build_time))]]);
+  }
+
+  async function loadMigration(){
+    const data=await api('/api/deploy-center/migration');
+    migrationBadge.className=`badge ${escapeHtml(statusClass(data.status||'unknown'))}`;
+    migrationBadge.innerText=statusText[data.status]||data.status||'unknown';
+    kv(migrationInfo,[['current_version',`<span class="mono">${escapeHtml(blank(data.current_version))}</span>`],['expected_version',`<span class="mono">${escapeHtml(blank(data.expected_version))}</span>`],['status',badge(data.status)]]);
+    migrationDone.style.display=data.current_version==='0009_deploy_center_tables'?'block':'none';
+  }
+
+  async function loadHealth(){
+    const data=await api('/api/deploy-center/health');
+    kv(healthInfo,[['backend',badge(itemStatus(data.backend))],['database',badge(itemStatus(data.database))],['redis',badge(itemStatus(data.redis))],['nginx',nginxBadge(data.nginx)],['checked_at',escapeHtml(fmtTime(data.checked_at))]]);
+  }
+
+  async function runHealthCheck(){
+    try{
+      healthCheckBtn.disabled=true;healthCheckBtn.innerText='检查中...';
+      await api('/api/deploy-center/health/check',{method:'POST'});
+      await Promise.all([loadStatus(),loadHealth(),loadRecords()]);
+      pageState.className='state';pageState.innerText='手动健康检查已完成，状态已刷新。';
+    }catch(e){
+      pageState.className='state error';pageState.innerText=e.message||'健康检查失败。';
+    }finally{
+      healthCheckBtn.disabled=false;healthCheckBtn.innerText='手动健康检查';
+    }
+  }
+
+  async function loadRecords(){
+    try{
+      recordsState.className='state';recordsState.innerText='正在加载部署记录...';
+      const rows=await api('/api/deploy-center/records');
+      recordsState.className=rows.length?'state':'state warn';
+      recordsState.innerText=rows.length?`已显示 ${rows.length} 条部署记录。`:'暂无部署记录';
+      recordRows.innerHTML=rows.length?rows.map(r=>`<tr><td>${escapeHtml(blank(r.deploy_version))}</td><td class="mono">${escapeHtml(blank(r.commit_hash))}</td><td>${escapeHtml(blank(r.branch))}</td><td>${escapeHtml(blank(r.operator))}</td><td>${badge(r.status)}</td><td>${fmtTime(r.started_at)}</td><td>${fmtTime(r.finished_at)}</td><td>${escapeHtml(blank(r.note))}</td></tr>`).join(''):'<tr><td colspan="8">暂无部署记录</td></tr>';
+    }catch(e){
+      recordsState.className='state error';recordsState.innerText=e.message||'部署记录加载失败。';recordRows.innerHTML='<tr><td colspan="8">部署记录加载失败，请稍后刷新。</td></tr>';
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>
