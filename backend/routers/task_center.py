@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user, require_permission_user
 from ..database import get_db
-from ..models import AiTask, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask, User
+from ..models import AiEmployee, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask, User
 
 
 router = APIRouter(prefix="/api/task-center")
@@ -124,12 +124,17 @@ def update_task_status(task_id: int, payload: TaskStatusUpdate, request: Request
 def assign_ai_employee(task_id: int, payload: TaskAssign, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "task_center.manage")
     task = get_task_or_404(db, task_id)
-    ai_employee = db.query(AiTask).filter(AiTask.ai_employee_code == payload.ai_employee_code.strip()).one_or_none()
-    if not ai_employee and not payload.ai_employee_name:
+    employee_code = payload.ai_employee_code.strip()
+    ai_employee = db.query(AiEmployee).filter(AiEmployee.employee_code == employee_code).one_or_none()
+    if not ai_employee:
         raise HTTPException(status_code=404, detail="AI employee not found")
+    if ai_employee.status != "active":
+        raise HTTPException(status_code=400, detail="AI employee is inactive")
+    if ai_employee.is_legacy:
+        raise HTTPException(status_code=400, detail="legacy AI employee cannot be assigned")
 
-    task.assigned_ai_employee_code = payload.ai_employee_code.strip()
-    task.assigned_ai_employee_name = payload.ai_employee_name or (ai_employee.ai_employee_name if ai_employee else None)
+    task.assigned_ai_employee_code = employee_code
+    task.assigned_ai_employee_name = payload.ai_employee_name or ai_employee.employee_name
     set_task_status(db, task, "assigned", user, "ai_employee_assigned", payload.detail or task.assigned_ai_employee_code)
     db.commit()
     db.refresh(task)
