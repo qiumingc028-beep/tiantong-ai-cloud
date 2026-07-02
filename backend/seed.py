@@ -1,7 +1,9 @@
+import json
+
 from sqlalchemy.orm import Session
 
 from .auth_data import ROLE_LABELS
-from .models import AiTask, Permission, Role
+from .models import AiEmployee, AiTask, Permission, Role
 
 
 PERMISSIONS = [
@@ -49,6 +51,36 @@ AI_EMPLOYEES = [
     ("ai_data_analyst", "AI数据分析", "生成经营日报和跨店铺趋势分析。"),
 ]
 
+REAL_AI_EMPLOYEES = [
+    ("tiantong", "天统：AI总指挥", "研发交付军团", "统筹任务拆分、分配、汇总与推进", ["command", "summary"], ["task_center.manage"], 10),
+    ("tiangong", "天工：系统架构中心", "研发交付军团", "系统架构设计、技术方案与边界控制", ["architecture"], ["task_center.read"], 20),
+    ("tianwang", "天王：后端开发中心", "研发交付军团", "后端 API、数据库模型、迁移、权限和测试", ["backend"], ["task_center.execute"], 30),
+    ("tianyan_frontend", "天颜：前端联调优化", "研发交付军团", "前端页面、交互联调与体验优化", ["frontend"], ["task_center.execute"], 40),
+    ("tianjian_test", "天检：测试验收中心", "研发交付军团", "测试验收、缺陷复核与回归验证", ["test", "acceptance"], ["task_center.review"], 50),
+    ("tianjian_audit", "天监：AI审计中心", "研发交付军团", "审计任务过程、权限和结果合规性", ["audit"], ["task_center.audit"], 60),
+    ("tiandun_ops", "天盾：部署运维修复", "研发交付军团", "部署运维、环境修复与运行保障", ["ops"], ["task_center.execute"], 70),
+    ("tiandun_deploy", "天盾：Deploy Center", "研发交付军团", "Deploy Center 建设与发布链路", ["deploy"], ["task_center.execute"], 80),
+    ("tiandao", "天道：AI产品经理中心", "产品策略军团", "产品规划、需求拆解与验收口径", ["product"], ["task_center.read"], 90),
+    ("tiance_strategy", "天策：策略分析中心", "经营策略军团", "经营策略、行业分析与策略建议", ["strategy"], ["task_center.read"], 100),
+    ("tianyan_sim", "天演：系统推演中心", "经营策略军团", "系统推演、流程模拟与风险预判", ["simulation"], ["task_center.read"], 110),
+    ("tianshi", "天市：全球市场研究中心", "市场增长军团", "全球市场、竞品和行业研究", ["market"], ["task_center.read"], 120),
+    ("tianying", "天盈：商业增长中心", "市场增长军团", "商业增长、转化提升与增长方案", ["growth"], ["task_center.read"], 130),
+    ("tiancai_data", "天采：数据采集平台", "数据资产军团", "数据采集、数据源接入与采集质量", ["data_collection"], ["task_center.execute"], 140),
+    ("tiance_account", "天册：账号资料模板中心", "数据资产军团", "账号资料、模板与字段规范管理", ["account_template"], ["task_center.read"], 150),
+    ("tiancang", "天藏：知识资产中心", "数据资产军团", "知识资产沉淀、SOP 与资料管理", ["knowledge"], ["task_center.read"], 160),
+    ("tianyu", "天誉：GEO品牌增长中心", "品牌运营军团", "GEO 品牌增长、声誉和内容分发", ["brand_growth"], ["task_center.read"], 170),
+    ("tianshang", "天商：商品运营中心", "电商运营军团", "商品运营、商品分析与运营动作", ["product_ops"], ["task_center.execute"], 180),
+    ("tiantou", "天投：广告投放中心", "电商运营军团", "广告投放、ROI 分析与计划优化", ["ads"], ["task_center.execute"], 190),
+    ("tianchuang", "天创：设计创意中心", "内容创意军团", "设计创意、图片素材与视觉优化", ["design"], ["task_center.execute"], 200),
+    ("tianbo", "天播：视频中心", "内容创意军团", "视频脚本、剪辑任务与短视频素材", ["video"], ["task_center.execute"], 210),
+    ("tianfu", "天服：客服中心", "服务保障军团", "客服、售后和退款异常分析", ["service"], ["task_center.execute"], 220),
+    ("tianshu", "天数：数据分析中心", "数据资产军团", "经营数据分析、日报和趋势洞察", ["data_analysis"], ["task_center.execute"], 230),
+    ("tiancai_finance", "天财：财务中心", "管理保障军团", "财务核算、利润和费用分析", ["finance"], ["task_center.read"], 240),
+    ("tianfa", "天法：法务中心", "管理保障军团", "法务审查、合同和合规支持", ["legal"], ["task_center.read"], 250),
+    ("tianan", "天安：安全中心", "管理保障军团", "安全策略、账号和系统安全", ["security"], ["task_center.read"], 260),
+    ("tianzhi", "天智：AI训练中心", "AI能力军团", "AI 训练、能力评测和提示词优化", ["ai_training"], ["task_center.read"], 270),
+]
+
 
 PERMISSIONS.append(("menu.account_center", "账号资料中心"))
 for role_code in ("owner", "admin", "operator"):
@@ -82,6 +114,20 @@ def seed_defaults(db: Session):
         else:
             ai_task.ai_employee_name = name
 
+    for code, name, legion, duty, task_types, default_permissions, sort_order in REAL_AI_EMPLOYEES:
+        employee = db.query(AiEmployee).filter(AiEmployee.employee_code == code).one_or_none()
+        if not employee:
+            employee = AiEmployee(employee_code=code)
+            db.add(employee)
+        employee.employee_name = name
+        employee.legion = legion
+        employee.duty = duty
+        employee.status = "active"
+        employee.task_types = json.dumps(task_types, ensure_ascii=False)
+        employee.default_permissions = json.dumps(default_permissions, ensure_ascii=False)
+        employee.is_legacy = False
+        employee.sort_order = sort_order
+
     db.commit()
 
 PERMISSIONS.extend([
@@ -97,6 +143,10 @@ PERMISSIONS.extend([
     ("task_center.review", "review task center tasks"),
     ("task_center.audit", "audit task center tasks"),
 ])
+PERMISSIONS.extend([
+    ("ai_employees.read", "read AI employee registry"),
+    ("ai_employees.manage", "manage AI employee registry"),
+])
 for role_code in ("owner", "admin"):
     ROLE_PERMISSIONS.setdefault(role_code, []).extend([
         "task_center.read",
@@ -104,4 +154,6 @@ for role_code in ("owner", "admin"):
         "task_center.execute",
         "task_center.review",
         "task_center.audit",
+        "ai_employees.read",
+        "ai_employees.manage",
     ])
