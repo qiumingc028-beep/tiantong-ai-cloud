@@ -2,14 +2,143 @@ from datetime import datetime, timezone
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_role_permissions, normalize_role, require_permission_user, current_user
 from ..database import get_db, get_redis
-from ..models import AiTask, EmployeeLog
+from ..models import AiEmployee, AiTask, EmployeeLog
 
 
 router = APIRouter()
+
+EMPLOYEE_STATUSES = {"active", "inactive"}
+
+
+class AiEmployeeCreate(BaseModel):
+    employee_code: str
+    employee_name: str
+    legion: str | None = None
+    duty: str | None = None
+    status: str = "active"
+    task_types: list[str] = []
+    default_permissions: list[str] = []
+    is_legacy: bool = False
+    sort_order: int = 0
+
+
+class AiEmployeeUpdate(BaseModel):
+    employee_name: str | None = None
+    legion: str | None = None
+    duty: str | None = None
+    status: str | None = None
+    task_types: list[str] | None = None
+    default_permissions: list[str] | None = None
+    is_legacy: bool | None = None
+    sort_order: int | None = None
+
+
+@router.get("/api/ai-employees")
+def list_ai_employees(
+    request: Request,
+    status: str | None = None,
+    task_type: str | None = None,
+    include_legacy: bool = False,
+    db: Session = Depends(get_db),
+):
+    require_ai_employee_read(request, db)
+    query = db.query(AiEmployee)
+    if status:
+        query = query.filter(AiEmployee.status == normalize_employee_status(status))
+    if not include_legacy:
+        query = query.filter(AiEmployee.is_legacy.is_(False))
+    employees = query.order_by(AiEmployee.sort_order.asc(), AiEmployee.id.asc()).all()
+    if task_type:
+        employees = [employee for employee in employees if task_type in parse_json_list(employee.task_types)]
+    return [employee_to_dict(employee) for employee in employees]
+
+
+@router.get("/api/ai-employees/{employee_code}")
+def get_ai_employee(employee_code: str, request: Request, db: Session = Depends(get_db)):
+    require_ai_employee_read(request, db)
+    return employee_to_dict(get_employee_or_404(db, employee_code))
+
+
+@router.post("/api/ai-employees")
+def create_ai_employee(payload: AiEmployeeCreate, request: Request, db: Session = Depends(get_db)):
+    require_permission_user(request, db, "ai_employees.manage")
+    employee_code = payload.employee_code.strip()
+    employee_name = payload.employee_name.strip()
+    if not employee_code:
+        raise HTTPException(status_code=400, detail="employee code is required")
+    if not employee_name:
+        raise HTTPException(status_code=400, detail="employee name is required")
+    if db.query(AiEmployee).filter(AiEmployee.employee_code == employee_code).one_or_none():
+        raise HTTPException(status_code=400, detail="employee code already exists")
+
+    employee = AiEmployee(
+        employee_code=employee_code,
+        employee_name=employee_name,
+        legion=payload.legion,
+        duty=payload.duty,
+        status=normalize_employee_status(payload.status),
+        task_types=json.dumps(payload.task_types, ensure_ascii=False),
+        default_permissions=json.dumps(payload.default_permissions, ensure_ascii=False),
+        is_legacy=payload.is_legacy,
+        sort_order=payload.sort_order,
+    )
+    db.add(employee)
+    db.commit()
+    db.refresh(employee)
+    return {"ok": True, "employee": employee_to_dict(employee)}
+
+
+@router.patch("/api/ai-employees/{employee_code}")
+def update_ai_employee(employee_code: str, payload: AiEmployeeUpdate, request: Request, db: Session = Depends(get_db)):
+    require_permission_user(request, db, "ai_employees.manage")
+    employee = get_employee_or_404(db, employee_code)
+    if payload.employee_name is not None:
+        employee_name = payload.employee_name.strip()
+        if not employee_name:
+            raise HTTPException(status_code=400, detail="employee name is required")
+        employee.employee_name = employee_name
+    if payload.legion is not None:
+        employee.legion = payload.legion
+    if payload.duty is not None:
+        employee.duty = payload.duty
+    if payload.status is not None:
+        employee.status = normalize_employee_status(payload.status)
+    if payload.task_types is not None:
+        employee.task_types = json.dumps(payload.task_types, ensure_ascii=False)
+    if payload.default_permissions is not None:
+        employee.default_permissions = json.dumps(payload.default_permissions, ensure_ascii=False)
+    if payload.is_legacy is not None:
+        employee.is_legacy = payload.is_legacy
+    if payload.sort_order is not None:
+        employee.sort_order = payload.sort_order
+    db.commit()
+    db.refresh(employee)
+    return {"ok": True, "employee": employee_to_dict(employee)}
+
+
+@router.post("/api/ai-employees/{employee_code}/enable")
+def enable_ai_employee(employee_code: str, request: Request, db: Session = Depends(get_db)):
+    require_permission_user(request, db, "ai_employees.manage")
+    employee = get_employee_or_404(db, employee_code)
+    employee.status = "active"
+    db.commit()
+    db.refresh(employee)
+    return {"ok": True, "employee": employee_to_dict(employee)}
+
+
+@router.post("/api/ai-employees/{employee_code}/disable")
+def disable_ai_employee(employee_code: str, request: Request, db: Session = Depends(get_db)):
+    require_permission_user(request, db, "ai_employees.manage")
+    employee = get_employee_or_404(db, employee_code)
+    employee.status = "inactive"
+    db.commit()
+    db.refresh(employee)
+    return {"ok": True, "employee": employee_to_dict(employee)}
 
 
 @router.get("/api/ai/tasks")
@@ -50,6 +179,55 @@ def run_ai_task(task_id: int, request: Request, db: Session = Depends(get_db)):
     db.commit()
     push_ai_queue(task)
     return {"ok": True, "message": f"{task.ai_employee_name} 已进入执行状态"}
+
+
+def get_employee_or_404(db: Session, employee_code: str):
+    employee = db.query(AiEmployee).filter(AiEmployee.employee_code == employee_code.strip()).one_or_none()
+    if not employee:
+        raise HTTPException(status_code=404, detail="AI employee not found")
+    return employee
+
+
+def normalize_employee_status(status: str) -> str:
+    clean = status.strip()
+    if clean not in EMPLOYEE_STATUSES:
+        raise HTTPException(status_code=400, detail="invalid employee status")
+    return clean
+
+
+def parse_json_list(value: str | None):
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def employee_to_dict(employee: AiEmployee):
+    return {
+        "id": employee.id,
+        "employee_code": employee.employee_code,
+        "employee_name": employee.employee_name,
+        "legion": employee.legion,
+        "duty": employee.duty,
+        "status": employee.status,
+        "task_types": parse_json_list(employee.task_types),
+        "default_permissions": parse_json_list(employee.default_permissions),
+        "is_legacy": employee.is_legacy,
+        "sort_order": employee.sort_order,
+        "created_at": employee.created_at.isoformat() if employee.created_at else None,
+        "updated_at": employee.updated_at.isoformat() if employee.updated_at else None,
+    }
+
+
+def require_ai_employee_read(request: Request, db: Session):
+    user = current_user(request, db)
+    permissions = get_role_permissions(db, normalize_role(user.role))
+    if not permissions.intersection({"ai_employees.read", "ai_employees.manage"}):
+        raise HTTPException(status_code=403, detail="no AI employee registry permission")
+    return user
 
 
 def task_to_dict(task: AiTask):
