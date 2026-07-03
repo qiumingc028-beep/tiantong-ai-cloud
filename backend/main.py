@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import text
 
 from .database import SessionLocal, ensure_tables, engine, get_redis
-from .routers import account_center, ai_employees, ceo_dashboard, deploy_center, jd_collection, jd_integrations, knowledge_center, metrics, orchestrator, stores, task_center, tiancang, users
+from .routers import account_center, ai_employees, ceo_dashboard, deploy_center, jd_collection, jd_integrations, knowledge_center, metrics, orchestrator, orchestrator_hotfix, stores, task_center, tiancang, users
 from .seed import seed_defaults
 
 
@@ -54,6 +54,7 @@ app.include_router(knowledge_center.router)
 app.include_router(task_center.router)
 app.include_router(deploy_center.router)
 app.include_router(ceo_dashboard.router)
+app.include_router(orchestrator_hotfix.router)
 app.include_router(orchestrator.router)
 
 
