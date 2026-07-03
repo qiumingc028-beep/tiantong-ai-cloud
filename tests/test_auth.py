@@ -4,6 +4,10 @@ from pathlib import Path
 from backend.models import User
 
 
+def test_backend_main_imports():
+    import backend.main  # noqa: F401
+
+
 def test_health_reports_server_database_and_redis(client):
     response = client.get("/api/health")
 
