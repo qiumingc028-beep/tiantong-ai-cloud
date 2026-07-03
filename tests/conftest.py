@@ -171,14 +171,62 @@ def seed_database(session_factory):
         db.add_all([owner_role, admin_role, operator_role, customer_service_role, designer_role, editor_role, viewer_role])
         db.add_all(
             [
-                User(username="owner", password_hash=hash_password("password"), role="owner", display_name="Owner", active=True),
-                User(username="admin", password_hash=hash_password("password"), role="admin", display_name="Admin", active=True),
-                User(username="boss", password_hash=hash_password("password"), role="boss", display_name="Boss", active=True),
-                User(username="operator", password_hash=hash_password("password"), role="operator", display_name="Operator", active=True),
-                User(username="customer_service", password_hash=hash_password("password"), role="customer_service", display_name="Customer Service", active=True),
-                User(username="designer", password_hash=hash_password("password"), role="designer", display_name="Designer", active=True),
-                User(username="editor", password_hash=hash_password("password"), role="editor", display_name="Editor", active=True),
-                User(username="viewer", password_hash=hash_password("password"), role="viewer", display_name="Viewer", active=True),
+                User(
+                    username="owner",
+                    password_hash=hash_password("password"),
+                    role="owner",
+                    display_name="Owner",
+                    active=True,
+                ),
+                User(
+                    username="admin",
+                    password_hash=hash_password("password"),
+                    role="admin",
+                    display_name="Admin",
+                    active=True,
+                ),
+                User(
+                    username="boss",
+                    password_hash=hash_password("password"),
+                    role="boss",
+                    display_name="Boss",
+                    active=True,
+                ),
+                User(
+                    username="operator",
+                    password_hash=hash_password("password"),
+                    role="operator",
+                    display_name="Operator",
+                    active=True,
+                ),
+                User(
+                    username="customer_service",
+                    password_hash=hash_password("password"),
+                    role="customer_service",
+                    display_name="Customer Service",
+                    active=True,
+                ),
+                User(
+                    username="designer",
+                    password_hash=hash_password("password"),
+                    role="designer",
+                    display_name="Designer",
+                    active=True,
+                ),
+                User(
+                    username="editor",
+                    password_hash=hash_password("password"),
+                    role="editor",
+                    display_name="Editor",
+                    active=True,
+                ),
+                User(
+                    username="viewer",
+                    password_hash=hash_password("password"),
+                    role="viewer",
+                    display_name="Viewer",
+                    active=True,
+                ),
             ]
         )
         db.add(Store(platform="jd", store_code="JD01", store_name="JD Store 01", active=True))
@@ -191,7 +239,15 @@ def seed_database(session_factory):
                 note="Deploy Center MVP initialized",
             )
         )
-        db.add(AiTask(ai_employee_code="ai_operator", ai_employee_name="AI Operator", status="idle", today_task="Check store metrics", execution_log=""))
+        db.add(
+            AiTask(
+                ai_employee_code="ai_operator",
+                ai_employee_name="AI Operator",
+                status="idle",
+                today_task="Check store metrics",
+                execution_log="",
+            )
+        )
         db.add_all(
             [
                 AiEmployee(
