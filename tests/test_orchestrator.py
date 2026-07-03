@@ -32,11 +32,12 @@ def test_orchestrator_allows_boss_owner_admin(client, boss_headers, owner_header
 
 def test_analyze_reply_detects_backend_completion_and_writes_safe_record(client, owner_headers, test_db):
     add_employee(test_db, "tianjian_test", "天检：测试验收中心", "test", 50)
+    long_secret = "password=super-secret-token"
     reply = (
         "你是【天王：后端开发中心】。\n"
         "现在执行《天统AI公司 V1 Sprint 5》的后端实现任务。\n"
         "AI Orchestrator MVP 后端已完成，测试通过，可以进入下一步。\n"
-        "password=super-secret-token\n"
+        f"{long_secret}\n"
         + ("补充说明" * 400)
     )
     response = client.post(
@@ -84,12 +85,42 @@ def test_analyze_reply_detects_blocker_and_generates_fix_suggestion(client, owne
     assert "修复" in data["recommended_next"]["action"]
 
 
+def test_analyze_reply_redacts_cookie_equals_from_record_and_prompt(client, owner_headers, test_db):
+    analysis_id, prompt_draft = create_sensitive_analysis(client, owner_headers, "cookie=session123")
+    assert "session123" not in prompt_draft
+    assert "[REDACTED]" in prompt_draft
+    assert_saved_analysis_is_redacted(test_db, analysis_id, "session123")
+
+
+def test_analyze_reply_redacts_cookie_header_from_record_and_prompt(client, owner_headers, test_db):
+    analysis_id, prompt_draft = create_sensitive_analysis(client, owner_headers, "Cookie: session123")
+    assert "session123" not in prompt_draft
+    assert_saved_analysis_is_redacted(test_db, analysis_id, "session123")
+
+
+def test_analyze_reply_redacts_set_cookie_header_from_record_and_prompt(client, owner_headers, test_db):
+    analysis_id, prompt_draft = create_sensitive_analysis(client, owner_headers, "Set-Cookie: session123")
+    assert "session123" not in prompt_draft
+    assert_saved_analysis_is_redacted(test_db, analysis_id, "session123")
+
+
+def test_analyze_reply_redacts_tiantong_session_from_record_and_prompt(client, owner_headers, test_db):
+    analysis_id, prompt_draft = create_sensitive_analysis(client, owner_headers, "tiantong_session=session123")
+    assert "session123" not in prompt_draft
+    assert_saved_analysis_is_redacted(test_db, analysis_id, "session123")
+
+
 def test_confirm_next_prompt_records_only_allowed_statuses(client, owner_headers, test_db):
     analysis_id = create_analysis(client, owner_headers)
     response = client.post(
         "/api/orchestrator/confirm-next-prompt",
         headers=owner_headers,
-        json={"analysis_id": analysis_id, "target_codex": "tianwang", "confirmed_prompt": "老板确认后的 Prompt", "confirm_status": "confirmed"},
+        json={
+            "analysis_id": analysis_id,
+            "target_codex": "tianwang",
+            "confirmed_prompt": "老板确认后的 Prompt",
+            "confirm_status": "confirmed",
+        },
     )
     assert response.status_code == 200
     confirmation_id = response.json()["confirmation_id"]
@@ -103,13 +134,84 @@ def test_confirm_next_prompt_records_only_allowed_statuses(client, owner_headers
     finally:
         db.close()
 
-    for status in ["copied", "cancelled"]:
-        response = client.post(
-            "/api/orchestrator/confirm-next-prompt",
-            headers=owner_headers,
-            json={"analysis_id": analysis_id, "target_codex": "tianwang", "confirmed_prompt": "Prompt", "confirm_status": status},
-        )
-        assert response.status_code == 200
+    copied = client.post(
+        "/api/orchestrator/confirm-next-prompt",
+        headers=owner_headers,
+        json={
+            "analysis_id": analysis_id,
+            "target_codex": "tianwang",
+            "confirmed_prompt": "已复制 Prompt",
+            "confirm_status": "copied",
+        },
+    )
+    assert copied.status_code == 200
+
+    cancelled = client.post(
+        "/api/orchestrator/confirm-next-prompt",
+        headers=owner_headers,
+        json={
+            "analysis_id": analysis_id,
+            "target_codex": "tianwang",
+            "confirmed_prompt": "取消 Prompt",
+            "confirm_status": "cancelled",
+        },
+    )
+    assert cancelled.status_code == 200
+
+
+def test_confirm_next_prompt_redacts_sensitive_confirmed_prompt_before_save(client, owner_headers, test_db):
+    analysis_id = create_analysis(client, owner_headers)
+    sensitive_prompt = (
+        "cookie=session123 Cookie: session456 Set-Cookie: session789 "
+        "tiantong_session=abc session=def sessionid=ghi session_id=jkl "
+        "csrftoken=mno csrf_token=pqr token=tok password=pwd api_key=key "
+        "DATABASE_URL=postgresql://user:pass@db/name REDIS_URL=redis://redis:6379/0"
+    )
+    response = client.post(
+        "/api/orchestrator/confirm-next-prompt",
+        headers=owner_headers,
+        json={
+            "analysis_id": analysis_id,
+            "target_codex": "tianwang",
+            "confirmed_prompt": sensitive_prompt,
+            "confirm_status": "confirmed",
+        },
+    )
+
+    assert response.status_code == 200
+    db = test_db()
+    try:
+        confirmation = db.get(OrchestratorPromptConfirmation, response.json()["confirmation_id"])
+        assert_sensitive_values_redacted(confirmation.confirmed_prompt)
+    finally:
+        db.close()
+
+
+def test_confirm_next_prompt_redacts_sensitive_note_before_save(client, owner_headers, test_db):
+    analysis_id = create_analysis(client, owner_headers)
+    sensitive_note = (
+        "cookie=session123 session=def token=tok password=pwd api_key=key "
+        "DATABASE_URL=postgresql://user:pass@db/name REDIS_URL=redis://redis:6379/0"
+    )
+    response = client.post(
+        "/api/orchestrator/confirm-next-prompt",
+        headers=owner_headers,
+        json={
+            "analysis_id": analysis_id,
+            "target_codex": "tianwang",
+            "confirmed_prompt": "safe prompt",
+            "confirm_status": "confirmed",
+            "note": sensitive_note,
+        },
+    )
+
+    assert response.status_code == 200
+    db = test_db()
+    try:
+        confirmation = db.get(OrchestratorPromptConfirmation, response.json()["confirmation_id"])
+        assert_sensitive_values_redacted(confirmation.note)
+    finally:
+        db.close()
 
 
 def test_confirm_next_prompt_rejects_execution_statuses(client, owner_headers):
@@ -118,7 +220,12 @@ def test_confirm_next_prompt_rejects_execution_statuses(client, owner_headers):
         response = client.post(
             "/api/orchestrator/confirm-next-prompt",
             headers=owner_headers,
-            json={"analysis_id": analysis_id, "target_codex": "tianwang", "confirmed_prompt": "Prompt", "confirm_status": status},
+            json={
+                "analysis_id": analysis_id,
+                "target_codex": "tianwang",
+                "confirmed_prompt": "Prompt",
+                "confirm_status": status,
+            },
         )
         assert response.status_code == 400
 
@@ -167,7 +274,12 @@ def test_orchestrator_does_not_touch_task_center(client, owner_headers, test_db)
 
 
 def test_orchestrator_migration_is_single_head():
-    result = subprocess.run([sys.executable, "-m", "alembic", "heads"], capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "heads"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     assert heads == ["0010_orchestrator_tables (head)"]
 
@@ -195,6 +307,59 @@ def add_employee(test_db, employee_code: str, employee_name: str, task_type: str
 
 
 def create_analysis(client, headers, reply_text: str = "你是【天王：后端开发中心】。Sprint 5 后端实现已完成，测试通过。"):
-    response = client.post("/api/orchestrator/analyze-reply", headers=headers, json={"reply_text": reply_text, "context": {"sprint": "Sprint 5"}})
+    response = client.post(
+        "/api/orchestrator/analyze-reply",
+        headers=headers,
+        json={"reply_text": reply_text, "context": {"sprint": "Sprint 5"}},
+    )
     assert response.status_code == 200
     return response.json()["analysis_id"]
+
+
+def create_sensitive_analysis(client, headers, sensitive_text: str):
+    response = client.post(
+        "/api/orchestrator/analyze-reply",
+        headers=headers,
+        json={
+            "reply_text": f"你是【天王：后端开发中心】。Sprint 5 后端实现已完成，测试通过。 {sensitive_text}",
+            "context": {"sprint": "Sprint 5"},
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert any(item["type"] == "sensitive_text_redacted" for item in data["safety_flags"])
+    return data["analysis_id"], data["prompt_draft"]
+
+
+def assert_saved_analysis_is_redacted(test_db, analysis_id: int, sensitive_value: str):
+    db = test_db()
+    try:
+        record = db.get(OrchestratorAnalysisRecord, analysis_id)
+        assert sensitive_value not in record.input_excerpt
+        assert sensitive_value not in record.prompt_draft
+        assert "[REDACTED]" in record.input_excerpt
+        assert "[REDACTED]" in record.prompt_draft
+        assert "sensitive_text_redacted" in record.safety_flags_json
+    finally:
+        db.close()
+
+
+def assert_sensitive_values_redacted(value: str):
+    assert "[REDACTED]" in value
+    for secret in [
+        "session123",
+        "session456",
+        "session789",
+        "abc",
+        "def",
+        "ghi",
+        "jkl",
+        "mno",
+        "pqr",
+        "tok",
+        "pwd",
+        "key",
+        "postgresql://user:pass@db/name",
+        "redis://redis:6379/0",
+    ]:
+        assert secret not in value
