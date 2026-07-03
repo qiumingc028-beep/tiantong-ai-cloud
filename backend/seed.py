@@ -147,6 +147,11 @@ PERMISSIONS.extend([
     ("ai_employees.read", "read AI employee registry"),
     ("ai_employees.manage", "manage AI employee registry"),
 ])
+PERMISSIONS.extend([
+    ("orchestrator.read", "read AI Orchestrator"),
+    ("orchestrator.analyze", "analyze AI Orchestrator replies"),
+    ("orchestrator.confirm", "confirm AI Orchestrator prompts"),
+])
 for role_code in ("owner", "admin"):
     ROLE_PERMISSIONS.setdefault(role_code, []).extend([
         "task_center.read",
@@ -156,4 +161,7 @@ for role_code in ("owner", "admin"):
         "task_center.audit",
         "ai_employees.read",
         "ai_employees.manage",
+        "orchestrator.read",
+        "orchestrator.analyze",
+        "orchestrator.confirm",
     ])
