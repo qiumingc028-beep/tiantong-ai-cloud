@@ -126,7 +126,7 @@ def test_alembic_heads_has_single_head():
     )
 
     heads = [line for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0010_orchestrator_tables (head)"]
+    assert heads == ["0011_orchestrator_task_links (head)"]
 
 
 def create_task(client, headers):
