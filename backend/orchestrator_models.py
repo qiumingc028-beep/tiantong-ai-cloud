@@ -49,3 +49,30 @@ class OrchestratorPromptConfirmation(Base):
 
     analysis_record: Mapped[OrchestratorAnalysisRecord] = relationship()
     confirmed_by: Mapped[User | None] = relationship()
+
+
+class OrchestratorTaskLink(Base):
+    __tablename__ = "orchestrator_task_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_record_id: Mapped[int] = mapped_column(
+        ForeignKey("orchestrator_analysis_records.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("task_center_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    link_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    recommended_codex: Mapped[str | None] = mapped_column(String(100), index=True)
+    recommended_action: Mapped[str | None] = mapped_column(String(100))
+    source_stage: Mapped[str | None] = mapped_column(String(50), index=True)
+    confidence: Mapped[str | None] = mapped_column(String(50))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    analysis_record: Mapped[OrchestratorAnalysisRecord] = relationship()
+    created_by: Mapped[User | None] = relationship()
