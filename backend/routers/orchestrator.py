@@ -43,15 +43,51 @@ NEXT_STAGE = {
 }
 
 EMPLOYEE_FALLBACKS = {
-    "tiantong": {"name": "天统：AI总指挥", "stage": "summary", "keywords": ["天统", "AI总指挥", "汇总", "summarized", "总指挥"]},
-    "tiangong": {"name": "天工：系统架构中心", "stage": "architecture", "keywords": ["天工", "系统架构中心", "架构设计", "数据库设计", "API设计", "模块边界"]},
-    "tianwang": {"name": "天王：后端开发中心", "stage": "backend", "keywords": ["天王", "后端开发中心", "后端", "API", "数据库", "Alembic", "模型", "迁移"]},
-    "tianyan_frontend": {"name": "天颜：前端联调优化", "stage": "frontend", "keywords": ["天颜", "前端联调", "前端", "页面", "联调"]},
-    "tianjian_test": {"name": "天检：测试验收中心", "stage": "test", "keywords": ["天检", "测试验收", "测试", "验收", "回归", "pytest"]},
-    "tianjian_audit": {"name": "天监：AI审计中心", "stage": "audit", "keywords": ["天监", "AI审计", "审计", "风险", "权限", "安全边界"]},
-    "tiandun_ops": {"name": "天盾：部署运维修复", "stage": "deploy", "keywords": ["天盾", "部署运维", "部署", "回滚", "健康检查", "迁移版本"]},
-    "tiandun_deploy": {"name": "天盾：Deploy Center", "stage": "deploy", "keywords": ["Deploy Center", "deploy center", "部署中心"]},
-    "tiandao": {"name": "天道：AI产品经理中心", "stage": "product", "keywords": ["天道", "AI产品经理", "产品设计", "PRD", "产品经理"]},
+    "tiantong": {
+        "name": "天统：AI总指挥",
+        "stage": "summary",
+        "keywords": ["天统", "AI总指挥", "汇总", "summarized", "总指挥"],
+    },
+    "tiangong": {
+        "name": "天工：系统架构中心",
+        "stage": "architecture",
+        "keywords": ["天工", "系统架构中心", "架构设计", "数据库设计", "API设计", "模块边界"],
+    },
+    "tianwang": {
+        "name": "天王：后端开发中心",
+        "stage": "backend",
+        "keywords": ["天王", "后端开发中心", "后端", "API", "数据库", "Alembic", "模型", "迁移"],
+    },
+    "tianyan_frontend": {
+        "name": "天颜：前端联调优化",
+        "stage": "frontend",
+        "keywords": ["天颜", "前端联调", "前端", "页面", "联调"],
+    },
+    "tianjian_test": {
+        "name": "天检：测试验收中心",
+        "stage": "test",
+        "keywords": ["天检", "测试验收", "测试", "验收", "回归", "pytest"],
+    },
+    "tianjian_audit": {
+        "name": "天监：AI审计中心",
+        "stage": "audit",
+        "keywords": ["天监", "AI审计", "审计", "风险", "权限", "安全边界"],
+    },
+    "tiandun_ops": {
+        "name": "天盾：部署运维修复",
+        "stage": "deploy",
+        "keywords": ["天盾", "部署运维", "部署", "回滚", "健康检查", "迁移版本"],
+    },
+    "tiandun_deploy": {
+        "name": "天盾：Deploy Center",
+        "stage": "deploy",
+        "keywords": ["Deploy Center", "deploy center", "部署中心"],
+    },
+    "tiandao": {
+        "name": "天道：AI产品经理中心",
+        "stage": "product",
+        "keywords": ["天道", "AI产品经理", "产品设计", "PRD", "产品经理"],
+    },
 }
 
 STAGE_KEYWORDS = {
@@ -84,6 +120,9 @@ BLOCKER_RULES = [
 ]
 
 SENSITIVE_PATTERNS = [
+    re.compile(r"(?i)\b(set-cookie|cookie)\s*[:=]\s*['\"]?[^'\";\s]+"),
+    re.compile(r"(?i)\b(tiantong_session|session|sessionid|session_id|csrftoken|csrf_token)\s*=\s*['\"]?[^'\";\s]+"),
+    re.compile(r"(?i)\b(database_url|redis_url)\s*[:=]\s*['\"]?[^'\"\s]+"),
     re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[^'\"\s]+"),
     re.compile(r"(?i)bearer\s+[a-z0-9._-]+"),
     re.compile(r"(?i)(mysql|postgresql|redis)://[^\s]+"),
@@ -130,9 +169,26 @@ def analyze_reply(payload: AnalyzeReplyPayload, request: Request, db: Session = 
 
     has_blocker = bool(blockers) or completion_status == "blocked"
     needs_fix = completion_status in {"blocked", "needs_fix"} or any(item["type"] in {"test_failure", "security_risk", "deploy_failure"} for item in blockers)
-    manual_review_required = employee.manual_review_required or sprint == "unknown" or stage == "unknown" or completion_status == "unclear" or bool(safety_flags)
+    manual_review_required = (
+        employee.manual_review_required
+        or sprint == "unknown"
+        or stage == "unknown"
+        or completion_status == "unclear"
+        or bool(safety_flags)
+    )
     recommendation = recommend_next(db, employee, stage, completion_status, has_blocker, needs_fix, safe_text)
-    prompt_draft = build_prompt_draft(db, recommendation["target_codex"], sprint, employee, stage, completion_status, has_blocker, blockers, safe_text, recommendation["action"])
+    prompt_draft = build_prompt_draft(
+        db=db,
+        target_codex=recommendation["target_codex"],
+        detected_sprint=sprint,
+        detected_employee=employee,
+        detected_stage=stage,
+        completion_status=completion_status,
+        has_blocker=has_blocker,
+        blockers=blockers,
+        text=safe_text,
+        action=recommendation["action"],
+    )
 
     record = OrchestratorAnalysisRecord(
         input_excerpt=safe_text[:EXCERPT_LIMIT],
@@ -157,14 +213,22 @@ def analyze_reply(payload: AnalyzeReplyPayload, request: Request, db: Session = 
 
     return {
         "analysis_id": record.id,
-        "detected_employee": {"employee_code": employee.code or "unknown", "employee_name": employee.name or "unknown"},
+        "detected_employee": {
+            "employee_code": employee.code or "unknown",
+            "employee_name": employee.name or "unknown",
+        },
         "detected_sprint": sprint,
         "detected_stage": stage,
         "completion_status": completion_status,
         "has_blocker": has_blocker,
         "needs_fix": needs_fix,
         "blockers": blockers,
-        "recommended_next": {"target_codex": recommendation["target_codex"], "target_name": recommendation["target_name"], "action": recommendation["action"], "is_suggestion": True},
+        "recommended_next": {
+            "target_codex": recommendation["target_codex"],
+            "target_name": recommendation["target_name"],
+            "action": recommendation["action"],
+            "is_suggestion": True,
+        },
         "prompt_draft": prompt_draft,
         "safety_flags": safety_flags,
         "confidence": employee.confidence,
@@ -189,8 +253,18 @@ def get_current_sprint(request: Request, db: Session = Depends(get_db)):
             status = latest_status if latest_status in {"blocked", "needs_fix"} else "current"
         elif stage == next_stage:
             status = "next"
-        chain.append({"stage": stage, "codex": STAGE_TO_CODEX[stage], "status": status})
-    return {"sprint": latest.detected_sprint if latest and latest.detected_sprint else "Sprint 5", "chain": chain, "latest_analysis": analysis_summary(latest) if latest else None}
+        chain.append(
+            {
+                "stage": stage,
+                "codex": STAGE_TO_CODEX[stage],
+                "status": status,
+            }
+        )
+    return {
+        "sprint": latest.detected_sprint if latest and latest.detected_sprint else "Sprint 5",
+        "chain": chain,
+        "latest_analysis": analysis_summary(latest) if latest else None,
+    }
 
 
 @router.post("/confirm-next-prompt")
@@ -210,6 +284,7 @@ def confirm_next_prompt(payload: ConfirmPromptPayload, request: Request, db: Ses
         raise HTTPException(status_code=400, detail="target_codex is required")
     if not confirmed_prompt:
         raise HTTPException(status_code=400, detail="confirmed_prompt is required")
+    safe_note = redact_sensitive_text(payload.note.strip()) if payload.note else None
 
     confirmation = OrchestratorPromptConfirmation(
         analysis_record_id=analysis.id,
@@ -217,12 +292,16 @@ def confirm_next_prompt(payload: ConfirmPromptPayload, request: Request, db: Ses
         target_codex=target_codex,
         confirm_status=status,
         confirmed_by_id=user.id,
-        note=payload.note,
+        note=safe_note,
     )
     db.add(confirmation)
     db.commit()
     db.refresh(confirmation)
-    return {"ok": True, "confirmation_id": confirmation.id, "message": "Prompt recorded. Boss must copy and send manually."}
+    return {
+        "ok": True,
+        "confirmation_id": confirmation.id,
+        "message": "Prompt recorded. Boss must copy and send manually.",
+    }
 
 
 @router.get("/analysis-records")
@@ -250,15 +329,19 @@ def detect_employee(db: Session, text: str) -> EmployeeDetection:
             return employee_detection_from_row(employee, "high")
         if name and name in text:
             return employee_detection_from_row(employee, "high")
+
     for employee in employees:
-        if any(keyword and keyword in text for keyword in employee_keywords(employee)):
+        keywords = employee_keywords(employee)
+        if any(keyword and keyword in text for keyword in keywords):
             return employee_detection_from_row(employee, "medium")
+
     for code, fallback in EMPLOYEE_FALLBACKS.items():
         if code.lower() in lower_text or any(keyword in text for keyword in fallback["keywords"]):
             row = db.query(AiEmployee).filter(AiEmployee.employee_code == code).one_or_none()
             if row:
                 return employee_detection_from_row(row, "medium")
             return EmployeeDetection(code=code, name=fallback["name"], confidence="medium", manual_review_required=False)
+
     return EmployeeDetection(code=None, name=None, confidence="unknown", manual_review_required=True)
 
 
@@ -268,7 +351,13 @@ def employee_detection_from_row(employee: AiEmployee, confidence: str) -> Employ
     if employee.status != "active":
         warning = "Detected employee is inactive. Manual confirmation is required."
         manual_review_required = True
-    return EmployeeDetection(code=employee.employee_code, name=employee.employee_name, confidence=confidence, manual_review_required=manual_review_required, warning=warning)
+    return EmployeeDetection(
+        code=employee.employee_code,
+        name=employee.employee_name,
+        confidence=confidence,
+        manual_review_required=manual_review_required,
+        warning=warning,
+    )
 
 
 def employee_keywords(employee: AiEmployee) -> list[str]:
@@ -287,13 +376,18 @@ def detect_sprint(text: str, context: dict) -> str:
     if "AI Orchestrator" in text or "自动派单中心" in text:
         return "Sprint 5"
     sprint = str(context.get("sprint") or "").strip()
-    return sprint or "unknown"
+    if sprint:
+        return sprint
+    return "unknown"
 
 
 def detect_stage(text: str, employee: EmployeeDetection) -> str:
-    scores = {stage: sum(1 for keyword in keywords if keyword in text) for stage, keywords in STAGE_KEYWORDS.items()}
+    scores = {}
+    for stage, keywords in STAGE_KEYWORDS.items():
+        scores[stage] = sum(1 for keyword in keywords if keyword in text)
     if employee.code in EMPLOYEE_FALLBACKS:
-        scores[EMPLOYEE_FALLBACKS[employee.code]["stage"]] = scores.get(EMPLOYEE_FALLBACKS[employee.code]["stage"], 0) + 2
+        fallback_stage = EMPLOYEE_FALLBACKS[employee.code]["stage"]
+        scores[fallback_stage] = scores.get(fallback_stage, 0) + 2
     best_stage, best_score = max(scores.items(), key=lambda item: (item[1], -STAGE_CHAIN.index(item[0])))
     return best_stage if best_score > 0 else "unknown"
 
@@ -321,7 +415,14 @@ def detect_blockers(text: str) -> list[dict]:
     for blocker_type, level, keywords in BLOCKER_RULES:
         evidence = next((keyword for keyword in keywords if keyword in text), None)
         if evidence:
-            blockers.append({"type": blocker_type, "level": level, "evidence": evidence[:80], "recommended_action": "Generate a fix prompt for manual confirmation."})
+            blockers.append(
+                {
+                    "type": blocker_type,
+                    "level": level,
+                    "evidence": evidence[:80],
+                    "recommended_action": "Generate a fix prompt for manual confirmation.",
+                }
+            )
     return blockers
 
 
@@ -352,7 +453,8 @@ def recommend_next(db: Session, employee: EmployeeDetection, stage: str, complet
             target = "tianjian_test"
             action = "建议进入天检测试验收，不跳过验收。"
         else:
-            target = STAGE_TO_CODEX.get(NEXT_STAGE.get(stage) or "summary", "tiantong")
+            next_stage = NEXT_STAGE.get(stage)
+            target = STAGE_TO_CODEX.get(next_stage or "summary", "tiantong")
             action = "建议进入下一阶段，由老板人工确认后复制发送。"
     else:
         target = employee.code or STAGE_TO_CODEX.get(stage, "tiantong")
@@ -363,25 +465,54 @@ def recommend_next(db: Session, employee: EmployeeDetection, stage: str, complet
         target = "tiantong"
         action = "建议天统人工判断，因为目标员工未启用。"
         target_row = db.query(AiEmployee).filter(AiEmployee.employee_code == target, AiEmployee.status == "active").one_or_none()
-    return {"target_codex": target, "target_name": target_row.employee_name if target_row else EMPLOYEE_FALLBACKS.get(target, {}).get("name", target), "action": action}
+    return {
+        "target_codex": target,
+        "target_name": target_row.employee_name if target_row else EMPLOYEE_FALLBACKS.get(target, {}).get("name", target),
+        "action": action,
+    }
 
 
-def build_prompt_draft(db: Session, target_codex: str, detected_sprint: str, detected_employee: EmployeeDetection, detected_stage: str, completion_status: str, has_blocker: bool, blockers: list[dict], text: str, action: str) -> str:
+def build_prompt_draft(
+    db: Session,
+    target_codex: str,
+    detected_sprint: str,
+    detected_employee: EmployeeDetection,
+    detected_stage: str,
+    completion_status: str,
+    has_blocker: bool,
+    blockers: list[dict],
+    text: str,
+    action: str,
+) -> str:
     target = db.query(AiEmployee).filter(AiEmployee.employee_code == target_codex).one_or_none()
     target_name = target.employee_name if target else EMPLOYEE_FALLBACKS.get(target_codex, {}).get("name", target_codex)
     sprint_number = detected_sprint.replace("Sprint", "").strip() if detected_sprint != "unknown" else "5"
     previous_summary = text[:500]
     risk_summary = ", ".join(item["type"] for item in blockers) if blockers else "none"
+    task_title = "AI Orchestrator MVP 下一阶段建议任务"
     return (
         f"你是【{target_name}】。\n\n"
         f"现在执行《天统AI公司 V1 Sprint {sprint_number}》的下一阶段任务：\n\n"
-        f"【AI Orchestrator MVP 下一阶段建议任务】\n\n"
+        f"【{task_title}】\n\n"
         f"背景：\n系统根据老板粘贴的上一位 AI 员工回复生成建议，不会自动发送或执行。\n\n"
         f"上一个 AI 员工输出结论：\n{previous_summary}\n\n"
-        f"当前判断：\n- 来源员工：{detected_employee.name or detected_employee.code or 'unknown'}\n- 当前阶段：{detected_stage}\n- 完成度：{completion_status}\n- 是否阻断：{has_blocker}\n- 风险：{risk_summary}\n\n"
+        f"当前判断：\n"
+        f"- 来源员工：{detected_employee.name or detected_employee.code or 'unknown'}\n"
+        f"- 当前阶段：{detected_stage}\n"
+        f"- 完成度：{completion_status}\n"
+        f"- 是否阻断：{has_blocker}\n"
+        f"- 风险：{risk_summary}\n\n"
         f"你的任务：\n{action}\n\n"
-        f"限制：\n1. 不扩大范围。\n2. 不破坏 Sprint 1 / 2 / 3 / 4。\n3. 不跳过天检、天监、天盾。\n4. 不执行自动部署、自动发消息、自动 GitHub 操作。\n\n"
-        f"完成后输出：\n1. 修改文件清单 / 或设计结论\n2. 测试结果 / 或验收标准\n3. 风险说明\n4. 下一步建议"
+        f"限制：\n"
+        f"1. 不扩大范围。\n"
+        f"2. 不破坏 Sprint 1 / 2 / 3 / 4。\n"
+        f"3. 不跳过天检、天监、天盾。\n"
+        f"4. 不执行自动部署、自动发消息、自动 GitHub 操作。\n\n"
+        f"完成后输出：\n"
+        f"1. 修改文件清单 / 或设计结论\n"
+        f"2. 测试结果 / 或验收标准\n"
+        f"3. 风险说明\n"
+        f"4. 下一步建议"
     )[:PROMPT_LIMIT]
 
 
