@@ -1,0 +1,51 @@
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .database import Base
+from .models import User
+
+
+class OrchestratorAnalysisRecord(Base):
+    __tablename__ = "orchestrator_analysis_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    input_excerpt: Mapped[str] = mapped_column(Text, nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    detected_employee_code: Mapped[str | None] = mapped_column(String(100), index=True)
+    detected_employee_name: Mapped[str | None] = mapped_column(String(100))
+    detected_sprint: Mapped[str | None] = mapped_column(String(100), index=True)
+    detected_stage: Mapped[str | None] = mapped_column(String(50), index=True)
+    completion_status: Mapped[str | None] = mapped_column(String(50), index=True)
+    has_blocker: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    needs_fix: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    confidence: Mapped[str | None] = mapped_column(String(50))
+    recommended_codex: Mapped[str | None] = mapped_column(String(100), index=True)
+    recommended_action: Mapped[str | None] = mapped_column(Text)
+    prompt_draft: Mapped[str | None] = mapped_column(Text)
+    safety_flags_json: Mapped[str | None] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    created_by: Mapped[User | None] = relationship()
+
+
+class OrchestratorPromptConfirmation(Base):
+    __tablename__ = "orchestrator_prompt_confirmations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    analysis_record_id: Mapped[int] = mapped_column(
+        ForeignKey("orchestrator_analysis_records.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    confirmed_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    target_codex: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    confirm_status: Mapped[str] = mapped_column(String(50), nullable=False)
+    confirmed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    note: Mapped[str | None] = mapped_column(Text)
+
+    analysis_record: Mapped[OrchestratorAnalysisRecord] = relationship()
+    confirmed_by: Mapped[User | None] = relationship()
