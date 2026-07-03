@@ -54,7 +54,7 @@ def test_deploy_center_migration(client, owner_headers):
     response = client.get("/api/deploy-center/migration", headers=owner_headers)
     assert response.status_code == 200
     data = response.json()
-    assert data["expected_version"] == "0009_deploy_center_tables"
+    assert data["expected_version"] == "0010_orchestrator_tables"
     assert data["status"] in {"up_to_date", "outdated"}
 
 
@@ -93,4 +93,4 @@ def test_alembic_has_single_head():
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert heads == ["0009_deploy_center_tables"]
+    assert heads == ["0010_orchestrator_tables"]
