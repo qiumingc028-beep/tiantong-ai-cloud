@@ -149,6 +149,9 @@ def seed_database(session_factory):
             Permission(code="ai_employees.manage", name="AI Employees Manage"),
             Permission(code="deploy_center.read", name="Deploy Center Read"),
             Permission(code="deploy_center.manage", name="Deploy Center Manage"),
+            Permission(code="orchestrator.read", name="Orchestrator Read"),
+            Permission(code="orchestrator.analyze", name="Orchestrator Analyze"),
+            Permission(code="orchestrator.confirm", name="Orchestrator Confirm"),
         ]
         owner_role = Role(code="owner", name="Owner", permissions=permissions)
         admin_role = Role(code="admin", name="Admin", permissions=permissions)
@@ -158,6 +161,7 @@ def seed_database(session_factory):
             if not p.code.startswith("task_center.")
             and not p.code.startswith("ai_employees.")
             and not p.code.startswith("deploy_center.")
+            and not p.code.startswith("orchestrator.")
         ]
         operator_role = Role(code="operator", name="Operator", permissions=operator_permissions)
         customer_service_role = Role(code="customer_service", name="Customer Service", permissions=[])
@@ -167,62 +171,14 @@ def seed_database(session_factory):
         db.add_all([owner_role, admin_role, operator_role, customer_service_role, designer_role, editor_role, viewer_role])
         db.add_all(
             [
-                User(
-                    username="owner",
-                    password_hash=hash_password("password"),
-                    role="owner",
-                    display_name="Owner",
-                    active=True,
-                ),
-                User(
-                    username="admin",
-                    password_hash=hash_password("password"),
-                    role="admin",
-                    display_name="Admin",
-                    active=True,
-                ),
-                User(
-                    username="boss",
-                    password_hash=hash_password("password"),
-                    role="boss",
-                    display_name="Boss",
-                    active=True,
-                ),
-                User(
-                    username="operator",
-                    password_hash=hash_password("password"),
-                    role="operator",
-                    display_name="Operator",
-                    active=True,
-                ),
-                User(
-                    username="customer_service",
-                    password_hash=hash_password("password"),
-                    role="customer_service",
-                    display_name="Customer Service",
-                    active=True,
-                ),
-                User(
-                    username="designer",
-                    password_hash=hash_password("password"),
-                    role="designer",
-                    display_name="Designer",
-                    active=True,
-                ),
-                User(
-                    username="editor",
-                    password_hash=hash_password("password"),
-                    role="editor",
-                    display_name="Editor",
-                    active=True,
-                ),
-                User(
-                    username="viewer",
-                    password_hash=hash_password("password"),
-                    role="viewer",
-                    display_name="Viewer",
-                    active=True,
-                ),
+                User(username="owner", password_hash=hash_password("password"), role="owner", display_name="Owner", active=True),
+                User(username="admin", password_hash=hash_password("password"), role="admin", display_name="Admin", active=True),
+                User(username="boss", password_hash=hash_password("password"), role="boss", display_name="Boss", active=True),
+                User(username="operator", password_hash=hash_password("password"), role="operator", display_name="Operator", active=True),
+                User(username="customer_service", password_hash=hash_password("password"), role="customer_service", display_name="Customer Service", active=True),
+                User(username="designer", password_hash=hash_password("password"), role="designer", display_name="Designer", active=True),
+                User(username="editor", password_hash=hash_password("password"), role="editor", display_name="Editor", active=True),
+                User(username="viewer", password_hash=hash_password("password"), role="viewer", display_name="Viewer", active=True),
             ]
         )
         db.add(Store(platform="jd", store_code="JD01", store_name="JD Store 01", active=True))
@@ -235,15 +191,7 @@ def seed_database(session_factory):
                 note="Deploy Center MVP initialized",
             )
         )
-        db.add(
-            AiTask(
-                ai_employee_code="ai_operator",
-                ai_employee_name="AI Operator",
-                status="idle",
-                today_task="Check store metrics",
-                execution_log="",
-            )
-        )
+        db.add(AiTask(ai_employee_code="ai_operator", ai_employee_name="AI Operator", status="idle", today_task="Check store metrics", execution_log=""))
         db.add_all(
             [
                 AiEmployee(
