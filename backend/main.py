@@ -14,7 +14,7 @@ from .seed import seed_defaults
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 HTML_PAGES = {
-    "login.html", "control.html", "stores.html", "jd-integrations.html",
+    "index.html", "login.html", "control.html", "stores.html", "jd-integrations.html",
     "jd-dashboard.html", "metrics.html", "import.html", "ads.html",
     "ai-assets.html", "workflows.html", "ai-employees.html", "settings.html",
     "account-center.html", "template-center.html", "brands.html", "store-groups.html",
