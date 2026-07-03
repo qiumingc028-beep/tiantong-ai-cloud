@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 from backend.config import get_settings
 from backend.database import Base
 from backend import models  # noqa: F401
+from backend import orchestrator_models  # noqa: F401
 
 
 config = context.config
