@@ -18,7 +18,7 @@ HTML_PAGES = {
     "jd-dashboard.html", "metrics.html", "import.html", "ads.html",
     "ai-assets.html", "workflows.html", "ai-employees.html", "settings.html",
     "account-center.html", "template-center.html", "brands.html", "store-groups.html",
-    "knowledge-center.html", "tiancang.html", "task-center.html", "deploy-center.html",
+    "knowledge-center.html", "tiancang.html", "task-center.html", "orchestrator.html", "deploy-center.html",
 }
 
 app = FastAPI(title="天统AI云中台")
@@ -44,69 +44,66 @@ def startup():
 
 app.include_router(users.router)
 app.include_router(stores.router)
-app.include_router(account_center.router)
+app.include_router(metrics.router)
 app.include_router(jd_integrations.router)
 app.include_router(jd_collection.router)
-app.include_router(metrics.router)
-app.include_router(ai_employees.router)
-app.include_router(tiancang.router)
+app.include_router(account_center.router)
 app.include_router(knowledge_center.router)
+app.include_router(tiancang.router)
 app.include_router(task_center.router)
+app.include_router(ai_employees.router)
 app.include_router(deploy_center.router)
 app.include_router(ceo_dashboard.router)
 app.include_router(orchestrator.router)
 
 
+def db_health() -> bool:
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
+    finally:
+        db.close()
+
+
+def redis_health() -> bool:
+    client = get_redis()
+    try:
+        if client is None:
+            return False
+        return bool(client.ping())
+    except Exception:
+        return False
+
+
 @app.get("/api/health")
 def health():
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        db_ok = True
-    except Exception as e:
-        db_ok = str(e)
-
-    try:
-        redis_ok = get_redis().ping()
-    except Exception as e:
-        redis_ok = str(e)
-
+    database_ok = db_health()
+    redis_ok = redis_health()
     return {
-        "system": "天统AI云中台",
-        "status": "running",
-        "database": db_ok,
+        "status": "ok" if database_ok else "degraded",
+        "database": database_ok,
         "redis": redis_ok,
-        "time": datetime.now().isoformat(),
+        "time": datetime.utcnow().isoformat(),
     }
 
 
-@app.get("/api/ready")
-def ready():
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-    get_redis().ping()
-    return {
-        "system": "天统AI云中台",
-        "status": "ready",
-        "time": datetime.now().isoformat(),
-    }
+@app.get("/")
+def root():
+    return frontend_file("index.html")
 
 
 def frontend_file(filename: str):
     path = FRONTEND_DIR / filename
-    if not path.is_file():
+    if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="页面不存在")
     return FileResponse(path)
 
 
-@app.get("/", include_in_schema=False)
-def index_page():
-    return frontend_file("index.html")
-
-
-@app.get("/{page_name}.html", include_in_schema=False)
-def html_page(page_name: str):
-    filename = f"{page_name}.html"
+@app.get("/{filename}")
+def html_page(filename: str):
     if filename not in HTML_PAGES:
         raise HTTPException(status_code=404, detail="页面不存在")
     return frontend_file(filename)
