@@ -70,6 +70,26 @@ function statusText(status){return statusLabels[status]||text(status)}
 function statusBadge(status){const s=text(status,'standby');return `<span class="badge ${esc(s)}">${esc(statusText(s))}</span>`}
 function boolBadge(value){return `<span class="badge ${value?'yes':'no'}">${value?'是':'否'}</span>`}
 function progressBar(value,status){const safe=Math.max(0,Math.min(100,num(value)));return `<div class="progress ${status==='blocked'?'blocked':''}"><span style="width:${safe}%"></span></div><div class="muted">${safe}%</div>`}
+function sourceSummary(source,emptyText='暂无 Orchestrator 来源'){
+  if(typeof source==='string'&&source.trim())return source;
+  const s=obj(source);if(!Object.keys(s).length)return emptyText;
+  return [
+    s.analysis_record_id||s.analysis_id,
+    s.detected_sprint,
+    s.detected_stage,
+    s.completion_status,
+    s.recommended_codex
+  ].map(v=>text(v,'')).filter(Boolean).join(' · ')||emptyText;
+}
+function commitSummary(commit,emptyText='暂无 GitHub Commit'){
+  if(typeof commit==='string'&&commit.trim())return commit;
+  const c=obj(commit);if(!Object.keys(c).length)return emptyText;
+  return [
+    c.commit_id||c.commit_hash,
+    c.message,
+    c.created_at
+  ].map(v=>text(v,'')).filter(Boolean).join(' · ')||emptyText;
+}
 
 async function api(url){
   let res;
@@ -134,7 +154,7 @@ function employeeCard(e){
     <div class="employee-title"><div><h3>${esc(text(e.employee_name))}</h3><div class="code">${esc(text(e.employee_code))}</div></div>${statusBadge(e.status)}</div>
     <div class="muted">${esc(text(e.department))} · ${esc(text(e.role))}</div>
     <div class="detail-row"><strong>${esc(text(e.current_task))}</strong><div class="muted">task_id：${esc(text(e.task_id))} · ${esc(text(e.sprint))} · ${esc(text(e.stage))}</div>${progressBar(e.progress_percent,e.status)}</div>
-    <div class="kv"><div>最近动作</div><div>${esc(text(e.last_action))}</div><div>更新时间</div><div>${esc(fmt(e.last_updated_at))}</div><div>阻塞</div><div>${boolBadge(!!e.has_blocker)} ${esc(text(e.blocker_reason,''))}</div><div>老板确认</div><div>${boolBadge(!!e.needs_boss_confirmation)}</div><div>下一步</div><div>${esc(text(e.next_suggestion))}</div></div>
+    <div class="kv"><div>最近动作</div><div>${esc(text(e.last_action))}</div><div>更新时间</div><div>${esc(fmt(e.last_updated_at))}</div><div>阻塞</div><div>${boolBadge(!!e.has_blocker)} ${esc(text(e.blocker_reason,''))}</div><div>老板确认</div><div>${boolBadge(!!e.needs_boss_confirmation)}</div><div>下一步</div><div>${esc(text(e.next_suggestion))}</div><div>验收状态</div><div>${esc(text(e.review_status,'暂无验收状态'))}</div><div>审计状态</div><div>${esc(text(e.audit_status,'暂无审计状态'))}</div><div>部署状态</div><div>${esc(text(e.deploy_status,'暂无部署状态'))}</div><div>最近 Orchestrator 来源</div><div>${esc(sourceSummary(e.recent_orchestrator_source))}</div><div>最近 GitHub Commit</div><div>${esc(commitSummary(e.recent_git_commit))}</div></div>
   </article>`;
 }
 
@@ -142,20 +162,22 @@ function selectEmployee(code){selectedCode=code;const row=workspace.employees.fi
 
 function renderDetail(e){
   detailPanel.innerHTML=`<div class="head"><h2>${esc(text(e.employee_name))}</h2>${statusBadge(e.status)}</div><div class="code">${esc(text(e.employee_code))}</div>
-    <div class="detail-row"><div class="kv"><div>当前任务</div><div>${esc(text(e.current_task))}</div><div>task_id</div><div>${esc(text(e.task_id))}</div><div>Sprint</div><div>${esc(text(e.sprint))}</div><div>阶段</div><div>${esc(text(e.stage))}</div><div>最近动作</div><div>${esc(text(e.last_action))}</div><div>最近更新时间</div><div>${esc(fmt(e.last_updated_at))}</div><div>阻塞原因</div><div>${esc(text(e.blocker_reason))}</div><div>下一步建议</div><div>${esc(text(e.next_suggestion))}</div><div>验收状态</div><div>${esc(text(e.review_status))}</div><div>审计状态</div><div>${esc(text(e.audit_status))}</div><div>部署状态</div><div>${esc(text(e.deploy_status))}</div></div></div>
+    <div class="detail-row"><div class="kv"><div>当前任务</div><div>${esc(text(e.current_task))}</div><div>task_id</div><div>${esc(text(e.task_id))}</div><div>Sprint</div><div>${esc(text(e.sprint))}</div><div>阶段</div><div>${esc(text(e.stage))}</div><div>最近动作</div><div>${esc(text(e.last_action))}</div><div>最近更新时间</div><div>${esc(fmt(e.last_updated_at))}</div><div>阻塞原因</div><div>${esc(text(e.blocker_reason))}</div><div>下一步建议</div><div>${esc(text(e.next_suggestion))}</div><div>验收状态</div><div>${esc(text(e.review_status,'暂无验收状态'))}</div><div>审计状态</div><div>${esc(text(e.audit_status,'暂无审计状态'))}</div><div>部署状态</div><div>${esc(text(e.deploy_status,'暂无部署状态'))}</div><div>最近 Orchestrator 来源</div><div>${esc(sourceSummary(e.recent_orchestrator_source))}</div><div>最近 GitHub Commit</div><div>${esc(commitSummary(e.recent_git_commit))}</div></div></div>
     <div class="detail-row"><strong>最近 Orchestrator 来源</strong>${renderSource(e.recent_orchestrator_source)}</div>
     <div class="detail-row"><strong>最近 GitHub commit</strong>${renderCommit(e.recent_git_commit)}</div>`;
 }
 
 function renderSource(source){
+  if(typeof source==='string'&&source.trim())return `<div class="muted">${esc(source)}</div>`;
   const s=obj(source);if(!Object.keys(s).length)return '<div class="muted">暂无</div>';
   const flags=arr(s.safety_flags).length?arr(s.safety_flags).map(esc).join('、'):'暂无';
-  return `<div class="kv"><div>analysis_id</div><div>${esc(text(s.analysis_id))}</div><div>识别员工</div><div>${esc(text(s.detected_employee_name))}</div><div>Sprint</div><div>${esc(text(s.detected_sprint))}</div><div>阶段</div><div>${esc(text(s.detected_stage))}</div><div>完成状态</div><div>${esc(text(s.completion_status))}</div><div>推荐对象</div><div>${esc(text(s.recommended_codex))}</div><div>推荐动作</div><div>${esc(text(s.recommended_action))}</div><div>阻塞</div><div>${boolBadge(!!s.has_blocker)}</div><div>需要修复</div><div>${boolBadge(!!s.needs_fix)}</div><div>安全标记</div><div>${flags}</div><div>创建时间</div><div>${esc(fmt(s.created_at))}</div></div>`;
+  return `<div class="kv"><div>analysis_record_id</div><div>${esc(text(s.analysis_record_id||s.analysis_id))}</div><div>识别员工</div><div>${esc(text(s.detected_employee_name))}</div><div>Sprint</div><div>${esc(text(s.detected_sprint))}</div><div>阶段</div><div>${esc(text(s.detected_stage))}</div><div>完成状态</div><div>${esc(text(s.completion_status))}</div><div>推荐对象</div><div>${esc(text(s.recommended_codex))}</div><div>推荐动作</div><div>${esc(text(s.recommended_action))}</div><div>阻塞</div><div>${boolBadge(!!s.has_blocker)}</div><div>需要修复</div><div>${boolBadge(!!s.needs_fix)}</div><div>安全标记</div><div>${flags}</div><div>创建时间</div><div>${esc(fmt(s.created_at))}</div></div>`;
 }
 
 function renderCommit(commit){
+  if(typeof commit==='string'&&commit.trim())return `<div class="muted">${esc(commit)}</div>`;
   const c=obj(commit);if(!Object.keys(c).length)return '<div class="muted">暂无</div>';
-  return `<div class="kv"><div>commit</div><div class="code">${esc(text(c.commit_hash))}</div><div>branch</div><div>${esc(text(c.branch))}</div><div>时间</div><div>${esc(fmt(c.created_at))}</div></div>`;
+  return `<div class="kv"><div>commit_id</div><div class="code">${esc(text(c.commit_id||c.commit_hash))}</div><div>message</div><div>${esc(text(c.message))}</div><div>branch</div><div>${esc(text(c.branch))}</div><div>时间</div><div>${esc(fmt(c.created_at))}</div></div>`;
 }
 
 function renderLists(){
