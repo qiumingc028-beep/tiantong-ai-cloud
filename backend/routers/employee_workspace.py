@@ -28,10 +28,65 @@ WORKSPACE_STATUSES = {
     "blocked",
     "pending_boss",
 }
-DONE_TASK_STATUSES = {"summarized"}
-REVIEW_STATUSES = {"result_submitted"}
+TASK_STATUS_TO_WORKSPACE = {
+    "created": "standby",
+    "pending": "standby",
+    "assigned": "standby",
+    "in_progress": "running",
+    "running": "running",
+    "submitted": "reviewing",
+    "result_submitted": "reviewing",
+    "reviewing": "reviewing",
+    "audited": "completed",
+    "accepted": "completed",
+    "completed": "completed",
+    "summarized": "completed",
+    "rejected": "blocked",
+    "failed": "blocked",
+    "blocked": "blocked",
+}
+TASK_PROGRESS = {
+    "created": 0,
+    "pending": 0,
+    "assigned": 0,
+    "in_progress": 50,
+    "running": 50,
+    "submitted": 75,
+    "result_submitted": 75,
+    "reviewing": 75,
+    "audited": 100,
+    "accepted": 100,
+    "completed": 100,
+    "summarized": 100,
+    "rejected": 20,
+    "failed": 20,
+    "blocked": 20,
+}
+BLOCKER_REASONS = {
+    "rejected": "任务被驳回",
+    "failed": "任务失败",
+    "blocked": "任务阻塞",
+}
+NEXT_SUGGESTIONS = {
+    "created": "等待老板确认或分配",
+    "pending": "等待处理",
+    "assigned": "等待开始任务",
+    "in_progress": "继续执行任务",
+    "running": "继续执行任务",
+    "submitted": "等待天检验收",
+    "result_submitted": "等待天检验收",
+    "reviewing": "验收中",
+    "audited": "等待最终确认",
+    "accepted": "任务已完成",
+    "completed": "任务已完成",
+    "summarized": "任务已完成",
+    "rejected": "需要修复后重新提交",
+    "failed": "需要排查失败原因",
+    "blocked": "需要处理阻塞原因",
+}
+REVIEW_STATUSES = {"submitted", "result_submitted", "reviewing"}
 AUDIT_STATUSES = {"accepted"}
-BOSS_CONFIRM_STATUSES = {"created", "split", "rejected"}
+BOSS_CONFIRM_STATUSES = {"created"}
 DEPLOY_PENDING_STATUSES = {"initialized", "pending", "running", "failed", "error"}
 DEPLOYING_STATUSES = {"initialized", "pending", "running"}
 
@@ -114,7 +169,7 @@ def employee_to_workspace_row(
     analysis: OrchestratorAnalysisRecord | None,
     deploy: DeployRecord | None,
 ):
-    has_blocker = bool(analysis and (analysis.has_blocker or analysis.needs_fix)) or bool(task and task.status == "rejected")
+    has_blocker = task_has_blocker(task) if task else bool(analysis and (analysis.has_blocker or analysis.needs_fix))
     employee_deploy = deploy if deploy and deploy.operator == employee.employee_code else None
     status = resolve_workspace_status(task, analysis, employee_deploy, has_blocker)
     current_task = task.title if task else None
@@ -154,18 +209,10 @@ def resolve_workspace_status(
 ) -> str:
     if has_blocker:
         return "blocked"
+    if task:
+        return TASK_STATUS_TO_WORKSPACE.get(task.status, "standby")
     if deploy and deploy.status in DEPLOYING_STATUSES:
         return "deploying"
-    if task and task.status in BOSS_CONFIRM_STATUSES:
-        return "pending_boss"
-    if task and task.status in REVIEW_STATUSES:
-        return "reviewing"
-    if task and task.status in AUDIT_STATUSES:
-        return "auditing"
-    if task and task.status in DONE_TASK_STATUSES:
-        return "completed"
-    if task and task.status in {"assigned", "running"}:
-        return "running"
     if analysis and analysis.completion_status == "completed":
         return "completed"
     return "standby"
@@ -176,33 +223,26 @@ def stage_from_task(task: TaskCenterTask | None) -> str | None:
         return None
     return {
         "created": "planning",
+        "pending": "planning",
         "split": "planning",
         "assigned": "execution",
+        "in_progress": "execution",
         "running": "execution",
+        "submitted": "testing",
         "result_submitted": "testing",
+        "reviewing": "testing",
         "accepted": "audit",
         "audited": "summary",
+        "completed": "completed",
         "summarized": "completed",
         "rejected": "fix",
+        "failed": "fix",
+        "blocked": "fix",
     }.get(task.status)
 
 
 def progress_for_status(task_status: str | None, workspace_status: str) -> int:
-    if workspace_status == "blocked":
-        return 30
-    if workspace_status == "standby":
-        return 0
-    return {
-        "created": 10,
-        "split": 20,
-        "assigned": 35,
-        "running": 55,
-        "result_submitted": 70,
-        "accepted": 82,
-        "audited": 92,
-        "summarized": 100,
-        "rejected": 30,
-    }.get(task_status or "", 100 if workspace_status == "completed" else 0)
+    return TASK_PROGRESS.get(task_status or "", 0)
 
 
 def resolve_last_action(task: TaskCenterTask | None, analysis: OrchestratorAnalysisRecord | None, deploy: DeployRecord | None) -> str:
@@ -218,8 +258,8 @@ def resolve_last_action(task: TaskCenterTask | None, analysis: OrchestratorAnaly
 def resolve_blocker_reason(task: TaskCenterTask | None, analysis: OrchestratorAnalysisRecord | None, has_blocker: bool) -> str | None:
     if not has_blocker:
         return None
-    if task and task.status == "rejected":
-        return "任务验收未通过"
+    if task and task.status in BLOCKER_REASONS:
+        return BLOCKER_REASONS[task.status]
     if analysis and analysis.has_blocker:
         flags = parse_json_list(analysis.safety_flags_json)
         return "、".join(flags) if flags else "Orchestrator 检测到阻断"
@@ -229,12 +269,8 @@ def resolve_blocker_reason(task: TaskCenterTask | None, analysis: OrchestratorAn
 
 
 def resolve_next_suggestion(status: str, task: TaskCenterTask | None, analysis: OrchestratorAnalysisRecord | None) -> str:
-    if status == "blocked":
-        return "先处理阻塞原因"
-    if status == "pending_boss":
-        return "等待老板确认"
-    if status == "reviewing":
-        return "等待天检验收"
+    if task:
+        return NEXT_SUGGESTIONS.get(task.status, "等待处理")
     if status == "auditing":
         return "等待天监审计"
     if status == "deploying":
@@ -243,17 +279,15 @@ def resolve_next_suggestion(status: str, task: TaskCenterTask | None, analysis: 
         return "继续执行当前任务"
     if status == "completed":
         return analysis.recommended_action if analysis and analysis.recommended_action else "等待下一步安排"
-    if task:
-        return "查看任务详情"
     return "等待任务"
 
 
 def review_status_for_task(task: TaskCenterTask | None) -> str | None:
     if not task:
         return None
-    if task.status == "result_submitted":
+    if task.status in REVIEW_STATUSES:
         return "pending"
-    if task.status in {"accepted", "audited", "summarized"}:
+    if task.status in {"accepted", "audited", "completed", "summarized"}:
         return "accepted"
     if task.status == "rejected":
         return "rejected"
@@ -265,9 +299,13 @@ def audit_status_for_task(task: TaskCenterTask | None) -> str | None:
         return None
     if task.status == "accepted":
         return "pending"
-    if task.status in {"audited", "summarized"}:
+    if task.status in {"audited", "completed", "summarized"}:
         return "audited"
     return None
+
+
+def task_has_blocker(task: TaskCenterTask | None) -> bool:
+    return bool(task and task.status in BLOCKER_REASONS)
 
 
 def orchestrator_source(analysis: OrchestratorAnalysisRecord | None) -> dict | None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from sqlalchemy import event
 
 from backend.deploy_models import DeployRecord
@@ -136,6 +137,82 @@ def test_employee_workspace_maps_task_and_orchestrator_data(client, owner_header
     assert data["summary"]["pending_test_reviews"] == 1
     assert data["pending_reviews"][0]["task_id"] == task_id
     assert data["recent_actions"]
+
+
+@pytest.mark.parametrize(
+    ("task_status", "workspace_status", "progress", "has_blocker", "blocker_reason", "next_suggestion"),
+    [
+        ("created", "standby", 0, False, None, "等待老板确认或分配"),
+        ("pending", "standby", 0, False, None, "等待处理"),
+        ("assigned", "standby", 0, False, None, "等待开始任务"),
+        ("in_progress", "running", 50, False, None, "继续执行任务"),
+        ("submitted", "reviewing", 75, False, None, "等待天检验收"),
+        ("reviewing", "reviewing", 75, False, None, "验收中"),
+        ("audited", "completed", 100, False, None, "等待最终确认"),
+        ("completed", "completed", 100, False, None, "任务已完成"),
+        ("summarized", "completed", 100, False, None, "任务已完成"),
+        ("result_submitted", "reviewing", 75, False, None, "等待天检验收"),
+        ("accepted", "completed", 100, False, None, "任务已完成"),
+        ("rejected", "blocked", 20, True, "任务被驳回", "需要修复后重新提交"),
+        ("failed", "blocked", 20, True, "任务失败", "需要排查失败原因"),
+        ("blocked", "blocked", 20, True, "任务阻塞", "需要处理阻塞原因"),
+        ("unknown_status", "standby", 0, False, None, "等待处理"),
+    ],
+)
+def test_employee_workspace_maps_task_statuses_without_mutating_tasks(
+    client,
+    owner_headers,
+    test_db,
+    task_status,
+    workspace_status,
+    progress,
+    has_blocker,
+    blocker_reason,
+    next_suggestion,
+):
+    employee_code = f"status_{task_status}"
+    db = test_db()
+    try:
+        db.add(
+            AiEmployee(
+                employee_code=employee_code,
+                employee_name=f"Status {task_status}",
+                legion="测试军团",
+                duty="状态映射测试",
+                status="active",
+                task_types='["test"]',
+                default_permissions="[]",
+                is_legacy=False,
+                sort_order=500,
+            )
+        )
+        task = TaskCenterTask(
+            title=f"{task_status} task",
+            status=task_status,
+            assigned_ai_employee_code=employee_code,
+            assigned_ai_employee_name=f"Status {task_status}",
+        )
+        db.add(task)
+        db.commit()
+        task_id = task.id
+    finally:
+        db.close()
+
+    response = client.get(API_PATH, headers=owner_headers)
+    assert response.status_code == 200
+    rows = {row["employee_code"]: row for row in response.json()["employees"]}
+    row = rows[employee_code]
+    assert row["status"] == workspace_status
+    assert row["progress_percent"] == progress
+    assert row["has_blocker"] is has_blocker
+    assert row["blocker_reason"] == blocker_reason
+    assert row["next_suggestion"] == next_suggestion
+
+    db = test_db()
+    try:
+        assert db.get(TaskCenterTask, task_id).status == task_status
+    finally:
+        db.close()
 
 
 def test_employee_workspace_handles_empty_sources(client, owner_headers, test_db):
