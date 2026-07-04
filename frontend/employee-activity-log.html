@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI员工执行日志中心 Employee Activity Log - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--good:#15803d;--warn:#b45309;--bad:#b91c1c;--brand:#0f766e}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar,.filters{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f172a,#0f766e 58%,#0369a1);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#d1fae5;line-height:1.6;margin:8px 0 0}.hero .note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#e0f2fe;border-radius:8px;padding:10px 12px;max-width:390px}.stats{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;margin-bottom:16px}.stat{background:white;border:1px solid var(--line);border-radius:8px;padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:16px}.card{background:white;border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2{font-size:18px;margin:0}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.empty{border-style:dashed;text-align:center;padding:26px}.timeline{display:flex;flex-direction:column;gap:12px}.log-item{border:1px solid var(--line);border-left:5px solid var(--brand);background:#fff;border-radius:8px;padding:14px}.log-item.bad{border-left-color:var(--bad);background:#fff7f7}.log-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.log-top h3{margin:0;font-size:16px}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.good{background:#dcfce7;color:#166534}.badge.warn{background:#ffedd5;color:#9a3412}.badge.bad{background:#fee2e2;color:#991b1b}.muted{color:var(--muted);line-height:1.65}.code{font-family:Consolas,monospace;color:#0f766e}.kv{display:grid;grid-template-columns:140px 1fr;gap:7px 10px;font-size:14px;margin-top:10px}.kv div:nth-child(odd){color:var(--muted)}.mini-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}.risk-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.filters input,.filters select{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:0 10px}.filters input{width:150px}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}@media(max-width:1240px){.stats{grid-template-columns:repeat(3,1fr)}.layout{grid-template-columns:1fr}.mini-grid,.risk-grid{grid-template-columns:1fr}}@media(max-width:760px){.app{grid-template-columns:1fr}.top,.hero{align-items:flex-start;flex-direction:column}.content{padding:18px}.stats{grid-template-columns:1fr}.kv{grid-template-columns:1fr}.filters input,.filters select{width:100%}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>AI员工执行日志中心 Employee Activity Log</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>AI员工执行日志中心 Employee Activity Log</h1><p>查看 AI 员工执行轨迹、任务流转、验收、审计、部署和最近动作。只读展示，不派单、不开始任务、不部署、不提交代码。</p></div>
+        <div class="note">第一阶段只做日志聚合与筛选，不触发任何任务动作。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 AI执行日志中心...</div>
+      <section class="stats" id="summaryStats"></section>
+      <div class="card">
+        <div class="filters">
+          <input id="employeeCodeInput" placeholder="employee_code">
+          <input id="sprintInput" placeholder="Sprint">
+          <input id="taskIdInput" type="number" min="1" placeholder="task_id">
+          <select id="actionTypeInput"><option value="">全部动作</option></select>
+          <select id="statusInput"><option value="">全部状态</option></select>
+          <select id="blockerInput"><option value="">阻塞不限</option><option value="true">有阻塞</option><option value="false">无阻塞</option></select>
+          <select id="bossInput"><option value="">老板确认不限</option><option value="true">需要确认</option><option value="false">无需确认</option></select>
+          <input id="dateFromInput" type="date">
+          <input id="dateToInput" type="date">
+          <input id="limitInput" type="number" min="1" max="200" value="50" placeholder="limit">
+          <button onclick="loadActivity()">筛选</button>
+          <button class="secondary" onclick="resetFilters()">重置</button>
+          <a class="btn secondary" href="/task-center.html">任务中心</a>
+          <a class="btn secondary" href="/employee-workspace.html">AI员工工作台</a>
+          <a class="btn secondary" href="/orchestrator.html">Orchestrator</a>
+        </div>
+      </div>
+      <div class="layout">
+        <section>
+          <div class="card"><div class="head"><h2>日志时间线</h2><button class="secondary" onclick="loadActivity()">刷新</button></div><div id="timeline" class="timeline"></div></div>
+          <div class="card"><div class="head"><h2>任务维度</h2></div><div id="taskList" class="mini-grid"></div></div>
+        </section>
+        <aside>
+          <div class="card"><div class="head"><h2>员工维度</h2></div><div id="employeeList"></div></div>
+        </aside>
+      </div>
+      <section class="risk-grid">
+        <div class="card"><div class="head"><h2>阻塞记录</h2></div><div id="blockerList"></div></div>
+        <div class="card"><div class="head"><h2>等待老板确认</h2></div><div id="bossList"></div></div>
+        <div class="card"><div class="head"><h2>GitHub Commit</h2></div><div id="commitList"></div></div>
+        <div class="card"><div class="head"><h2>部署记录</h2></div><div id="deployList"></div></div>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI执行日志中心','/employee-activity-log.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/orchestrator.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
+let activity={summary:{},logs:[],employees:[],tasks:[],filters:{},timeline:[],blockers:[],pending_boss_confirmations:[],recent_commits:[],recent_deploys:[]};
+
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/employee-activity-log.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,emptyText='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;return emptyText}
+function arr(value){return Array.isArray(value)?value:[]}
+function obj(value){return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
+function num(value){return Number.isFinite(Number(value))?Number(value):0}
+function fmt(value){return value?String(value).slice(0,19).replace('T',' '):'暂无'}
+function boolBadge(value){return `<span class="badge ${value?'warn':'good'}">${value?'是':'否'}</span>`}
+function actionBadge(row){const bad=!!row.has_blocker||row.success===false;return `<span class="badge ${bad?'bad':'good'}">${esc(text(row.action_title||row.action_label||row.action_type))}</span>`}
+
+async function api(url){
+  let res;
+  try{res=await fetch(url,{credentials:'include'})}catch(e){throw new Error('网络异常，请稍后重试')}
+  if(res.status===401){location.href='/login.html';throw new Error('请先登录')}
+  const data=res.ok?null:await res.json().catch(()=>({}));
+  if(res.status===403)throw new Error((data&&data.detail)||'无权限访问 AI执行日志中心');
+  if(res.status>=500)throw new Error((data&&data.detail)||'服务器异常，请稍后重试');
+  if(!res.ok)throw new Error((data&&data.detail)||'请求失败，请稍后重试');
+  return res.json();
+}
+
+async function init(){
+  renderMenu();tick();setInterval(tick,1000);renderEmpty();
+  try{const user=await api('/api/me');me.innerText=`${text(user.display_name||user.username,'当前用户')} · ${text(user.role_label||user.role)}`}catch(e){pageState.className='state error';pageState.innerText=e.message;return}
+  await loadActivity();
+}
+
+function queryString(){
+  const params=new URLSearchParams();
+  [['employee_code',employeeCodeInput.value],['sprint',sprintInput.value],['task_id',taskIdInput.value],['action_type',actionTypeInput.value],['status',statusInput.value],['has_blocker',blockerInput.value],['needs_boss_confirmation',bossInput.value],['date_from',dateFromInput.value],['date_to',dateToInput.value],['limit',limitInput.value]].forEach(([key,value])=>{if(String(value||'').trim())params.set(key,String(value).trim())});
+  return params.toString();
+}
+
+async function loadActivity(){
+  pageState.className='state';pageState.innerText='正在加载 AI执行日志中心...';
+  try{
+    const qs=queryString();
+    const data=await api(`/api/employee-activity-log/overview${qs?'?'+qs:''}`);
+    activity={summary:obj(data.summary),logs:arr(data.logs),employees:arr(data.employees),tasks:arr(data.tasks),filters:obj(data.filters),timeline:arr(data.timeline),blockers:arr(data.blockers),pending_boss_confirmations:arr(data.pending_boss_confirmations),recent_commits:arr(data.recent_commits),recent_deploys:arr(data.recent_deploys)};
+    pageState.className='state ok';pageState.innerText='AI执行日志中心已更新。';
+    renderAll();
+  }catch(e){
+    pageState.className='state error';pageState.innerText=e.message||'AI执行日志中心加载失败';
+    renderEmpty();
+  }
+}
+
+function resetFilters(){[employeeCodeInput,sprintInput,taskIdInput,actionTypeInput,statusInput,blockerInput,bossInput,dateFromInput,dateToInput].forEach(el=>el.value='');limitInput.value='50';loadActivity()}
+function renderEmpty(){activity={summary:{},logs:[],employees:[],tasks:[],filters:{},timeline:[],blockers:[],pending_boss_confirmations:[],recent_commits:[],recent_deploys:[]};renderAll()}
+function renderAll(){renderFilterOptions();renderSummary();renderTimeline();renderEmployees();renderTasks();renderRisks()}
+
+function renderFilterOptions(){
+  const currentAction=actionTypeInput.value,currentStatus=statusInput.value,filters=obj(activity.filters);
+  actionTypeInput.innerHTML='<option value="">全部动作</option>'+arr(filters.action_types).map(x=>`<option value="${esc(obj(x).value)}">${esc(text(obj(x).label||obj(x).value))}</option>`).join('');
+  statusInput.innerHTML='<option value="">全部状态</option>'+arr(filters.statuses).map(x=>`<option value="${esc(x)}">${esc(text(x))}</option>`).join('');
+  actionTypeInput.value=currentAction;statusInput.value=currentStatus;
+}
+
+function renderSummary(){
+  const s=activity.summary||{};
+  const items=[['今日日志数','today_logs'],['今日任务流转数','today_task_flows'],['今日验收数','today_reviews'],['今日审计数','today_audits'],['今日部署数','today_deploys'],['今日 GitHub commit 数','today_git_commits'],['今日失败 / 阻塞数','today_failed_or_blocked'],['等待老板确认数','pending_boss_confirmations'],['当前 Sprint','current_sprint']];
+  summaryStats.innerHTML=items.map(([label,key])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(key==='current_sprint'?text(s[key],'暂无'):num(s[key]))}</div></div>`).join('');
+}
+
+function renderTimeline(){
+  const rows=arr(activity.logs).length?arr(activity.logs):arr(activity.timeline);
+  if(!rows.length){timeline.innerHTML='<div class="state empty">暂无执行日志</div>';return}
+  timeline.innerHTML=rows.map(row=>logItem(obj(row))).join('');
+}
+
+function logItem(row){
+  const bad=!!row.has_blocker||row.success===false;
+  return `<article class="log-item ${bad?'bad':''}"><div class="log-top"><div><h3>${actionBadge(row)} ${esc(text(row.action_title||row.action_type))}</h3><div class="muted">${esc(fmt(row.created_at))} · ${esc(text(row.employee_name))} · <span class="code">${esc(text(row.employee_code))}</span></div></div><div class="badge ${bad?'bad':'good'}">${bad?'需关注':'正常'}</div></div>
+    <div class="kv"><div>log_id</div><div class="code">${esc(text(row.log_id))}</div><div>部门 / 角色</div><div>${esc(text(row.department))} · ${esc(text(row.role))}</div><div>task_id</div><div><span class="badge warn">${esc(text(row.task_id))}</span></div><div>Sprint / 阶段</div><div>${esc(text(row.sprint))} · ${esc(text(row.stage))}</div><div>状态</div><div>${esc(text(row.status))}</div><div>来源</div><div>${esc(text(row.source_module))} · ${esc(text(row.source_id))}</div><div>摘要</div><div>${esc(text(row.summary))}</div><div>结果</div><div>${esc(text(row.result))}</div><div>成功</div><div>${boolBadge(row.success!==false)}</div><div>阻塞</div><div>${boolBadge(!!row.has_blocker)} ${esc(text(row.blocker_reason,''))}</div><div>老板确认</div><div>${boolBadge(!!row.needs_boss_confirmation)}</div><div>下一步</div><div>${esc(text(row.next_suggestion))}</div></div></article>`;
+}
+
+function renderEmployees(){
+  const rows=arr(activity.employees);
+  if(!rows.length){employeeList.innerHTML='<div class="muted">暂无员工日志</div>';return}
+  employeeList.innerHTML=rows.map(row=>{const e=obj(row),recent=arr(e.recent_logs),blockers=arr(e.recent_blockers);return `<div class="item"><strong>${esc(text(e.employee_name))}</strong><div class="code">${esc(text(e.employee_code))}</div><div class="muted">${esc(text(e.department))} · ${esc(text(e.role))}</div><div class="kv"><div>最近日志数量</div><div>${recent.length}</div><div>最近动作</div><div>${esc(text(recent[0]&&recent[0].action_title))}</div><div>当前任务</div><div>${esc(text(arr(e.current_task_logs)[0]&&arr(e.current_task_logs)[0].task_title))}</div><div>最近阻塞</div><div>${esc(text(blockers[0]&&blockers[0].summary))}</div><div>最近验收</div><div>${esc(text(arr(e.recent_reviews)[0]&&arr(e.recent_reviews)[0].summary))}</div><div>最近审计</div><div>${esc(text(arr(e.recent_audits)[0]&&arr(e.recent_audits)[0].summary))}</div><div>最近部署</div><div>${esc(text(arr(e.recent_deploys)[0]&&arr(e.recent_deploys)[0].summary))}</div><div>最近 GitHub Commit</div><div>${esc(text(arr(e.recent_commits)[0]&&arr(e.recent_commits)[0].summary,'暂无 GitHub Commit 记录'))}</div></div></div>`}).join('');
+}
+
+function renderTasks(){
+  const rows=arr(activity.tasks);
+  taskList.innerHTML=rows.length?rows.map(row=>{const t=obj(row),flow=arr(t.flow),latest=flow[flow.length-1]||{};return `<div class="item"><strong>task_id ${esc(text(t.task_id))}</strong><div>${esc(text(t.task_title||t.title))}</div><div class="kv"><div>Sprint</div><div>${esc(text(t.sprint))}</div><div>状态</div><div>${esc(text(t.status))}</div><div>assigned_employee</div><div>${esc(text(t.employee_name||t.employee_code))}</div><div>created_at</div><div>${esc(fmt(flow[0]&&flow[0].created_at))}</div><div>latest_action</div><div>${esc(text(latest.action_title||latest.action_type))}</div><div>flow_count</div><div>${flow.length}</div></div></div>`}).join(''):'<div class="state empty">暂无任务流转记录</div>';
+}
+
+function renderRisks(){
+  renderList(blockerList,activity.blockers,'暂无阻塞记录',row=>`${text(row.employee_name)} · task_id ${text(row.task_id)} · ${text(row.summary)}`);
+  renderList(bossList,activity.pending_boss_confirmations,'暂无等待老板确认',row=>`${text(row.employee_name)} · task_id ${text(row.task_id)} · ${text(row.summary)}`);
+  renderList(commitList,activity.recent_commits,'暂无 GitHub Commit 记录',row=>`${text(row.commit_id)} · ${text(row.employee_name)} · ${fmt(row.created_at)}`);
+  renderList(deployList,activity.recent_deploys,'暂无部署记录',row=>`${text(row.deploy_id)} · ${text(row.status)} · ${text(row.summary)}`);
+}
+
+function renderList(el,items,emptyText,formatter){
+  const rows=arr(items);el.innerHTML=rows.length?rows.map(item=>`<div class="item">${esc(formatter(obj(item)))}</div>`).join(''):`<div class="muted">${esc(emptyText)}</div>`;
+}
+
+init();
+</script>
+</body>
+</html>
