@@ -6,6 +6,7 @@ from backend.deploy_models import DeployRecord
 from backend.main import app
 from backend.models import AiEmployee, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
+from backend.routers.employee_activity_log import orchestrator_blocker_reason
 
 
 API_PATH = "/api/employee-activity-log/overview"
@@ -228,6 +229,62 @@ def test_employee_activity_log_does_not_return_sensitive_fields(client, owner_he
     payload = json.dumps(response.json(), ensure_ascii=False).lower()
     for key in SENSITIVE_KEYS:
         assert key not in payload
+    assert "raw original should stay hidden" not in payload
+    assert "hidden draft" not in payload
+
+
+def test_orchestrator_blocker_reason_handles_mixed_flag_shapes():
+    cases = [
+        (["manual_review", "needs_fix"], "manual_review、needs_fix"),
+        ([{"message": "字典阻塞"}, {"reason": "需要复核"}], "字典阻塞、需要复核"),
+        ([["嵌套阻塞", {"title": "标题阻塞"}]], "嵌套阻塞、标题阻塞"),
+        (None, "Orchestrator 检测到阻塞"),
+        ([], "Orchestrator 检测到阻塞"),
+        ([{"unknown": "hidden"}, True, 7, None], "存在阻塞项、是、7"),
+    ]
+    for flags, expected in cases:
+        row = OrchestratorAnalysisRecord(
+            has_blocker=True,
+            safety_flags_json=json.dumps(flags) if flags is not None else None,
+        )
+        assert orchestrator_blocker_reason(row) == expected
+
+
+def test_employee_activity_log_handles_mixed_orchestrator_flags(client, owner_headers, test_db):
+    db = test_db()
+    try:
+        db.add(
+            OrchestratorAnalysisRecord(
+                input_excerpt="raw original should stay hidden",
+                input_hash="d" * 64,
+                detected_employee_code="log_tianwang",
+                detected_employee_name="日志天王",
+                detected_sprint="Sprint 8",
+                detected_stage="backend",
+                completion_status="completed",
+                recommended_codex="log_tianwang",
+                recommended_action="交给天检验收",
+                prompt_draft="hidden draft",
+                has_blocker=True,
+                safety_flags_json=json.dumps(
+                    [
+                        "字符串阻塞",
+                        {"message": "字典阻塞"},
+                        [{"reason": "嵌套阻塞"}],
+                        {"unknown": "must not leak"},
+                    ]
+                ),
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(API_PATH, headers=owner_headers, params={"limit": 50})
+    assert response.status_code == 200
+    payload = json.dumps(response.json(), ensure_ascii=False)
+    assert "字符串阻塞、字典阻塞、嵌套阻塞、存在阻塞项" in payload
+    assert "must not leak" not in payload
     assert "raw original should stay hidden" not in payload
     assert "hidden draft" not in payload
 

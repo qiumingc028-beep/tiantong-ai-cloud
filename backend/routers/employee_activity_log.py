@@ -626,7 +626,7 @@ def current_sprint(db: Session) -> str | None:
 
 def orchestrator_blocker_reason(row: OrchestratorAnalysisRecord) -> str | None:
     if row.has_blocker:
-        flags = parse_json_list(row.safety_flags_json)
+        flags = safe_text_list(parse_json_list(row.safety_flags_json))
         return "、".join(flags) if flags else "Orchestrator 检测到阻塞"
     if row.needs_fix:
         return "Orchestrator 建议修复"
@@ -744,7 +744,42 @@ def parse_json_list(value: str | None) -> list:
 
 def first_json_value(value: str | None) -> str | None:
     data = parse_json_list(value)
-    return str(data[0]) if data else None
+    return safe_text(data[0], None) if data else None
+
+
+def safe_text(value, fallback: str | None = "暂无") -> str | None:
+    if value is None:
+        return fallback
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        text = value.strip()
+        return text or fallback
+    if isinstance(value, list):
+        parts = safe_text_list(value)
+        return "、".join(parts) if parts else fallback
+    if isinstance(value, dict):
+        for key in ["reason", "message", "title", "text", "name", "code"]:
+            if key in value:
+                text = safe_text(value.get(key), None)
+                if text:
+                    return text
+        return "存在阻塞项"
+    return fallback
+
+
+def safe_text_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        items: list[str] = []
+        for item in value:
+            items.extend(safe_text_list(item))
+        return items
+    text = safe_text(value, None)
+    return [text] if text else []
 
 
 def clean_text(value: str | None) -> str | None:
