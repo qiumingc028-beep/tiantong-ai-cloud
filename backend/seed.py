@@ -1,9 +1,15 @@
 import json
+import os
 
 from sqlalchemy.orm import Session
 
+from .auth import hash_password, verify_password
 from .auth_data import ROLE_LABELS
-from .models import AiEmployee, AiTask, Permission, Role
+from .models import AiEmployee, AiTask, Permission, Role, User
+
+
+BOSS_USERNAME = "boss"
+BOSS_DEFAULT_PASSWORD = os.getenv("BOSS_INITIAL_PASSWORD", "Tiantong@2026")
 
 
 PERMISSIONS = [
@@ -106,6 +112,23 @@ def seed_defaults(db: Session):
         else:
             role.name = label
         role.permissions = [permission_by_code[p] for p in ROLE_PERMISSIONS.get(code, [])]
+
+    boss_user = db.query(User).filter(User.username == BOSS_USERNAME).one_or_none()
+    if not boss_user:
+        boss_user = User(
+            username=BOSS_USERNAME,
+            password_hash=hash_password(BOSS_DEFAULT_PASSWORD),
+            role="boss",
+            display_name="老板",
+            active=True,
+        )
+        db.add(boss_user)
+    else:
+        boss_user.role = "boss"
+        boss_user.display_name = boss_user.display_name or "老板"
+        boss_user.active = True
+        if not verify_password(BOSS_DEFAULT_PASSWORD, boss_user.password_hash):
+            boss_user.password_hash = hash_password(BOSS_DEFAULT_PASSWORD)
 
     for code, name, task in AI_EMPLOYEES:
         ai_task = db.query(AiTask).filter(AiTask.ai_employee_code == code).one_or_none()
