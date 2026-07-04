@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from backend.deploy_models import DeployRecord
+from backend.main import app
 from backend.models import AiEmployee, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
 
@@ -33,6 +34,16 @@ def auth_headers(client, username: str):
 def test_employee_activity_log_requires_login(client):
     response = client.get(API_PATH)
     assert response.status_code == 401
+
+
+def test_employee_activity_log_route_is_registered_once():
+    routes = [
+        getattr(route, "path", "")
+        for route in app.routes
+        if "employee-activity-log" in getattr(route, "path", "")
+    ]
+    assert API_PATH in routes
+    assert routes.count(API_PATH) == 1
 
 
 def test_employee_activity_log_rejects_low_privilege_users(client):

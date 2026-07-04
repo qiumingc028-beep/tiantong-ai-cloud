@@ -20,7 +20,7 @@ from ..models import (
 from ..orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
 
 
-router = APIRouter(prefix="/api/employee-activity-log")
+router = APIRouter()
 
 PRIVILEGED_ROLES = {"owner", "admin"}
 MAX_LIMIT = 200
