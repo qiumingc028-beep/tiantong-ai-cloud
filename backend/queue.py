@@ -2,6 +2,9 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
+
 from .database import get_redis
 
 
@@ -47,7 +50,11 @@ def requeue_task(task: dict, message: str):
 
 
 def dequeue_task(timeout: int = 5):
-    result = get_redis().blpop(QUEUE_NAME, timeout=timeout)
+    try:
+        result = get_redis().blpop(QUEUE_NAME, timeout=timeout)
+    except (RedisTimeoutError, RedisConnectionError) as exc:
+        print(f"Redis queue read warning: {type(exc).__name__}: {exc}", flush=True)
+        return None
     if not result:
         return None
     _, raw = result

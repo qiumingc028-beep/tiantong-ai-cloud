@@ -1,6 +1,9 @@
 import time
 from datetime import datetime, timezone
 
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
+
 from .database import SessionLocal
 from .models import EmployeeLog, JdSyncLog
 from .queue import dequeue_task, requeue_task, update_task_status
@@ -97,16 +100,26 @@ def write_employee_log(db, task_type: str, status: str, detail: dict, attempt: i
 
 def main():
     while True:
-        task = dequeue_task(timeout=5)
-        if not task:
-            continue
-        try:
-            handle_task(task)
-        except JdCollectorError as exc:
-            print(f"采集任务未完成: {exc}", flush=True)
-        except Exception as exc:
-            print(f"任务执行失败: {exc}", flush=True)
+        process_next_task()
         time.sleep(0.1)
+
+
+def process_next_task():
+    try:
+        task = dequeue_task(timeout=5)
+    except (RedisTimeoutError, RedisConnectionError) as exc:
+        print(f"Redis queue warning: {type(exc).__name__}: {exc}", flush=True)
+        time.sleep(2)
+        return False
+    if not task:
+        return False
+    try:
+        handle_task(task)
+    except JdCollectorError as exc:
+        print(f"采集任务未完成: {exc}", flush=True)
+    except Exception as exc:
+        print(f"任务执行失败: {exc}", flush=True)
+    return True
 
 
 if __name__ == "__main__":
