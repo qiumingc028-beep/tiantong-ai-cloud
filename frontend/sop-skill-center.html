@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SOP / Skill 绑定中心 SOP Skill Binding Center - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#1d4ed8;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar,.links{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#111827,#1d4ed8 58%,#0f766e);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#dbeafe;line-height:1.6;margin:8px 0 0}.hero .note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#ecfeff;border-radius:8px;padding:10px 12px;max-width:500px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.empty{border-style:dashed;text-align:center;padding:24px}.stats{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:12px;margin-bottom:16px}.stat,.card{background:white;border:1px solid var(--line);border-radius:8px}.stat{padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.card{padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2,.card h2{font-size:18px;margin:0}.toolbar input,.toolbar select{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:0 10px;min-width:180px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 430px;gap:16px}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.item-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.item-card{border:1px solid var(--line);background:white;border-radius:8px;padding:14px;cursor:pointer}.item-card:hover,.item-card.selected{border-color:var(--brand);box-shadow:0 8px 22px rgba(15,23,42,.08)}.item-card.high,.item-card.critical{border-color:#fed7aa;background:#fff7ed}.title-row{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.title-row h3{margin:0;font-size:17px}.code{font-family:Consolas,monospace;color:#1d4ed8}.muted{color:var(--muted);line-height:1.65}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.low,.badge.active,.badge.good{background:#dcfce7;color:#166534}.badge.medium,.badge.readonly_configured{background:#fef3c7;color:#92400e}.badge.high,.badge.critical,.badge.no{background:#fee2e2;color:#991b1b}.badge.yes{background:#dcfce7;color:#166534}.cap-list{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.kv{display:grid;grid-template-columns:180px minmax(0,1fr);gap:7px 10px;font-size:14px}.kv div:nth-child(odd){color:var(--muted)}.detail-row{border-top:1px solid var(--line);padding:12px 0}.detail-row:first-of-type{border-top:0}.list-item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;background:#f8fafc}@media(max-width:1240px){.stats{grid-template-columns:repeat(2,1fr)}.layout,.grid-2{grid-template-columns:1fr}.item-grid{grid-template-columns:1fr}}@media(max-width:760px){.app{grid-template-columns:1fr}.top,.hero{align-items:flex-start;flex-direction:column}.content{padding:18px}.stats{grid-template-columns:1fr}.toolbar input,.toolbar select{width:100%;min-width:0}.kv{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>SOP / Skill 绑定中心 SOP Skill Binding Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>SOP / Skill 绑定中心 SOP Skill Binding Center</h1><p>查看员工、任务类型、部门与 SOP、Skill、Prompt 模板、验收规则和安全规则的只读配置档案。</p></div>
+        <div class="note">第一阶段只读展示；不调用模型、不调用工具、不派单、不开始任务、不部署、不提交代码、不改权限、不改任务状态。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 SOP / Skill 绑定中心...</div>
+      <div class="head"><h2>总览统计区</h2></div>
+      <section id="summaryStats" class="stats"></section>
+      <div class="card">
+        <div class="toolbar">
+          <input id="searchInput" placeholder="搜索 SOP / Skill / Prompt / 员工 / 任务" oninput="renderLibraries()">
+          <select id="typeFilter" onchange="renderLibraries()"><option value="">全部类型</option><option value="sops">SOP</option><option value="skills">Skill</option><option value="prompts">Prompt 模板</option></select>
+          <select id="safetyFilter" onchange="renderLibraries()"><option value="">全部安全等级</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
+          <button onclick="renderLibraries()">筛选</button>
+          <button class="secondary" onclick="resetFilters()">重置</button>
+          <button class="secondary" onclick="loadAll()">刷新</button>
+        </div>
+        <div class="links" style="margin-top:12px">
+          <a class="btn secondary" href="/employee-capabilities.html">跳转 AI员工能力档案</a>
+          <a class="btn secondary" href="/model-routing.html">跳转多模型路由中心</a>
+          <a class="btn secondary" href="/tool-permissions.html">跳转AI工具调用权限中心</a>
+          <a class="btn secondary" href="/employee-activity-trace.html">跳转AI执行追溯中心</a>
+          <a class="btn secondary" href="/task-center.html">跳转 Task Center</a>
+          <a class="btn secondary" href="/orchestrator.html">跳转 Orchestrator</a>
+        </div>
+      </div>
+      <div class="layout">
+        <section>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>SOP 库总览区</h2></div><div id="sopGrid" class="item-grid"></div></div>
+            <div class="card"><div class="head"><h2>Skill 库总览区</h2></div><div id="skillGrid" class="item-grid"></div></div>
+          </div>
+          <div class="card"><div class="head"><h2>Prompt 模板库总览区</h2></div><div id="promptGrid" class="item-grid"></div></div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>员工绑定关系区</h2></div><div id="employeeTable"></div></div>
+            <div class="card"><div class="head"><h2>任务类型绑定关系区</h2></div><div id="taskTypeTable"></div></div>
+          </div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>部门绑定关系区</h2></div><div id="departmentTable"></div></div>
+            <div class="card"><div class="head"><h2>验收规则绑定区</h2></div><div id="acceptanceBox"></div></div>
+          </div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>安全规则绑定区</h2></div><div id="securityBox"></div></div>
+            <div class="card"><div class="head"><h2>禁止自动执行规则区</h2></div><div id="disabledBox"></div></div>
+          </div>
+        </section>
+        <aside>
+          <div id="detailPanel" class="card"><h2>查看详情</h2><div class="muted">点击 SOP、Skill、Prompt 或员工查看详情。</div></div>
+          <div class="card"><div class="head"><h2>推荐模型绑定区</h2></div><div id="modelBox"></div></div>
+          <div class="card"><div class="head"><h2>推荐工具权限绑定区</h2></div><div id="toolBox"></div></div>
+          <div class="card"><div class="head"><h2>缺失绑定提醒区</h2></div><div id="missingBox"></div></div>
+          <div class="card"><div class="head"><h2>下一步升级建议区</h2></div><div id="upgradeBox"></div></div>
+          <div class="card"><div class="head"><h2>安全边界说明区</h2></div><div id="safetyBox"></div></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/orchestrator.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
+let state={overview:{},sops:[],skills:[],prompts:[],employees:[],taskTypes:[],departments:[],acceptanceRules:[],securityRules:[],missingBindings:[],nextUpgrades:[]};
+let selectedKey='';
+
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/sop-skill-center.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,emptyText='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;if(Array.isArray(value))return value.length?value.map(x=>text(x,'')).filter(Boolean).join('、'):emptyText;if(value&&typeof value==='object')return [value.sop_name,value.sop_code,value.skill_name,value.skill_code,value.prompt_name,value.prompt_code,value.employee_name,value.employee_code,value.task_type_name,value.task_type,value.department_name,value.department,value.rule_name,value.rule_code,value.upgrade_name,value.upgrade_code,value.description].map(v=>text(v,'')).filter(Boolean).join(' · ')||emptyText;return emptyText}
+function arr(value){return Array.isArray(value)?value:[]}
+function obj(value){return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
+function badge(value,type=''){const v=text(value);return `<span class="badge ${esc(type||String(value||'').toLowerCase())}">${esc(v)}</span>`}
+function yesNo(value){return `<span class="badge ${value?'yes':'no'}">${value?'是':'否'}</span>`}
+function listHtml(values,emptyText='暂无数据'){const rows=arr(values);return rows.length?`<div class="cap-list">${rows.map(x=>`<span class="badge">${esc(text(x))}</span>`).join('')}</div>`:`<div class="muted">${esc(emptyText)}</div>`}
+
+async function api(url){
+  let res;
+  try{res=await fetch(url,{credentials:'include'})}catch(e){throw new Error('网络异常，请稍后重试')}
+  if(res.status===401){location.href='/login.html';throw new Error('请重新登录')}
+  const data=res.ok?null:await res.json().catch(()=>({}));
+  if(res.status===403)throw new Error((data&&data.detail)||'无权限访问');
+  if(res.status===404)throw new Error((data&&data.detail)||'接口或数据不存在');
+  if(res.status===422)throw new Error((data&&data.detail)||'参数错误');
+  if(res.status>=500)throw new Error((data&&data.detail)||'服务器异常');
+  if(!res.ok)throw new Error((data&&data.detail)||'请求失败，请稍后重试');
+  return res.json();
+}
+
+async function init(){
+  renderMenu();tick();setInterval(tick,1000);renderAll();
+  try{const user=await api('/api/me');me.innerText=`${text(user.display_name||user.username,'当前用户')} · ${text(user.role_label||user.role)}`}catch(e){pageState.className='state error';pageState.innerText=e.message;return}
+  await loadAll();
+}
+
+async function loadAll(){
+  pageState.className='state';pageState.innerText='正在加载 SOP / Skill 绑定中心...';
+  try{
+    const [overview,sops,skills,prompts,employees,taskTypes,departments,acceptanceRules,securityRules,missingBindings,nextUpgrades]=await Promise.all([
+      api('/api/sop-skill-center/overview'),
+      api('/api/sop-skill-center/sops'),
+      api('/api/sop-skill-center/skills'),
+      api('/api/sop-skill-center/prompts'),
+      api('/api/sop-skill-center/employees'),
+      api('/api/sop-skill-center/task-types'),
+      api('/api/sop-skill-center/departments'),
+      api('/api/sop-skill-center/acceptance-rules'),
+      api('/api/sop-skill-center/security-rules'),
+      api('/api/sop-skill-center/missing-bindings'),
+      api('/api/sop-skill-center/next-upgrades')
+    ]);
+    state={overview:obj(overview),sops:arr(obj(sops).sops),skills:arr(obj(skills).skills),prompts:arr(obj(prompts).prompts),employees:arr(obj(employees).employees),taskTypes:arr(obj(taskTypes).task_types),departments:arr(obj(departments).departments),acceptanceRules:arr(obj(acceptanceRules).acceptance_rules),securityRules:arr(obj(securityRules).security_rules),missingBindings:arr(obj(missingBindings).missing_bindings),nextUpgrades:arr(obj(nextUpgrades).next_upgrades)};
+    pageState.className='state ok';pageState.innerText='SOP / Skill 绑定中心已更新。';
+    renderAll();
+  }catch(e){
+    pageState.className='state error';pageState.innerText=e.message||'SOP / Skill 绑定中心加载失败';
+    state={overview:{},sops:[],skills:[],prompts:[],employees:[],taskTypes:[],departments:[],acceptanceRules:[],securityRules:[],missingBindings:[],nextUpgrades:[]};renderAll();
+  }
+}
+
+function resetFilters(){searchInput.value='';typeFilter.value='';safetyFilter.value='';renderLibraries()}
+function renderAll(){renderOverview();renderLibraries();renderRelations();renderRules();renderSide()}
+
+function renderOverview(){
+  const o=state.overview;
+  const items=[['SOP 总数','total_sops'],['Skill 总数','total_skills'],['Prompt 模板总数','total_prompt_templates'],['已绑定员工数','bound_employee_count'],['已绑定任务类型数','bound_task_type_count'],['部门绑定数','department_binding_count'],['老板确认规则数','boss_confirmation_rule_count'],['天检验收规则数','test_acceptance_rule_count'],['天监审计规则数','security_audit_rule_count'],['天盾部署规则数','deploy_required_rule_count'],['禁止自动执行规则数','auto_execute_disabled_count'],['缺失绑定数','missing_binding_count']];
+  summaryStats.innerHTML=items.map(([label,key])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(text(o[key],'0'))}</div></div>`).join('');
+}
+
+function matches(row){
+  const q=searchInput.value.trim().toLowerCase(),safety=safetyFilter.value;
+  const hay=text(row,'').toLowerCase();
+  const level=row.safety_level||row.current_status||'';
+  return (!q||hay.includes(q))&&(!safety||level===safety);
+}
+
+function renderLibraries(){
+  const type=typeFilter.value;
+  sopGrid.innerHTML=(type&&type!=='sops')?'<div class="muted">已按类型筛选隐藏</div>':cardList(state.sops.filter(matches),'sop','暂无数据');
+  skillGrid.innerHTML=(type&&type!=='skills')?'<div class="muted">已按类型筛选隐藏</div>':cardList(state.skills.filter(matches),'skill','暂无数据');
+  promptGrid.innerHTML=(type&&type!=='prompts')?'<div class="muted">已按类型筛选隐藏</div>':cardList(state.prompts.filter(matches),'prompt','暂无数据');
+}
+
+function cardList(rows,kind,emptyText){
+  if(!rows.length)return `<div class="state empty">${esc(emptyText)}</div>`;
+  return rows.map(row=>{
+    const code=row.sop_code||row.skill_code||row.prompt_code;
+    const name=row.sop_name||row.skill_name||row.prompt_name;
+    const sub=row.department||row.skill_category||row.task_type;
+    const status=row.current_status||row.safety_level||'readonly';
+    return `<article class="item-card ${esc(row.safety_level||'')}" onclick="selectDetail('${esc(kind)}','${esc(code)}')">
+      <div class="title-row"><div><h3>${esc(text(name))}</h3><div class="code">${esc(text(code))}</div></div>${badge(status)}</div>
+      <div class="muted">${esc(text(sub))} · ${esc(text(row.description||row.template_content_summary))}</div>
+      <div class="cap-list">${row.requires_boss_confirmation?badge('需老板确认','medium'):badge('无需确认','good')}${row.requires_test_acceptance?badge('需天检','medium'):''}${row.requires_security_audit?badge('需天监','high'):''}${row.requires_deploy_review?badge('需天盾','critical'):''}${row.can_auto_execute?badge('可自动执行','yes'):badge('禁止自动执行','no')}</div>
+    </article>`;
+  }).join('');
+}
+
+async function selectDetail(kind,code){
+  selectedKey=`${kind}:${code}`;
+  const paths={sop:`/api/sop-skill-center/sops/${encodeURIComponent(code)}`,skill:`/api/sop-skill-center/skills/${encodeURIComponent(code)}`,prompt:`/api/sop-skill-center/prompts/${encodeURIComponent(code)}`,employee:`/api/sop-skill-center/employees/${encodeURIComponent(code)}`};
+  try{const detail=await api(paths[kind]);renderDetail(kind,obj(detail))}
+  catch(e){pageState.className='state error';pageState.innerText=e.message||'详情加载失败'}
+}
+
+function renderDetail(kind,row){
+  const title=row.sop_name||row.skill_name||row.prompt_name||row.employee_name||'查看详情';
+  const code=row.sop_code||row.skill_code||row.prompt_code||row.employee_code||'';
+  let html=`<div class="head"><h2>${esc(text(title))}</h2>${badge(row.current_status||row.safety_level||'readonly')}</div><div class="code">${esc(text(code))}</div>`;
+  if(kind==='sop')html+=kvRows(row,['department','description','owner_employee','requires_boss_confirmation','requires_test_acceptance','requires_security_audit','requires_deploy_review','can_auto_execute','next_upgrade_suggestion'])+detailLists(row,[['task_types','task_types'],['steps_summary','steps_summary'],['required_inputs','required_inputs'],['expected_outputs','expected_outputs'],['acceptance_rules','acceptance_rules'],['safety_rules','safety_rules'],['required_roles','required_roles']]);
+  if(kind==='skill')html+=kvRows(row,['skill_category','description','safety_level','requires_boss_confirmation','requires_test_acceptance','requires_security_audit','can_auto_execute','next_upgrade_suggestion'])+detailLists(row,[['suitable_employees','suitable_employees'],['suitable_task_types','suitable_task_types'],['required_tools','required_tools'],['forbidden_tools','forbidden_tools'],['recommended_models','recommended_models']]);
+  if(kind==='prompt')html+=kvRows(row,['task_type','employee_code','template_content_summary','output_format','current_status','next_upgrade_suggestion'])+detailLists(row,[['required_variables','required_variables'],['safety_notes','safety_notes'],['forbidden_content','forbidden_content']]);
+  if(kind==='employee')html+=kvRows(row,['department','requires_boss_confirmation','requires_test_acceptance','requires_security_audit','requires_deploy_review','can_auto_execute','next_upgrade_suggestion'])+detailLists(row,[['bound_sops','bound_sops'],['bound_skills','bound_skills'],['bound_prompt_templates','bound_prompt_templates'],['recommended_models','recommended_models'],['allowed_tools','allowed_tools'],['forbidden_tools','forbidden_tools'],['safety_rules','safety_rules'],['missing_bindings','missing_bindings']]);
+  detailPanel.innerHTML=html;
+}
+
+function kvRows(row,keys){
+  return `<div class="detail-row"><div class="kv">${keys.map(key=>`<div>${esc(key)}</div><div>${esc(text(row[key]))}</div>`).join('')}</div></div>`;
+}
+
+function detailLists(row,pairs){
+  return pairs.map(([label,key])=>`<div class="detail-row"><strong>${esc(label)}</strong>${listHtml(row[key])}</div>`).join('');
+}
+
+function renderRelations(){
+  employeeTable.innerHTML=state.employees.length?`<table><thead><tr><th>员工</th><th>SOP</th><th>Skill</th><th>Prompt</th><th>模型</th><th>工具</th><th>验收链路</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" onclick="selectDetail('employee','${esc(row.employee_code)}')">查看详情</button><div><strong>${esc(text(row.employee_name))}</strong></div><div class="code">${esc(text(row.employee_code))}</div><div class="muted">${esc(text(row.department))}</div></td><td>${listHtml(row.bound_sops)}</td><td>${listHtml(row.bound_skills)}</td><td>${listHtml(row.bound_prompt_templates)}</td><td>${listHtml(row.recommended_models)}</td><td>${listHtml(row.allowed_tools)}<div class="muted">禁用：${esc(text(row.forbidden_tools))}</div></td><td>${row.requires_boss_confirmation?badge('老板确认','medium'):''}${row.requires_test_acceptance?badge('天检','medium'):''}${row.requires_security_audit?badge('天监','high'):''}${row.requires_deploy_review?badge('天盾','critical'):''}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+  taskTypeTable.innerHTML=state.taskTypes.length?`<table><thead><tr><th>任务类型</th><th>员工</th><th>SOP / Skill / Prompt</th><th>模型</th><th>工具</th><th>安全</th></tr></thead><tbody>${state.taskTypes.map(row=>`<tr><td><strong>${esc(text(row.task_type_name))}</strong><div class="code">${esc(text(row.task_type))}</div></td><td>${esc(text(row.recommended_employee))}</td><td>${listHtml([row.recommended_sop,row.recommended_skill,row.recommended_prompt].filter(Boolean))}</td><td>${esc(text(row.recommended_model))}</td><td>${listHtml(row.recommended_tools)}<div class="muted">禁用：${esc(text(row.forbidden_tools))}</div></td><td>${badge(row.safety_level)}${row.can_auto_execute?badge('可自动执行','yes'):badge('禁止自动执行','no')}${listHtml(row.required_acceptance_flow)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+  departmentTable.innerHTML=state.departments.length?`<table><thead><tr><th>部门</th><th>SOP</th><th>Skill</th><th>Prompt</th><th>模型</th><th>缺失</th></tr></thead><tbody>${state.departments.map(row=>`<tr><td><strong>${esc(text(row.department_name))}</strong><div class="code">${esc(text(row.department))}</div></td><td>${listHtml(row.bound_sops)}</td><td>${listHtml(row.bound_skills)}</td><td>${listHtml(row.bound_prompt_templates)}</td><td>${listHtml(row.recommended_models)}</td><td>${listHtml(row.missing_bindings)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+}
+
+function renderRules(){
+  acceptanceBox.innerHTML=ruleList(state.acceptanceRules,'暂无数据');
+  securityBox.innerHTML=ruleList(state.securityRules,'暂无数据');
+  disabledBox.innerHTML=ruleList(state.securityRules.filter(row=>row.can_auto_execute===false),'暂无数据');
+}
+
+function ruleList(rows,emptyText){
+  return rows.length?rows.map(row=>`<div class="list-item"><strong>${esc(text(row.rule_name))}</strong>${badge(row.safety_level||row.current_status)}<div class="code">${esc(text(row.rule_code))}</div><div class="muted">${esc(text(row.task_type||row.scope||row.department))}</div>${listHtml(row.acceptance_steps||row.forbidden_actions)}<div class="cap-list">${row.requires_boss_confirmation?badge('需老板确认','medium'):''}${row.requires_test_acceptance?badge('需天检','medium'):''}${row.requires_security_audit?badge('需天监','high'):''}${row.requires_deploy_review?badge('需天盾','critical'):''}${row.can_auto_execute?badge('可自动执行','yes'):badge('禁止自动执行','no')}</div></div>`).join(''):`<div class="muted">${esc(emptyText)}</div>`;
+}
+
+function renderSide(){
+  modelBox.innerHTML=listItems(extractPairs(state.employees,'recommended_models'),'暂无数据');
+  toolBox.innerHTML=listItems(extractPairs(state.employees,'allowed_tools'),'暂无数据');
+  missingBox.innerHTML=state.missingBindings.length?state.missingBindings.map(row=>`<div class="list-item"><strong>${esc(text(row.target_name))}</strong>${badge(row.severity)}<div class="code">${esc(text(row.target_code))}</div><div class="muted">${esc(text(row.missing_type))} · ${esc(text(row.suggestion))}</div>${listHtml(row.missing_fields)}</div>`).join(''):'<div class="muted">暂无数据</div>';
+  upgradeBox.innerHTML=state.nextUpgrades.length?state.nextUpgrades.map(row=>`<div class="list-item"><strong>${esc(text(row.upgrade_name))}</strong>${badge(row.risk_level)}<div class="code">${esc(text(row.upgrade_code))}</div><div class="muted">${esc(text(row.target_sprint))} · ${esc(text(row.description))}</div>${listHtml(row.depends_on)}<div class="cap-list">${row.requires_boss_confirmation?badge('需老板确认','medium'):badge('无需确认','good')}${row.can_auto_execute?badge('可自动执行','yes'):badge('禁止自动执行','no')}</div></div>`).join(''):'<div class="muted">暂无数据</div>';
+  safetyBox.innerHTML=['所有业务接口只读 GET','Prompt 模板只展示摘要、变量、输出格式和安全说明','不调用模型或工具','不派单、不部署、不提交代码、不改权限、不改任务状态'].map(x=>`<div class="list-item">${esc(x)}</div>`).join('');
+}
+
+function extractPairs(rows,key){
+  const result=[];
+  rows.forEach(row=>arr(row[key]).forEach(value=>result.push({name:value,owner:row.employee_name})));
+  return result;
+}
+
+function listItems(rows,emptyText){
+  return rows.length?rows.map(row=>`<div class="list-item"><strong>${esc(text(row.name||row))}</strong><div class="muted">${esc(text(row.owner||row.description||row.next_upgrade_suggestion))}</div></div>`).join(''):`<div class="muted">${esc(emptyText)}</div>`;
+}
+
+init();
+</script>
+</body>
+</html>
