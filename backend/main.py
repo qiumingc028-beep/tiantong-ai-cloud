@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import text
 
 from .database import SessionLocal, ensure_tables, engine, get_redis
-from .routers import account_center, ai_employees, ceo_dashboard, deploy_center, employee_activity_log, employee_activity_trace, employee_capabilities, employee_workspace, jd_collection, jd_integrations, knowledge_center, metrics, model_routing, orchestrator, orchestrator_hotfix, orchestrator_task_links, sop_skill_center, stores, task_center, tiancang, tool_permissions, users
+from .routers import account_center, ai_employees, ceo_dashboard, deploy_center, employee_activity_log, employee_activity_trace, employee_capabilities, employee_workspace, jd_collection, jd_integrations, knowledge_center, metrics, model_routing, orchestrator, orchestrator_hotfix, orchestrator_task_links, skill_plugin_center, sop_skill_center, stores, task_center, tiancang, tool_permissions, users
 from .seed import seed_defaults
 
 
@@ -60,6 +60,7 @@ app.include_router(employee_capabilities.router, prefix="/api/employee-capabilit
 app.include_router(model_routing.router, prefix="/api/model-routing")
 app.include_router(tool_permissions.router, prefix="/api/tool-permissions")
 app.include_router(sop_skill_center.router, prefix="/api/sop-skill-center")
+app.include_router(skill_plugin_center.router, prefix="/api/skill-plugin-center")
 app.include_router(employee_workspace.router)
 app.include_router(orchestrator_hotfix.router)
 app.include_router(orchestrator_task_links.router)
