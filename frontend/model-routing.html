@@ -198,7 +198,7 @@ function renderEmployees(){
 }
 
 function renderTaskTypes(){
-  taskTypeTable.innerHTML=state.taskTypes.length?`<table><thead><tr><th>任务类型</th><th>主模型</th><th>备用</th><th>禁止模型</th><th>推荐理由</th><th>边界</th></tr></thead><tbody>${state.taskTypes.map(row=>`<tr><td><strong>${esc(text(row.task_name))}</strong><div class="code">${esc(text(row.task_type))}</div></td><td>${esc(text(row.primary_model))}</td><td>${listHtml(row.backup_models)}</td><td>${listHtml(row.forbidden_models)}</td><td>${esc(text(row.recommended_reason))}</td><td>${badge(row.cost_level)} ${badge(row.risk_level)} ${row.requires_boss_confirmation?badge('需老板确认','medium'):badge('无需确认','good')} ${yesNo(row.can_auto_call)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+  taskTypeTable.innerHTML=state.taskTypes.length?`<table><thead><tr><th>任务类型</th><th>主模型</th><th>备用</th><th>禁止模型</th><th>推荐理由</th><th>safety_notes</th><th>边界</th></tr></thead><tbody>${state.taskTypes.map(row=>`<tr><td><strong>${esc(text(row.task_name))}</strong><div class="code">${esc(text(row.task_type))}</div></td><td>${esc(text(row.primary_model))}</td><td>${listHtml(row.backup_models)}</td><td>${listHtml(row.forbidden_models)}</td><td>${esc(text(row.recommended_reason))}</td><td><div class="muted">${esc(text(row.safety_notes))}</div></td><td>${badge(row.cost_level)} ${badge(row.risk_level)} ${row.requires_boss_confirmation?badge('需老板确认','medium'):badge('无需确认','good')} ${yesNo(row.can_auto_call)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
 }
 
 function renderRisks(){
