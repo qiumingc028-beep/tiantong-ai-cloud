@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>天赋：Skill / 插件赋能中心 Skill / Plugin Empowerment Center - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#1d4ed8;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar,.links{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#111827,#1d4ed8 58%,#0f766e);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#dbeafe;line-height:1.6;margin:8px 0 0}.hero .note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#ecfeff;border-radius:8px;padding:10px 12px;max-width:520px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.empty{border-style:dashed;text-align:center;padding:24px}.stats{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:12px;margin-bottom:16px}.stat,.card{background:white;border:1px solid var(--line);border-radius:8px}.stat{padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.card{padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2,.card h2{font-size:18px;margin:0}.toolbar input,.toolbar select{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:0 10px;min-width:170px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 430px;gap:16px}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.item-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.item-card{border:1px solid var(--line);background:white;border-radius:8px;padding:14px;cursor:pointer}.item-card:hover,.item-card.selected{border-color:var(--brand);box-shadow:0 8px 22px rgba(15,23,42,.08)}.item-card.high{border-color:#fed7aa;background:#fff7ed}.item-card.critical{border-color:#fecaca;background:#fef2f2}.title-row{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.title-row h3{margin:0;font-size:17px}.code{font-family:Consolas,monospace;color:#1d4ed8}.muted{color:var(--muted);line-height:1.65}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.low,.badge.good,.badge.true{background:#dcfce7;color:#166534}.badge.medium,.badge.research_only,.badge.draft_only,.badge.manual_only,.badge.read_only_candidate,.badge.view_only_candidate{background:#fef3c7;color:#92400e}.badge.high,.badge.critical,.badge.false,.badge.blocked_first_phase,.badge.forbidden_auto_execute{background:#fee2e2;color:#991b1b}.cap-list{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.kv{display:grid;grid-template-columns:180px minmax(0,1fr);gap:7px 10px;font-size:14px}.kv div:nth-child(odd){color:var(--muted)}.detail-row{border-top:1px solid var(--line);padding:12px 0}.detail-row:first-of-type{border-top:0}.list-item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;background:#f8fafc}@media(max-width:1240px){.stats{grid-template-columns:repeat(2,1fr)}.layout,.grid-2{grid-template-columns:1fr}.item-grid{grid-template-columns:1fr}}@media(max-width:760px){.app{grid-template-columns:1fr}.top,.hero{align-items:flex-start;flex-direction:column}.content{padding:18px}.stats{grid-template-columns:1fr}.toolbar input,.toolbar select{width:100%;min-width:0}.kv{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>天赋：Skill / 插件赋能中心 Skill / Plugin Empowerment Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>天赋：Skill / 插件赋能中心</h1><p>查看 Skill、插件、MCP、外部工具候选能力，用于未来赋能 AI 员工。</p></div>
+        <div class="note">第一阶段只读展示：不自动下载、不自动安装、不自动启用、不自动赋权、不调用 MCP、不调用外部 API、不调用模型、不调用工具、不派单、不执行任务。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 Skill / 插件赋能中心...</div>
+      <section id="summaryStats" class="stats"></section>
+      <div class="card">
+        <div class="toolbar">
+          <input id="searchInput" placeholder="搜索 Skill / 插件 / MCP / 工具 / 员工" oninput="renderAllLists()">
+          <select id="typeFilter" onchange="renderAllLists()"><option value="">全部类型</option><option value="skills">Skill</option><option value="plugins">插件</option><option value="mcps">MCP</option><option value="externalTools">外部工具</option></select>
+          <select id="riskFilter" onchange="renderAllLists()"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
+          <button onclick="renderAllLists()">筛选</button>
+          <button class="secondary" onclick="resetFilters()">重置</button>
+          <button class="secondary" onclick="loadAll()">刷新</button>
+        </div>
+        <div class="links" style="margin-top:12px">
+          <a class="btn secondary" href="/employee-capabilities.html">跳转 AI员工能力档案</a>
+          <a class="btn secondary" href="/model-routing.html">跳转多模型路由中心</a>
+          <a class="btn secondary" href="/tool-permissions.html">跳转AI工具调用权限中心</a>
+          <a class="btn secondary" href="/sop-skill-center.html">跳转SOP / Skill 绑定中心</a>
+          <a class="btn secondary" href="/employee-activity-log.html">跳转AI执行日志中心</a>
+          <a class="btn secondary" href="/employee-activity-trace.html">跳转AI执行追溯中心</a>
+          <a class="btn secondary" href="/task-center.html">跳转 Task Center</a>
+          <a class="btn secondary" href="/orchestrator.html">跳转 Orchestrator</a>
+        </div>
+      </div>
+      <div class="layout">
+        <section>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>Skill 库总览区</h2></div><div id="skillGrid" class="item-grid"></div></div>
+            <div class="card"><div class="head"><h2>插件库总览区</h2></div><div id="pluginGrid" class="item-grid"></div></div>
+          </div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>MCP 候选区</h2></div><div id="mcpGrid" class="item-grid"></div></div>
+            <div class="card"><div class="head"><h2>外部工具候选区</h2></div><div id="externalToolGrid" class="item-grid"></div></div>
+          </div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>AI 员工绑定建议区</h2></div><div id="employeeTable"></div></div>
+            <div class="card"><div class="head"><h2>部门绑定建议区</h2></div><div id="departmentTable"></div></div>
+          </div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>高风险工具提醒区</h2></div><div id="riskBox"></div></div>
+            <div class="card"><div class="head"><h2>缺失配置提醒区</h2></div><div id="missingBox"></div></div>
+          </div>
+          <div class="card"><div class="head"><h2>下一步升级建议区</h2></div><div id="upgradeBox"></div></div>
+        </section>
+        <aside>
+          <div id="detailPanel" class="card"><h2>右侧详情区</h2><div class="muted">点击 Skill / 插件 / MCP / 外部工具 / 员工 / 部门 / 风险项查看只读详情。</div></div>
+          <div class="card"><div class="head"><h2>安全边界说明区</h2></div><div id="safetyBox"></div></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/orchestrator.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
+let state={overview:{},skills:[],plugins:[],mcps:[],externalTools:[],employees:[],departments:[],riskTools:[],missingConfigs:[],nextUpgrades:[]};
+
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/skill-plugin-center.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,emptyText='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;if(Array.isArray(value))return value.length?value.map(x=>text(x,'')).filter(Boolean).join('、'):emptyText;if(value&&typeof value==='object')return [value.skill_name,value.skill_code,value.plugin_name,value.plugin_code,value.mcp_name,value.mcp_code,value.tool_name,value.tool_code,value.employee_name,value.employee_code,value.department,value.title,value.upgrade_code,value.risk_type,value.capability].map(v=>text(v,'')).filter(Boolean).join(' · ')||emptyText;return emptyText}
+function arr(value){return Array.isArray(value)?value:[]}
+function obj(value){return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
+function badge(value,type=''){return `<span class="badge ${esc(type||String(value||'').toLowerCase())}">${esc(text(value))}</span>`}
+function listHtml(values,emptyText='暂无数据'){const rows=arr(values);return rows.length?`<div class="cap-list">${rows.map(x=>`<span class="badge">${esc(text(x))}</span>`).join('')}</div>`:`<div class="muted">${esc(emptyText)}</div>`}
+function errorText(data,fallback){return text(data&&data.detail,fallback)}
+
+async function api(url){
+  let res;
+  try{res=await fetch(url,{credentials:'include'})}catch(e){throw new Error('网络异常，请稍后重试')}
+  if(res.status===401){pageState.className='state error';pageState.innerText='登录已过期，请重新登录';setTimeout(()=>location.href='/login.html',500);throw new Error('登录已过期，请重新登录')}
+  const data=res.ok?null:await res.json().catch(()=>({}));
+  if(res.status===403)throw new Error(errorText(data,'无权限访问'));
+  if(res.status===404)throw new Error(errorText(data,'接口或数据不存在'));
+  if(res.status===422)throw new Error(errorText(data,'参数错误'));
+  if(res.status>=500)throw new Error(errorText(data,'服务器异常'));
+  if(!res.ok)throw new Error(errorText(data,'请求失败，请稍后重试'));
+  return res.json();
+}
+
+async function init(){
+  renderMenu();tick();setInterval(tick,1000);renderSafety();renderAll();
+  try{const user=await api('/api/me');me.innerText=`${text(user.display_name||user.username,'当前用户')} · ${text(user.role_label||user.role)}`}catch(e){pageState.className='state error';pageState.innerText=e.message;return}
+  await loadAll();
+}
+
+async function loadAll(){
+  pageState.className='state';pageState.innerText='正在加载 Skill / 插件赋能中心...';
+  try{
+    const [overview,skills,plugins,mcps,externalTools,employees,departments,riskTools,missingConfigs,nextUpgrades]=await Promise.all([
+      api('/api/skill-plugin-center/overview'),
+      api('/api/skill-plugin-center/skills'),
+      api('/api/skill-plugin-center/plugins'),
+      api('/api/skill-plugin-center/mcps'),
+      api('/api/skill-plugin-center/external-tools'),
+      api('/api/skill-plugin-center/employees'),
+      api('/api/skill-plugin-center/departments'),
+      api('/api/skill-plugin-center/risk-tools'),
+      api('/api/skill-plugin-center/missing-configs'),
+      api('/api/skill-plugin-center/next-upgrades')
+    ]);
+    state={overview:obj(overview),skills:arr(obj(skills).skills),plugins:arr(obj(plugins).plugins),mcps:arr(obj(mcps).mcps),externalTools:arr(obj(externalTools).external_tools),employees:arr(obj(employees).employees),departments:arr(obj(departments).departments),riskTools:arr(obj(riskTools).risk_tools),missingConfigs:arr(obj(missingConfigs).missing_configs),nextUpgrades:arr(obj(nextUpgrades).next_upgrades)};
+    pageState.className='state ok';pageState.innerText='Skill / 插件赋能中心已更新。';
+    renderAll();
+  }catch(e){
+    pageState.className='state error';pageState.innerText=e.message||'Skill / 插件赋能中心加载失败';
+    state={overview:{},skills:[],plugins:[],mcps:[],externalTools:[],employees:[],departments:[],riskTools:[],missingConfigs:[],nextUpgrades:[]};renderAll();
+  }
+}
+
+function resetFilters(){searchInput.value='';typeFilter.value='';riskFilter.value='';renderAllLists()}
+function renderAll(){renderOverview();renderAllLists();renderBindings();renderSideLists();renderSafety()}
+
+function renderOverview(){
+  const o=state.overview;
+  const items=[['Skill 总数','total_skills'],['插件总数','total_plugins'],['MCP 候选数','total_mcps'],['外部工具候选数','total_external_tools'],['高风险数量','high_risk_count'],['需要老板确认','boss_confirmation_required_count'],['禁止自动执行','auto_execute_disabled_count'],['可研究接入','research_candidate_count'],['缺失配置数','missing_config_count'],['只读模式','safe_readonly_mode'],['全部禁止执行','can_auto_execute_all'],['全部禁止安装','can_auto_install_all'],['全部禁止启用','can_auto_enable_all']];
+  summaryStats.innerHTML=items.map(([label,key])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(text(o[key],'0'))}</div></div>`).join('');
+}
+
+function matches(row){
+  const q=searchInput.value.trim().toLowerCase();
+  const risk=riskFilter.value;
+  const hay=text(row,'').toLowerCase();
+  return (!q||hay.includes(q))&&(!risk||row.risk_level===risk);
+}
+
+function renderAllLists(){
+  const type=typeFilter.value;
+  skillGrid.innerHTML=(type&&type!=='skills')?'<div class="muted">已按类型筛选隐藏</div>':cardList(state.skills.filter(matches),'skill');
+  pluginGrid.innerHTML=(type&&type!=='plugins')?'<div class="muted">已按类型筛选隐藏</div>':cardList(state.plugins.filter(matches),'plugin');
+  mcpGrid.innerHTML=(type&&type!=='mcps')?'<div class="muted">已按类型筛选隐藏</div>':cardList(state.mcps.filter(matches),'mcp');
+  externalToolGrid.innerHTML=(type&&type!=='externalTools')?'<div class="muted">已按类型筛选隐藏</div>':cardList(state.externalTools.filter(matches),'externalTool');
+}
+
+function codeOf(row){return row.skill_code||row.plugin_code||row.mcp_code||row.tool_code||row.employee_code||row.department||row.upgrade_code||row.target_code}
+function nameOf(row){return row.skill_name||row.plugin_name||row.mcp_name||row.tool_name||row.employee_name||row.department||row.title||row.target_code}
+function cardList(rows,kind){
+  if(!rows.length)return '<div class="state empty">暂无数据</div>';
+  return rows.map(row=>`<article class="item-card ${esc(row.risk_level)}" onclick="selectDetail('${esc(kind)}','${esc(codeOf(row))}')">
+    <div class="title-row"><div><h3>${esc(text(nameOf(row)))}</h3><div class="code">${esc(text(codeOf(row)))}</div></div>${badge(row.risk_level||row.permission_level||'readonly')}</div>
+    <div class="muted">${esc(text(row.skill_category||row.plugin_category||row.capability||row.tool_category))}</div>
+    <div class="cap-list">${row.requires_boss_confirmation?badge('需老板确认','medium'):''}${row.can_auto_execute?badge('可自动执行','true'):badge('禁止自动执行','false')}${row.can_auto_install?badge('可自动安装','true'):badge('禁止自动安装','false')}${row.can_auto_enable?badge('可自动启用','true'):badge('禁止自动启用','false')}</div>
+    <div class="detail-row"><strong>safety_notes</strong>${listHtml(row.safety_notes)}</div>
+  </article>`).join('');
+}
+
+async function selectDetail(kind,code){
+  const paths={skill:`/api/skill-plugin-center/skills/${encodeURIComponent(code)}`,plugin:`/api/skill-plugin-center/plugins/${encodeURIComponent(code)}`,mcp:`/api/skill-plugin-center/mcps/${encodeURIComponent(code)}`,externalTool:`/api/skill-plugin-center/external-tools/${encodeURIComponent(code)}`,employee:`/api/skill-plugin-center/employees/${encodeURIComponent(code)}`};
+  try{
+    const row=paths[kind]?await api(paths[kind]):findLocal(kind,code);
+    renderDetail(kind,obj(row));
+  }catch(e){pageState.className='state error';pageState.innerText=e.message||'详情加载失败'}
+}
+
+function findLocal(kind,code){
+  const map={department:state.departments,risk:state.riskTools,missing:state.missingConfigs,upgrade:state.nextUpgrades};
+  return arr(map[kind]).find(row=>codeOf(row)===code)||{};
+}
+
+function renderDetail(kind,row){
+  const title=nameOf(row)||'查看详情';
+  const code=codeOf(row)||'';
+  detailPanel.innerHTML=`<div class="head"><h2>${esc(text(title))}</h2>${badge(row.risk_level||row.permission_level||'readonly')}</div><div class="code">${esc(text(code))}</div>${kvRows(row)}${detailLists(row)}`;
+}
+
+function kvRows(row){
+  const keys=['skill_code','skill_name','skill_category','plugin_code','plugin_name','plugin_category','official_url','vendor','install_method','mcp_code','mcp_name','capability','tool_code','tool_name','tool_category','target_employee','target_department','department','risk_type','risk_level','cost_level','permission_level','permission_scope','requires_boss_confirmation','can_read','can_write','can_execute','can_spend_money','can_auto_download','can_auto_install','can_auto_enable','can_auto_execute','safe_readonly_mode','allowed_stage','priority','target_module','forbidden_reason','suggested_fix','acceptance_notes'];
+  const rows=keys.filter(key=>key in row).map(key=>`<div>${esc(key)}</div><div>${esc(text(row[key]))}</div>`).join('');
+  return rows?`<div class="detail-row"><div class="kv">${rows}</div></div>`:'';
+}
+
+function detailLists(row){
+  const keys=['suitable_employees','suitable_departments','supported_platform','safety_notes','recommended_skills','recommended_plugins','recommended_mcps','recommended_external_tools','forbidden_tools','boss_confirm_required_tools','missing_fields','forbidden_actions'];
+  return keys.filter(key=>key in row).map(key=>`<div class="detail-row"><strong>${esc(key)}</strong>${listHtml(row[key])}</div>`).join('');
+}
+
+function renderBindings(){
+  employeeTable.innerHTML=state.employees.length?`<table><thead><tr><th>员工</th><th>Skill</th><th>插件</th><th>MCP</th><th>外部工具</th><th>禁用/确认</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" onclick="selectDetail('employee','${esc(row.employee_code)}')">查看详情</button><div><strong>${esc(text(row.employee_name))}</strong></div><div class="code">${esc(text(row.employee_code))}</div><div class="muted">${esc(text(row.department))}</div></td><td>${listHtml(row.recommended_skills)}</td><td>${listHtml(row.recommended_plugins)}</td><td>${listHtml(row.recommended_mcps)}</td><td>${listHtml(row.recommended_external_tools)}</td><td><strong>forbidden_tools</strong>${listHtml(row.forbidden_tools)}<strong>boss_confirm_required_tools</strong>${listHtml(row.boss_confirm_required_tools)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+  departmentTable.innerHTML=state.departments.length?`<table><thead><tr><th>部门</th><th>Skill</th><th>插件</th><th>MCP</th><th>外部工具</th><th>禁用</th></tr></thead><tbody>${state.departments.map(row=>`<tr onclick="selectDetail('department','${esc(row.department)}')"><td><strong>${esc(text(row.department))}</strong></td><td>${listHtml(row.recommended_skills)}</td><td>${listHtml(row.recommended_plugins)}</td><td>${listHtml(row.recommended_mcps)}</td><td>${listHtml(row.recommended_external_tools)}</td><td>${listHtml(row.forbidden_tools)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+}
+
+function renderSideLists(){
+  riskBox.innerHTML=state.riskTools.length?state.riskTools.map(row=>`<div class="list-item" onclick="selectDetail('risk','${esc(row.tool_code)}')"><strong>${esc(text(row.tool_name))}</strong>${badge(row.risk_level)}<div class="code">${esc(text(row.tool_code))}</div><div class="muted">${esc(text(row.risk_type))} · ${esc(text(row.forbidden_reason))}</div>${badge(row.can_auto_execute?'可自动执行':'禁止自动执行',row.can_auto_execute?'true':'false')}</div>`).join(''):'<div class="muted">暂无数据</div>';
+  missingBox.innerHTML=state.missingConfigs.length?state.missingConfigs.map(row=>`<div class="list-item" onclick="selectDetail('missing','${esc(row.target_code)}')"><strong>${esc(text(row.target_type))}</strong>${badge(row.risk_level)}<div class="code">${esc(text(row.target_code))}</div><div class="muted">${esc(text(row.suggested_fix))}</div>${listHtml(row.missing_fields)}</div>`).join(''):'<div class="muted">暂无数据</div>';
+  upgradeBox.innerHTML=state.nextUpgrades.length?state.nextUpgrades.map(row=>`<div class="list-item" onclick="selectDetail('upgrade','${esc(row.upgrade_code)}')"><strong>${esc(text(row.title))}</strong>${badge(row.priority)}<div class="code">${esc(text(row.upgrade_code))}</div><div class="muted">${esc(text(row.target_module))} · ${esc(text(row.allowed_stage))}</div><strong>forbidden_actions</strong>${listHtml(row.forbidden_actions)}<div class="muted">${esc(text(row.acceptance_notes))}</div></div>`).join(''):'<div class="muted">暂无数据</div>';
+}
+
+function renderSafety(){
+  safetyBox.innerHTML=['只调用 /api/skill-plugin-center/* 只读接口','不连接 MCP 服务，不请求外部平台','官方地址只展示文本，不提供外部跳转','不提供编辑、保存、绑定、安装、下载、启用或执行入口','不改 Task Center、Orchestrator、Deploy Center 流程'].map(x=>`<div class="list-item">${esc(x)}</div>`).join('');
+}
+
+init().catch(e=>{pageState.className='state error';pageState.innerText=e.message||'页面加载失败'});
+</script>
+</body>
+</html>
