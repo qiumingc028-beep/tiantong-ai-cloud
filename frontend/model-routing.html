@@ -16,7 +16,7 @@
     <header class="top"><strong>多模型路由中心 Multi Model Routing Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
-        <div><h1>多模型路由中心 Multi Model Routing Center</h1><p>查看模型能力、成本、风险、员工适配、任务推荐、确认规则、降级方案和下一步升级建议。</p></div>
+        <div><h1>多模型路由中心 Multi Model Routing Center</h1><p>查看模型能力、模型成本、风险等级、员工模型适配、任务类型推荐、fallback 降级策略。</p></div>
         <div class="note">第一阶段只读展示；不调用模型、不扣费、不派单、不开始任务、不部署、不提交代码、不改权限。</div>
       </div>
       <div id="pageState" class="state">正在加载多模型路由中心...</div>
@@ -128,7 +128,7 @@ function renderAll(){renderOverview();renderModels();renderEmployees();renderTas
 
 function renderOverview(){
   const o=state.overview;
-  const items=[['模型总数','total_models'],['可用模型','active_models'],['高成本模型','high_cost_models'],['高风险模型','high_risk_models'],['需老板确认','boss_confirmation_required_count'],['员工适配档案','employees_with_model_profile'],['任务类型配置','task_types_configured'],['禁止自动调用','auto_call_disabled_count'],['降级策略','fallback_strategy_count']];
+  const items=[['模型总数','total_models'],['高成本模型','high_cost_models'],['高风险模型','high_risk_models'],['需要老板确认','boss_confirmation_required_count'],['禁止自动调用','auto_call_disabled_count'],['已配置任务类型','task_types_configured'],['可用模型','active_models'],['员工适配档案','employees_with_model_profile'],['降级策略','fallback_strategy_count']];
   summaryStats.innerHTML=items.map(([label,key])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(text(o[key],'0'))}</div></div>`).join('');
 }
 
