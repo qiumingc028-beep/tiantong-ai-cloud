@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI员工执行追溯中心 Employee Activity Trace - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--good:#15803d;--warn:#b45309;--bad:#b91c1c;--brand:#0f766e;--blue:#0369a1}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar,.quick-links{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f172a,#0f766e 58%,#0369a1);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#d1fae5;line-height:1.6;margin:8px 0 0}.hero .note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#e0f2fe;border-radius:8px;padding:10px 12px;max-width:390px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.empty{border-style:dashed;text-align:center;padding:24px}.stats{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:12px;margin-bottom:16px}.stat{background:white;border:1px solid var(--line);border-radius:8px;padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 430px;gap:16px}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.card{background:white;border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2{font-size:18px;margin:0}.toolbar input{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:0 10px;min-width:170px}.timeline{display:flex;flex-direction:column;gap:12px}.node{border:1px solid var(--line);border-left:5px solid var(--brand);background:#fff;border-radius:8px;padding:14px}.node.bad{border-left-color:var(--bad);background:#fff7f7}.node.warn{border-left-color:var(--warn);background:#fffbeb}.node h3{margin:0;font-size:16px}.edge{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}.kv{display:grid;grid-template-columns:145px minmax(0,1fr);gap:7px 10px;font-size:14px}.kv div:nth-child(odd){color:var(--muted)}.item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.good{background:#dcfce7;color:#166534}.badge.warn{background:#ffedd5;color:#9a3412}.badge.bad{background:#fee2e2;color:#991b1b}.muted{color:var(--muted);line-height:1.65}.code{font-family:Consolas,monospace;color:#0f766e}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}@media(max-width:1240px){.stats{grid-template-columns:repeat(3,1fr)}.layout,.grid-2{grid-template-columns:1fr}}@media(max-width:760px){.app{grid-template-columns:1fr}.top,.hero{align-items:flex-start;flex-direction:column}.content{padding:18px}.stats{grid-template-columns:1fr}.kv{grid-template-columns:1fr}.toolbar input{width:100%;min-width:0}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>AI员工执行追溯中心 Employee Activity Trace</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>AI员工执行追溯中心 Employee Activity Trace</h1><p>查看 AI 员工、任务和日志的跨模块追溯链路。只读展示，不派单、不开始任务、不部署、不提交代码。</p></div>
+        <div class="note">追溯中心只展示来源、确认、验收、审计、部署、提交摘要和缺失环节，不触发任何任务动作。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 AI执行追溯中心...</div>
+      <section id="summaryStats" class="stats"></section>
+      <div class="card">
+        <div class="toolbar">
+          <input id="employeeCodeInput" placeholder="employee_code，例如 tianwang">
+          <input id="taskIdInput" type="number" min="1" placeholder="task_id">
+          <input id="logIdInput" placeholder="log_id">
+          <button onclick="loadOverview()">追溯总览</button>
+          <button class="secondary" onclick="loadEmployeeTrace()">员工追溯</button>
+          <button class="secondary" onclick="loadTaskTrace()">任务追溯</button>
+          <button class="secondary" onclick="loadLogTrace()">日志追溯</button>
+        </div>
+        <div class="quick-links" style="margin-top:12px">
+          <a class="btn secondary" href="/task-center.html">Task Center</a>
+          <a class="btn secondary" href="/employee-workspace.html">Employee Workspace</a>
+          <a class="btn secondary" href="/employee-activity-log.html">Employee Activity Log</a>
+          <a class="btn secondary" href="/orchestrator.html">Orchestrator</a>
+        </div>
+      </div>
+      <div class="layout">
+        <section>
+          <div class="card"><div class="head"><h2>trace_nodes 时间线</h2><button class="secondary" onclick="reloadCurrent()">刷新</button></div><div id="nodeList" class="timeline"></div></div>
+          <div class="card"><div class="head"><h2>trace_edges 链路关系</h2></div><div id="edgeList"></div></div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>缺失环节</h2></div><div id="missingList"></div></div>
+            <div class="card"><div class="head"><h2>阻塞与风险</h2></div><div id="blockerList"></div></div>
+          </div>
+        </section>
+        <aside>
+          <div class="card"><div class="head"><h2>下一步建议</h2></div><div id="suggestionBox" class="state"></div></div>
+          <div class="card"><div class="head"><h2>员工信息</h2></div><div id="employeeBox"></div></div>
+          <div class="card"><div class="head"><h2>任务信息</h2></div><div id="taskBox"></div></div>
+          <div class="card"><div class="head"><h2>Orchestrator 来源</h2></div><div id="orchestratorBox"></div></div>
+          <div class="card"><div class="head"><h2>老板确认</h2></div><div id="bossBox"></div></div>
+          <div class="card"><div class="head"><h2>天检 / 天监 / 天盾</h2></div><div id="statusBox"></div></div>
+          <div class="card"><div class="head"><h2>GitHub Commit 摘要</h2></div><div id="commitBox"></div></div>
+          <div class="card"><div class="head"><h2>safety_flags 安全标记</h2></div><div id="safetyBox"></div></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI执行日志中心','/employee-activity-log.html'],['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/orchestrator.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
+let traceData=emptyTrace();
+let currentMode='overview';
+
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/employee-activity-trace.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,emptyText='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;return emptyText}
+function arr(value){return Array.isArray(value)?value:[]}
+function obj(value){return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
+function num(value){return Number.isFinite(Number(value))?Number(value):0}
+function fmt(value){return value?String(value).slice(0,19).replace('T',' '):'暂无'}
+function badge(value,type=''){return `<span class="badge ${esc(type)}">${esc(text(value))}</span>`}
+function boolBadge(value){return `<span class="badge ${value?'warn':'good'}">${value?'是':'否'}</span>`}
+function emptyTrace(){return {summary:{},trace_nodes:[],trace_edges:[],employee:{},task:{},orchestrator_source:{},boss_confirmation:{},review_status:{},audit_status:{},deploy_status:{},git_commit:{},blockers:[],missing_steps:[],next_suggestion:'',safety_flags:[]}}
+
+async function api(url){
+  let res;
+  try{res=await fetch(url,{credentials:'include'})}catch(e){throw new Error('网络异常，请稍后重试')}
+  if(res.status===401){location.href='/login.html';throw new Error('请重新登录')}
+  const data=res.ok?null:await res.json().catch(()=>({}));
+  if(res.status===403)throw new Error((data&&data.detail)||'无权限访问 AI执行追溯中心');
+  if(res.status===404)throw new Error((data&&data.detail)||'追溯数据不存在');
+  if(res.status===422)throw new Error((data&&data.detail)||'参数错误，请检查输入');
+  if(res.status>=500)throw new Error((data&&data.detail)||'服务器异常，请稍后重试');
+  if(!res.ok)throw new Error((data&&data.detail)||'请求失败，请稍后重试');
+  return res.json();
+}
+
+async function init(){
+  renderMenu();tick();setInterval(tick,1000);renderAll();
+  try{const user=await api('/api/me');me.innerText=`${text(user.display_name||user.username,'当前用户')} · ${text(user.role_label||user.role)}`}catch(e){pageState.className='state error';pageState.innerText=e.message;return}
+  await loadOverview();
+}
+
+async function loadOverview(){currentMode='overview';await loadTrace('/api/employee-activity-trace/trace-overview','AI执行追溯总览已更新。')}
+async function loadEmployeeTrace(){const code=employeeCodeInput.value.trim();if(!code){showWarn('请填写 employee_code。');return}currentMode='employee';await loadTrace(`/api/employee-activity-trace/employees/${encodeURIComponent(code)}/trace`,'员工追溯已更新。')}
+async function loadTaskTrace(){const id=taskIdInput.value.trim();if(!id){showWarn('请填写 task_id。');return}currentMode='task';await loadTrace(`/api/employee-activity-trace/tasks/${encodeURIComponent(id)}/trace`,'任务追溯已更新。')}
+async function loadLogTrace(){const id=logIdInput.value.trim();if(!id){showWarn('请填写 log_id。');return}currentMode='log';await loadTrace(`/api/employee-activity-trace/logs/${encodeURIComponent(id)}/trace`,'日志追溯已更新。')}
+async function reloadCurrent(){if(currentMode==='employee')return loadEmployeeTrace();if(currentMode==='task')return loadTaskTrace();if(currentMode==='log')return loadLogTrace();return loadOverview()}
+function showWarn(message){pageState.className='state warn';pageState.innerText=message}
+
+async function loadTrace(url,okText){
+  pageState.className='state';pageState.innerText='正在加载 AI执行追溯数据...';
+  try{
+    const data=await api(url);
+    traceData=normalizeTrace(data);
+    pageState.className='state ok';pageState.innerText=okText;
+    renderAll();
+  }catch(e){
+    pageState.className='state error';pageState.innerText=e.message||'AI执行追溯中心加载失败';
+    traceData=emptyTrace();renderAll();
+  }
+}
+
+function normalizeTrace(data){
+  const d=obj(data);
+  return {summary:obj(d.summary),trace_nodes:arr(d.trace_nodes),trace_edges:arr(d.trace_edges),employee:obj(d.employee),task:obj(d.task),orchestrator_source:obj(d.orchestrator_source),boss_confirmation:obj(d.boss_confirmation),review_status:obj(d.review_status),audit_status:obj(d.audit_status),deploy_status:obj(d.deploy_status),git_commit:obj(d.git_commit),blockers:arr(d.blockers),missing_steps:arr(d.missing_steps),next_suggestion:text(d.next_suggestion),safety_flags:arr(d.safety_flags)};
+}
+
+function renderAll(){renderSummary();renderNodes();renderEdges();renderMissing();renderBlockers();renderSidePanels()}
+
+function renderSummary(){
+  const s=traceData.summary;
+  const items=[['追溯类型','trace_type'],['节点数','total_nodes'],['链路数','total_edges'],['阻塞数','blockers'],['缺失环节','missing_steps'],['等待老板确认','pending_boss_confirmations'],['待验收','pending_reviews'],['待审计','pending_audits'],['待部署','pending_deploys'],['当前 Sprint','current_sprint']];
+  summaryStats.innerHTML=items.map(([label,key])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(key.includes('count')||key.includes('nodes')||key.includes('edges')||['blockers','missing_steps','pending_boss_confirmations','pending_reviews','pending_audits','pending_deploys'].includes(key)?num(s[key]):text(s[key]))}</div></div>`).join('');
+}
+
+function renderNodes(){
+  const nodes=arr(traceData.trace_nodes);
+  if(!nodes.length){nodeList.innerHTML='<div class="state empty">暂无追溯节点</div>';return}
+  nodeList.innerHTML=nodes.map(raw=>{const n=obj(raw),bad=String(n.status||'').includes('failed')||String(n.status||'').includes('blocked')||String(n.status||'').includes('rejected');return `<article class="node ${bad?'bad':''}"><div class="head"><h3>${esc(text(n.title))}</h3>${badge(n.node_type,bad?'bad':'')}</div><div class="kv"><div>node_id</div><div class="code">${esc(text(n.node_id))}</div><div>状态</div><div>${esc(text(n.status))}</div><div>时间</div><div>${esc(fmt(n.time))}</div><div>employee_code</div><div class="code">${esc(text(n.employee_code))}</div><div>task_id</div><div>${esc(text(n.task_id))}</div><div>source_module</div><div>${esc(text(n.source_module))}</div><div>source_id</div><div>${esc(text(n.source_id))}</div><div>摘要</div><div>${esc(text(n.summary))}</div></div></article>`}).join('');
+}
+
+function renderEdges(){
+  const edges=arr(traceData.trace_edges);
+  edgeList.innerHTML=edges.length?edges.map(raw=>{const e=obj(raw);return `<div class="edge"><div class="kv"><div>from_node</div><div class="code">${esc(text(e.from_node))}</div><div>to_node</div><div class="code">${esc(text(e.to_node))}</div><div>relation_type</div><div>${esc(text(e.relation_type))}</div><div>label</div><div>${esc(text(e.label))}</div></div></div>`}).join(''):'<div class="state empty">暂无链路关系</div>';
+}
+
+function renderMissing(){renderList(missingList,traceData.missing_steps,'暂无缺失环节',item=>`${text(item.step)} · ${text(item.label)} · task_id ${text(item.task_id)}`)}
+function renderBlockers(){renderList(blockerList,traceData.blockers,'暂无阻塞记录',item=>`${text(item.action_title||item.title)} · ${text(item.blocker_reason||item.summary)} · task_id ${text(item.task_id)}`)}
+
+function renderSidePanels(){
+  suggestionBox.className='state';suggestionBox.innerText=text(traceData.next_suggestion);
+  employeeBox.innerHTML=kvHtml(traceData.employee,[['employee_code','employee_code'],['员工名称','employee_name'],['部门','department'],['角色','role'],['状态','status']]);
+  taskBox.innerHTML=kvHtml(traceData.task,[['task_id','task_id'],['任务标题','task_title'],['状态','status'],['优先级','priority'],['Sprint','sprint'],['AI员工 code','assigned_employee_code'],['AI员工名称','assigned_employee_name'],['创建时间','created_at']]);
+  orchestratorBox.innerHTML=kvHtml(traceData.orchestrator_source,[['analysis_record_id','analysis_record_id'],['link_type','link_type'],['recommended_codex','recommended_codex'],['detected_employee_name','detected_employee_name'],['detected_sprint','detected_sprint'],['detected_stage','detected_stage'],['completion_status','completion_status'],['has_blocker','has_blocker'],['needs_fix','needs_fix']]);
+  bossBox.innerHTML=kvHtml(traceData.boss_confirmation,[['状态','status'],['摘要','summary'],['时间','time']]);
+  statusBox.innerHTML=`<h3>天检验收</h3>${kvHtml(traceData.review_status,[['review_id','review_id'],['状态','status'],['角色','reviewer_role'],['时间','time']])}<h3>天监审计</h3>${kvHtml(traceData.audit_status,[['review_id','review_id'],['状态','status'],['角色','reviewer_role'],['时间','time']])}<h3>天盾部署</h3>${kvHtml(traceData.deploy_status,[['deploy_id','deploy_id'],['状态','status'],['时间','time']])}`;
+  commitBox.innerHTML=kvHtml(traceData.git_commit,[['commit_id','commit_id'],['branch','branch'],['时间','time']]);
+  safetyBox.innerHTML=arr(traceData.safety_flags).length?arr(traceData.safety_flags).map(x=>`<span class="badge warn">${esc(text(x))}</span>`).join(' '):'<div class="muted">暂无</div>';
+}
+
+function kvHtml(source,fields){
+  const s=obj(source);
+  if(!Object.keys(s).length)return '<div class="muted">暂无</div>';
+  return `<div class="kv">${fields.map(([label,key])=>`<div>${esc(label)}</div><div>${esc(formatValue(s[key]))}</div>`).join('')}</div>`;
+}
+
+function formatValue(value){if(value===true||value===false)return text(value);return text(value)}
+function renderList(el,items,emptyText,formatter){
+  const rows=arr(items);
+  el.innerHTML=rows.length?rows.map(item=>`<div class="item">${esc(formatter(obj(item)))}</div>`).join(''):`<div class="muted">${esc(emptyText)}</div>`;
+}
+
+init();
+</script>
+</body>
+</html>
