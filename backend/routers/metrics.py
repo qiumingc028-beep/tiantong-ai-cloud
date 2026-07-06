@@ -13,6 +13,7 @@ from ..models import AiTask, JdDailyMetric, MetricDaily, Store
 
 
 router = APIRouter()
+MAX_IMPORT_FILE_SIZE = 512 * 1024
 
 
 @router.get("/api/jd/metrics/summary")
@@ -59,6 +60,8 @@ def metrics_today(request: Request, db: Session = Depends(get_db)):
 async def import_metrics_file(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "data.metrics.write")
     content = await file.read()
+    if len(content) > MAX_IMPORT_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="导入文件过大")
     filename = (file.filename or "").lower()
     if filename.endswith(".xlsx"):
         rows = read_xlsx_rows(content)
