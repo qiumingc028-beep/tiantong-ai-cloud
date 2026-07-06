@@ -1,4 +1,4 @@
-import pytest
+from backend.routers.metrics import MAX_IMPORT_FILE_SIZE
 
 
 def test_metrics_import_requires_login(client):
@@ -40,9 +40,8 @@ def test_owner_can_import_metrics_csv(client, owner_headers):
     assert data["errors"] == []
 
 
-@pytest.mark.xfail(reason="Upload size limit is not enforced in the import endpoint yet.")
 def test_metrics_import_rejects_oversized_file(client, owner_headers):
-    oversized = b"store_code,sales_amount\n" + (b"JD01,1\n" * 100)
+    oversized = b"store_code,sales_amount\n" + (b"JD01,1\n" * ((MAX_IMPORT_FILE_SIZE // 7) + 1))
 
     response = client.post(
         "/api/metrics/import",
