@@ -6,8 +6,12 @@ cd "${ROOT_DIR}"
 
 DEPLOY_MODE="${DEPLOY_MODE:-docker}"
 COMPOSE="${COMPOSE:-docker compose}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+COMPOSE_CMD="${COMPOSE} -f ${COMPOSE_FILE}"
 VENV_DIR="${VENV_DIR:-${ROOT_DIR}/venv}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+GIT_REMOTE="${GIT_REMOTE:-origin}"
+GIT_BRANCH="${GIT_BRANCH:-main}"
 
 ensure_env() {
   if [ ! -f .env ]; then
@@ -32,22 +36,26 @@ deploy_docker() {
   ensure_env
   mkdir -p backups
 
-  ${COMPOSE} config
-  ${COMPOSE} pull postgres redis nginx
+  if [ -d .git ] && git remote get-url "${GIT_REMOTE}" >/dev/null 2>&1; then
+    git fetch --prune "${GIT_REMOTE}" "${GIT_BRANCH}"
+    git checkout "${GIT_BRANCH}"
+    git pull --ff-only "${GIT_REMOTE}" "${GIT_BRANCH}"
+  fi
 
-  # Docker build installs backend and worker Python dependencies from requirements.txt.
-  ${COMPOSE} build backend worker
+  ${COMPOSE_CMD} config
+  ${COMPOSE_CMD} pull postgres redis
 
-  ${COMPOSE} up -d postgres redis
+  ${COMPOSE_CMD} build --pull backend worker nginx
+
+  ${COMPOSE_CMD} up -d postgres redis
 
   # Run migrations explicitly before replacing application processes.
-  ${COMPOSE} run --rm backend alembic upgrade head
+  ${COMPOSE_CMD} run --rm backend alembic upgrade head
 
-  ${COMPOSE} up -d --force-recreate backend
-  ${COMPOSE} up -d --force-recreate worker nginx
+  ${COMPOSE_CMD} up -d --force-recreate backend worker nginx
 
-  ${COMPOSE} ps
-  CHECK_DOCKER_INFRA=1 bash "${ROOT_DIR}/scripts/healthcheck.sh"
+  ${COMPOSE_CMD} ps
+  COMPOSE="${COMPOSE_CMD}" CHECK_DOCKER_INFRA=1 bash "${ROOT_DIR}/scripts/healthcheck.sh"
 }
 
 deploy_systemd() {

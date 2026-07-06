@@ -91,6 +91,11 @@ def health():
     }
 
 
+@app.get("/health")
+def root_health():
+    return health()
+
+
 @app.get("/api/ready")
 def ready():
     with engine.connect() as conn:
@@ -101,6 +106,11 @@ def ready():
         "status": "ready",
         "time": datetime.now().isoformat(),
     }
+
+
+@app.get("/ready")
+def root_ready():
+    return ready()
 
 
 def frontend_file(filename: str):
