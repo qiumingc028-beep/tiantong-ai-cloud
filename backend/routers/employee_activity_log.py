@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 import json
 from datetime import date, datetime, timezone
 
@@ -94,15 +93,15 @@ TASK_FLOW_ACTIONS = {
 @router.get("/overview")
 def get_employee_activity_log_overview(
     request: Request,
-    employee_code: Optional[str] = None,
-    sprint: Optional[str] = None,
-    task_id: Optional[int] = None,
-    action_type: Optional[str] = None,
-    status: Optional[str] = None,
-    has_blocker: Optional[bool] = None,
-    needs_boss_confirmation: Optional[bool] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
+    employee_code: str | None = None,
+    sprint: str | None = None,
+    task_id: int | None = None,
+    action_type: str | None = None,
+    status: str | None = None,
+    has_blocker: bool | None = None,
+    needs_boss_confirmation: bool | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     limit: int = Query(DEFAULT_LIMIT, ge=1),
     db: Session = Depends(get_db),
 ):
@@ -441,22 +440,22 @@ def deploy_logs(db: Session, employee_map: dict[str, AiEmployee]) -> list[dict]:
 def make_log(
     *,
     action_type: str,
-    created_at: Optional[datetime],
+    created_at: datetime | None,
     employee_map: dict[str, AiEmployee],
     source_module: str,
     source_id: str,
-    employee_code: Optional[str] = None,
-    task: Optional[TaskCenterTask] = None,
-    summary: Optional[str] = None,
-    result: Optional[str] = None,
-    sprint: Optional[str] = None,
-    stage: Optional[str] = None,
-    status: Optional[str] = None,
-    success: Optional[bool] = None,
+    employee_code: str | None = None,
+    task: TaskCenterTask | None = None,
+    summary: str | None = None,
+    result: str | None = None,
+    sprint: str | None = None,
+    stage: str | None = None,
+    status: str | None = None,
+    success: bool | None = None,
     has_blocker: bool = False,
-    blocker_reason: Optional[str] = None,
+    blocker_reason: str | None = None,
     needs_boss_confirmation: bool = False,
-    next_suggestion: Optional[str] = None,
+    next_suggestion: str | None = None,
 ) -> dict:
     code = employee_code or (task.assigned_ai_employee_code if task else None)
     employee = employee_map.get(code or "")
@@ -581,7 +580,7 @@ def filter_options(logs: list[dict], employees: list[AiEmployee]) -> dict:
     }
 
 
-def deploy_action_type(status: Optional[str]) -> str:
+def deploy_action_type(status: str | None) -> str:
     clean = status or ""
     if clean in DEPLOY_SUCCESS_STATUSES:
         return "deploy_success"
@@ -615,7 +614,7 @@ def deploy_item(row: dict) -> dict:
     }
 
 
-def current_sprint(db: Session) -> Optional[str]:
+def current_sprint(db: Session) -> str | None:
     latest = (
         db.query(OrchestratorAnalysisRecord.detected_sprint)
         .filter(OrchestratorAnalysisRecord.detected_sprint.isnot(None))
@@ -625,7 +624,7 @@ def current_sprint(db: Session) -> Optional[str]:
     return latest[0] if latest else None
 
 
-def orchestrator_blocker_reason(row: OrchestratorAnalysisRecord) -> Optional[str]:
+def orchestrator_blocker_reason(row: OrchestratorAnalysisRecord) -> str | None:
     if row.has_blocker:
         flags = safe_text_list(parse_json_list(row.safety_flags_json))
         return "、".join(flags) if flags else "Orchestrator 检测到阻塞"
@@ -634,7 +633,7 @@ def orchestrator_blocker_reason(row: OrchestratorAnalysisRecord) -> Optional[str
     return None
 
 
-def status_summary(status: Optional[str]) -> str:
+def status_summary(status: str | None) -> str:
     return {
         "running": "任务已开始",
         "in_progress": "任务执行中",
@@ -651,7 +650,7 @@ def status_summary(status: Optional[str]) -> str:
     }.get(status or "", "任务状态更新")
 
 
-def blocker_reason(status: Optional[str]) -> Optional[str]:
+def blocker_reason(status: str | None) -> str | None:
     return {
         "rejected": "任务被驳回",
         "failed": "任务失败",
@@ -659,7 +658,7 @@ def blocker_reason(status: Optional[str]) -> Optional[str]:
     }.get(status or "")
 
 
-def next_suggestion(status: Optional[str]) -> str:
+def next_suggestion(status: str | None) -> str:
     return {
         "created": "等待老板确认或分配",
         "pending": "等待老板确认或分配",
@@ -693,7 +692,7 @@ def next_suggestion_for_action(action_type: str) -> str:
     }.get(action_type, "等待处理")
 
 
-def task_sprint(task: Optional[TaskCenterTask]) -> Optional[str]:
+def task_sprint(task: TaskCenterTask | None) -> str | None:
     if not task:
         return None
     for value in [task.title, task.description, task.split_plan, task.summary]:
@@ -703,7 +702,7 @@ def task_sprint(task: Optional[TaskCenterTask]) -> Optional[str]:
     return None
 
 
-def extract_sprint(value: Optional[str]) -> Optional[str]:
+def extract_sprint(value: str | None) -> str | None:
     if not value:
         return None
     for index in range(1, 20):
@@ -713,7 +712,7 @@ def extract_sprint(value: Optional[str]) -> Optional[str]:
     return None
 
 
-def stage_for_status(status: Optional[str]) -> Optional[str]:
+def stage_for_status(status: str | None) -> str | None:
     return {
         "created": "planning",
         "pending": "planning",
@@ -733,7 +732,7 @@ def stage_for_status(status: Optional[str]) -> Optional[str]:
     }.get(status or "")
 
 
-def parse_json_list(value: Optional[str]) -> list:
+def parse_json_list(value: str | None) -> list:
     if not value:
         return []
     try:
@@ -743,12 +742,12 @@ def parse_json_list(value: Optional[str]) -> list:
     return data if isinstance(data, list) else []
 
 
-def first_json_value(value: Optional[str]) -> Optional[str]:
+def first_json_value(value: str | None) -> str | None:
     data = parse_json_list(value)
     return safe_text(data[0], None) if data else None
 
 
-def safe_text(value, fallback: Optional[str] = "暂无") -> Optional[str]:
+def safe_text(value, fallback: str | None = "暂无") -> str | None:
     if value is None:
         return fallback
     if isinstance(value, bool):
@@ -783,21 +782,21 @@ def safe_text_list(value) -> list[str]:
     return [text] if text else []
 
 
-def clean_text(value: Optional[str]) -> Optional[str]:
+def clean_text(value: str | None) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
     return text or None
 
 
-def safe_excerpt(value: Optional[str], limit: int = 160) -> Optional[str]:
+def safe_excerpt(value: str | None, limit: int = 160) -> str | None:
     clean = clean_text(value)
     if not clean:
         return None
     return clean[:limit]
 
 
-def parse_date(value: Optional[str]) -> Optional[date]:
+def parse_date(value: str | None) -> date | None:
     if not value:
         return None
     try:
@@ -806,7 +805,7 @@ def parse_date(value: Optional[str]) -> Optional[date]:
         return None
 
 
-def date_from_iso(value: Optional[str]) -> Optional[date]:
+def date_from_iso(value: str | None) -> date | None:
     if not value:
         return None
     try:
@@ -815,5 +814,5 @@ def date_from_iso(value: Optional[str]) -> Optional[date]:
         return parse_date(value)
 
 
-def iso(value: Optional[datetime]) -> Optional[str]:
+def iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None

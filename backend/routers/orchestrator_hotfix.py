@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-from typing import Optional
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
@@ -39,7 +36,7 @@ def _apply_rule_fixes():
     )
 
 
-def _extract_explicit_identity(text: str) -> Optional[str]:
+def _extract_explicit_identity(text: str) -> str | None:
     match = base.re.search(r"你是【([^】]+)】", text)
     if match:
         return match.group(1).strip()

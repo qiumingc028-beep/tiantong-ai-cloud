@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 import json
 from datetime import datetime, timezone
 
@@ -51,9 +50,9 @@ async def upload_file(request: Request, file: UploadFile = File(...), db: Sessio
 @router.get("/api/knowledge/files")
 def list_files(
     request: Request,
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    status: Optional[str] = None,
+    q: str | None = None,
+    category: str | None = None,
+    status: str | None = None,
     db: Session = Depends(get_db),
 ):
     require_knowledge_access(request, db)
@@ -152,9 +151,9 @@ def publish_article(article_id: int, request: Request, db: Session = Depends(get
 @router.get("/api/knowledge/articles")
 def list_articles(
     request: Request,
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    status: Optional[str] = None,
+    q: str | None = None,
+    category: str | None = None,
+    status: str | None = None,
     db: Session = Depends(get_db),
 ):
     require_knowledge_access(request, db)
@@ -164,9 +163,9 @@ def list_articles(
 @router.get("/api/knowledge/search")
 def search_knowledge(
     request: Request,
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    status: Optional[str] = None,
+    q: str | None = None,
+    category: str | None = None,
+    status: str | None = None,
     db: Session = Depends(get_db),
 ):
     require_knowledge_access(request, db)
@@ -176,34 +175,34 @@ def search_knowledge(
 
 
 @router.get("/api/knowledge/sops")
-def list_sops(request: Request, category: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_sops(request: Request, category: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
     require_knowledge_access(request, db)
     query = filter_category_status(db.query(SopLibrary), SopLibrary, category, status)
     return [sop_to_dict(row) for row in query.order_by(SopLibrary.id.desc()).limit(200).all()]
 
 
 @router.get("/api/knowledge/prompts")
-def list_prompts(request: Request, category: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_prompts(request: Request, category: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
     require_knowledge_access(request, db)
     query = filter_category_status(db.query(PromptLibrary), PromptLibrary, category, status)
     return [prompt_to_dict(row) for row in query.order_by(PromptLibrary.id.desc()).limit(200).all()]
 
 
 @router.get("/api/knowledge/bug-cases")
-def list_bug_cases(request: Request, category: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_bug_cases(request: Request, category: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
     require_knowledge_access(request, db)
     query = filter_category_status(db.query(BugCase), BugCase, category, status)
     return [bug_to_dict(row) for row in query.order_by(BugCase.id.desc()).limit(200).all()]
 
 
 @router.get("/api/knowledge/courses")
-def list_courses(request: Request, category: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_courses(request: Request, category: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
     require_knowledge_access(request, db)
     query = filter_category_status(db.query(CourseLesson), CourseLesson, category, status)
     return [course_to_dict(row) for row in query.order_by(CourseLesson.id.desc()).limit(200).all()]
 
 
-def query_articles(db: Session, q: Optional[str], category: Optional[str], status: Optional[str]):
+def query_articles(db: Session, q: str | None, category: str | None, status: str | None):
     query = db.query(KnowledgeArticle).order_by(KnowledgeArticle.id.desc())
     if q:
         like = f"%{q.strip()}%"
@@ -216,7 +215,7 @@ def query_articles(db: Session, q: Optional[str], category: Optional[str], statu
     return [article_to_dict(row) for row in query.limit(200).all()]
 
 
-def filter_category_status(query, model, category: Optional[str], status: Optional[str]):
+def filter_category_status(query, model, category: str | None, status: str | None):
     if category:
         query = query.filter(model.category == category)
     normalized_status = normalize_status(status)
@@ -244,13 +243,13 @@ def require_knowledge_access(request: Request, db: Session, manage: bool = False
     return user
 
 
-def normalize_status(value: Optional[str]) -> Optional[str]:
+def normalize_status(value: str | None) -> str | None:
     if not value:
         return None
     return STATUS_MAP.get(value.strip(), value.strip())
 
 
-def status_label(value: Optional[str]) -> str:
+def status_label(value: str | None) -> str:
     return {"draft": "草稿", "published": "已发布", "review": "待审核"}.get(value or "", value or "")
 
 

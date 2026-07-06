@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 import hashlib
 import json
 import re
@@ -132,7 +131,7 @@ SENSITIVE_PATTERNS = [
 
 class AnalyzeReplyPayload(BaseModel):
     reply_text: str
-    context: Optional[dict] = None
+    context: dict | None = None
 
 
 class ConfirmPromptPayload(BaseModel):
@@ -140,16 +139,16 @@ class ConfirmPromptPayload(BaseModel):
     target_codex: str
     confirmed_prompt: str
     confirm_status: str = "confirmed"
-    note: Optional[str] = None
+    note: str | None = None
 
 
 @dataclass
 class EmployeeDetection:
-    code: Optional[str]
-    name: Optional[str]
+    code: str | None
+    name: str | None
     confidence: str
     manual_review_required: bool
-    warning: Optional[str] = None
+    warning: str | None = None
 
 
 @router.post("/analyze-reply")
@@ -517,7 +516,7 @@ def build_prompt_draft(
     )[:PROMPT_LIMIT]
 
 
-def analysis_summary(row: Optional[OrchestratorAnalysisRecord]):
+def analysis_summary(row: OrchestratorAnalysisRecord | None):
     if not row:
         return None
     return {

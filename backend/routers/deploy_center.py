@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 import json
 import os
 from datetime import datetime, timezone
@@ -215,7 +214,7 @@ def read_runtime_state():
     return {}
 
 
-def iso(value: Optional[datetime]):
+def iso(value: datetime | None):
     return value.isoformat() if value else None
 
 

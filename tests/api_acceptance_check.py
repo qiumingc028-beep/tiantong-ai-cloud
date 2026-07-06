@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -29,7 +29,7 @@ class ApiChecker:
         self.username = username
         self.password = password
         self.client = httpx.Client(base_url=self.base_url, timeout=timeout, follow_redirects=True)
-        self.token: Optional[str] = None
+        self.token: str | None = None
         self.results: list[CheckResult] = []
 
     def close(self) -> None:

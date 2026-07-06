@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-from typing import Optional
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -43,7 +40,7 @@ def create_access_token(user_id: int) -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_access_token(token: str) -> Optional[int]:
+def decode_access_token(token: str) -> int | None:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
         return int(payload["sub"])
@@ -60,7 +57,7 @@ def create_session(user_id: int) -> tuple[str, str]:
     return session_token, jwt_token
 
 
-def delete_session(session_token: Optional[str]):
+def delete_session(session_token: str | None):
     if session_token:
         get_redis().delete(f"session:{session_token}")
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -555,7 +554,7 @@ def build_capability_rows(db: Session) -> list[dict]:
     return rows
 
 
-def build_capability_row(db: Session, employee: Optional[AiEmployee], code: str) -> dict:
+def build_capability_row(db: Session, employee: AiEmployee | None, code: str) -> dict:
     profile = merged_profile(employee, code)
     metrics = aggregate_employee_metrics(db, code)
     task_count = metrics["task_count"]
@@ -609,7 +608,7 @@ def build_capability_row(db: Session, employee: Optional[AiEmployee], code: str)
     return ensure_capability_shape(row)
 
 
-def merged_profile(employee: Optional[AiEmployee], code: str) -> dict:
+def merged_profile(employee: AiEmployee | None, code: str) -> dict:
     profile = {**DEFAULT_PROFILE, **CAPABILITY_PROFILES.get(code, {})}
     if employee:
         profile["employee_name"] = employee.employee_name or profile["employee_name"]
@@ -860,16 +859,16 @@ def maturity_score(value: str) -> int:
     return {"planned": 1, "growing": 2, "stable": 3}.get(value, 1)
 
 
-def latest_dt(values: list[Optional[datetime]]) -> Optional[datetime]:
+def latest_dt(values: list[datetime | None]) -> datetime | None:
     clean = [value for value in values if value is not None]
     return max(clean) if clean else None
 
 
-def latest_iso(values: list[Optional[datetime]]) -> Optional[str]:
+def latest_iso(values: list[datetime | None]) -> str | None:
     return iso(latest_dt(values))
 
 
-def iso(value) -> Optional[str]:
+def iso(value) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
     return None

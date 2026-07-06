@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 import json
 from datetime import datetime
 
@@ -103,7 +102,7 @@ def require_trace_user(request: Request, db: Session):
     return user
 
 
-def build_trace_response(db: Session, task: Optional[TaskCenterTask] = None, employee_code: Optional[str] = None, focus_log: Optional[dict] = None) -> dict:
+def build_trace_response(db: Session, task: TaskCenterTask | None = None, employee_code: str | None = None, focus_log: dict | None = None) -> dict:
     logs = build_activity_logs(db)
     if task:
         logs = [row for row in logs if row.get("task_id") == task.id or row.get("source_id") == str(task.id)]
@@ -209,7 +208,7 @@ def build_activity_logs(db: Session) -> list[dict]:
     return logs
 
 
-def make_log(action_type: str, title: str, time: Optional[datetime], task: Optional[TaskCenterTask], employees: dict[str, AiEmployee], source_module: str, source_id: str, status: Optional[str], summary: Optional[str], employee_code: Optional[str] = None, has_blocker: bool = False, blocker_reason: Optional[str] = None, needs_boss_confirmation: bool = False) -> dict:
+def make_log(action_type: str, title: str, time: datetime | None, task: TaskCenterTask | None, employees: dict[str, AiEmployee], source_module: str, source_id: str, status: str | None, summary: str | None, employee_code: str | None = None, has_blocker: bool = False, blocker_reason: str | None = None, needs_boss_confirmation: bool = False) -> dict:
     code = employee_code or (task.assigned_ai_employee_code if task else None)
     employee = employees.get(code or "")
     return {
@@ -262,20 +261,20 @@ def build_edges(nodes: list[dict]) -> list[dict]:
     return edges
 
 
-def first_task_from_logs(db: Session, logs: list[dict]) -> Optional[TaskCenterTask]:
+def first_task_from_logs(db: Session, logs: list[dict]) -> TaskCenterTask | None:
     for log in logs:
         if log.get("task_id"):
             return db.get(TaskCenterTask, log["task_id"])
     return None
 
 
-def find_employee(db: Session, employee_code: Optional[str]) -> Optional[AiEmployee]:
+def find_employee(db: Session, employee_code: str | None) -> AiEmployee | None:
     if not employee_code:
         return None
     return db.query(AiEmployee).filter(AiEmployee.employee_code == employee_code).one_or_none()
 
 
-def task_payload(task: Optional[TaskCenterTask]) -> dict:
+def task_payload(task: TaskCenterTask | None) -> dict:
     if not task:
         return {}
     return {
@@ -291,7 +290,7 @@ def task_payload(task: Optional[TaskCenterTask]) -> dict:
     }
 
 
-def employee_payload(employee: Optional[AiEmployee]) -> dict:
+def employee_payload(employee: AiEmployee | None) -> dict:
     if not employee:
         return {}
     return {
@@ -303,7 +302,7 @@ def employee_payload(employee: Optional[AiEmployee]) -> dict:
     }
 
 
-def orchestrator_source_for_task(db: Session, task: Optional[TaskCenterTask]) -> dict:
+def orchestrator_source_for_task(db: Session, task: TaskCenterTask | None) -> dict:
     if not task:
         return {}
     link = db.query(OrchestratorTaskLink).filter(OrchestratorTaskLink.task_id == task.id).order_by(OrchestratorTaskLink.id.desc()).first()
@@ -326,19 +325,19 @@ def orchestrator_source_for_task(db: Session, task: Optional[TaskCenterTask]) ->
     }
 
 
-def reviews_for_task(db: Session, task: Optional[TaskCenterTask]) -> list[TaskCenterReview]:
+def reviews_for_task(db: Session, task: TaskCenterTask | None) -> list[TaskCenterReview]:
     if not task:
         return []
     return db.query(TaskCenterReview).filter(TaskCenterReview.task_id == task.id, TaskCenterReview.review_type != "audit").order_by(TaskCenterReview.id.desc()).all()
 
 
-def audits_for_task(db: Session, task: Optional[TaskCenterTask]) -> list[TaskCenterReview]:
+def audits_for_task(db: Session, task: TaskCenterTask | None) -> list[TaskCenterReview]:
     if not task:
         return []
     return db.query(TaskCenterReview).filter(TaskCenterReview.task_id == task.id, TaskCenterReview.review_type == "audit").order_by(TaskCenterReview.id.desc()).all()
 
 
-def deploys_for_task(db: Session, task: Optional[TaskCenterTask]) -> list[DeployRecord]:
+def deploys_for_task(db: Session, task: TaskCenterTask | None) -> list[DeployRecord]:
     if not task:
         return []
     sprint = task_sprint(task)
@@ -360,7 +359,7 @@ def commits_for_deploys(deploys: list[DeployRecord]) -> list[dict]:
     ]
 
 
-def boss_confirmation_for_task(task: Optional[TaskCenterTask]) -> dict:
+def boss_confirmation_for_task(task: TaskCenterTask | None) -> dict:
     if not task:
         return {}
     return {
@@ -388,7 +387,7 @@ def commit_summary(rows: list[dict]) -> dict:
     return rows[0] if rows else {}
 
 
-def missing_steps_for_task(db: Session, task: Optional[TaskCenterTask]) -> list[dict]:
+def missing_steps_for_task(db: Session, task: TaskCenterTask | None) -> list[dict]:
     if not task:
         return []
     steps = []
@@ -407,7 +406,7 @@ def missing_steps_for_task(db: Session, task: Optional[TaskCenterTask]) -> list[
     return steps
 
 
-def next_suggestion(task: Optional[TaskCenterTask], blockers: list[dict], missing_steps: list[dict]) -> str:
+def next_suggestion(task: TaskCenterTask | None, blockers: list[dict], missing_steps: list[dict]) -> str:
     if blockers:
         return "优先处理阻塞原因"
     if missing_steps:
@@ -458,11 +457,11 @@ def safe_obj(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def safe_summary(value, fallback: Optional[str] = "暂无") -> Optional[str]:
+def safe_summary(value, fallback: str | None = "暂无") -> str | None:
     return safe_text(value, fallback)
 
 
-def safe_text(value, fallback: Optional[str] = "暂无") -> Optional[str]:
+def safe_text(value, fallback: str | None = "暂无") -> str | None:
     if value is None:
         return fallback
     if isinstance(value, bool):
@@ -497,7 +496,7 @@ def safe_text_list(value) -> list[str]:
     return [text] if text else []
 
 
-def orchestrator_blocker_reason(row: OrchestratorAnalysisRecord) -> Optional[str]:
+def orchestrator_blocker_reason(row: OrchestratorAnalysisRecord) -> str | None:
     if row.has_blocker:
         flags = safe_text_list(parse_json_list(row.safety_flags_json))
         return "、".join(flags) if flags else "Orchestrator 检测到阻塞"
@@ -506,16 +505,16 @@ def orchestrator_blocker_reason(row: OrchestratorAnalysisRecord) -> Optional[str
     return None
 
 
-def status_summary(status: Optional[str]) -> str:
+def status_summary(status: str | None) -> str:
     return {"rejected": "任务被驳回", "failed": "任务失败", "blocked": "任务阻塞"}.get(status or "", "任务状态更新")
 
 
-def first_json_value(value: Optional[str]) -> Optional[str]:
+def first_json_value(value: str | None) -> str | None:
     values = parse_json_list(value)
     return safe_text(values[0], None) if values else None
 
 
-def parse_json_list(value: Optional[str]) -> list:
+def parse_json_list(value: str | None) -> list:
     if not value:
         return []
     try:
@@ -525,7 +524,7 @@ def parse_json_list(value: Optional[str]) -> list:
     return data if isinstance(data, list) else []
 
 
-def task_sprint(task: Optional[TaskCenterTask]) -> Optional[str]:
+def task_sprint(task: TaskCenterTask | None) -> str | None:
     if not task:
         return None
     for value in [task.title, task.description, task.split_plan, task.summary]:
@@ -538,5 +537,5 @@ def task_sprint(task: Optional[TaskCenterTask]) -> Optional[str]:
     return None
 
 
-def iso(value: Optional[datetime]) -> Optional[str]:
+def iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None

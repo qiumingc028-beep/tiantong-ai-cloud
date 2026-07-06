@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 import json
 from datetime import datetime
 
@@ -31,31 +30,31 @@ ACCEPTANCE_REVIEW_STATUSES = {"accepted", "rejected"}
 
 class TaskCreate(BaseModel):
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     priority: str = "normal"
-    parent_task_id: Optional[int] = None
-    split_plan: Optional[str] = None
+    parent_task_id: int | None = None
+    split_plan: str | None = None
 
 
 class TaskStatusUpdate(BaseModel):
     status: str
-    detail: Optional[str] = None
+    detail: str | None = None
 
 
 class TaskAssign(BaseModel):
     ai_employee_code: str
-    ai_employee_name: Optional[str] = None
-    detail: Optional[str] = None
+    ai_employee_name: str | None = None
+    detail: str | None = None
 
 
 class TaskResultSubmit(BaseModel):
     result_content: str
-    attachments: Optional[list[str]] = None
+    attachments: list[str] | None = None
 
 
 class TaskReviewSubmit(BaseModel):
     review_status: str
-    comment: Optional[str] = None
+    comment: str | None = None
 
 
 class TaskSummarySubmit(BaseModel):
@@ -90,7 +89,7 @@ def create_task(payload: TaskCreate, request: Request, db: Session = Depends(get
 
 
 @router.get("/tasks")
-def list_tasks(request: Request, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_tasks(request: Request, status: str | None = None, db: Session = Depends(get_db)):
     require_task_read(request, db)
     query = db.query(TaskCenterTask)
     if status:
@@ -274,7 +273,7 @@ def normalize_acceptance_review_status(status: str) -> str:
     return clean
 
 
-def set_task_status(db: Session, task: TaskCenterTask, status: str, user: User, action: str, detail: Optional[str] = None) -> None:
+def set_task_status(db: Session, task: TaskCenterTask, status: str, user: User, action: str, detail: str | None = None) -> None:
     from_status = task.status
     task.status = normalize_status(status)
     task.updated_by_id = user.id
@@ -286,9 +285,9 @@ def write_audit_log(
     task: TaskCenterTask,
     user: User,
     action: str,
-    from_status: Optional[str],
-    to_status: Optional[str],
-    detail: Optional[str],
+    from_status: str | None,
+    to_status: str | None,
+    detail: str | None,
 ) -> None:
     db.add(
         TaskCenterAuditLog(
@@ -303,11 +302,11 @@ def write_audit_log(
     )
 
 
-def iso(value: Optional[datetime]):
+def iso(value: datetime | None):
     return value.isoformat() if value else None
 
 
-def parse_json_list(value: Optional[str]):
+def parse_json_list(value: str | None):
     if not value:
         return []
     try:
@@ -317,7 +316,7 @@ def parse_json_list(value: Optional[str]):
         return []
 
 
-def user_to_dict(user: Optional[User]):
+def user_to_dict(user: User | None):
     return {"id": user.id, "display_name": user.display_name, "role": user.role} if user else None
 
 

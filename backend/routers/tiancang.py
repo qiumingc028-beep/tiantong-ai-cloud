@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 import json
 import shutil
 import uuid
@@ -62,9 +61,9 @@ async def upload_file(request: Request, file: UploadFile = File(...), db: Sessio
 @router.get("/files")
 def list_files(
     request: Request,
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    status: Optional[str] = None,
+    q: str | None = None,
+    category: str | None = None,
+    status: str | None = None,
     db: Session = Depends(get_db),
 ):
     current_user(request, db)
@@ -139,9 +138,9 @@ def publish_article(article_id: int, request: Request, db: Session = Depends(get
 @router.get("/articles/search")
 def search_articles(
     request: Request,
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    status: Optional[str] = None,
+    q: str | None = None,
+    category: str | None = None,
+    status: str | None = None,
     db: Session = Depends(get_db),
 ):
     current_user(request, db)
@@ -158,7 +157,7 @@ def search_articles(
 
 
 @router.get("/sops")
-def list_sops(request: Request, q: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_sops(request: Request, q: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
     current_user(request, db)
     query = db.query(SopLibrary)
     if q:
@@ -170,7 +169,7 @@ def list_sops(request: Request, q: Optional[str] = None, status: Optional[str] =
 
 
 @router.get("/prompts")
-def list_prompts(request: Request, q: Optional[str] = None, prompt_type: Optional[str] = None, db: Session = Depends(get_db)):
+def list_prompts(request: Request, q: str | None = None, prompt_type: str | None = None, db: Session = Depends(get_db)):
     current_user(request, db)
     query = db.query(PromptLibrary)
     if q:
@@ -182,7 +181,7 @@ def list_prompts(request: Request, q: Optional[str] = None, prompt_type: Optiona
 
 
 @router.get("/bugs")
-def list_bugs(request: Request, q: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_bugs(request: Request, q: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
     current_user(request, db)
     query = db.query(BugCase)
     if q:
@@ -194,7 +193,7 @@ def list_bugs(request: Request, q: Optional[str] = None, status: Optional[str] =
 
 
 @router.get("/courses")
-def list_courses(request: Request, q: Optional[str] = None, status: Optional[str] = None, db: Session = Depends(get_db)):
+def list_courses(request: Request, q: str | None = None, status: str | None = None, db: Session = Depends(get_db)):
     current_user(request, db)
     query = db.query(CourseLesson)
     if q:
@@ -256,7 +255,7 @@ def safe_call_ai(prompt: str):
         return None
 
 
-def parse_json_list(value: Optional[str]):
+def parse_json_list(value: str | None):
     if not value:
         return []
     try:

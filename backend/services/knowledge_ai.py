@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 import json
 import urllib.request
 
@@ -47,7 +46,7 @@ def classify_material(filename: str, text: str) -> dict:
     return {"category": category, "tags": [category, "自动分类"], "reason": "根据文件名和正文关键词完成模拟分类。", "mock": True}
 
 
-def generate_assets(filename: str, text: str, summary: Optional[str], category: Optional[str]) -> dict:
+def generate_assets(filename: str, text: str, summary: str | None, category: str | None) -> dict:
     prompt = (
         f"基于资料《{filename}》生成企业知识库文章、SOP、Prompt、Bug案例和课程大纲。"
         "请用清晰标题和可执行内容输出。\n\n"
@@ -101,7 +100,7 @@ def generate_assets(filename: str, text: str, summary: Optional[str], category: 
     }
 
 
-def call_ai(prompt: str) -> Optional[str]:
+def call_ai(prompt: str) -> str | None:
     settings = get_settings()
     provider = (settings.AI_PROVIDER or "mock").lower()
     if provider == "deepseek" and settings.DEEPSEEK_API_KEY:
@@ -121,7 +120,7 @@ def call_ai(prompt: str) -> Optional[str]:
     return None
 
 
-def chat_completion(url: str, api_key: str, model: str, prompt: str) -> Optional[str]:
+def chat_completion(url: str, api_key: str, model: str, prompt: str) -> str | None:
     payload = json.dumps(
         {
             "model": model,
@@ -147,7 +146,7 @@ def chat_completion(url: str, api_key: str, model: str, prompt: str) -> Optional
         return None
 
 
-def compact_text(value: Optional[str]) -> str:
+def compact_text(value: str | None) -> str:
     return " ".join((value or "").split())
 
 
