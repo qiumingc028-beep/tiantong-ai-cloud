@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Optional
 import json
 from datetime import datetime, timezone
 
@@ -165,9 +166,9 @@ def latest_orchestrator_by_employee(db: Session) -> dict[str, OrchestratorAnalys
 
 def employee_to_workspace_row(
     employee: AiEmployee,
-    task: TaskCenterTask | None,
-    analysis: OrchestratorAnalysisRecord | None,
-    deploy: DeployRecord | None,
+    task: Optional[TaskCenterTask],
+    analysis: Optional[OrchestratorAnalysisRecord],
+    deploy: Optional[DeployRecord],
 ):
     has_blocker = task_has_blocker(task) if task else bool(analysis and (analysis.has_blocker or analysis.needs_fix))
     employee_deploy = deploy if deploy and deploy.operator == employee.employee_code else None
@@ -202,9 +203,9 @@ def employee_to_workspace_row(
 
 
 def resolve_workspace_status(
-    task: TaskCenterTask | None,
-    analysis: OrchestratorAnalysisRecord | None,
-    deploy: DeployRecord | None,
+    task: Optional[TaskCenterTask],
+    analysis: Optional[OrchestratorAnalysisRecord],
+    deploy: Optional[DeployRecord],
     has_blocker: bool,
 ) -> str:
     if has_blocker:
@@ -218,7 +219,7 @@ def resolve_workspace_status(
     return "standby"
 
 
-def stage_from_task(task: TaskCenterTask | None) -> str | None:
+def stage_from_task(task: Optional[TaskCenterTask]) -> Optional[str]:
     if not task:
         return None
     return {
@@ -241,11 +242,11 @@ def stage_from_task(task: TaskCenterTask | None) -> str | None:
     }.get(task.status)
 
 
-def progress_for_status(task_status: str | None, workspace_status: str) -> int:
+def progress_for_status(task_status: Optional[str], workspace_status: str) -> int:
     return TASK_PROGRESS.get(task_status or "", 0)
 
 
-def resolve_last_action(task: TaskCenterTask | None, analysis: OrchestratorAnalysisRecord | None, deploy: DeployRecord | None) -> str:
+def resolve_last_action(task: Optional[TaskCenterTask], analysis: Optional[OrchestratorAnalysisRecord], deploy: Optional[DeployRecord]) -> str:
     candidates = [
         (task.updated_at if task else None, f"任务状态：{task.status}" if task else None),
         (analysis.created_at if analysis else None, f"Orchestrator 建议：{analysis.recommended_action or '暂无'}" if analysis else None),
@@ -255,7 +256,7 @@ def resolve_last_action(task: TaskCenterTask | None, analysis: OrchestratorAnaly
     return latest[1] if latest else "暂无"
 
 
-def resolve_blocker_reason(task: TaskCenterTask | None, analysis: OrchestratorAnalysisRecord | None, has_blocker: bool) -> str | None:
+def resolve_blocker_reason(task: Optional[TaskCenterTask], analysis: Optional[OrchestratorAnalysisRecord], has_blocker: bool) -> Optional[str]:
     if not has_blocker:
         return None
     if task and task.status in BLOCKER_REASONS:
@@ -268,7 +269,7 @@ def resolve_blocker_reason(task: TaskCenterTask | None, analysis: OrchestratorAn
     return "存在阻塞"
 
 
-def resolve_next_suggestion(status: str, task: TaskCenterTask | None, analysis: OrchestratorAnalysisRecord | None) -> str:
+def resolve_next_suggestion(status: str, task: Optional[TaskCenterTask], analysis: Optional[OrchestratorAnalysisRecord]) -> str:
     if task:
         return NEXT_SUGGESTIONS.get(task.status, "等待处理")
     if status == "auditing":
@@ -282,7 +283,7 @@ def resolve_next_suggestion(status: str, task: TaskCenterTask | None, analysis: 
     return "等待任务"
 
 
-def review_status_for_task(task: TaskCenterTask | None) -> str | None:
+def review_status_for_task(task: Optional[TaskCenterTask]) -> Optional[str]:
     if not task:
         return None
     if task.status in REVIEW_STATUSES:
@@ -294,7 +295,7 @@ def review_status_for_task(task: TaskCenterTask | None) -> str | None:
     return None
 
 
-def audit_status_for_task(task: TaskCenterTask | None) -> str | None:
+def audit_status_for_task(task: Optional[TaskCenterTask]) -> Optional[str]:
     if not task:
         return None
     if task.status == "accepted":
@@ -304,11 +305,11 @@ def audit_status_for_task(task: TaskCenterTask | None) -> str | None:
     return None
 
 
-def task_has_blocker(task: TaskCenterTask | None) -> bool:
+def task_has_blocker(task: Optional[TaskCenterTask]) -> bool:
     return bool(task and task.status in BLOCKER_REASONS)
 
 
-def orchestrator_source(analysis: OrchestratorAnalysisRecord | None) -> dict | None:
+def orchestrator_source(analysis: Optional[OrchestratorAnalysisRecord]) -> Optional[dict]:
     if not analysis:
         return None
     return {
@@ -326,7 +327,7 @@ def orchestrator_source(analysis: OrchestratorAnalysisRecord | None) -> dict | N
     }
 
 
-def git_commit_summary(deploy: DeployRecord | None, employee_code: str) -> dict | None:
+def git_commit_summary(deploy: Optional[DeployRecord], employee_code: str) -> Optional[dict]:
     if not deploy or deploy.operator != employee_code or not deploy.commit_hash:
         return None
     return {
@@ -363,7 +364,7 @@ def build_summary(
     }
 
 
-def current_sprint(db: Session) -> str | None:
+def current_sprint(db: Session) -> Optional[str]:
     latest = (
         db.query(OrchestratorAnalysisRecord.detected_sprint)
         .filter(OrchestratorAnalysisRecord.detected_sprint.isnot(None))
@@ -403,7 +404,7 @@ def task_pending_item(task: TaskCenterTask, pending_type: str) -> dict:
     }
 
 
-def deploy_pending_items(deploy: DeployRecord | None) -> list[dict]:
+def deploy_pending_items(deploy: Optional[DeployRecord]) -> list[dict]:
     if not deploy or deploy.status not in DEPLOY_PENDING_STATUSES:
         return []
     return [
@@ -455,12 +456,12 @@ def build_recent_actions(db: Session, tasks: list[TaskCenterTask]) -> list[dict]
     return actions[:12]
 
 
-def first_json_value(value: str | None) -> str | None:
+def first_json_value(value: Optional[str]) -> Optional[str]:
     data = parse_json_list(value)
     return str(data[0]) if data else None
 
 
-def parse_json_list(value: str | None) -> list:
+def parse_json_list(value: Optional[str]) -> list:
     if not value:
         return []
     try:
@@ -470,10 +471,10 @@ def parse_json_list(value: str | None) -> list:
     return data if isinstance(data, list) else []
 
 
-def latest_iso(values: list[datetime | None]) -> str | None:
+def latest_iso(values: list[Optional[datetime]]) -> Optional[str]:
     clean = [value for value in values if value]
     return iso(max(clean)) if clean else None
 
 
-def iso(value: datetime | None) -> str | None:
+def iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value else None

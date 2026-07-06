@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Optional
 import csv
 from datetime import date, datetime, timedelta
 from io import BytesIO, StringIO
@@ -168,7 +171,7 @@ def upsert_jd_daily_from_manual(db: Session, store_id: int, metric_date: date, d
     metric.source = "manual"
 
 
-def metric_row(store: Store, jd_metric: JdDailyMetric | None, legacy_metric: MetricDaily | None):
+def metric_row(store: Store, jd_metric: Optional[JdDailyMetric], legacy_metric: Optional[MetricDaily]):
     return {
         "store_id": store.id,
         "store_code": store.store_code,

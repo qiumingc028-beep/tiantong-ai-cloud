@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Optional
 import json
 from datetime import datetime
 from io import BytesIO
@@ -58,9 +59,9 @@ SENSITIVE_EXCEL_HEADERS = SENSITIVE_FIELD_KEYWORDS + ("密码", "口令", "密�
 @router.get("/api/accounts")
 def list_accounts(
     request: Request,
-    brand: str | None = None,
-    owner: str | None = None,
-    status: str | None = None,
+    brand: Optional[str] = None,
+    owner: Optional[str] = None,
+    status: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     require_account_user(request, db)
@@ -345,7 +346,7 @@ def get_or_create_group(db: Session, group_name: str) -> StoreGroup:
     return row
 
 
-def account_to_dict(note: StoreAccountNote, assignment: EmployeeStoreAssignment | None):
+def account_to_dict(note: StoreAccountNote, assignment: Optional[EmployeeStoreAssignment]):
     return {
         "id": note.store_id,
         "store_id": note.store_id,

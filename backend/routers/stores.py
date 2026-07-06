@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Optional
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -114,7 +117,7 @@ def store_to_dict(store: Store):
     }
 
 
-def store_metric_to_dict(store: Store, jd_metric: JdDailyMetric | None, legacy_metric: MetricDaily | None):
+def store_metric_to_dict(store: Store, jd_metric: Optional[JdDailyMetric], legacy_metric: Optional[MetricDaily]):
     return {
         "store_id": store.id,
         "store_code": store.store_code,

@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Optional
 from datetime import date
 
 from sqlalchemy.orm import Session
@@ -5,7 +8,7 @@ from sqlalchemy.orm import Session
 from ..models import JdAd, JdDailyMetric, JdProduct, Store
 
 
-def analyze_store_health(db: Session, metric_date: date | None = None):
+def analyze_store_health(db: Session, metric_date: Optional[date] = None):
     metric_date = metric_date or date.today()
     metrics = {m.store_id: m for m in db.query(JdDailyMetric).filter(JdDailyMetric.metric_date == metric_date).all()}
     stores = db.query(Store).filter(Store.platform == "jd", Store.active.is_(True)).all()

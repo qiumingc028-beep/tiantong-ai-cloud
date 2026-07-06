@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Optional
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -197,7 +198,7 @@ def normalize_deploy_status(statuses: list[str]):
     return "healthy"
 
 
-def action(level: str, action_type: str, message: str, count: int | None = None):
+def action(level: str, action_type: str, message: str, count: Optional[int] = None):
     data = {"level": level, "type": action_type, "message": message}
     if count is not None:
         data["count"] = count

@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Optional
 import json
 from datetime import date, datetime, timezone
 
@@ -43,7 +46,7 @@ class JztCollector:
         raise JdCollectorError("京准通真实接口适配尚未配置")
 
 
-def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):
+def sync_jd_smart(db: Session, store_id: int, metric_date: Optional[date] = None):
     store = db.get(Store, store_id)
     if not store:
         raise JdCollectorError("店铺不存在")
@@ -63,7 +66,7 @@ def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):
     return result
 
 
-def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
+def sync_jzt(db: Session, store_id: int, stat_date: Optional[date] = None):
     account = (
         db.query(JdAccount)
         .filter(JdAccount.store_id == store_id, JdAccount.account_type == "jzt", JdAccount.active.is_(True))
@@ -98,7 +101,7 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
     return {"saved": saved}
 
 
-def sync_jd_orders(db: Session, store_id: int, order_date: date | None = None):
+def sync_jd_orders(db: Session, store_id: int, order_date: Optional[date] = None):
     account = get_smart_account(db, store_id)
     rows = JdSmartCollector().fetch_orders_today(account)
     saved = 0
@@ -110,7 +113,7 @@ def sync_jd_orders(db: Session, store_id: int, order_date: date | None = None):
     return {"saved": saved}
 
 
-def sync_jd_products(db: Session, store_id: int, stat_date: date | None = None):
+def sync_jd_products(db: Session, store_id: int, stat_date: Optional[date] = None):
     account = get_smart_account(db, store_id)
     rows = JdSmartCollector().fetch_products_today(account)
     saved = 0

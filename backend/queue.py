@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Optional
 import json
 import uuid
 from datetime import datetime, timezone
@@ -18,7 +21,7 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def enqueue_task(task_type: str, payload: dict, max_retries: int = 3, delay_note: str | None = None):
+def enqueue_task(task_type: str, payload: dict, max_retries: int = 3, delay_note: Optional[str] = None):
     task_id = str(uuid.uuid4())
     item = {
         "task_id": task_id,
@@ -68,7 +71,7 @@ def update_task_status(
     payload: dict,
     message: str = "",
     attempt: int = 0,
-    max_retries: int | None = None,
+    max_retries: Optional[int] = None,
 ):
     redis_client = get_redis()
     now = utc_now()

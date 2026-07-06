@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -24,7 +25,7 @@ class TaskLinkCreate(BaseModel):
     analysis_record_id: int
     task_id: int
     link_type: str = "existing_task"
-    note: str | None = None
+    note: Optional[str] = None
 
 
 class TaskDraftCreate(BaseModel):
@@ -34,12 +35,12 @@ class TaskDraftCreate(BaseModel):
 class ConfirmCreateTask(BaseModel):
     analysis_record_id: int
     title: str
-    description: str | None = None
+    description: Optional[str] = None
     priority: str = "normal"
-    parent_task_id: int | None = None
-    split_plan: str | None = None
-    recommended_ai_employee_code: str | None = None
-    note: str | None = None
+    parent_task_id: Optional[int] = None
+    split_plan: Optional[str] = None
+    recommended_ai_employee_code: Optional[str] = None
+    note: Optional[str] = None
 
 
 @router.post("/api/orchestrator/task-links")
@@ -177,10 +178,10 @@ def build_task_link(
     analysis: OrchestratorAnalysisRecord,
     task: TaskCenterTask,
     link_type: str,
-    created_by_id: int | None,
-    note: str | None,
-    recommended_codex: str | None,
-    recommended_action: str | None,
+    created_by_id: Optional[int],
+    note: Optional[str],
+    recommended_codex: Optional[str],
+    recommended_action: Optional[str],
 ) -> OrchestratorTaskLink:
     return OrchestratorTaskLink(
         analysis_record_id=analysis.id,
@@ -214,24 +215,24 @@ def build_task_draft(db: Session, analysis: OrchestratorAnalysisRecord) -> dict:
     }
 
 
-def resolve_employee_name(db: Session, employee_code: str | None) -> str | None:
+def resolve_employee_name(db: Session, employee_code: Optional[str]) -> Optional[str]:
     if not employee_code:
         return None
     employee = db.query(AiEmployee).filter(AiEmployee.employee_code == employee_code).one_or_none()
     return employee.employee_name if employee else employee_code
 
 
-def compact_action(action: str | None) -> str | None:
+def compact_action(action: Optional[str]) -> Optional[str]:
     if not action:
         return None
     return redact_sensitive_text(action.strip())[:100]
 
 
-def iso(value: datetime | None):
+def iso(value: Optional[datetime]):
     return value.isoformat() if value else None
 
 
-def task_link_to_dict(link: OrchestratorTaskLink, analysis: OrchestratorAnalysisRecord | None) -> dict:
+def task_link_to_dict(link: OrchestratorTaskLink, analysis: Optional[OrchestratorAnalysisRecord]) -> dict:
     return {
         "link_id": link.id,
         "analysis_record_id": link.analysis_record_id,
@@ -248,7 +249,7 @@ def task_link_to_dict(link: OrchestratorTaskLink, analysis: OrchestratorAnalysis
     }
 
 
-def analysis_summary(analysis: OrchestratorAnalysisRecord | None) -> dict | None:
+def analysis_summary(analysis: Optional[OrchestratorAnalysisRecord]) -> Optional[dict]:
     if not analysis:
         return None
     return {

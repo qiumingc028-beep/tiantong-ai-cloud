@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Optional
 from datetime import datetime, timezone
 import json
 
@@ -18,8 +21,8 @@ EMPLOYEE_STATUSES = {"active", "inactive"}
 class AiEmployeeCreate(BaseModel):
     employee_code: str
     employee_name: str
-    legion: str | None = None
-    duty: str | None = None
+    legion: Optional[str] = None
+    duty: Optional[str] = None
     status: str = "active"
     task_types: list[str] = []
     default_permissions: list[str] = []
@@ -28,21 +31,21 @@ class AiEmployeeCreate(BaseModel):
 
 
 class AiEmployeeUpdate(BaseModel):
-    employee_name: str | None = None
-    legion: str | None = None
-    duty: str | None = None
-    status: str | None = None
-    task_types: list[str] | None = None
-    default_permissions: list[str] | None = None
-    is_legacy: bool | None = None
-    sort_order: int | None = None
+    employee_name: Optional[str] = None
+    legion: Optional[str] = None
+    duty: Optional[str] = None
+    status: Optional[str] = None
+    task_types: Optional[list[str]] = None
+    default_permissions: Optional[list[str]] = None
+    is_legacy: Optional[bool] = None
+    sort_order: Optional[int] = None
 
 
 @router.get("/api/ai-employees")
 def list_ai_employees(
     request: Request,
-    status: str | None = None,
-    task_type: str | None = None,
+    status: Optional[str] = None,
+    task_type: Optional[str] = None,
     include_legacy: bool = False,
     db: Session = Depends(get_db),
 ):
@@ -195,7 +198,7 @@ def normalize_employee_status(status: str) -> str:
     return clean
 
 
-def parse_json_list(value: str | None):
+def parse_json_list(value: Optional[str]):
     if not value:
         return []
     try:

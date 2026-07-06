@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Optional
 import subprocess
 import sys
 
@@ -167,9 +170,9 @@ def test_orchestrator_task_links_migration_is_single_head():
 def create_analysis(
     test_db,
     input_excerpt: str = "backend implementation completed and tests passed",
-    prompt_draft: str | None = "draft",
-    recommended_codex: str | None = "tianwang",
-    recommended_action: str | None = "backend_development",
+    prompt_draft: Optional[str] = "draft",
+    recommended_codex: Optional[str] = "tianwang",
+    recommended_action: Optional[str] = "backend_development",
 ):
     db = test_db()
     try:
