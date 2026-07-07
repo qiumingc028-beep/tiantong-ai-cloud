@@ -281,7 +281,7 @@ def test_orchestrator_migration_is_single_head():
         check=True,
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0017_sprint20_5_release_center (head)"]
+    assert heads == ["0018_sprint21_ai_capabilities (head)"]
 
 
 def add_employee(test_db, employee_code: str, employee_name: str, task_type: str, sort_order: int):
