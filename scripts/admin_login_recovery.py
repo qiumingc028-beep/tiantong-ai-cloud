@@ -13,6 +13,11 @@ from backend.models import User
 
 PRIVILEGED_ROLES = {"owner", "boss", "admin"}
 PASSWORD_ENV = "ADMIN_RESET_PASSWORD"
+CORE_ADMIN_ACCOUNTS = {
+    "owner": {"role": "owner", "display_name": "Owner"},
+    "boss": {"role": "boss", "display_name": "老板"},
+    "admin": {"role": "admin", "display_name": "Admin"},
+}
 
 
 @dataclass(frozen=True)
@@ -91,6 +96,24 @@ def reset_admin_password(
     )
 
 
+def ensure_core_admin_accounts(db: Session, new_password: str) -> list[AdminAccountSummary]:
+    if len(new_password) < 12:
+        raise ValueError("new password must be at least 12 characters")
+    summaries = []
+    for username, account in CORE_ADMIN_ACCOUNTS.items():
+        summaries.append(
+            reset_admin_password(
+                db,
+                username,
+                new_password,
+                role=account["role"],
+                create_missing=True,
+                display_name=account["display_name"],
+            )
+        )
+    return summaries
+
+
 def password_hash_algorithm(password_hash: str | None) -> str:
     if not password_hash:
         return "missing"
@@ -101,6 +124,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="List or reset privileged login accounts without printing secrets.")
     parser.add_argument("--list", action="store_true", help="List owner/boss/admin accounts without password hashes.")
     parser.add_argument("--reset", action="store_true", help=f"Reset a privileged account password from ${PASSWORD_ENV}.")
+    parser.add_argument(
+        "--ensure-core-admins",
+        action="store_true",
+        help=f"Create or repair owner/boss/admin accounts with password from ${PASSWORD_ENV}.",
+    )
     parser.add_argument("--username", default="boss", help="Account username to reset. Defaults to boss.")
     parser.add_argument("--role", choices=sorted(PRIVILEGED_ROLES), help="Set or enforce a privileged role during reset.")
     parser.add_argument("--display-name", help="Display name to set when creating or repairing the account.")
@@ -110,8 +138,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    if not args.list and not args.reset:
-        raise SystemExit("choose --list or --reset")
+    if not args.list and not args.reset and not args.ensure_core_admins:
+        raise SystemExit("choose --list, --reset, or --ensure-core-admins")
 
     db = SessionLocal()
     try:
@@ -135,6 +163,13 @@ def main() -> int:
                 f"reset_ok username={summary.username} role={summary.role} active={summary.active} "
                 f"hash_algorithm={summary.password_hash_algorithm}"
             )
+        if args.ensure_core_admins:
+            new_password = os.getenv(PASSWORD_ENV, "")
+            for summary in ensure_core_admin_accounts(db, new_password):
+                print(
+                    f"ensure_ok username={summary.username} role={summary.role} active={summary.active} "
+                    f"hash_algorithm={summary.password_hash_algorithm}"
+                )
     finally:
         db.close()
     return 0
