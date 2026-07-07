@@ -25,7 +25,7 @@ HTML_PAGES = {
     "jd-dashboard.html", "metrics.html", "import.html", "ads.html",
     "ai-assets.html", "workflows.html", "ai-employees.html", "settings.html",
     "account-center.html", "template-center.html", "brands.html", "store-groups.html",
-    "knowledge-center.html", "tiancang.html", "task-center.html", "orchestrator.html", "deploy-center.html",
+    "knowledge-center.html", "tiancang.html", "task-center.html", "orchestrator.html", "auto-dispatch-center.html", "deploy-center.html",
     "ai-execution.html",
 }
 DASHBOARD_HTML_PAGES = {

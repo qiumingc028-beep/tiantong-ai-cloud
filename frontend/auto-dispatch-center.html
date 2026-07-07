@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI自动派单中心 - 天统AI云中台</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f5f7fb;color:#172033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}.app{display:grid;grid-template-columns:232px 1fr;min-height:100vh}.side{background:#101827;color:#dbeafe;padding:22px 16px}.brand{font-size:18px;font-weight:800;margin-bottom:18px}.menu{display:flex;flex-direction:column;gap:6px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1e40af;color:#fff}.top{height:64px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:5}.meta{display:flex;align-items:center;gap:10px}.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #dbe3ef;background:#f8fafc;border-radius:999px;padding:6px 10px;color:#475569;font-size:12px}button,.btn{border:0;border-radius:8px;padding:9px 13px;background:#2563eb;color:#fff;cursor:pointer;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px}button:hover,.btn:hover{background:#1d4ed8}button.secondary,.btn.secondary{background:#e2e8f0;color:#1f2937}button.secondary:hover,.btn.secondary:hover{background:#cbd5e1}button.danger{background:#dc2626}button.danger:hover{background:#b91c1c}button.warn{background:#f59e0b;color:#111827}button.warn:hover{background:#d97706}button:disabled{opacity:.55;cursor:not-allowed}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f172a,#2563eb);color:#fff;border-radius:12px;padding:26px;display:flex;justify-content:space-between;gap:20px;margin-bottom:18px}.hero h1{margin:0 0 8px;font-size:28px}.hero p{margin:0;color:#dbeafe;line-height:1.7}.safe-note{max-width:420px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.24);border-radius:10px;padding:14px;line-height:1.7}.grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(360px,.7fr);gap:18px}.card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:18px;margin-bottom:18px;box-shadow:0 10px 25px rgba(15,23,42,.04)}.card h2{margin:0;font-size:18px}.head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.full{grid-column:1/-1}label{display:block;font-size:12px;color:#64748b;margin-bottom:6px}input,select,textarea{width:100%;border:1px solid #d8e0ec;border-radius:8px;padding:10px 11px;font:inherit;background:#fff}textarea{min-height:104px;resize:vertical}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}.state{border:1px solid #dbe3ef;background:#f8fafc;color:#475569;border-radius:8px;padding:10px 12px;margin:10px 0;line-height:1.6}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.muted{color:#64748b;font-size:13px;line-height:1.6}.table{overflow:auto}.table table{width:100%;border-collapse:collapse;font-size:13px}.table th,.table td{border-bottom:1px solid #e5e7eb;padding:10px;text-align:left;vertical-align:top}.table th{background:#f8fafc;color:#475569;white-space:nowrap}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;background:#e2e8f0;color:#334155}.badge.low,.badge.ok{background:#dcfce7;color:#166534}.badge.medium,.badge.warn,.badge.pending_confirmation{background:#fef3c7;color:#92400e}.badge.high,.badge.critical,.badge.danger,.badge.fail{background:#fee2e2;color:#991b1b}.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{display:inline-flex;border-radius:999px;background:#eef2ff;color:#3730a3;padding:4px 8px;font-size:12px;font-weight:650}.kv{display:grid;grid-template-columns:150px 1fr;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden}.kv div{padding:9px;border-bottom:1px solid #e5e7eb}.kv div:nth-child(odd){background:#f8fafc;color:#64748b}.kv div:nth-last-child(-n+2){border-bottom:0}.plan-step{display:grid;grid-template-columns:42px 1fr;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid #e5e7eb}.plan-step:last-child{border-bottom:0}.step-no{width:32px;height:32px;border-radius:50%;background:#dbeafe;color:#1d4ed8;display:grid;place-items:center;font-weight:800}.log{border-left:3px solid #2563eb;padding:9px 0 9px 12px;margin:8px 0;background:#f8fafc}.progress{height:10px;border-radius:999px;background:#e5e7eb;overflow:hidden}.progress span{display:block;height:100%;background:#2563eb}.divider{height:1px;background:#e5e7eb;margin:14px 0}.readonly-banner{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.readonly-banner div{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px}.detail-box{min-height:180px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}.empty{padding:18px;text-align:center;color:#64748b;background:#f8fafc;border-radius:8px}.link-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.link-grid a{color:#2563eb;text-decoration:none;font-weight:700}.link-grid a:hover{text-decoration:underline}@media(max-width:980px){.app{grid-template-columns:1fr}.side{position:static}.grid,.hero,.readonly-banner,.link-grid{grid-template-columns:1fr}.top{position:static}.row{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand">天统AI云中台</div>
+      <nav id="menu" class="menu"></nav>
+    </aside>
+    <main>
+      <header class="top">
+        <strong>AI自动派单中心</strong>
+        <div class="meta">
+          <span id="time" class="pill">--</span>
+          <span id="me" class="pill">加载中</span>
+          <button class="secondary" onclick="logout()">退出登录</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="hero">
+          <div>
+            <h1>AI自动派单中心 Auto Dispatch Center</h1>
+            <p>根据任务标题、描述、优先级与风险等级，分析适合的 AI 员工，生成派单建议、老板确认信息和执行追踪视图。</p>
+          </div>
+          <div class="safe-note">
+            第一阶段保持人工确认：不自动执行任务、不绕过老板确认、不自动部署、不修改权限、不提交代码。高风险任务必须显示等待老板确认，并需要天监审计后才能确认派单。
+          </div>
+        </div>
+
+        <div id="pageState" class="state">正在加载自动派单中心...</div>
+
+        <section class="grid">
+          <div>
+            <div class="card">
+              <div class="head">
+                <h2>任务输入区</h2>
+                <button id="analyzeBtn" onclick="analyzeTask()">分析任务</button>
+              </div>
+              <div class="row">
+                <div class="full">
+                  <label>任务标题</label>
+                  <input id="taskTitle" placeholder="例如：分析新品推广方案">
+                </div>
+                <div class="full">
+                  <label>任务描述</label>
+                  <textarea id="taskDescription" placeholder="描述任务目标、上下文、限制条件。高风险内容会提示老板确认。"></textarea>
+                </div>
+                <div>
+                  <label>任务类型</label>
+                  <select id="taskType">
+                    <option value="">系统自动判断</option>
+                    <option value="product">产品 / 需求</option>
+                    <option value="strategy">策略 / 增长</option>
+                    <option value="frontend">前端 / 页面</option>
+                    <option value="backend">后端 / API</option>
+                    <option value="testing">测试 / 验收</option>
+                    <option value="security">安全 / 审计</option>
+                    <option value="deploy">部署 / 运维</option>
+                    <option value="ads">广告 / 投放</option>
+                    <option value="creative">视觉 / 内容</option>
+                  </select>
+                </div>
+                <div>
+                  <label>优先级</label>
+                  <select id="taskPriority">
+                    <option value="normal">normal</option>
+                    <option value="high">high</option>
+                    <option value="urgent">urgent</option>
+                    <option value="low">low</option>
+                  </select>
+                </div>
+                <div>
+                  <label>风险等级</label>
+                  <select id="manualRiskLevel">
+                    <option value="">由系统评估</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="critical">critical</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Task Center 任务 ID（生成方案/确认/追踪需要）</label>
+                  <input id="taskId" type="number" min="1" placeholder="例如：128">
+                </div>
+              </div>
+              <div class="actions">
+                <button class="secondary" onclick="resetInput()">重置</button>
+                <button class="secondary" onclick="loadOverview()">刷新统计</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="head">
+                <h2>AI员工推荐区</h2>
+                <span id="analysisRisk" class="badge">未分析</span>
+              </div>
+              <div id="recommendationState" class="state">请先输入任务并点击“分析任务”。</div>
+              <div class="table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>推荐员工</th>
+                      <th>员工能力</th>
+                      <th>匹配原因</th>
+                      <th>风险等级</th>
+                      <th>分数</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recommendationRows"><tr><td colspan="6">暂无数据</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="head">
+                <h2>派单方案区</h2>
+                <button class="secondary" onclick="generateDispatchPlan()">生成派单方案</button>
+              </div>
+              <div class="state warn">生成后端派单方案需要现有 Task Center 任务 ID。没有任务 ID 时，本区只展示本地预览，不写入后端。</div>
+              <div id="planPanel" class="detail-box empty">暂无派单方案</div>
+            </div>
+
+            <div class="card">
+              <div class="head">
+                <h2>老板确认区</h2>
+                <span id="bossState" class="badge warn">等待分析</span>
+              </div>
+              <div id="bossNotice" class="state">高风险任务将显示“等待老板确认”。确认派单不会自动执行任务，只会将任务状态置为 assigned。</div>
+              <div class="row">
+                <div>
+                  <label>确认员工</label>
+                  <select id="confirmEmployee"></select>
+                </div>
+                <div>
+                  <label>确认说明</label>
+                  <input id="confirmDetail" placeholder="老板确认派单说明">
+                </div>
+                <div>
+                  <label>老板确认</label>
+                  <select id="bossConfirmed">
+                    <option value="false">否</option>
+                    <option value="true">是</option>
+                  </select>
+                </div>
+                <div>
+                  <label>天监审计</label>
+                  <select id="securityAudited">
+                    <option value="false">否</option>
+                    <option value="true">是</option>
+                  </select>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="warn" onclick="confirmDispatch()">确认派单</button>
+                <button class="danger" onclick="rejectDispatch()">拒绝</button>
+                <button class="secondary" onclick="reanalyzeTask()">重新分析</button>
+              </div>
+              <div id="confirmState" class="state" style="display:none"></div>
+            </div>
+          </div>
+
+          <aside>
+            <div class="card">
+              <div class="head">
+                <h2>总览统计</h2>
+                <button class="secondary" onclick="loadOverview()">刷新</button>
+              </div>
+              <div id="overviewBox" class="kv"></div>
+            </div>
+
+            <div class="card">
+              <div class="head">
+                <h2>执行追踪区</h2>
+                <button class="secondary" onclick="refreshTracking()">刷新追踪</button>
+              </div>
+              <div class="row">
+                <div>
+                  <label>当前员工</label>
+                  <input id="trackingEmployee" placeholder="例如：tiance">
+                </div>
+                <div>
+                  <label>追踪动作</label>
+                  <select id="trackingAction">
+                    <option value="start">start</option>
+                    <option value="execute">execute</option>
+                    <option value="complete">complete</option>
+                    <option value="fail">fail</option>
+                  </select>
+                </div>
+                <div class="full">
+                  <label>执行日志</label>
+                  <textarea id="trackingResult" placeholder="记录执行过程、结果或失败原因。"></textarea>
+                </div>
+              </div>
+              <div class="actions">
+                <button class="secondary" onclick="recordTracking()">记录追踪</button>
+              </div>
+              <div class="divider"></div>
+              <div id="trackingPanel" class="detail-box empty">暂无执行追踪</div>
+            </div>
+
+            <div class="card">
+              <div class="head">
+                <h2>安全边界</h2>
+              </div>
+              <div class="readonly-banner">
+                <div><strong>不自动执行</strong><div class="muted">只展示建议和人工触发入口。</div></div>
+                <div><strong>不绕过确认</strong><div class="muted">高风险必须老板确认与天监审计。</div></div>
+                <div><strong>不越权</strong><div class="muted">不部署、不改权限、不提交代码。</div></div>
+              </div>
+              <div class="divider"></div>
+              <div class="link-grid">
+                <a href="/task-center.html">跳转 Task Center</a>
+                <a href="/orchestrator.html">跳转 Orchestrator</a>
+                <a href="/employee-capabilities.html">AI员工能力档案</a>
+                <a href="/employee-activity-trace.html">AI执行追溯中心</a>
+              </div>
+            </div>
+          </aside>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const menus=[
+      ['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['AI员工工作台','/employee-workspace.html'],
+      ['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],
+      ['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],
+      ['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI执行日志中心','/employee-activity-log.html'],
+      ['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],
+      ['AI自动派单中心','/auto-dispatch-center.html'],['Orchestrator','/orchestrator.html'],
+      ['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html']
+    ];
+    let currentAnalysis=null;
+    let currentPlan=null;
+    let capabilities=[];
+
+    function esc(value){
+      return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+    function safe(value, empty='暂无'){
+      if(value === null || value === undefined || value === '') return empty;
+      if(Array.isArray(value)) return value.length ? value.map(v => safe(v, empty)).join('、') : '暂无数据';
+      if(typeof value === 'boolean') return value ? '是' : '否';
+      if(typeof value === 'object') return JSON.stringify(value, null, 2);
+      return String(value);
+    }
+    function badge(value){
+      const v=String(value || 'unknown');
+      const cls=['low','ok','assigned','confirmed','planned'].includes(v) ? 'low' : (['medium','pending_confirmation'].includes(v) ? 'medium' : (['high','critical','fail'].includes(v) ? 'critical' : ''));
+      return `<span class="badge ${cls}">${esc(v)}</span>`;
+    }
+    function chips(values){
+      if(!Array.isArray(values) || !values.length) return '<span class="muted">暂无</span>';
+      return `<div class="chips">${values.map(item=>`<span class="chip">${esc(item)}</span>`).join('')}</div>`;
+    }
+    function setState(el, text, type=''){
+      el.style.display='block';
+      el.className='state '+type;
+      el.textContent=text;
+    }
+    function clearAuth(){
+      try{
+        localStorage.removeItem('token');localStorage.removeItem('tiantong_token');localStorage.removeItem('session');localStorage.removeItem('tiantong_session');sessionStorage.clear();
+      }catch(e){}
+    }
+    async function logout(){
+      clearAuth();
+      try{await fetch('/api/logout',{method:'POST',credentials:'include'});}catch(e){}
+      location.href='/login.html';
+    }
+    async function api(url, options={}){
+      let response;
+      try{
+        response=await fetch(url,{credentials:'include',...options});
+      }catch(e){
+        throw new Error('网络异常，请稍后重试');
+      }
+      if(response.status===401){
+        clearAuth();
+        location.href='/login.html';
+        throw new Error('登录已过期，请重新登录');
+      }
+      const payload=response.ok ? null : await response.json().catch(()=>({}));
+      if(response.status===403) throw new Error(payload.detail || '无权限访问');
+      if(response.status===404) throw new Error(payload.detail || '接口或数据不存在');
+      if(response.status===422) throw new Error(payload.detail || '参数错误');
+      if(response.status>=500) throw new Error(payload.detail || '服务器异常');
+      if(!response.ok) throw new Error(payload.detail || '请求失败');
+      return response.json();
+    }
+    function renderMenu(){
+      menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/auto-dispatch-center.html'?'active':''}" href="${href}">${label}</a>`).join('');
+    }
+    function tick(){
+      time.textContent=new Date().toLocaleString('zh-CN',{hour12:false});
+    }
+    async function init(){
+      renderMenu();
+      tick();
+      setInterval(tick,1000);
+      try{
+        const user=await api('/api/me');
+        me.textContent=`${user.display_name || user.username || '当前用户'} · ${user.role_label || user.role || ''}`;
+        await Promise.all([loadOverview(), loadCapabilities()]);
+        setState(pageState,'AI自动派单中心已就绪。','ok');
+      }catch(e){
+        setState(pageState,e.message,'error');
+      }
+    }
+    async function loadOverview(){
+      try{
+        const data=await api('/api/auto-dispatch/overview');
+        overviewBox.innerHTML=[
+          ['员工能力数',data.employee_capability_count],
+          ['路由规则数',data.routing_rule_count],
+          ['派单记录数',data.dispatch_record_count],
+          ['执行日志数',data.execution_log_count],
+          ['高风险老板确认',data.readonly_safety && data.readonly_safety.high_risk_requires_boss_confirmation],
+          ['高风险天监审计',data.readonly_safety && data.readonly_safety.high_risk_requires_security_audit],
+          ['允许自动部署',data.readonly_safety && data.readonly_safety.auto_deploy_allowed],
+          ['允许改权限',data.readonly_safety && data.readonly_safety.permission_mutation_allowed]
+        ].map(([k,v])=>`<div>${esc(k)}</div><div>${esc(safe(v))}</div>`).join('');
+      }catch(e){
+        overviewBox.innerHTML=`<div>状态</div><div>${esc(e.message)}</div>`;
+      }
+    }
+    async function loadCapabilities(){
+      try{
+        capabilities=await api('/api/auto-dispatch/employee-capabilities');
+      }catch(e){
+        capabilities=[];
+      }
+    }
+    function capabilityFor(code){
+      return capabilities.find(item=>item.employee_code===code) || null;
+    }
+    function buildPayload(){
+      const title=taskTitle.value.trim();
+      const description=taskDescription.value.trim();
+      const task_type=taskType.value || null;
+      if(!title) throw new Error('请填写任务标题');
+      return {title,description,task_type};
+    }
+    function effectiveRisk(data){
+      return manualRiskLevel.value || (data && data.risk_level) || '';
+    }
+    function requiresBossGate(data){
+      const risk=effectiveRisk(data);
+      return ['high','critical'].includes(risk) || Boolean(data && data.requires_boss_confirmation);
+    }
+    async function analyzeTask(){
+      try{
+        analyzeBtn.disabled=true;
+        setState(pageState,'正在分析任务...');
+        const payload=buildPayload();
+        const data=await api('/api/auto-dispatch/analyze',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload)
+        });
+        currentAnalysis=data;
+        currentPlan=null;
+        renderAnalysis(data);
+        renderLocalPlanPreview(data);
+        setState(pageState,'任务分析完成。','ok');
+      }catch(e){
+        setState(pageState,e.message,'error');
+      }finally{
+        analyzeBtn.disabled=false;
+      }
+    }
+    function renderAnalysis(data){
+      const risk=effectiveRisk(data);
+      const needsBoss=requiresBossGate(data);
+      analysisRisk.className='badge '+risk;
+      analysisRisk.textContent=`风险：${risk}`;
+      const employees=data.recommended_employees || [];
+      recommendationState.className='state '+(needsBoss?'warn':'ok');
+      recommendationState.textContent=needsBoss ? '高风险任务：等待老板确认，并需要天监审计。' : '已生成推荐员工，低风险仍需人工确认后进入后续流程。';
+      recommendationRows.innerHTML=employees.length ? employees.map(item=>{
+        const cap=capabilityFor(item.employee_code);
+        return `<tr>
+          <td><strong>${esc(item.employee_name)}</strong><div class="muted mono">${esc(item.employee_code)}</div></td>
+          <td>${chips(cap ? cap.skills : [])}</td>
+          <td>${esc(safe(item.reason))}</td>
+          <td>${badge(item.risk_level)}</td>
+          <td>${esc(safe(item.score))}</td>
+          <td><button class="secondary" onclick="selectEmployee('${esc(item.employee_code)}')">查看详情</button></td>
+        </tr>`;
+      }).join('') : '<tr><td colspan="6">暂无数据</td></tr>';
+      confirmEmployee.innerHTML=employees.length ? employees.map(item=>`<option value="${esc(item.employee_code)}">${esc(item.employee_name)}（${esc(item.employee_code)}）</option>`).join('') : '<option value="">暂无推荐员工</option>';
+      trackingEmployee.value=employees[0] ? employees[0].employee_code : '';
+      bossState.className='badge '+(needsBoss?'high':'low');
+      bossState.textContent=needsBoss ? '等待老板确认' : '可人工确认';
+      bossNotice.className='state '+(needsBoss?'warn':'ok');
+      bossNotice.textContent=needsBoss ? '等待老板确认：高风险任务必须勾选老板确认和天监审计，不能自动派单。' : '低风险任务也不会自动执行，确认后仅进入 assigned 状态。';
+    }
+    function renderLocalPlanPreview(data){
+      const employees=data.recommended_employees || [];
+      planPanel.className='detail-box';
+      planPanel.innerHTML=`<div class="kv">
+        <div>任务</div><div>${esc(taskTitle.value.trim())}</div>
+        <div>任务类型</div><div>${esc(safe(data.task_type))}</div>
+        <div>风险等级</div><div>${badge(effectiveRisk(data))}</div>
+        <div>老板确认</div><div>${esc(safe(requiresBossGate(data)))}</div>
+        <div>预计步骤</div><div>${esc(safe(data.safety_notes))}</div>
+      </div>
+      <div class="divider"></div>
+      ${employees.length ? employees.slice(0,3).map((item,index)=>`<div class="plan-step">
+        <div class="step-no">${index+1}</div>
+        <div><strong>${esc(item.employee_name)}</strong><div class="muted">执行顺序 ${index+1} · ${esc(item.reason)}</div></div>
+      </div>`).join('') : '<div class="empty">暂无执行顺序</div>'}`;
+    }
+    function selectEmployee(code){
+      confirmEmployee.value=code;
+      trackingEmployee.value=code;
+      const cap=capabilityFor(code);
+      if(cap){
+        setState(pageState,`${cap.employee_name}：${safe(cap.skills)}；支持任务：${safe(cap.supported_tasks)}`,'ok');
+      }
+    }
+    async function generateDispatchPlan(){
+      const id=Number(taskId.value);
+      if(!id){
+        if(currentAnalysis){
+          renderLocalPlanPreview(currentAnalysis);
+          setState(pageState,'未填写 Task ID，已展示本地派单预览，未写入后端。','warn');
+          return;
+        }
+        setState(pageState,'请先分析任务，或填写 Task Center 任务 ID。','warn');
+        return;
+      }
+      try{
+        const data=await api(`/api/auto-dispatch/tasks/${id}/plan`,{method:'POST'});
+        currentPlan=data.dispatch_plan;
+        renderBackendPlan(data);
+        setState(pageState,'派单方案已生成，等待老板人工确认。','ok');
+      }catch(e){
+        setState(pageState,e.message,'error');
+      }
+    }
+    function renderBackendPlan(data){
+      const plan=data.dispatch_plan || {};
+      const records=data.dispatch_records || [];
+      planPanel.className='detail-box';
+      planPanel.innerHTML=`<div class="kv">
+        <div>任务 ID</div><div>${esc(safe(plan.task_id))}</div>
+        <div>风险等级</div><div>${badge(plan.risk_level)}</div>
+        <div>需要老板确认</div><div>${esc(safe(plan.requires_boss_confirmation))}</div>
+        <div>需要天监审计</div><div>${esc(safe(plan.requires_security_audit))}</div>
+        <div>允许自动执行</div><div>否</div>
+      </div>
+      <div class="divider"></div>
+      ${(plan.employees || []).map((item,index)=>`<div class="plan-step">
+        <div class="step-no">${index+1}</div>
+        <div><strong>${esc(item.employee_name)}</strong><div class="muted mono">${esc(item.employee_code)}</div><div>${esc(item.reason)}</div></div>
+      </div>`).join('') || '<div class="empty">暂无 AI员工列表</div>'}
+      <div class="divider"></div>
+      <div class="table"><table><thead><tr><th>记录ID</th><th>员工</th><th>状态</th><th>原因</th></tr></thead><tbody>${records.length ? records.map(row=>`<tr><td>${esc(row.id)}</td><td>${esc(row.employee_code)}</td><td>${badge(row.dispatch_status)}</td><td>${esc(row.dispatch_reason)}</td></tr>`).join('') : '<tr><td colspan="4">暂无派单记录</td></tr>'}</tbody></table></div>`;
+      if(plan.requires_boss_confirmation){
+        bossState.className='badge high';
+        bossState.textContent='等待老板确认';
+      }
+      if(plan.employees && plan.employees[0]){
+        confirmEmployee.value=plan.employees[0].employee_code;
+      }
+    }
+    async function confirmDispatch(){
+      const id=Number(taskId.value);
+      if(!id){
+        setState(confirmState,'确认派单必须填写 Task Center 任务 ID。','warn');
+        return;
+      }
+      const employee_code=confirmEmployee.value;
+      if(!employee_code){
+        setState(confirmState,'请选择确认员工。','warn');
+        return;
+      }
+      const risk=manualRiskLevel.value || (currentPlan && currentPlan.risk_level) || (currentAnalysis && currentAnalysis.risk_level) || '';
+      const boss_confirmed=bossConfirmed.value==='true';
+      const security_audited=securityAudited.value==='true';
+      if(['high','critical'].includes(risk) && (!boss_confirmed || !security_audited)){
+        setState(confirmState,'等待老板确认：高风险任务必须同时完成老板确认和天监审计。','warn');
+        return;
+      }
+      try{
+        const data=await api(`/api/auto-dispatch/tasks/${id}/confirm`,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({employee_code,boss_confirmed,security_audited,detail:confirmDetail.value.trim() || 'boss confirmed dispatch'})
+        });
+        setState(confirmState,`已确认派单：${safe(data.confirmed_employee && data.confirmed_employee.employee_name)}，任务状态 ${safe(data.task && data.task.status)}。不会自动执行任务。`,'ok');
+        await refreshTracking();
+      }catch(e){
+        setState(confirmState,e.message,'error');
+      }
+    }
+    function rejectDispatch(){
+      setState(confirmState,'已在页面标记拒绝。本操作未调用后端写接口，任务状态未改变。','warn');
+      bossState.className='badge high';
+      bossState.textContent='已拒绝';
+    }
+    function reanalyzeTask(){
+      analyzeTask();
+    }
+    async function recordTracking(){
+      const id=Number(taskId.value);
+      const employee_code=trackingEmployee.value.trim();
+      if(!id){
+        setState(pageState,'记录追踪必须填写 Task Center 任务 ID。','warn');
+        return;
+      }
+      if(!employee_code){
+        setState(pageState,'记录追踪必须填写当前员工。','warn');
+        return;
+      }
+      try{
+        await api(`/api/auto-dispatch/tasks/${id}/tracking`,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({employee_code,action:trackingAction.value,result:trackingResult.value.trim() || null})
+        });
+        trackingResult.value='';
+        setState(pageState,'执行追踪已记录。','ok');
+        await refreshTracking();
+      }catch(e){
+        setState(pageState,e.message,'error');
+      }
+    }
+    async function refreshTracking(){
+      const id=Number(taskId.value);
+      if(!id){
+        trackingPanel.className='detail-box empty';
+        trackingPanel.textContent='请填写 Task Center 任务 ID 后刷新追踪。';
+        return;
+      }
+      try{
+        const data=await api(`/api/auto-dispatch/tasks/${id}/tracking`);
+        renderTracking(data);
+      }catch(e){
+        trackingPanel.className='detail-box';
+        trackingPanel.innerHTML=`<div class="state error">${esc(e.message)}</div>`;
+      }
+    }
+    function renderTracking(data){
+      const logs=data.execution_logs || [];
+      const records=data.dispatch_records || [];
+      const lastLog=logs[logs.length-1];
+      const progress=Math.min(100, logs.length * 25);
+      trackingPanel.className='detail-box';
+      trackingPanel.innerHTML=`<div class="kv">
+        <div>任务状态</div><div>${logs.length ? badge(lastLog.action) : '暂无'}</div>
+        <div>当前员工</div><div>${esc(lastLog ? lastLog.employee_code : safe(records[0] && records[0].employee_code))}</div>
+        <div>完成进度</div><div><div class="progress"><span style="width:${progress}%"></span></div><div class="muted">${progress}%</div></div>
+      </div>
+      <div class="divider"></div>
+      <h3>执行日志</h3>
+      ${logs.length ? logs.map(log=>`<div class="log"><strong>${esc(log.action)}</strong><div class="muted">${esc(log.employee_code)} · ${esc(safe(log.created_at))}</div><div>${esc(safe(log.result))}</div></div>`).join('') : '<div class="empty">暂无执行日志</div>'}
+      <div class="divider"></div>
+      <h3>派单记录</h3>
+      ${records.length ? records.map(row=>`<div class="log"><strong>${esc(row.employee_code)}</strong><div>${badge(row.dispatch_status)} ${esc(row.dispatch_reason)}</div></div>`).join('') : '<div class="empty">暂无派单记录</div>'}`;
+    }
+    function resetInput(){
+      taskTitle.value='';
+      taskDescription.value='';
+      taskType.value='';
+      taskPriority.value='normal';
+      manualRiskLevel.value='';
+      taskId.value='';
+      currentAnalysis=null;
+      currentPlan=null;
+      recommendationRows.innerHTML='<tr><td colspan="6">暂无数据</td></tr>';
+      recommendationState.className='state';
+      recommendationState.textContent='请先输入任务并点击“分析任务”。';
+      analysisRisk.className='badge';
+      analysisRisk.textContent='未分析';
+      planPanel.className='detail-box empty';
+      planPanel.textContent='暂无派单方案';
+      trackingPanel.className='detail-box empty';
+      trackingPanel.textContent='暂无执行追踪';
+      confirmEmployee.innerHTML='';
+      confirmState.style.display='none';
+      bossState.className='badge warn';
+      bossState.textContent='等待分析';
+    }
+    init();
+  </script>
+</body>
+</html>
