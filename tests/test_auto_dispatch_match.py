@@ -31,6 +31,21 @@ def test_auto_dispatch_match_recommends_employee_for_normal_task(client, owner_h
     assert first["risk_level"]
 
 
+def test_auto_dispatch_match_owner_response_schema(client, owner_headers):
+    response = client.post(
+        "/api/auto-dispatch/match",
+        headers=owner_headers,
+        json={"task_title": "分析新品推广计划", "task_description": "需要推荐负责员工"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data["recommended_employees"], list)
+    assert data["recommended_employees"]
+    item = data["recommended_employees"][0]
+    assert set(item) >= {"employee_code", "employee_name", "match_reason", "risk_level"}
+
+
 def test_auto_dispatch_match_returns_high_risk_level(client, owner_headers):
     response = client.post(
         "/api/auto-dispatch/match",
