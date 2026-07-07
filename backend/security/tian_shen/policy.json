@@ -1,0 +1,82 @@
+{
+  "version": "phase-2.3.2",
+  "green": {
+    "description": "Allowed low-risk internal orchestration events.",
+    "default_reasons": [
+      "未命中高危或需确认动作，允许自动进入队列"
+    ]
+  },
+  "yellow": {
+    "description": "Requires explicit confirmation before execution.",
+    "sources": [
+      "codex",
+      "openclaw",
+      "cli"
+    ],
+    "keywords": [
+      "codex",
+      "openclaw",
+      "cli",
+      "github",
+      "deploy",
+      "browser",
+      "external_api",
+      "tool_call",
+      "mcp"
+    ],
+    "safe_alternative": "先生成只读计划、风险说明和人工确认单，确认后再进入执行队列。"
+  },
+  "red": {
+    "description": "Blocked high-risk commands.",
+    "keywords": [
+      "subprocess",
+      "os.system",
+      "shell=true",
+      "shell_exec",
+      "systemctl",
+      "docker run",
+      "docker exec",
+      "docker compose",
+      "deploy.sh",
+      "git push",
+      "git commit",
+      "rm -rf",
+      "chmod",
+      "chown",
+      "browser_click",
+      "browser_form_fill",
+      "external_api_write",
+      "payment",
+      "recharge",
+      "spend_money",
+      "modify_permission",
+      "permission_modify",
+      "api_key_management"
+    ],
+    "safe_alternatives": {
+      "subprocess": "改为生成命令审查报告，由人工在受控终端执行。",
+      "os.system": "改为生成命令审查报告，由人工在受控终端执行。",
+      "shell=true": "改为只读检查或人工确认后的部署流程。",
+      "shell_exec": "改为只读检查或人工确认后的部署流程。",
+      "systemctl": "改为提交天盾部署审批单，不直接控制服务。",
+      "docker run": "改为提交天盾部署审批单，不直接操作 Docker。",
+      "docker exec": "改为提交天盾部署审批单，不直接进入容器。",
+      "docker compose": "改为提交天盾部署审批单，不直接重启服务。",
+      "deploy.sh": "改为进入天盾 Deploy Center 审批流程。",
+      "git push": "改为创建本地 commit 和 PR，等待人工 merge。",
+      "git commit": "改为生成 diff 摘要，等待人工确认提交。",
+      "rm -rf": "改为列出待删除清单，人工确认后处理。",
+      "chmod": "改为提交权限变更审批单。",
+      "chown": "改为提交权限变更审批单。",
+      "browser_click": "改为浏览器只读截图或人工点击。",
+      "browser_form_fill": "改为生成表单填写建议，不自动提交。",
+      "external_api_write": "改为只读 API 调研或人工确认后的调用。",
+      "payment": "改为生成付款审批单，不自动扣费。",
+      "recharge": "改为生成充值审批单，不自动扣费。",
+      "spend_money": "改为生成预算审批单，不自动花费。",
+      "modify_permission": "改为生成权限变更申请，不自动授权。",
+      "permission_modify": "改为生成权限变更申请，不自动授权。",
+      "api_key_management": "改为生成密钥轮换建议，不展示或修改密钥。"
+    }
+  }
+}

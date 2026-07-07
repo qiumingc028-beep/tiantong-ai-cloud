@@ -10,6 +10,9 @@ from ..auth import current_user
 from ..auth_data import normalize_role
 from ..database import get_db
 from ..deploy_models import DeployHealthCheck, DeployRecord
+from ..employee_command_dashboard import build_employee_command_dashboard, build_employee_detail
+from ..employee_organization import build_employee_organization_center
+from ..employee_performance import build_ai_employee_business_board
 from ..models import AiEmployee, TaskCenterTask
 from . import deploy_center
 
@@ -37,6 +40,18 @@ def get_ceo_dashboard_summary(request: Request, db: Session = Depends(get_db)):
     return build_ceo_dashboard_summary(db)
 
 
+@router.get("/employee-command-dashboard")
+def get_employee_command_dashboard(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_employee_command_dashboard(db)
+
+
+@router.get("/employee-command-dashboard/employees/{employee_code}")
+def get_employee_command_dashboard_detail(employee_code: str, request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_employee_detail(db, employee_code)
+
+
 def require_ceo_dashboard_user(request: Request, db: Session):
     user = current_user(request, db)
     role_code = normalize_role(user.role)
@@ -50,6 +65,9 @@ def build_ceo_dashboard_summary(db: Session):
     task_summary = build_task_summary(db)
     employee_summary = build_employee_summary(db)
     deploy_summary = build_deploy_summary(db, system_health)
+    ai_employee_business_board = build_ai_employee_business_board(db)
+    ai_employee_organization_board = build_employee_organization_center(db)
+    ai_employee_command_dashboard = build_employee_command_dashboard(db)
     pending_actions = build_pending_actions(task_summary, system_health, deploy_summary)
     alerts = build_alerts(system_health, task_summary, employee_summary, deploy_summary, pending_actions)
     return {
@@ -59,6 +77,9 @@ def build_ceo_dashboard_summary(db: Session):
         "task_summary": task_summary,
         "pending_actions": pending_actions,
         "employee_summary": employee_summary,
+        "ai_employee_business_board": ai_employee_business_board,
+        "ai_employee_organization_board": ai_employee_organization_board,
+        "ai_employee_command_dashboard": ai_employee_command_dashboard,
         "deploy_summary": deploy_summary,
         "alerts": alerts,
     }

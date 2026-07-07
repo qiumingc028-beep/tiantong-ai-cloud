@@ -3,6 +3,7 @@ import os
 
 from sqlalchemy.orm import Session
 
+from .ai_employees.registry import AI_EMPLOYEE_REGISTRY, TIANBO, TIANCAI_DATA, TIANCE_STRATEGY, TIANSHU
 from .auth import hash_password, verify_password
 from .auth_data import ROLE_LABELS
 from .models import AiEmployee, AiTask, Permission, Role, User
@@ -67,20 +68,20 @@ REAL_AI_EMPLOYEES = [
     ("tiandun_ops", "天盾：部署运维修复", "研发交付军团", "部署运维、环境修复与运行保障", ["ops"], ["task_center.execute"], 70),
     ("tiandun_deploy", "天盾：Deploy Center", "研发交付军团", "Deploy Center 建设与发布链路", ["deploy"], ["task_center.execute"], 80),
     ("tiandao", "天道：AI产品经理中心", "产品策略军团", "产品规划、需求拆解与验收口径", ["product"], ["task_center.read"], 90),
-    ("tiance_strategy", "天策：策略分析中心", "经营策略军团", "经营策略、行业分析与策略建议", ["strategy"], ["task_center.read"], 100),
+    (TIANCE_STRATEGY, AI_EMPLOYEE_REGISTRY[TIANCE_STRATEGY].name, "经营策略军团", "经营策略、行业分析与策略建议", ["strategy"], ["task_center.read"], 100),
     ("tianyan_sim", "天演：系统推演中心", "经营策略军团", "系统推演、流程模拟与风险预判", ["simulation"], ["task_center.read"], 110),
     ("tianshi", "天市：全球市场研究中心", "市场增长军团", "全球市场、竞品和行业研究", ["market"], ["task_center.read"], 120),
     ("tianying", "天盈：商业增长中心", "市场增长军团", "商业增长、转化提升与增长方案", ["growth"], ["task_center.read"], 130),
-    ("tiancai_data", "天采：数据采集平台", "数据资产军团", "数据采集、数据源接入与采集质量", ["data_collection"], ["task_center.execute"], 140),
+    (TIANCAI_DATA, AI_EMPLOYEE_REGISTRY[TIANCAI_DATA].name, "数据资产军团", "数据采集、数据源接入与采集质量", ["data_collection"], ["task_center.execute"], 140),
     ("tiance_account", "天册：账号资料模板中心", "数据资产军团", "账号资料、模板与字段规范管理", ["account_template"], ["task_center.read"], 150),
     ("tiancang", "天藏：知识资产中心", "数据资产军团", "知识资产沉淀、SOP 与资料管理", ["knowledge"], ["task_center.read"], 160),
     ("tianyu", "天誉：GEO品牌增长中心", "品牌运营军团", "GEO 品牌增长、声誉和内容分发", ["brand_growth"], ["task_center.read"], 170),
     ("tianshang", "天商：商品运营中心", "电商运营军团", "商品运营、商品分析与运营动作", ["product_ops"], ["task_center.execute"], 180),
     ("tiantou", "天投：广告投放中心", "电商运营军团", "广告投放、ROI 分析与计划优化", ["ads"], ["task_center.execute"], 190),
     ("tianchuang", "天创：设计创意中心", "内容创意军团", "设计创意、图片素材与视觉优化", ["design"], ["task_center.execute"], 200),
-    ("tianbo", "天播：视频中心", "内容创意军团", "视频脚本、剪辑任务与短视频素材", ["video"], ["task_center.execute"], 210),
+    (TIANBO, AI_EMPLOYEE_REGISTRY[TIANBO].name, "内容创意军团", "视频脚本、剪辑任务与短视频素材", ["video"], ["task_center.execute"], 210),
     ("tianfu", "天服：客服中心", "服务保障军团", "客服、售后和退款异常分析", ["service"], ["task_center.execute"], 220),
-    ("tianshu", "天数：数据分析中心", "数据资产军团", "经营数据分析、日报和趋势洞察", ["data_analysis"], ["task_center.execute"], 230),
+    (TIANSHU, AI_EMPLOYEE_REGISTRY[TIANSHU].name, "数据资产军团", "经营数据分析、日报和趋势洞察", ["data_analysis"], ["task_center.execute"], 230),
     ("tiancai_finance", "天财：财务中心", "管理保障军团", "财务核算、利润和费用分析", ["finance"], ["task_center.read"], 240),
     ("tianfa", "天法：法务中心", "管理保障军团", "法务审查、合同和合规支持", ["legal"], ["task_center.read"], 250),
     ("tianan", "天安：安全中心", "管理保障军团", "安全策略、账号和系统安全", ["security"], ["task_center.read"], 260),

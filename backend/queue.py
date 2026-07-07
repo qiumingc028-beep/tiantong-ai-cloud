@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -6,12 +7,15 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from .database import get_redis
+from .logging_config import configure_json_logging
 
 
 QUEUE_NAME = "tiantong:tasks"
 STATUS_PREFIX = "tiantong:task_status:"
 RECENT_STATUS_KEY = "tiantong:task_status_recent"
 STATUS_TTL_SECONDS = 7 * 24 * 3600
+configure_json_logging()
+logger = logging.getLogger("tiantong.queue")
 
 
 def utc_now():
@@ -53,7 +57,7 @@ def dequeue_task(timeout: int = 5):
     try:
         result = get_redis().blpop(QUEUE_NAME, timeout=timeout)
     except (RedisTimeoutError, RedisConnectionError) as exc:
-        print(f"Redis queue read warning: {type(exc).__name__}: {exc}", flush=True)
+        logger.warning("redis_queue_read_warning: %s: %s", type(exc).__name__, exc)
         return None
     if not result:
         return None

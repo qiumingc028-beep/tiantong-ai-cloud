@@ -43,6 +43,9 @@ class FakeRedis:
     def lrange(self, key, start, end):
         return self.lists.get(key, [])[start : end + 1]
 
+    def llen(self, key):
+        return len(self.lists.get(key, []))
+
     def blpop(self, key, timeout=0):
         values = self.lists.get(key, [])
         if not values:
@@ -77,6 +80,8 @@ def test_db(monkeypatch):
     monkeypatch.setattr("backend.database.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.auth.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.queue.get_redis", lambda: fake_redis)
+    monkeypatch.setattr("backend.task_queue.get_redis", lambda: fake_redis)
+    monkeypatch.setattr("backend.command_center.orchestration_view.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.routers.metrics.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.routers.ai_employees.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.routers.deploy_center.get_redis", lambda: fake_redis)

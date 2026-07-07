@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ..auth import current_user
 from ..auth_data import normalize_role
 from ..database import get_db
+from ..employee_workspace import build_employee_home
 from ..deploy_models import DeployRecord
 from ..models import AiEmployee, TaskCenterAuditLog, TaskCenterTask
 from ..orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
@@ -97,11 +98,27 @@ def get_employee_workspace_overview(request: Request, db: Session = Depends(get_
     return build_employee_workspace_overview(db)
 
 
+@router.get("/employees/{employee_code}/home")
+def get_employee_workspace_home(employee_code: str, request: Request, db: Session = Depends(get_db)):
+    require_employee_home_access(request, db, employee_code)
+    return build_employee_home(db, employee_code)
+
+
 def require_employee_workspace_user(request: Request, db: Session):
     user = current_user(request, db)
     if normalize_role(user.role) not in PRIVILEGED_ROLES:
         raise HTTPException(status_code=403, detail="no employee workspace permission")
     return user
+
+
+def require_employee_home_access(request: Request, db: Session, employee_code: str):
+    user = current_user(request, db)
+    role = normalize_role(user.role)
+    if role in PRIVILEGED_ROLES:
+        return user
+    if user.username == employee_code:
+        return user
+    raise HTTPException(status_code=403, detail="no employee workspace permission")
 
 
 def build_employee_workspace_overview(db: Session):

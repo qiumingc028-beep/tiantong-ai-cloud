@@ -1,27 +1,41 @@
-from datetime import datetime
+import logging
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 
+from .core.orchestrator import handle_event as orchestrator_handle_event
 from .database import SessionLocal, ensure_tables, engine, get_redis
-from .routers import account_center, ai_employees, ceo_dashboard, deploy_center, employee_activity_log, employee_activity_trace, employee_capabilities, employee_workspace, jd_collection, jd_integrations, knowledge_center, metrics, model_routing, orchestrator, orchestrator_hotfix, orchestrator_task_links, skill_plugin_center, skill_plugin_research, sop_skill_center, stores, task_center, tiancang, tool_permissions, users
+from .logging_config import configure_json_logging
+from .command_center import controller as command_center
+from .routers import account_center, ai_employees, ai_execution, business_loop, ceo_dashboard, deploy_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_workspace, jd_collection, jd_integrations, knowledge_center, metrics, model_routing, orchestrator, orchestrator_hotfix, orchestrator_task_links, skill_plugin_center, skill_plugin_research, sop_skill_center, stores, task_center, tiancang, tool_permissions, users
 from .seed import seed_defaults
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+WORKER_HEARTBEAT_KEY = "tiantong:worker:heartbeat"
+WORKER_HEARTBEAT_MAX_AGE_SECONDS = 60
 HTML_PAGES = {
     "index.html", "login.html", "control.html", "stores.html", "jd-integrations.html",
     "jd-dashboard.html", "metrics.html", "import.html", "ads.html",
     "ai-assets.html", "workflows.html", "ai-employees.html", "settings.html",
     "account-center.html", "template-center.html", "brands.html", "store-groups.html",
     "knowledge-center.html", "tiancang.html", "task-center.html", "orchestrator.html", "deploy-center.html",
+    "ai-execution.html",
 }
 
+configure_json_logging()
+logger = logging.getLogger("tiantong.backend")
 app = FastAPI(title="天统AI云中台")
+
+
+def handle_event(event: dict) -> dict:
+    return orchestrator_handle_event(event)
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,6 +44,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    started_at = time.perf_counter()
+    response = await call_next(request)
+    logger.info(
+        "http_request",
+        extra={
+            "event": "http_request",
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+            "client_ip": request.client.host if request.client else "",
+        },
+    )
+    return response
 
 
 @app.on_event("startup")
@@ -62,33 +94,81 @@ app.include_router(tool_permissions.router, prefix="/api/tool-permissions")
 app.include_router(sop_skill_center.router, prefix="/api/sop-skill-center")
 app.include_router(skill_plugin_center.router, prefix="/api/skill-plugin-center")
 app.include_router(skill_plugin_research.router, prefix="/api/skill-plugin-research")
+app.include_router(ai_execution.router)
+app.include_router(business_loop.router)
+app.include_router(dual_engine_business.router)
 app.include_router(employee_workspace.router)
 app.include_router(orchestrator_hotfix.router)
 app.include_router(orchestrator_task_links.router)
 app.include_router(orchestrator.router)
+app.include_router(command_center.router)
 
 
-@app.get("/api/health")
-def health():
+def check_database():
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        db_ok = True
+        return {"ok": True, "status": "up"}
     except Exception as e:
-        db_ok = str(e)
+        return {"ok": False, "status": "down", "error": str(e)}
+
+
+def check_redis():
+    try:
+        return {"ok": bool(get_redis().ping()), "status": "up"}
+    except Exception as e:
+        return {"ok": False, "status": "down", "error": str(e)}
+
+
+def check_worker():
+    try:
+        raw = get_redis().get(WORKER_HEARTBEAT_KEY)
+    except Exception as e:
+        return {"ok": False, "status": "unknown", "error": str(e)}
+
+    if not raw:
+        return {"ok": False, "status": "unknown", "last_seen_at": None}
 
     try:
-        redis_ok = get_redis().ping()
-    except Exception as e:
-        redis_ok = str(e)
+        last_seen = datetime.fromisoformat(raw)
+        age_seconds = max(0, int((datetime.now(timezone.utc) - last_seen).total_seconds()))
+    except Exception:
+        return {"ok": False, "status": "unknown", "last_seen_at": raw}
+
+    is_fresh = age_seconds <= WORKER_HEARTBEAT_MAX_AGE_SECONDS
+    return {
+        "ok": is_fresh,
+        "status": "up" if is_fresh else "stale",
+        "last_seen_at": raw,
+        "age_seconds": age_seconds,
+    }
+
+
+def build_health_payload():
+    database = check_database()
+    redis = check_redis()
+    worker = check_worker()
+    service_ok = database["ok"] and redis["ok"]
 
     return {
         "system": "天统AI云中台",
         "status": "running",
-        "database": db_ok,
-        "redis": redis_ok,
-        "time": datetime.now().isoformat(),
+        "ok": service_ok,
+        "checks": {
+            "database": database,
+            "redis": redis,
+            "worker": worker,
+        },
+        "database": database["ok"],
+        "redis": redis["ok"],
+        "worker": worker["ok"],
+        "time": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.get("/api/health")
+def health():
+    return build_health_payload()
 
 
 @app.get("/health")
@@ -98,14 +178,15 @@ def root_health():
 
 @app.get("/api/ready")
 def ready():
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
-    get_redis().ping()
-    return {
+    payload = build_health_payload()
+    service_ready = payload["checks"]["database"]["ok"] and payload["checks"]["redis"]["ok"]
+    return JSONResponse(status_code=200 if service_ready else 503, content={
         "system": "天统AI云中台",
-        "status": "ready",
-        "time": datetime.now().isoformat(),
-    }
+        "status": "ready" if service_ready else "not_ready",
+        "ok": service_ready,
+        "checks": payload["checks"],
+        "time": datetime.now(timezone.utc).isoformat(),
+    })
 
 
 @app.get("/ready")

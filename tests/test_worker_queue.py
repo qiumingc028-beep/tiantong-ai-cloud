@@ -30,6 +30,8 @@ def test_worker_task_type_whitelist_is_complete():
         "sync_jd_orders",
         "sync_jd_products",
         "ai_store_manager_daily",
+        "sprint17_ai_task",
+        "sprint18_business_loop",
     }
 
 
