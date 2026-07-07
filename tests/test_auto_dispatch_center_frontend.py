@@ -47,6 +47,7 @@ def test_auto_dispatch_center_uses_existing_dispatch_apis():
         "/api/auto-dispatch/overview",
         "/api/auto-dispatch/employee-capabilities",
         "/api/auto-dispatch/analyze",
+        "/api/auto-dispatch/match",
         "/api/auto-dispatch/tasks/${id}/plan",
         "/api/auto-dispatch/tasks/${id}/confirm",
         "/api/auto-dispatch/tasks/${id}/tracking",

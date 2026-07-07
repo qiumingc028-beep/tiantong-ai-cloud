@@ -370,10 +370,25 @@
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify(payload)
         });
-        currentAnalysis=data;
+        const match=await api('/api/auto-dispatch/match',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({task_title:payload.title,task_description:payload.description,task_type:payload.task_type})
+        });
+        currentAnalysis={
+          ...data,
+          recommended_employees:(match.recommended_employees || []).map(item=>({
+            employee_code:item.employee_code,
+            employee_name:item.employee_name,
+            risk_level:item.risk_level,
+            reason:item.match_reason,
+            score:item.score || ''
+          })),
+          match_result:match
+        };
         currentPlan=null;
-        renderAnalysis(data);
-        renderLocalPlanPreview(data);
+        renderAnalysis(currentAnalysis);
+        renderLocalPlanPreview(currentAnalysis);
         setState(pageState,'任务分析完成。','ok');
       }catch(e){
         setState(pageState,e.message,'error');

@@ -133,6 +133,8 @@ class AnalyzePayload(BaseModel):
 
 
 class MatchPayload(BaseModel):
+    task_title: str | None = None
+    task_description: str | None = None
     task_type: str | None = None
     keywords: list[str] | None = None
     capability_tags: list[str] | None = None
@@ -181,10 +183,15 @@ def analyze_task(payload: AnalyzePayload, request: Request, db: Session = Depend
 @router.post("/match")
 def match_employee(payload: MatchPayload, request: Request, db: Session = Depends(get_db)):
     require_auto_dispatch_read(request, db)
-    title = payload.title or " ".join(payload.keywords or []) or payload.task_type or ""
-    description = payload.description or " ".join(payload.capability_tags or [])
-    analysis = analyze_input(db, title, description, payload.task_type)
-    return {"best_employee": analysis["recommended_employees"][0] if analysis["recommended_employees"] else None, **analysis}
+    title = payload.task_title or payload.title or " ".join(payload.keywords or []) or payload.task_type or ""
+    description = payload.task_description or payload.description or " ".join(payload.capability_tags or [])
+    analysis = match_input(db, title, description, payload.task_type, payload.keywords, payload.capability_tags)
+    return {
+        "task_type": analysis["task_type"],
+        "risk_level": analysis["risk_level"],
+        "recommended_employees": analysis["recommended_employees"],
+        "best_employee": analysis["recommended_employees"][0] if analysis["recommended_employees"] else None,
+    }
 
 
 @router.post("/tasks/{task_id}/plan")
@@ -347,6 +354,36 @@ def analyze_input(db: Session, title: str, description: str | None, task_type: s
     }
 
 
+def match_input(
+    db: Session,
+    title: str,
+    description: str | None,
+    task_type: str | None = None,
+    keywords: list[str] | None = None,
+    capability_tags: list[str] | None = None,
+) -> dict:
+    text = " ".join([title or "", description or "", " ".join(keywords or []), " ".join(capability_tags or [])]).lower()
+    inferred_type = task_type or infer_task_type(db, text)
+    risk_level = infer_risk_level(text, inferred_type)
+    if inferred_type == "general" and not has_capability_match(db, text):
+        recommendations = []
+    else:
+        recommendations = [
+            {
+                "employee_code": item["employee_code"],
+                "employee_name": item["employee_name"],
+                "match_reason": item["reason"],
+                "risk_level": item["risk_level"],
+            }
+            for item in recommend_employees(db, inferred_type, text, risk_level)
+        ]
+    return {
+        "task_type": inferred_type,
+        "risk_level": risk_level,
+        "recommended_employees": recommendations,
+    }
+
+
 def infer_task_type(db: Session, text: str) -> str:
     best_rule = None
     best_score = -1
@@ -356,6 +393,15 @@ def infer_task_type(db: Session, text: str) -> str:
             best_rule = rule
             best_score = score
     return best_rule.task_type if best_rule and best_score > 0 else "general"
+
+
+def has_capability_match(db: Session, text: str) -> bool:
+    for cap in load_capabilities(db):
+        if any(skill.lower() in text for skill in cap.skills):
+            return True
+        if any(task.lower() in text for task in cap.supported_tasks):
+            return True
+    return False
 
 
 def infer_risk_level(text: str, task_type: str) -> str:
