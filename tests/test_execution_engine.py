@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
+import backend.execution_engine as execution_engine
 from backend.execution_engine import (
+    EXECUTION_QUEUE_NAME,
+    ExecutionSafetyError,
     acquire_execution_lock,
     pop_execution_task,
     process_next_execution_task,
@@ -144,6 +149,65 @@ def test_high_risk_execution_requires_boss_and_security_audit(client, owner_head
         json={"boss_confirmed": True, "security_audited": True},
     )
     assert allowed.status_code == 200
+    assert allowed.json()["queue_item"]["boss_confirmed"] is True
+    assert allowed.json()["queue_item"]["security_audited"] is True
+
+
+def test_high_risk_start_requires_boss_confirmation_and_security_audit(client, owner_headers, test_db):
+    no_confirmation = create_assigned_task(test_db, title="部署生产环境", description="docker deploy production")
+    blocked = client.post(f"/api/execution/tasks/{no_confirmation}/start", headers=owner_headers)
+    assert blocked.status_code == 403
+    assert get_task(test_db, no_confirmation).status == "assigned"
+
+    boss_only = create_assigned_task(test_db, title="部署生产环境", description="docker deploy production")
+    blocked_without_audit = client.post(
+        f"/api/execution/tasks/{boss_only}/start",
+        headers=owner_headers,
+        json={"boss_confirmed": True, "security_audited": False},
+    )
+    assert blocked_without_audit.status_code == 403
+    assert get_task(test_db, boss_only).status == "assigned"
+
+    double_confirmed = create_assigned_task(test_db, title="部署生产环境", description="docker deploy production")
+    allowed = client.post(
+        f"/api/execution/tasks/{double_confirmed}/start",
+        headers=owner_headers,
+        json={"boss_confirmed": True, "security_audited": True},
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["task"]["status"] == "running"
+
+
+def test_worker_rechecks_high_risk_approval_before_running(test_db):
+    task_id = create_assigned_task(test_db, title="部署生产环境", description="docker deploy production")
+    execution_engine.get_redis().rpush(
+        EXECUTION_QUEUE_NAME,
+        json.dumps(
+            {
+                "queue_item_id": "unsafe-fixture",
+                "task_id": task_id,
+                "employee_code": "tianshang",
+                "risk_level": "critical",
+                "boss_confirmed": False,
+                "security_audited": False,
+            }
+        ),
+    )
+
+    db = test_db()
+    try:
+        with pytest.raises(ExecutionSafetyError):
+            process_next_execution_task(db, timeout=1, worker_id="test-worker")
+        task = db.get(TaskCenterTask, task_id)
+        assert task.status == "failed"
+        failed_log = (
+            db.query(EmployeeExecutionLog)
+            .filter(EmployeeExecutionLog.task_id == task_id, EmployeeExecutionLog.status == "failed")
+            .one()
+        )
+        assert "high risk execution requires boss confirmation and security audit" in failed_log.error_message
+    finally:
+        db.close()
 
 
 def test_execution_logs_api_returns_safe_rows(client, owner_headers, test_db):

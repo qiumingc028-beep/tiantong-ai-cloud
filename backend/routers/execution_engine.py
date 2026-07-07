@@ -31,6 +31,8 @@ class ClaimPayload(BaseModel):
 
 class StartPayload(BaseModel):
     worker_id: str = "api"
+    boss_confirmed: bool = False
+    security_audited: bool = False
 
 
 class CompletePayload(BaseModel):
@@ -73,7 +75,16 @@ def start_task(task_id: int, request: Request, payload: StartPayload | None = No
     if not acquire_execution_lock(task.id, worker_id):
         raise HTTPException(status_code=409, detail="task is already locked")
     try:
-        log = start_task_execution(db, task, worker_id=worker_id)
+        log = start_task_execution(
+            db,
+            task,
+            worker_id=worker_id,
+            boss_confirmed=payload.boss_confirmed,
+            security_audited=payload.security_audited,
+        )
+    except ExecutionSafetyError as exc:
+        release_execution_lock(task.id, worker_id)
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ExecutionEngineError as exc:
         release_execution_lock(task.id, worker_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

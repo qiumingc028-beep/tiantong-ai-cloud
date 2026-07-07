@@ -75,6 +75,8 @@ def enqueue_execution_task(db: Session, task: TaskCenterTask, boss_confirmed: bo
         "employee_name": task.assigned_ai_employee_name,
         "task_status": task.status,
         "risk_level": infer_execution_risk(task),
+        "boss_confirmed": bool(boss_confirmed),
+        "security_audited": bool(security_audited),
         "queued_at": utc_now(),
     }
     try:
@@ -118,7 +120,13 @@ def process_next_execution_task(db: Session, timeout: int = 1, worker_id: str = 
         logger.warning("execution_task_lock_busy task_id=%s worker_id=%s", task.id, worker_id)
         return False
     try:
-        start_task_execution(db, task, worker_id=worker_id)
+        start_task_execution(
+            db,
+            task,
+            worker_id=worker_id,
+            boss_confirmed=truthy(item.get("boss_confirmed")),
+            security_audited=truthy(item.get("security_audited")),
+        )
         output = build_mock_execution_output(task)
         complete_task_execution(db, task, output_data=output, waiting_review=True, worker_id=worker_id)
         return True
@@ -129,7 +137,14 @@ def process_next_execution_task(db: Session, timeout: int = 1, worker_id: str = 
         release_execution_lock(task.id, worker_id)
 
 
-def start_task_execution(db: Session, task: TaskCenterTask, worker_id: str = "api") -> EmployeeExecutionLog:
+def start_task_execution(
+    db: Session,
+    task: TaskCenterTask,
+    worker_id: str = "api",
+    boss_confirmed: bool = False,
+    security_audited: bool = False,
+) -> EmployeeExecutionLog:
+    enforce_high_risk_approval(task, boss_confirmed=boss_confirmed, security_audited=security_audited)
     if task.status != "assigned":
         raise ExecutionEngineError(f"task must be assigned before running, current={task.status}")
     if not task.assigned_ai_employee_code:
@@ -369,6 +384,14 @@ def decode_redis_value(value) -> str | None:
     if isinstance(value, bytes):
         return value.decode()
     return str(value)
+
+
+def truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 def now_utc() -> datetime:
