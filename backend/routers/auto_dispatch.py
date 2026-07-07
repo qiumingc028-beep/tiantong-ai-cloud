@@ -38,13 +38,59 @@ HIGH_RISK_KEYWORDS = {
     "docker",
 }
 MEDIUM_RISK_KEYWORDS = {"广告", "投放", "预算", "价格", "调价", "客服", "订单", "库存"}
+ECOMMERCE_KEYWORDS = {"爆款", "手表", "商品", "选品", "销量", "趋势", "竞品", "电商", "转化", "利润"}
+DATA_KEYWORDS = {"数据", "采集", "抓取", "指标", "报表", "分析", "趋势"}
+STRATEGY_KEYWORDS = {"策略", "方案", "增长", "推广", "优化", "计划", "建议"}
+CREATIVE_KEYWORDS = {"内容", "素材", "视觉", "脚本", "短视频", "种草"}
 
 DEFAULT_CAPABILITIES = [
+    {
+        "employee_code": "tianshang",
+        "employee_name": "天商：商品中心",
+        "skills": ["商品分析", "选品", "爆款", "手表", "电商", "ecommerce_operation", "product_analysis"],
+        "supported_tasks": ["ecommerce", "product", "trend", "analysis", "ecommerce_operation"],
+        "department": "电商经营军团",
+        "capability": "商品分析、选品策略、爆款趋势判断",
+        "priority": 94,
+        "risk_level": "medium",
+    },
+    {
+        "employee_code": "tiancai_data",
+        "employee_name": "天采：数据采集平台",
+        "skills": ["数据采集", "数据抓取", "趋势数据", "竞品数据", "data_collection"],
+        "supported_tasks": ["data", "collection", "trend", "analysis", "data_collection"],
+        "department": "数据资产军团",
+        "capability": "采集电商、内容、趋势和竞品基础数据",
+        "priority": 91,
+        "risk_level": "medium",
+    },
+    {
+        "employee_code": "tianshu",
+        "employee_name": "天数：数据分析中心",
+        "skills": ["数据分析", "趋势分析", "指标分析", "data_analysis"],
+        "supported_tasks": ["data", "analysis", "trend", "data_analysis"],
+        "department": "数据资产军团",
+        "capability": "分析业务数据、趋势变化和异常原因",
+        "priority": 89,
+        "risk_level": "medium",
+    },
+    {
+        "employee_code": "tiance_strategy",
+        "employee_name": "天策：策略分析中心",
+        "skills": ["策略分析", "增长策略", "推广计划", "趋势策略", "分析", "strategy_planning"],
+        "supported_tasks": ["strategy", "planning", "analysis", "strategy_planning"],
+        "department": "经营策略军团",
+        "capability": "输出策略方案、增长建议和执行优先级",
+        "priority": 87,
+        "risk_level": "medium",
+    },
     {
         "employee_code": "tiandao",
         "employee_name": "天道：产品设计中心",
         "skills": ["product_analysis", "requirement_design", "business_process"],
         "supported_tasks": ["product", "planning", "analysis", "market_research"],
+        "department": "产品设计军团",
+        "capability": "产品分析、需求设计、业务流程梳理",
         "priority": 80,
         "risk_level": "medium",
     },
@@ -53,6 +99,8 @@ DEFAULT_CAPABILITIES = [
         "employee_name": "天王：后端开发中心",
         "skills": ["backend", "api", "database", "pytest"],
         "supported_tasks": ["backend", "api", "database", "development"],
+        "department": "研发交付军团",
+        "capability": "后端 API、数据库、迁移和测试",
         "priority": 90,
         "risk_level": "high",
     },
@@ -61,6 +109,8 @@ DEFAULT_CAPABILITIES = [
         "employee_name": "天颜：前端联调优化",
         "skills": ["frontend", "html", "ui", "dashboard"],
         "supported_tasks": ["frontend", "ui", "page", "dashboard"],
+        "department": "研发交付军团",
+        "capability": "前端页面、交互联调和看板展示",
         "priority": 85,
         "risk_level": "medium",
     },
@@ -69,6 +119,8 @@ DEFAULT_CAPABILITIES = [
         "employee_name": "天检：测试验收中心",
         "skills": ["testing", "acceptance", "pytest", "regression"],
         "supported_tasks": ["test", "acceptance", "qa", "validation"],
+        "department": "质量验收军团",
+        "capability": "测试验收、回归检查和质量确认",
         "priority": 88,
         "risk_level": "medium",
     },
@@ -77,6 +129,8 @@ DEFAULT_CAPABILITIES = [
         "employee_name": "天监：AI审计中心",
         "skills": ["security", "audit", "risk_review"],
         "supported_tasks": ["security", "audit", "risk"],
+        "department": "安全审计军团",
+        "capability": "安全审计、风险识别和权限边界检查",
         "priority": 92,
         "risk_level": "critical",
     },
@@ -85,6 +139,8 @@ DEFAULT_CAPABILITIES = [
         "employee_name": "天盾：Deploy Center",
         "skills": ["deploy_review", "health_check", "ops"],
         "supported_tasks": ["deploy", "deployment", "ops", "health_check"],
+        "department": "部署运维军团",
+        "capability": "部署验证、健康检查和运维修复",
         "priority": 90,
         "risk_level": "critical",
     },
@@ -93,6 +149,8 @@ DEFAULT_CAPABILITIES = [
         "employee_name": "天策：战略规划中心",
         "skills": ["strategy", "growth", "business_analysis"],
         "supported_tasks": ["strategy", "planning", "promotion", "marketing"],
+        "department": "经营策略军团",
+        "capability": "战略规划、增长分析和业务策略",
         "priority": 82,
         "risk_level": "medium",
     },
@@ -101,6 +159,8 @@ DEFAULT_CAPABILITIES = [
         "employee_name": "天创：视觉创意中心",
         "skills": ["creative", "visual", "content"],
         "supported_tasks": ["creative", "visual", "content", "promotion"],
+        "department": "内容创意军团",
+        "capability": "内容创意、视觉方案和素材规划",
         "priority": 78,
         "risk_level": "low",
     },
@@ -109,12 +169,17 @@ DEFAULT_CAPABILITIES = [
         "employee_name": "天投：广告投放中心",
         "skills": ["ads", "budget_review", "marketing"],
         "supported_tasks": ["ads", "marketing", "promotion"],
+        "department": "增长投放军团",
+        "capability": "广告投放、预算复核和投放策略",
         "priority": 76,
         "risk_level": "high",
     },
 ]
 
 DEFAULT_RULES = [
+    {"task_type": "ecommerce", "keyword_rules": ["爆款", "手表", "商品", "选品", "销量", "电商"], "recommended_employee": "tianshang", "priority": 96, "risk_level": "medium"},
+    {"task_type": "data_analysis", "keyword_rules": ["数据", "分析", "趋势", "指标"], "recommended_employee": "tianshu", "priority": 90, "risk_level": "medium"},
+    {"task_type": "data_collection", "keyword_rules": ["采集", "抓取", "竞品", "趋势"], "recommended_employee": "tiancai_data", "priority": 88, "risk_level": "medium"},
     {"task_type": "backend", "keyword_rules": ["后端", "api", "database", "数据库"], "recommended_employee": "tianwang", "priority": 90, "risk_level": "medium"},
     {"task_type": "frontend", "keyword_rules": ["前端", "页面", "ui", "dashboard"], "recommended_employee": "tianyan", "priority": 85, "risk_level": "low"},
     {"task_type": "testing", "keyword_rules": ["测试", "验收", "pytest", "回归"], "recommended_employee": "tianjian", "priority": 88, "risk_level": "low"},
@@ -136,6 +201,8 @@ class MatchPayload(BaseModel):
     task_title: str | None = None
     task_description: str | None = None
     task_type: str | None = None
+    priority: str | None = None
+    risk_level: str | None = None
     keywords: list[str] | None = None
     capability_tags: list[str] | None = None
     title: str | None = None
@@ -163,6 +230,8 @@ class CapabilityItem:
     supported_tasks: list[str]
     priority: int
     risk_level: str
+    department: str = ""
+    capability: str = ""
 
 
 @dataclass
@@ -185,7 +254,7 @@ def match_employee(payload: MatchPayload, request: Request, db: Session = Depend
     require_auto_dispatch_read(request, db)
     title = payload.task_title or payload.title or " ".join(payload.keywords or []) or payload.task_type or ""
     description = payload.task_description or payload.description or " ".join(payload.capability_tags or [])
-    analysis = match_input(db, title, description, payload.task_type, payload.keywords, payload.capability_tags)
+    analysis = match_input(db, title, description, payload.task_type, payload.keywords, payload.capability_tags, payload.priority, payload.risk_level)
     return {
         "task_type": analysis["task_type"],
         "risk_level": analysis["risk_level"],
@@ -361,10 +430,14 @@ def match_input(
     task_type: str | None = None,
     keywords: list[str] | None = None,
     capability_tags: list[str] | None = None,
+    priority: str | None = None,
+    risk_level_override: str | None = None,
 ) -> dict:
     text = " ".join([title or "", description or "", " ".join(keywords or []), " ".join(capability_tags or [])]).lower()
+    if not text.strip() and not task_type:
+        return {"task_type": "general", "risk_level": risk_level_override or "low", "recommended_employees": []}
     inferred_type = task_type or infer_task_type(db, text)
-    risk_level = infer_risk_level(text, inferred_type)
+    risk_level = risk_level_override or infer_risk_level(text, inferred_type)
     if inferred_type == "general" and not has_capability_match(db, text):
         recommendations = []
     else:
@@ -373,9 +446,10 @@ def match_input(
                 "employee_code": item["employee_code"],
                 "employee_name": item["employee_name"],
                 "match_reason": item["reason"],
+                "score": item["score"],
                 "risk_level": item["risk_level"],
             }
-            for item in recommend_employees(db, inferred_type, text, risk_level)
+            for item in recommend_employees(db, inferred_type, text, risk_level, priority)
         ]
     return {
         "task_type": inferred_type,
@@ -401,6 +475,10 @@ def has_capability_match(db: Session, text: str) -> bool:
             return True
         if any(task.lower() in text for task in cap.supported_tasks):
             return True
+        if any(keyword in text for keyword in department_keywords(cap.department)):
+            return True
+        if any(keyword in text for keyword in tokenize_profile_text(cap.capability)):
+            return True
     return False
 
 
@@ -412,7 +490,7 @@ def infer_risk_level(text: str, task_type: str) -> str:
     return "low"
 
 
-def recommend_employees(db: Session, task_type: str, text: str, risk_level: str) -> list[dict]:
+def recommend_employees(db: Session, task_type: str, text: str, risk_level: str, priority: str | None = None) -> list[dict]:
     capabilities = load_capabilities(db)
     rules = load_rules(db)
     rule_employee_boost = {rule.recommended_employee: rule.priority for rule in rules if rule.task_type == task_type}
@@ -420,23 +498,45 @@ def recommend_employees(db: Session, task_type: str, text: str, risk_level: str)
     for cap in capabilities:
         score = cap.priority
         reasons = []
+        matched = False
         if task_type in cap.supported_tasks:
             score += 40
             reasons.append(f"支持任务类型 {task_type}")
+            matched = True
+        department_hits = [word for word in department_keywords(cap.department) if word and word in text]
+        if department_hits:
+            score += 18
+            reasons.append("部门匹配：" + "、".join(department_hits[:3]))
+            matched = True
+        capability_hits = [word for word in tokenize_profile_text(cap.capability) if word and word in text]
+        if capability_hits:
+            score += 8 * min(len(capability_hits), 4)
+            reasons.append("能力匹配：" + "、".join(capability_hits[:4]))
+            matched = True
         skill_hits = [skill for skill in cap.skills if skill.lower() in text or skill in task_type]
         if skill_hits:
             score += 10 * len(skill_hits)
             reasons.append("技能匹配：" + "、".join(skill_hits))
+            matched = True
         if cap.employee_code in rule_employee_boost:
             score += rule_employee_boost[cap.employee_code]
             reasons.append("命中路由规则")
+            matched = True
+        history_score = employee_history_score(db, cap.employee_code, task_type)
+        if history_score:
+            score += history_score
+            reasons.append(f"历史执行记录加权 {history_score}")
+            matched = True
+        if priority in {"high", "urgent"}:
+            score += max(cap.priority // 10, 1)
+            reasons.append(f"优先级 {priority} 加权")
         if RISK_ORDER.get(cap.risk_level, 1) >= RISK_ORDER.get(risk_level, 1):
             score += 15
             reasons.append(f"风险等级可覆盖 {risk_level}")
         else:
             score -= 30
             reasons.append(f"风险等级不足，仅支持 {cap.risk_level}")
-        if score > 0:
+        if matched and score > 0:
             items.append(
                 {
                     "employee_code": cap.employee_code,
@@ -451,30 +551,49 @@ def recommend_employees(db: Session, task_type: str, text: str, risk_level: str)
 
 
 def load_capabilities(db: Session) -> list[CapabilityItem]:
-    rows = db.query(EmployeeCapability).order_by(EmployeeCapability.priority.desc(), EmployeeCapability.id.asc()).all()
-    if rows:
-        return [
-            CapabilityItem(
-                employee_code=row.employee_code,
-                employee_name=row.employee_name,
-                skills=parse_json_list(row.skills),
-                supported_tasks=parse_json_list(row.supported_tasks),
-                priority=row.priority,
-                risk_level=row.risk_level,
-            )
-            for row in rows
-        ]
-    return [
-        CapabilityItem(
+    items_by_code: dict[str, CapabilityItem] = {}
+    for item in DEFAULT_CAPABILITIES:
+        items_by_code[item["employee_code"]] = CapabilityItem(
             employee_code=item["employee_code"],
             employee_name=item["employee_name"],
             skills=item["skills"],
             supported_tasks=item["supported_tasks"],
             priority=item["priority"],
             risk_level=item["risk_level"],
+            department=item.get("department", ""),
+            capability=item.get("capability", ""),
         )
-        for item in DEFAULT_CAPABILITIES
-    ]
+
+    rows = db.query(EmployeeCapability).order_by(EmployeeCapability.priority.desc(), EmployeeCapability.id.asc()).all()
+    for row in rows:
+        items_by_code[row.employee_code] = CapabilityItem(
+            employee_code=row.employee_code,
+            employee_name=row.employee_name,
+            skills=parse_json_list(row.skills),
+            supported_tasks=parse_json_list(row.supported_tasks),
+            priority=row.priority,
+            risk_level=row.risk_level,
+            department=items_by_code.get(row.employee_code, CapabilityItem("", "", [], [], 0, "")).department,
+            capability=items_by_code.get(row.employee_code, CapabilityItem("", "", [], [], 0, "")).capability,
+        )
+
+    employees = db.query(AiEmployee).filter(AiEmployee.status == "active", AiEmployee.is_legacy.is_(False)).all()
+    for employee in employees:
+        existing = items_by_code.get(employee.employee_code)
+        skills = sorted(set((existing.skills if existing else []) + parse_json_list(employee.task_types) + tokenize_profile_text(employee.duty)))
+        supported_tasks = sorted(set((existing.supported_tasks if existing else []) + parse_json_list(employee.task_types)))
+        items_by_code[employee.employee_code] = CapabilityItem(
+            employee_code=employee.employee_code,
+            employee_name=employee.employee_name,
+            skills=skills,
+            supported_tasks=supported_tasks,
+            priority=existing.priority if existing else max(60, 100 - employee.sort_order),
+            risk_level=existing.risk_level if existing else infer_employee_risk(employee.default_permissions, employee.duty),
+            department=employee.legion or (existing.department if existing else ""),
+            capability=employee.duty or (existing.capability if existing else ""),
+        )
+
+    return sorted(items_by_code.values(), key=lambda item: (-item.priority, item.employee_code))
 
 
 def load_rules(db: Session) -> list[RoutingRuleItem]:
@@ -512,6 +631,60 @@ def parse_json_list(raw: str | None) -> list[str]:
     except Exception:
         pass
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def tokenize_profile_text(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    text = str(raw).lower()
+    tokens = {item.strip() for item in text.replace("、", ",").replace("，", ",").replace("/", ",").split(",") if item.strip()}
+    known_terms = [
+        "商品", "商品分析", "选品", "爆款", "手表", "电商", "趋势", "趋势分析", "数据", "数据采集", "数据分析",
+        "策略", "策略分析", "推广", "推广计划", "广告", "投放", "预算", "前端", "后端", "测试", "验收",
+        "审计", "部署", "运维", "内容", "视觉", "素材",
+    ]
+    for term in known_terms:
+        if term in text:
+            tokens.add(term)
+    return sorted(tokens)
+
+
+def department_keywords(department: str | None) -> list[str]:
+    mapping = {
+        "电商经营军团": ["电商", "商品", "选品", "销量", "爆款", "利润"],
+        "数据资产军团": ["数据", "采集", "分析", "趋势", "指标"],
+        "经营策略军团": ["策略", "推广", "增长", "方案", "计划"],
+        "增长投放军团": ["广告", "投放", "预算", "增长"],
+        "内容创意军团": ["内容", "视觉", "素材", "脚本"],
+        "研发交付军团": ["前端", "后端", "api", "数据库", "页面"],
+        "质量验收军团": ["测试", "验收", "回归"],
+        "安全审计军团": ["安全", "审计", "权限", "风险"],
+        "部署运维军团": ["部署", "运维", "健康检查"],
+    }
+    return mapping.get(department or "", [])
+
+
+def infer_employee_risk(default_permissions: str | None, duty: str | None) -> str:
+    text = f"{default_permissions or ''} {duty or ''}".lower()
+    if any(word in text for word in ("deploy", "部署", "权限", "manage", "audit", "审计")):
+        return "high"
+    if any(word in text for word in ("execute", "执行", "投放", "预算")):
+        return "medium"
+    return "low"
+
+
+def employee_history_score(db: Session, employee_code: str, task_type: str) -> int:
+    dispatch_count = db.query(DispatchRecord).filter(DispatchRecord.employee_code == employee_code).count()
+    complete_count = (
+        db.query(EmployeeExecutionLog)
+        .filter(EmployeeExecutionLog.employee_code == employee_code, EmployeeExecutionLog.action == "complete")
+        .count()
+    )
+    task_query = db.query(TaskCenterTask).filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
+    if task_type != "general":
+        task_query = task_query.filter(TaskCenterTask.description.ilike(f"%{task_type}%"))
+    task_count = task_query.count()
+    return min(dispatch_count * 2 + complete_count * 4 + task_count * 2, 20)
 
 
 def get_task_or_404(db: Session, task_id: int) -> TaskCenterTask:
@@ -576,6 +749,8 @@ def capability_to_dict(item: CapabilityItem) -> dict:
         "employee_code": item.employee_code,
         "employee_name": item.employee_name,
         "skills": item.skills,
+        "capability": item.capability,
+        "department": item.department,
         "supported_tasks": item.supported_tasks,
         "priority": item.priority,
         "risk_level": item.risk_level,

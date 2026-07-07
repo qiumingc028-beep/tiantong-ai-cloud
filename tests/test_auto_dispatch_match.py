@@ -43,7 +43,36 @@ def test_auto_dispatch_match_owner_response_schema(client, owner_headers):
     assert isinstance(data["recommended_employees"], list)
     assert data["recommended_employees"]
     item = data["recommended_employees"][0]
-    assert set(item) >= {"employee_code", "employee_name", "match_reason", "risk_level"}
+    assert set(item) >= {"employee_code", "employee_name", "match_reason", "score", "risk_level"}
+
+
+def test_auto_dispatch_match_recommends_business_trend_team(client, owner_headers):
+    response = client.post(
+        "/api/auto-dispatch/match",
+        headers=owner_headers,
+        json={
+            "task_title": "分析近期爆款手表趋势",
+            "task_description": "需要结合商品、数据和策略给出经营建议",
+            "task_type": "ecommerce",
+            "priority": "high",
+            "risk_level": "medium",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["task_type"] == "ecommerce"
+    assert data["risk_level"] == "medium"
+
+    recommended = data["recommended_employees"]
+    codes = [item["employee_code"] for item in recommended]
+    assert codes[:4] == ["tianshang", "tiancai_data", "tianshu", "tiance_strategy"]
+    assert recommended[0]["employee_name"].startswith("天商")
+    for item in recommended[:4]:
+        assert item["employee_name"]
+        assert item["match_reason"]
+        assert isinstance(item["score"], int)
+        assert item["risk_level"] in {"medium", "high", "critical"}
 
 
 def test_auto_dispatch_match_returns_high_risk_level(client, owner_headers):
@@ -65,6 +94,20 @@ def test_auto_dispatch_match_returns_empty_list_without_match(client, owner_head
         "/api/auto-dispatch/match",
         headers=owner_headers,
         json={"task_title": "蓝色月光随机事项", "task_description": "没有任何任务类型和能力标签"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["task_type"] == "general"
+    assert data["recommended_employees"] == []
+    assert data["best_employee"] is None
+
+
+def test_auto_dispatch_match_returns_empty_list_without_task(client, owner_headers):
+    response = client.post(
+        "/api/auto-dispatch/match",
+        headers=owner_headers,
+        json={"task_title": "", "task_description": ""},
     )
 
     assert response.status_code == 200

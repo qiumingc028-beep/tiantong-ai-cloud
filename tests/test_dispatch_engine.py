@@ -149,6 +149,10 @@ def test_auto_dispatch_overview_and_reference_data(client, owner_headers):
     capabilities = client.get("/api/auto-dispatch/employee-capabilities", headers=owner_headers)
     assert capabilities.status_code == 200
     assert any(item["employee_code"] == "tianwang" for item in capabilities.json())
+    assert any(
+        item["employee_code"] == "tianshang" and item["department"] == "电商经营军团" and item["capability"]
+        for item in capabilities.json()
+    )
 
     rules = client.get("/api/auto-dispatch/routing-rules", headers=owner_headers)
     assert rules.status_code == 200
