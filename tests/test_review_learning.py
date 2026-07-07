@@ -87,7 +87,7 @@ def login_headers(client, username: str):
 def test_review_learning_tables_and_migration_head():
     assert {"task_reviews", "employee_scores", "knowledge_feedback"} <= set(TaskReview.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0016_sprint20_employee_evolution"]
+    assert script.get_heads() == ["0017_sprint20_5_release_center"]
 
 
 def test_reviews_routes_require_login_and_reject_viewer(client, viewer_headers):

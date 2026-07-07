@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Release Center - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#0f766e;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f172a,#0f766e 58%,#1d4ed8);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#d1fae5;line-height:1.6;margin:8px 0 0}.note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#e0f2fe;border-radius:8px;padding:10px 12px;max-width:520px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.card{background:white;border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}.card h2{font-size:18px;margin:0 0 12px}.status-card{border:1px solid var(--line);background:white;border-radius:8px;padding:16px}.status-card .label{color:var(--muted);font-size:13px}.status-card .value{font-size:24px;font-weight:800;margin-top:8px}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569}.badge.ok{background:#dcfce7;color:#166534}.badge.wait{background:#fef3c7;color:#92400e}.badge.bad{background:#fee2e2;color:#991b1b}.kv{display:grid;grid-template-columns:160px minmax(0,1fr);gap:8px 10px}.kv div:nth-child(odd){color:var(--muted)}input{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:0 10px;min-width:220px}button{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;font-family:inherit}button.secondary{background:white;color:var(--ink);border:1px solid var(--line)}button:disabled{opacity:.55;cursor:not-allowed}.muted{color:var(--muted);line-height:1.65}@media(max-width:980px){.app{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.hero,.top{align-items:flex-start;flex-direction:column}.kv{grid-template-columns:1fr}.content{padding:18px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>🚀 Release Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>🚀 Release Center</h1><p>统一检查 Commit、测试、Migration、Docker、Nginx、文档，并生成 Release 版本记录。</p></div>
+        <div class="note">第一阶段只做发布记录和人工审批；不自动发布、不自动推送代码、不自动部署、不修改 Task Center、Orchestrator 或 Deploy Center。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 Release Center...</div>
+      <section class="grid" id="statusCards"></section>
+      <section class="card"><h2>当前版本</h2><div id="currentBox" class="kv"></div></section>
+      <section class="card">
+        <h2>生成 Release</h2>
+        <div class="toolbar">
+          <input id="versionInput" placeholder="版本号，例如 Sprint20-v1.0">
+          <input id="sprintInput" placeholder="Sprint 名称">
+          <button onclick="createRelease()">生成Release</button>
+          <button class="secondary" onclick="submitReview()">提交审核</button>
+          <button onclick="approveRelease()">批准发布</button>
+          <button class="secondary" onclick="loadAll()">刷新</button>
+        </div>
+        <p class="muted">批准发布只更新 Release 记录为 approved，不触发部署。部署仍由天盾流程单独执行。</p>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['Release Center','/release-center.html'],['AI员工自学习进化中心','/employee-evolution-center.html'],['AI员工复盘学习中心','/review-learning-center.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['Orchestrator','/orchestrator.html'],['天盾部署中心','/deploy-center.html'],['AI员工名册','/ai-employees.html'],['系统设置','/settings.html']];
+let state={release:null,check:{}};
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/release-center.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,empty='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;return empty}
+function badge(ok){return ok?'<span class="badge ok">通过</span>':'<span class="badge bad">未通过</span>'}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+async function api(url,options={}){
+  let res;
+  try{res=await fetch(url,{credentials:'include',...options})}catch(e){throw new Error('网络异常，请稍后重试')}
+  if(res.status===401){pageState.className='state error';pageState.innerText='登录已过期，请重新登录';setTimeout(()=>location.href='/login.html',600);throw new Error('登录已过期，请重新登录')}
+  const data=res.ok?null:await res.json().catch(()=>({}));
+  if(res.status===403)throw new Error((data&&data.detail)||'无权限访问');
+  if(res.status===404)throw new Error((data&&data.detail)||'接口或数据不存在');
+  if(res.status===409)throw new Error((data&&data.detail)||'Release 版本已存在');
+  if(res.status>=500)throw new Error((data&&data.detail)||'服务器异常');
+  if(!res.ok)throw new Error((data&&data.detail)||'请求失败');
+  return res.json();
+}
+async function init(){renderMenu();tick();setInterval(tick,1000);try{const user=await api('/api/me');me.innerText=`${text(user.display_name||user.username)} · ${text(user.role_label||user.role)}`}catch(e){pageState.className='state error';pageState.innerText=e.message;return}await loadAll()}
+async function loadAll(){pageState.className='state';pageState.innerText='正在加载 Release Center...';try{const data=await api('/api/release/current');state.release=data.release;state.check=data.check;pageState.className='state ok';pageState.innerText='Release Center 已更新。'}catch(e){pageState.className='state error';pageState.innerText=e.message;state={release:null,check:{}}}renderAll()}
+async function createRelease(){
+  const version=versionInput.value.trim(), sprint=sprintInput.value.trim();
+  if(!version||!sprint){pageState.className='state warn';pageState.innerText='请填写版本号和 Sprint 名称';return}
+  try{const data=await api('/api/release/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version,sprint_name:sprint})});state.release=data.release;state.check=data.check;pageState.className='state ok';pageState.innerText='Release 已生成，等待审核。'}catch(e){pageState.className='state error';pageState.innerText=e.message}renderAll()
+}
+function submitReview(){pageState.className='state warn';pageState.innerText='已提交审核，请依次进入天检、天监、天盾流程。'}
+async function approveRelease(){
+  const release=state.release||{};
+  if(!release.id){pageState.className='state warn';pageState.innerText='请先生成 Release';return}
+  try{const data=await api('/api/release/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({release_id:release.id,boss_confirmed:true,security_audited:true})});state.release=data.release;state.check=data.check;pageState.className='state ok';pageState.innerText='Release 已批准，部署状态仍等待天盾执行。'}catch(e){pageState.className='state error';pageState.innerText=e.message}renderAll()
+}
+function renderAll(){renderCards();renderCurrent()}
+function renderCards(){
+  const c=state.check||{};
+  const rows=[['代码',c.commit],['测试',c.test],['Migration',c.migration],['Docker',c.docker],['Nginx',c.nginx],['文档',c.docs],['安全','等待'],['部署','等待']];
+  statusCards.innerHTML=rows.map(([label,value])=>`<div class="status-card"><div class="label">${esc(label)}</div><div class="value">${value==='等待'?'<span class="badge wait">等待</span>':badge(!!value)}</div></div>`).join('');
+}
+function renderCurrent(){
+  const r=state.release||{};
+  currentBox.innerHTML=[['当前版本',r.version],['Sprint编号',r.sprint_name],['Commit',r.commit_id],['Branch',r.branch],['Author',r.author],['测试状态',(state.check||{}).test?'通过':'未通过'],['安全状态',r.status==='approved'?'已批准':'等待'],['部署状态',r.deploy_status||'waiting'],['批准人',r.approved_by],['创建时间',r.created_at]].map(([k,v])=>`<div>${esc(k)}</div><div>${esc(text(v))}</div>`).join('');
+}
+init();
+</script>
+</body>
+</html>
