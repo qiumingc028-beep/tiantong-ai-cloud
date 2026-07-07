@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+from backend.main import app
+
+
+def test_auto_dispatch_match_route_is_registered():
+    routes = {
+        getattr(route, "path", ""): getattr(route, "methods", set())
+        for route in app.routes
+    }
+
+    assert "/api/auto-dispatch/match" in routes
+    assert "POST" in routes["/api/auto-dispatch/match"]
+
 
 def test_auto_dispatch_match_recommends_employee_for_normal_task(client, owner_headers):
     response = client.post(
         "/api/auto-dispatch/match",
         headers=owner_headers,
-        json={"task_title": "分析新品推广方案", "task_description": "需要输出增长策略和推广建议"},
+        json={"task_title": "分析新品推广计划", "task_description": "需要输出增长策略和推广建议"},
     )
 
     assert response.status_code == 200
