@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI员工自学习进化中心 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#0f766e;--blue:#1d4ed8;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar,.links{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f172a,#0f766e 56%,#1d4ed8);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#d1fae5;line-height:1.6;margin:8px 0 0}.hero .note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#e0f2fe;border-radius:8px;padding:10px 12px;max-width:520px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.empty{border-style:dashed;text-align:center;padding:24px}.stats{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:12px;margin-bottom:16px}.stat,.card{background:white;border:1px solid var(--line);border-radius:8px}.stat{padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.card{padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2,.card h2{font-size:18px;margin:0}.layout{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:16px}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.toolbar input,.toolbar select{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:0 10px;min-width:180px}.growth-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.growth-card{border:1px solid var(--line);background:white;border-radius:8px;padding:14px;cursor:pointer}.growth-card:hover,.growth-card.selected{border-color:var(--brand);box-shadow:0 8px 22px rgba(15,23,42,.08)}.growth-card.needs_review{border-color:#fecaca;background:#fef2f2}.growth-card.advanced{border-color:#bbf7d0;background:#f8fffb}.title-row{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.title-row h3{margin:0;font-size:17px}.code{font-family:Consolas,monospace;color:#0f766e}.muted{color:var(--muted);line-height:1.65}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.good,.badge.success,.badge.advanced,.badge.low{background:#dcfce7;color:#166534}.badge.warn,.badge.growing,.badge.starter,.badge.medium,.badge.draft{background:#fef3c7;color:#92400e}.badge.bad,.badge.needs_review,.badge.failure,.badge.high{background:#fee2e2;color:#991b1b}.badge.owner{background:#dbeafe;color:#1d4ed8}.cap-list{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.kv{display:grid;grid-template-columns:150px minmax(0,1fr);gap:7px 10px;font-size:14px}.kv div:nth-child(odd){color:var(--muted)}.detail-row{border-top:1px solid var(--line);padding:12px 0}.detail-row:first-of-type{border-top:0}.list-item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit;align-items:center;justify-content:center}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}button:disabled{opacity:.55;cursor:not-allowed}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;background:#f8fafc}.bar{height:8px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:8px}.bar span{display:block;height:100%;background:linear-gradient(90deg,#0f766e,#1d4ed8);border-radius:999px}@media(max-width:1180px){.layout,.grid-2{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.growth-grid{grid-template-columns:1fr}}@media(max-width:760px){.app{grid-template-columns:1fr}.top,.hero{align-items:flex-start;flex-direction:column}.content{padding:18px}.stats{grid-template-columns:1fr}.toolbar input,.toolbar select{width:100%;min-width:0}.kv{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>AI员工自学习进化中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>AI员工自学习进化中心</h1><p>查看 AI 员工执行后的成长档案、复盘分析、评分趋势、Skill 优化建议和风险事件。</p></div>
+        <div class="note">第一阶段只做成长分析展示；不修改 Skill、不修改 Prompt、不改 Task Center 状态、不改 Orchestrator 规则、不改 Deploy Center 流程。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 AI员工成长中心...</div>
+      <section id="summaryStats" class="stats"></section>
+
+      <div class="card">
+        <div class="toolbar">
+          <select id="employeeSelect" onchange="selectEmployee(this.value)"></select>
+          <input id="searchInput" placeholder="搜索任务 / 原因 / 建议 / 风险" oninput="renderAll()">
+          <select id="riskFilter" onchange="renderAll()"><option value="">全部风险</option><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option></select>
+          <button onclick="loadAll()">刷新</button>
+          <a class="btn secondary" href="/review-learning-center.html">复盘学习中心</a>
+          <a class="btn secondary" href="/employee-capabilities.html">能力档案</a>
+          <a class="btn secondary" href="/employee-workspace.html">员工工作台</a>
+        </div>
+      </div>
+
+      <div class="layout">
+        <section>
+          <div class="card">
+            <div class="head"><h2>员工成长档案</h2><span id="scopeBadge" class="badge">读取中</span></div>
+            <div id="growthGrid" class="growth-grid"></div>
+          </div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>成长趋势</h2></div><div id="growthTrend"></div></div>
+            <div class="card"><div class="head"><h2>AI评分</h2></div><div id="scoreBox"></div></div>
+          </div>
+          <div class="card"><div class="head"><h2>我的复盘</h2><span id="analysisCount" class="pill">0 条</span></div><div id="analysisList"></div></div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>Skill优化建议</h2></div><div id="skillList"></div></div>
+            <div class="card"><div class="head"><h2>风险事件</h2></div><div id="riskList"></div></div>
+          </div>
+        </section>
+        <aside>
+          <div id="detailPanel" class="card"><h2>成长详情</h2><div class="muted">点击成长档案查看详情。</div></div>
+          <div class="card"><div class="head"><h2>权限说明</h2></div><div id="permissionBox"></div></div>
+          <div class="card"><div class="head"><h2>安全边界</h2></div><div id="safetyBox"></div></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['AI员工自学习进化中心','/employee-evolution-center.html'],['AI员工复盘学习中心','/review-learning-center.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
+let state={user:null,growth:[],profile:null,riskEvents:[],activeEmployee:'',activeGrowth:null};
+
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/employee-evolution-center.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,emptyText='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;if(Array.isArray(value))return value.length?value.map(x=>text(x,'')).filter(Boolean).join('、'):emptyText;if(value&&typeof value==='object')return Object.values(value).map(x=>text(x,'')).filter(Boolean).join(' · ')||emptyText;return emptyText}
+function arr(value){return Array.isArray(value)?value:[]}
+function obj(value){return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
+function num(value){const n=Number(value);return Number.isFinite(n)?n:0}
+function pct(value){return `${Math.round(num(value))}%`}
+function fmt(value){return value?String(value).slice(0,19).replace('T',' '):'暂无'}
+function badge(value,type=''){return `<span class="badge ${esc(type||String(value||'').toLowerCase())}">${esc(text(value))}</span>`}
+function progress(value){const n=Math.max(0,Math.min(100,num(value)));return `<div class="bar"><span style="width:${n}%"></span></div>`}
+function levelName(value){return ({advanced:'高级成长',growing:'稳定成长',starter:'起步成长',needs_review:'需要复盘'}[value]||text(value))}
+
+async function api(url){
+  let res;
+  try{res=await fetch(url,{credentials:'include'})}catch(e){throw new Error('网络异常，请稍后重试')}
+  if(res.status===401){pageState.className='state error';pageState.innerText='登录已过期，请重新登录';setTimeout(()=>location.href='/login.html',600);throw new Error('登录已过期，请重新登录')}
+  const data=res.ok?null:await res.json().catch(()=>({}));
+  if(res.status===403)throw new Error((data&&data.detail)||'无权限访问');
+  if(res.status===404)throw new Error((data&&data.detail)||'接口或数据不存在');
+  if(res.status===422)throw new Error((data&&data.detail)||'参数错误');
+  if(res.status>=500)throw new Error((data&&data.detail)||'服务器异常');
+  if(!res.ok)throw new Error((data&&data.detail)||'请求失败，请稍后重试');
+  return res.json();
+}
+
+function roleCode(){return String((state.user&&state.user.role_code)||(state.user&&state.user.role)||'').toLowerCase()}
+function isPrivileged(){return ['owner','admin','boss'].includes(roleCode())}
+function employeeCode(){return state.activeEmployee||((state.user&&state.user.username)||'')}
+
+async function init(){
+  renderMenu();tick();setInterval(tick,1000);renderStaticBoxes();
+  try{
+    state.user=await api('/api/me');
+    me.innerText=`${text(state.user.display_name||state.user.username,'当前用户')} · ${text(state.user.role_label||state.user.role)}`;
+    state.activeEmployee=state.user.username||'';
+  }catch(e){pageState.className='state error';pageState.innerText=e.message;return}
+  await loadAll();
+}
+
+async function loadAll(){
+  pageState.className='state';pageState.innerText='正在加载 AI员工成长中心...';
+  try{
+    const growthData=await api('/api/employee-evolution/growth');
+    state.growth=arr(obj(growthData).growth);
+    if(isPrivileged()&&state.growth.length&&!state.growth.some(row=>row.employee_code===state.activeEmployee)){
+      state.activeEmployee=state.growth[0].employee_code;
+    }
+    if(!isPrivileged())state.activeEmployee=state.user.username||state.activeEmployee;
+    await Promise.all([loadProfile(employeeCode(),false),loadRisks()]);
+    pageState.className='state ok';pageState.innerText='AI员工成长中心已更新。';
+  }catch(e){
+    pageState.className='state error';pageState.innerText=e.message||'AI员工成长中心加载失败';
+    state.growth=[];state.profile=null;state.riskEvents=[];
+  }
+  renderAll();
+}
+
+async function loadProfile(code,render=true){
+  if(!code){state.profile=null;return}
+  const data=await api(`/api/employee-evolution/profile/${encodeURIComponent(code)}`);
+  state.profile=obj(data);
+  if(render)renderAll();
+}
+
+async function loadRisks(){
+  try{const data=await api('/api/employee-evolution/risk-events');state.riskEvents=arr(obj(data).risk_events)}
+  catch(e){state.riskEvents=[]}
+}
+
+async function selectEmployee(code){
+  state.activeEmployee=code;
+  if(!isPrivileged()&&code!==state.user.username){pageState.className='state error';pageState.innerText='只能查看自己的成长数据';return}
+  try{await loadProfile(code,false);pageState.className='state ok';pageState.innerText='员工成长档案已更新。'}
+  catch(e){pageState.className='state error';pageState.innerText=e.message||'员工成长档案加载失败'}
+  renderAll();
+}
+
+function renderAll(){renderEmployeeSelect();renderSummary();renderGrowthGrid();renderTrend();renderScore();renderAnalysis();renderSkills();renderRisks();renderStaticBoxes()}
+
+function renderEmployeeSelect(){
+  if(isPrivileged()){
+    employeeSelect.disabled=false;
+    employeeSelect.innerHTML=state.growth.length?state.growth.map(row=>`<option value="${esc(row.employee_code)}" ${row.employee_code===state.activeEmployee?'selected':''}>${esc(row.employee_code)}</option>`).join(''):'<option value="">暂无成长档案</option>';
+  }else{
+    employeeSelect.disabled=true;
+    employeeSelect.innerHTML=`<option value="${esc(employeeCode())}">${esc(employeeCode())}</option>`;
+  }
+  scopeBadge.outerHTML=isPrivileged()?'<span id="scopeBadge" class="badge owner">Owner/Admin/Boss · 全部员工</span>':'<span id="scopeBadge" class="badge">AI员工 · 仅本人</span>';
+}
+
+function activeGrowth(){
+  return obj(state.profile).employee_growth||state.growth.find(row=>row.employee_code===employeeCode())||null;
+}
+
+function renderSummary(){
+  const growth=activeGrowth();
+  const analyses=arr(obj(state.profile).review_analysis);
+  const skills=arr(obj(state.profile).skill_suggestions);
+  const risks=filteredRisks();
+  const items=[
+    ['当前员工',employeeCode()||'暂无'],
+    ['成长评分',growth?growth.score:'暂无'],
+    ['成长等级',growth?levelName(growth.growth_level):'暂无'],
+    ['成功率',growth?pct(growth.success_rate):'暂无'],
+    ['失败次数',growth?growth.failure_count:'暂无'],
+    ['复盘分析',analyses.length],
+    ['Skill建议',skills.length],
+    ['风险事件',risks.length]
+  ];
+  summaryStats.innerHTML=items.map(([label,value])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(text(value,'0'))}</div></div>`).join('');
+}
+
+function filteredGrowth(){
+  const q=searchInput.value.trim().toLowerCase();
+  return state.growth.filter(row=>{
+    const hay=[row.employee_code,row.growth_level,row.improvement_summary,row.task_id].map(v=>text(v,'')).join(' ').toLowerCase();
+    return !q||hay.includes(q);
+  });
+}
+
+function renderGrowthGrid(){
+  const rows=filteredGrowth();
+  if(!rows.length){growthGrid.innerHTML='<div class="state empty">暂无数据</div>';detailPanel.innerHTML='<h2>成长详情</h2><div class="muted">暂无数据</div>';return}
+  growthGrid.innerHTML=rows.map(row=>`<article class="growth-card ${esc(row.growth_level)} ${row.employee_code===employeeCode()?'selected':''}" onclick="selectEmployee('${esc(row.employee_code)}')">
+    <div class="title-row"><div><h3>${esc(row.employee_code)}</h3><div class="code">task_id: ${esc(text(row.task_id))}</div></div>${badge(levelName(row.growth_level),row.growth_level)}</div>
+    <div class="muted">评分 ${esc(text(row.score,'0'))} · 成功率 ${esc(pct(row.success_rate))} · 失败 ${esc(text(row.failure_count,'0'))}</div>
+    ${progress(row.score)}
+    <div class="detail-row"><strong>成长摘要</strong><div class="muted">${esc(text(row.improvement_summary))}</div></div>
+  </article>`).join('');
+  const selected=activeGrowth()||rows[0];
+  renderDetail(selected);
+}
+
+function renderDetail(row){
+  if(!row){detailPanel.innerHTML='<h2>成长详情</h2><div class="muted">暂无数据</div>';return}
+  detailPanel.innerHTML=`<div class="head"><h2>${esc(text(row.employee_code))}</h2>${badge(levelName(row.growth_level),row.growth_level)}</div>
+    <div class="detail-row"><div class="kv"><div>task_id</div><div>${esc(text(row.task_id))}</div><div>score</div><div>${esc(text(row.score,'0'))}</div><div>success_rate</div><div>${esc(pct(row.success_rate))}</div><div>failure_count</div><div>${esc(text(row.failure_count,'0'))}</div><div>created_at</div><div>${esc(fmt(row.created_at))}</div></div></div>
+    <div class="detail-row"><strong>improvement_summary</strong><div class="muted">${esc(text(row.improvement_summary))}</div></div>`;
+}
+
+function renderTrend(){
+  const rows=state.growth.filter(row=>row.employee_code===employeeCode()).slice(0,8);
+  if(!rows.length){growthTrend.innerHTML='<div class="state empty">暂无数据</div>';return}
+  growthTrend.innerHTML=rows.map(row=>`<div class="list-item"><div class="title-row"><strong>${esc(fmt(row.created_at))}</strong><span>${esc(text(row.score,'0'))}</span></div>${progress(row.score)}<div class="muted">${esc(text(row.improvement_summary))}</div></div>`).join('');
+}
+
+function renderScore(){
+  const growth=activeGrowth();
+  if(!growth){scoreBox.innerHTML='<div class="state empty">暂无数据</div>';return}
+  scoreBox.innerHTML=`<div class="kv"><div>成长评分</div><div>${esc(text(growth.score,'0'))}</div><div>成长等级</div><div>${badge(levelName(growth.growth_level),growth.growth_level)}</div><div>成功率</div><div>${esc(pct(growth.success_rate))}</div><div>失败次数</div><div>${esc(text(growth.failure_count,'0'))}</div></div>${progress(growth.score)}`;
+}
+
+function matchSearch(row){
+  const q=searchInput.value.trim().toLowerCase();
+  if(!q)return true;
+  return text(row,'').toLowerCase().includes(q);
+}
+
+function renderAnalysis(){
+  const rows=arr(obj(state.profile).review_analysis).filter(matchSearch);
+  analysisCount.innerText=`${rows.length} 条`;
+  if(!rows.length){analysisList.innerHTML='<div class="state empty">暂无数据</div>';return}
+  analysisList.innerHTML=rows.map(row=>`<div class="list-item">
+    <div class="title-row"><strong>任务 #${esc(text(row.task_id))}</strong>${badge(row.analysis_type,row.analysis_type)}</div>
+    <div class="muted">${esc(fmt(row.created_at))} · ${esc(text(row.status))}</div>
+    <div class="detail-row"><strong>原因分析</strong><div class="muted">${esc(text(row.reason))}</div></div>
+    <div class="detail-row"><strong>优化建议</strong><div class="muted">${esc(text(row.suggestion))}</div></div>
+  </div>`).join('');
+}
+
+function renderSkills(){
+  const rows=arr(obj(state.profile).skill_suggestions).filter(matchSearch);
+  if(!rows.length){skillList.innerHTML='<div class="state empty">暂无数据</div>';return}
+  skillList.innerHTML=rows.map(row=>`<div class="list-item"><div class="title-row"><strong>${esc(text(row.skill_name))}</strong>${badge(row.status,row.status)}</div><div class="muted">${esc(text(row.suggestion))}</div><div class="muted">${esc(fmt(row.created_at))}</div></div>`).join('');
+}
+
+function filteredRisks(){
+  const level=riskFilter.value;
+  const code=employeeCode();
+  return state.riskEvents.filter(row=>(!code||row.employee_code===code||isPrivileged())&&(!level||row.risk_level===level)&&matchSearch(row));
+}
+
+function renderRisks(){
+  const rows=filteredRisks();
+  if(!rows.length){riskList.innerHTML='<div class="state empty">暂无数据</div>';return}
+  riskList.innerHTML=rows.map(row=>`<div class="list-item"><div class="title-row"><strong>${esc(text(row.event_type))}</strong>${badge(row.risk_level,row.risk_level)}</div><div class="code">${esc(text(row.employee_code))}</div><div class="muted">${esc(text(row.description))}</div><div class="muted">${esc(fmt(row.created_at))}</div></div>`).join('');
+}
+
+function renderStaticBoxes(){
+  permissionBox.innerHTML='<div class="list-item"><strong>Owner/Admin/Boss</strong><div class="muted">可以查看全部员工成长档案、复盘分析、Skill建议和风险事件。</div></div><div class="list-item"><strong>AI员工</strong><div class="muted">只能查看自己的成长数据。</div></div><div class="list-item"><strong>Viewer</strong><div class="muted">禁止访问本中心。</div></div>';
+  safetyBox.innerHTML='<div class="list-item"><strong>只生成建议</strong><div class="muted">不自动修改 Skill、Prompt、权限、任务状态或调度规则。</div></div><div class="list-item"><strong>高风险建议</strong><div class="muted">必须老板确认和天监审核后，才能进入后续人工处理流程。</div></div><div class="list-item"><strong>敏感字段</strong><div class="muted">页面不展示账号凭据、认证凭据或内部密钥。</div></div>';
+}
+
+init();
+</script>
+</body>
+</html>
