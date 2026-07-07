@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Employee Command Dashboard - 员工详情</title>
+  <style>
+    :root { --bg:#f6f7f9; --panel:#fff; --ink:#111827; --muted:#64748b; --line:#e5e7eb; --dark:#0b1020; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:Arial,"Microsoft YaHei",sans-serif; }
+    .layout { display:grid; grid-template-columns:248px minmax(0,1fr); min-height:100vh; }
+    aside { background:var(--dark); color:white; padding:20px 14px; }
+    aside h1 { margin:0 0 16px; font-size:18px; }
+    aside a { display:block; color:#cbd5e1; text-decoration:none; padding:10px 12px; border-radius:8px; margin:4px 0; }
+    aside a.active, aside a:hover { background:#1f2937; color:white; }
+    main { padding:24px; }
+    .hero,.card { background:white; border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:14px; }
+    .hero { background:linear-gradient(135deg,#111827,#334155); color:white; }
+    .hero h2 { margin:0 0 8px; font-size:26px; }
+    .hero p { margin:0; color:#dbeafe; line-height:1.6; }
+    .grid { display:grid; grid-template-columns:320px 1fr; gap:14px; }
+    .employee-list { display:flex; flex-direction:column; gap:8px; }
+    .employee-link { border:1px solid var(--line); background:#fff; color:#111827; border-radius:8px; padding:10px; text-decoration:none; }
+    .employee-link.active,.employee-link:hover { border-color:#111827; }
+    .kv { display:grid; grid-template-columns:170px 1fr; gap:9px 12px; }
+    .kv div:nth-child(odd) { color:var(--muted); }
+    .chips { display:flex; gap:6px; flex-wrap:wrap; }
+    .badge { display:inline-flex; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:700; background:#e2e8f0; color:#475569; }
+    .badge.ok { background:#dcfce7; color:#166534; }
+    .badge.bad { background:#fee2e2; color:#991b1b; }
+    .state { border:1px solid var(--line); background:white; border-radius:8px; padding:12px; margin-bottom:12px; color:var(--muted); }
+    .state.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
+    .muted { color:var(--muted); }
+    @media(max-width:1000px){.layout,.grid,.kv{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <h1>AI Employee Dashboard</h1>
+      <a href="/dashboard/overview.html">员工总览</a>
+      <a href="/dashboard/organization.html">组织架构</a>
+      <a class="active" href="/dashboard/employees.html">员工详情</a>
+      <a href="/index.html">老板驾驶舱</a>
+      <a href="/employee-workspace.html">员工工作台</a>
+    </aside>
+    <main>
+      <section class="hero">
+        <h2>员工详情页</h2>
+        <p>只读查看员工身份、技能、历史任务、成功率、失败记录、学习记录和当前能力等级。</p>
+      </section>
+      <div id="pageState" class="state">正在加载员工详情...</div>
+      <section class="grid">
+        <div class="card">
+          <h3>AI员工</h3>
+          <div id="employeeList" class="employee-list"></div>
+        </div>
+        <div class="card">
+          <h3 id="detailTitle">员工详情</h3>
+          <div id="detail"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script>
+    const safe = (value) => {
+      if (value === null || value === undefined || value === '') return '暂无';
+      if (Array.isArray(value)) return value.length ? value.map(safe).join(', ') : '暂无数据';
+      if (typeof value === 'object') return JSON.stringify(value);
+      if (typeof value === 'boolean') return value ? '是' : '否';
+      return String(value);
+    };
+    const percent = (value) => `${Math.round(Number(value || 0) * 100)}%`;
+    const params = new URLSearchParams(location.search);
+    let selected = params.get('employee_code') || '';
+    async function api(path) {
+      const res = await fetch(path, { credentials:'include' });
+      if (res.status === 401) { location.href = '/login.html'; return null; }
+      if (res.status === 403) throw new Error('无权限访问');
+      if (res.status === 404) throw new Error('接口或数据不存在');
+      if (!res.ok) throw new Error('服务器异常');
+      return res.json();
+    }
+    function renderList(rows) {
+      if (!selected && rows[0]) selected = rows[0].identity.employee_code;
+      employeeList.innerHTML = rows.length ? rows.map(row => {
+        const code = row.identity.employee_code;
+        return `<a class="employee-link ${code === selected ? 'active' : ''}" href="/dashboard/employees.html?employee_code=${encodeURIComponent(code)}">
+          <strong>${safe(row.identity.employee_name)}</strong><br><span class="muted">${safe(code)} · ${safe(row.current_capability_level)}</span>
+        </a>`;
+      }).join('') : '<div class="muted">暂无数据</div>';
+    }
+    async function renderDetail() {
+      if (!selected) { detail.innerHTML = '<div class="muted">暂无数据</div>'; return; }
+      const row = await api(`/api/ceo-dashboard/employee-command-dashboard/employees/${encodeURIComponent(selected)}`);
+      if (!row) return;
+      detailTitle.textContent = safe(row.identity.employee_name);
+      detail.innerHTML = `<div class="kv">
+        <div>身份</div><div>${safe(row.identity.employee_code)} / ${safe(row.identity.department)}</div>
+        <div>技能</div><div class="chips">${(row.skills || []).map(item => `<span class="badge">${safe(item)}</span>`).join('') || '暂无'}</div>
+        <div>能力标签</div><div class="chips">${(row.capability_tags || []).map(item => `<span class="badge">${safe(item)}</span>`).join('') || '暂无'}</div>
+        <div>完成任务</div><div>${safe(row.completed_tasks)}</div>
+        <div>成功率</div><div>${percent(row.success_rate)}</div>
+        <div>失败记录</div><div>${safe(row.failure_records)}</div>
+        <div>学习建议</div><div>${safe(row.learning_records && row.learning_records.tianbrain_next_optimization)}</div>
+        <div>当前能力等级</div><div><span class="badge ok">${safe(row.current_capability_level)}</span></div>
+        <div>安全边界</div><div class="chips">${Object.entries(row.safety || {}).map(([key, value]) => `<span class="badge ${value ? 'ok' : 'bad'}">${key}: ${safe(value)}</span>`).join('')}</div>
+      </div>`;
+    }
+    async function load() {
+      try {
+        const data = await api('/api/ceo-dashboard/employee-command-dashboard');
+        if (!data) return;
+        renderList(data.employee_details || []);
+        await renderDetail();
+        pageState.textContent = '员工详情已刷新。';
+      } catch (err) {
+        pageState.className = 'state error';
+        pageState.textContent = safe(err.message);
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

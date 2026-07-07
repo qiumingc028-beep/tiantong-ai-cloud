@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Employee Command Dashboard - 组织架构</title>
+  <style>
+    :root { --bg:#f6f7f9; --panel:#fff; --ink:#111827; --muted:#64748b; --line:#e5e7eb; --dark:#0b1020; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:Arial,"Microsoft YaHei",sans-serif; }
+    .layout { display:grid; grid-template-columns:248px minmax(0,1fr); min-height:100vh; }
+    aside { background:var(--dark); color:white; padding:20px 14px; }
+    aside h1 { margin:0 0 16px; font-size:18px; }
+    aside a { display:block; color:#cbd5e1; text-decoration:none; padding:10px 12px; border-radius:8px; margin:4px 0; }
+    aside a.active, aside a:hover { background:#1f2937; color:white; }
+    main { padding:24px; }
+    .hero,.card { background:white; border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:14px; }
+    .hero { background:linear-gradient(135deg,#111827,#334155); color:white; }
+    .hero h2 { margin:0 0 8px; font-size:26px; }
+    .hero p { margin:0; color:#dbeafe; line-height:1.6; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    pre { margin:0; white-space:pre-wrap; font-family:Consolas,monospace; line-height:1.8; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { border-bottom:1px solid var(--line); padding:9px 8px; text-align:left; vertical-align:top; }
+    th { color:var(--muted); background:#f8fafc; }
+    .badge { display:inline-flex; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:700; background:#e2e8f0; color:#475569; margin:2px; }
+    .state { border:1px solid var(--line); background:white; border-radius:8px; padding:12px; margin-bottom:12px; color:var(--muted); }
+    .state.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
+    .muted { color:var(--muted); }
+    @media(max-width:1000px){.layout,.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <h1>AI Employee Dashboard</h1>
+      <a href="/dashboard/overview.html">员工总览</a>
+      <a class="active" href="/dashboard/organization.html">组织架构</a>
+      <a href="/dashboard/employees.html">员工详情</a>
+      <a href="/index.html">老板驾驶舱</a>
+      <a href="/employee-workspace.html">员工工作台</a>
+    </aside>
+    <main>
+      <section class="hero">
+        <h2>员工组织架构</h2>
+        <p>展示天统下的 AI 员工树，支持查看上下级、负责人和能力标签；只读展示，不调整组织关系。</p>
+      </section>
+      <div id="pageState" class="state">正在加载组织架构...</div>
+      <section class="grid">
+        <div class="card">
+          <h3>组织树</h3>
+          <pre id="treeText">暂无数据</pre>
+        </div>
+        <div class="card">
+          <h3>核心节点</h3>
+          <p class="muted">天统 / 天工 / 天王 / 天颜 / 天检 / 天监 / 天盾 / 天藏 / 天采</p>
+          <p class="muted">支持查看上下级、查看负责人、查看能力标签。</p>
+          <h3>支持能力</h3>
+          <div id="supports"></div>
+        </div>
+      </section>
+      <section class="card">
+        <h3>部门与负责人</h3>
+        <div id="departments"></div>
+      </section>
+      <section class="card">
+        <h3>上下级与协作关系</h3>
+        <div id="relationships"></div>
+      </section>
+    </main>
+  </div>
+  <script>
+    const safe = (value) => {
+      if (value === null || value === undefined || value === '') return '暂无';
+      if (Array.isArray(value)) return value.length ? value.map(safe).join(', ') : '暂无数据';
+      if (typeof value === 'object') return JSON.stringify(value);
+      if (typeof value === 'boolean') return value ? '是' : '否';
+      return String(value);
+    };
+    async function api(path) {
+      const res = await fetch(path, { credentials:'include' });
+      if (res.status === 401) { location.href = '/login.html'; return null; }
+      if (res.status === 403) throw new Error('无权限访问');
+      if (res.status === 404) throw new Error('接口或数据不存在');
+      if (!res.ok) throw new Error('服务器异常');
+      return res.json();
+    }
+    function renderTable(target, rows, columns) {
+      target.innerHTML = rows.length ? `<table><thead><tr>${columns.map(col => `<th>${col[1]}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${columns.map(col => `<td>${safe(row[col[0]])}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<div class="muted">暂无数据</div>';
+    }
+    async function load() {
+      try {
+        const data = await api('/api/ceo-dashboard/employee-command-dashboard');
+        if (!data) return;
+        const org = data.organization_view || {};
+        treeText.textContent = (org.tree_text || []).join('\n') || '暂无数据';
+        supports.innerHTML = (org.supports || []).map(item => `<span class="badge">${safe(item)}</span>`).join('') || '<span class="muted">暂无数据</span>';
+        renderTable(departments, org.departments || [], [['department','部门'], ['leader_employee_name','负责人'], ['employee_count','员工数'], ['active_task_count','当前任务']]);
+        renderTable(relationships, org.relationships || [], [['employee_name','员工'], ['manager_employee_name','上级AI'], ['subordinate_employees','下属AI'], ['collaboration_employees','协作AI']]);
+        pageState.textContent = '组织架构已刷新。';
+      } catch (err) {
+        pageState.className = 'state error';
+        pageState.textContent = safe(err.message);
+      }
+    }
+    load();
+  </script>
+</body>
+</html>
