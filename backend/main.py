@@ -13,7 +13,7 @@ from .database import SessionLocal, ensure_tables, engine, get_redis
 from .logging_config import configure_json_logging
 from .command_center import controller as command_center
 from .routers import auto_dispatch
-from .routers import account_center, ai_employees, ai_execution, business_loop, ceo_dashboard, deploy_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_workspace, execution_engine, jd_collection, jd_integrations, knowledge_center, metrics, model_routing, orchestrator, orchestrator_hotfix, orchestrator_task_links, reviews, skill_plugin_center, skill_plugin_research, sop_skill_center, stores, task_center, tiancang, tool_permissions, users
+from .routers import account_center, ai_employees, ai_execution, business_loop, ceo_dashboard, deploy_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_evolution, employee_workspace, execution_engine, jd_collection, jd_integrations, knowledge_center, metrics, model_routing, orchestrator, orchestrator_hotfix, orchestrator_task_links, reviews, skill_plugin_center, skill_plugin_research, sop_skill_center, stores, task_center, tiancang, tool_permissions, users
 from .seed import seed_defaults
 
 
@@ -97,6 +97,7 @@ app.include_router(ceo_dashboard.router)
 app.include_router(employee_activity_log.router, prefix="/api/employee-activity-log")
 app.include_router(employee_activity_trace.router, prefix="/api/employee-activity-trace")
 app.include_router(employee_capabilities.router, prefix="/api/employee-capabilities")
+app.include_router(employee_evolution.router)
 app.include_router(model_routing.router, prefix="/api/model-routing")
 app.include_router(tool_permissions.router, prefix="/api/tool-permissions")
 app.include_router(sop_skill_center.router, prefix="/api/sop-skill-center")
