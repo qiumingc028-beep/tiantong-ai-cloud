@@ -19,6 +19,12 @@ def test_employee_command_dashboard_frontend_files_exist():
         assert path.exists(), f"{path} should exist"
 
 
+def test_employee_command_dashboard_pages_are_served(client):
+    for path in ["/dashboard/overview.html", "/dashboard/organization.html", "/dashboard/employees.html", "/dashboard/workflow.html"]:
+        response = client.get(path)
+        assert response.status_code == 200
+
+
 def test_employee_command_dashboard_overview_shows_required_metrics():
     html = read(Path("frontend/dashboard/overview.html"))
 

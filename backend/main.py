@@ -28,6 +28,12 @@ HTML_PAGES = {
     "knowledge-center.html", "tiancang.html", "task-center.html", "orchestrator.html", "deploy-center.html",
     "ai-execution.html",
 }
+DASHBOARD_HTML_PAGES = {
+    "overview.html",
+    "organization.html",
+    "employees.html",
+    "workflow.html",
+}
 
 configure_json_logging()
 logger = logging.getLogger("tiantong.backend")
@@ -204,6 +210,14 @@ def frontend_file(filename: str):
 @app.get("/", include_in_schema=False)
 def index_page():
     return frontend_file("index.html")
+
+
+@app.get("/dashboard/{page_name}.html", include_in_schema=False)
+def dashboard_html_page(page_name: str):
+    filename = f"{page_name}.html"
+    if filename not in DASHBOARD_HTML_PAGES:
+        raise HTTPException(status_code=404, detail="页面不存在")
+    return frontend_file(f"dashboard/{filename}")
 
 
 @app.get("/{page_name}.html", include_in_schema=False)
