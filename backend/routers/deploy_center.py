@@ -17,7 +17,7 @@ from ..deploy_models import DeployHealthCheck, DeployRecord
 
 router = APIRouter(prefix="/api/deploy-center")
 
-EXPECTED_ALEMBIC_VERSION = "0011_orchestrator_task_links"
+EXPECTED_ALEMBIC_VERSION = "0012_sprint16_ceo_deploy_loop"
 BASE_DIR = Path(__file__).resolve().parents[2]
 STATE_FILES = [BASE_DIR / "deploy-state.json", BASE_DIR / "runtime-status.json"]
 
@@ -221,6 +221,11 @@ def iso(value: datetime | None):
 def deploy_record_to_dict(record: DeployRecord):
     return {
         "id": record.id,
+        "deploy_id": record.deploy_id,
+        "version": record.version,
+        "commit_id": record.commit_id,
+        "deploy_time": iso(record.deploy_time),
+        "deploy_status": record.deploy_status,
         "deploy_version": record.deploy_version,
         "commit_hash": record.commit_hash,
         "branch": record.branch,
