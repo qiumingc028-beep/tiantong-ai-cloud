@@ -2,7 +2,7 @@ from pathlib import Path
 
 from sqlalchemy import event, text
 
-from backend.deploy_models import DeployHealthCheck, DeployRecord
+from backend.deploy_models import DeployHealthCheck, DeployRecord, HealthCheckRecord
 from backend.models import AiEmployee, TaskCenterTask
 
 
@@ -93,7 +93,7 @@ def test_ceo_dashboard_deploy_summary_returns_alembic_version(client, owner_head
     db = test_db()
     try:
         db.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-        db.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0011_orchestrator_task_links')"))
+        db.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0013_sprint17_auto_dispatch')"))
         db.add(DeployRecord(deploy_version="Sprint 4", status="success"))
         db.add(DeployHealthCheck(check_type="database", target="database", status="healthy"))
         db.commit()
@@ -103,10 +103,122 @@ def test_ceo_dashboard_deploy_summary_returns_alembic_version(client, owner_head
     response = client.get("/api/ceo-dashboard/summary", headers=owner_headers)
     assert response.status_code == 200
     deploy_summary = response.json()["deploy_summary"]
-    assert deploy_summary["alembic_version"] == "0011_orchestrator_task_links"
-    assert deploy_summary["expected_version"] == "0011_orchestrator_task_links"
+    assert deploy_summary["alembic_version"] == "0013_sprint17_auto_dispatch"
+    assert deploy_summary["expected_version"] == "0013_sprint17_auto_dispatch"
     assert deploy_summary["last_deploy_status"] == "success"
     assert deploy_summary["last_health_check_status"] == "healthy"
+
+
+def test_ceo_dashboard_sprint16_deploy_loop_fields(client, owner_headers, test_db):
+    db = test_db()
+    try:
+        db.add(
+            DeployRecord(
+                deploy_id="deploy-sprint16-001",
+                version="Sprint 16",
+                commit_id="abc1234",
+                deploy_status="success",
+                operator="tiandun",
+            )
+        )
+        db.add(HealthCheckRecord(service="backend", status="healthy", latency=15))
+        db.add(HealthCheckRecord(service="redis", status="healthy", latency=6))
+        db.add(HealthCheckRecord(service="worker", status="unhealthy", latency=120))
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/api/ceo-dashboard/summary", headers=owner_headers)
+    assert response.status_code == 200
+    deploy_summary = response.json()["deploy_summary"]
+    assert deploy_summary["latest_deploy"]["deploy_id"] == "deploy-sprint16-001"
+    assert deploy_summary["latest_deploy"]["version"] == "Sprint 16"
+    assert deploy_summary["latest_deploy"]["commit_id"] == "abc1234"
+    assert deploy_summary["latest_deploy"]["deploy_time"] is not None
+    assert deploy_summary["latest_deploy"]["deploy_status"] == "success"
+    assert deploy_summary["latest_deploy"]["operator"] == "tiandun"
+    assert deploy_summary["deployment_history"][0]["deploy_id"] == "deploy-sprint16-001"
+    assert deploy_summary["last_health_check_status"] == "unhealthy"
+    assert deploy_summary["last_health_check_time"] is not None
+    assert deploy_summary["service_stability_score"] == 67
+
+
+def test_ceo_dashboard_deployment_history_api_auth_and_data(client, owner_headers, viewer_headers, test_db):
+    client.cookies.clear()
+    assert client.get("/api/ceo-dashboard/deployment-history").status_code == 401
+    assert client.get("/api/ceo-dashboard/deployment-history", headers=viewer_headers).status_code == 403
+
+    db = test_db()
+    try:
+        db.add(
+            DeployRecord(
+                deploy_id="deploy-history-001",
+                version="Sprint 16",
+                commit_id="commit-history",
+                deploy_status="success",
+                operator="tiandun",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/api/ceo-dashboard/deployment-history", headers=owner_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["readonly"] is True
+    assert data["deployment_history"][0]["deploy_id"] == "deploy-history-001"
+    assert data["deployment_history"][0]["deploy_status"] == "success"
+
+
+def test_ceo_dashboard_latest_deploy_api_auth_and_data(client, owner_headers, viewer_headers, test_db):
+    client.cookies.clear()
+    assert client.get("/api/ceo-dashboard/latest-deploy").status_code == 401
+    assert client.get("/api/ceo-dashboard/latest-deploy", headers=viewer_headers).status_code == 403
+
+    db = test_db()
+    try:
+        db.add(
+            DeployRecord(
+                deploy_id="deploy-latest-001",
+                version="Sprint 16",
+                commit_id="commit-latest",
+                deploy_status="success",
+                operator="tiandun",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/api/ceo-dashboard/latest-deploy", headers=owner_headers)
+    assert response.status_code == 200
+    latest_deploy = response.json()["latest_deploy"]
+    assert latest_deploy["deploy_id"] == "deploy-latest-001"
+    assert latest_deploy["version"] == "Sprint 16"
+    assert latest_deploy["commit_id"] == "commit-latest"
+
+
+def test_ceo_dashboard_health_check_history_api_auth_and_data(client, owner_headers, viewer_headers, test_db):
+    client.cookies.clear()
+    assert client.get("/api/ceo-dashboard/health-check-history").status_code == 401
+    assert client.get("/api/ceo-dashboard/health-check-history", headers=viewer_headers).status_code == 403
+
+    db = test_db()
+    try:
+        db.add(HealthCheckRecord(service="backend", status="healthy", latency=11))
+        db.add(HealthCheckRecord(service="worker", status="warning", latency=82))
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/api/ceo-dashboard/health-check-history", headers=owner_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["readonly"] is True
+    assert data["latest_checked_at"] is not None
+    assert data["health_check_history"][0]["service"] == "worker"
+    assert data["health_check_history"][0]["latency"] == 82
 
 
 def test_ceo_dashboard_pending_actions_detect_task_states(client, owner_headers, test_db):
@@ -171,3 +283,5 @@ def test_ceo_dashboard_does_not_add_unexpected_alembic_migration():
     assert "0009_deploy_center_tables.py" in versions
     assert "0010_orchestrator_tables.py" in versions
     assert "0011_orchestrator_task_links.py" in versions
+    assert "0012_sprint16_ceo_deploy_loop.py" in versions
+    assert "0013_sprint17_auto_dispatch.py" in versions

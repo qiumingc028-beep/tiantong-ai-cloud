@@ -85,7 +85,9 @@ if [ "${CHECK_PAGES}" = "1" ]; then
 fi
 
 check_api_health
+check_endpoint "/health" "running"
 check_endpoint "/api/ready" "ready"
+check_endpoint "/ready" "ready"
 
 if [ "${CHECK_DOCKER_INFRA}" = "1" ]; then
   check_docker_infra

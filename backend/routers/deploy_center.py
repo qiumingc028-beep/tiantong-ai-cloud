@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,12 +13,12 @@ from sqlalchemy.orm import Session
 from ..auth import current_user
 from ..auth_data import normalize_role
 from ..database import get_db, get_redis
-from ..deploy_models import DeployHealthCheck, DeployRecord
+from ..deploy_models import DeployHealthCheck, DeployRecord, HealthCheckRecord
 
 
 router = APIRouter(prefix="/api/deploy-center")
 
-EXPECTED_ALEMBIC_VERSION = "0011_orchestrator_task_links"
+EXPECTED_ALEMBIC_VERSION = "0013_sprint17_auto_dispatch"
 BASE_DIR = Path(__file__).resolve().parents[2]
 STATE_FILES = [BASE_DIR / "deploy-state.json", BASE_DIR / "runtime-status.json"]
 
@@ -106,6 +107,14 @@ def run_health_check(request: Request, db: Session = Depends(get_db)):
                 checked_at=checked_at,
             )
         )
+        db.add(
+            HealthCheckRecord(
+                service=key,
+                status=item["status"],
+                checked_at=checked_at,
+                latency=item.get("latency"),
+            )
+        )
     db.commit()
     return payload
 
@@ -127,11 +136,11 @@ def require_deploy_center_user(request: Request, db: Session):
 
 def build_health_payload(db: Session):
     now = datetime.now(timezone.utc).isoformat()
-    database = check_database(db)
-    redis = check_redis()
-    migration = check_migration(db)
-    backend = {"target": "backend", "status": "running", "message": "backend service is running"}
-    nginx = {"target": "nginx", "status": "unknown", "message": "nginx is not checked from backend runtime"}
+    database = measured_check(lambda: check_database(db))
+    redis = measured_check(check_redis)
+    migration = measured_check(lambda: check_migration(db))
+    backend = measured_check(lambda: {"target": "backend", "status": "running", "message": "backend service is running"})
+    nginx = measured_check(lambda: {"target": "nginx", "status": "unknown", "message": "nginx is not checked from backend runtime"})
     return {
         "backend": backend,
         "database": database,
@@ -140,6 +149,13 @@ def build_health_payload(db: Session):
         "nginx": nginx,
         "checked_at": now,
     }
+
+
+def measured_check(check):
+    started = time.perf_counter()
+    result = check()
+    result["latency"] = max(0, round((time.perf_counter() - started) * 1000))
+    return result
 
 
 def check_database(db: Session):
@@ -221,6 +237,11 @@ def iso(value: datetime | None):
 def deploy_record_to_dict(record: DeployRecord):
     return {
         "id": record.id,
+        "deploy_id": record.deploy_id,
+        "version": record.version,
+        "commit_id": record.commit_id,
+        "deploy_time": iso(record.deploy_time),
+        "deploy_status": record.deploy_status,
         "deploy_version": record.deploy_version,
         "commit_hash": record.commit_hash,
         "branch": record.branch,

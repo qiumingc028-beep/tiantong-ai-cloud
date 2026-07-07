@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Employee Command Dashboard - 员工总览</title>
+  <style>
+    :root { --bg:#f6f7f9; --panel:#fff; --ink:#111827; --muted:#64748b; --line:#e5e7eb; --dark:#0b1020; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:Arial,"Microsoft YaHei",sans-serif; }
+    .layout { display:grid; grid-template-columns:248px minmax(0,1fr); min-height:100vh; }
+    aside { background:var(--dark); color:white; padding:20px 14px; }
+    aside h1 { margin:0 0 16px; font-size:18px; }
+    aside a { display:block; color:#cbd5e1; text-decoration:none; padding:10px 12px; border-radius:8px; margin:4px 0; }
+    aside a.active, aside a:hover { background:#1f2937; color:white; }
+    main { padding:24px; }
+    .hero { background:linear-gradient(135deg,#111827,#334155); color:white; border-radius:8px; padding:24px; margin-bottom:16px; }
+    .hero h2 { margin:0 0 8px; font-size:26px; }
+    .hero p { margin:0; color:#dbeafe; line-height:1.6; }
+    .grid { display:grid; gap:12px; }
+    .metrics { grid-template-columns:repeat(6,minmax(120px,1fr)); }
+    .two { grid-template-columns:1fr 1fr; margin-top:16px; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; }
+    .metric { min-height:112px; }
+    .label { color:var(--muted); font-size:12px; margin-bottom:8px; }
+    .value { font-size:28px; font-weight:800; }
+    .badge { display:inline-flex; border-radius:999px; padding:4px 9px; font-size:12px; font-weight:700; background:#e2e8f0; color:#475569; }
+    .badge.ok { background:#dcfce7; color:#166534; }
+    .badge.warn { background:#fef3c7; color:#92400e; }
+    .badge.bad { background:#fee2e2; color:#991b1b; }
+    .chips { display:flex; gap:6px; flex-wrap:wrap; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { border-bottom:1px solid var(--line); padding:9px 8px; text-align:left; vertical-align:top; }
+    th { color:var(--muted); background:#f8fafc; }
+    .btn { border:1px solid var(--line); background:#fff; color:#111827; border-radius:8px; padding:7px 10px; text-decoration:none; display:inline-flex; }
+    .state { border:1px solid var(--line); background:white; border-radius:8px; padding:12px; margin-bottom:12px; color:var(--muted); }
+    .state.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
+    .muted { color:var(--muted); }
+    @media(max-width:1100px){.layout,.metrics,.two{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <h1>AI Employee Dashboard</h1>
+      <a class="active" href="/dashboard/overview.html">员工总览</a>
+      <a href="/dashboard/organization.html">组织架构</a>
+      <a href="/dashboard/employees.html">员工详情</a>
+      <a href="/index.html">老板驾驶舱</a>
+      <a href="/employee-workspace.html">员工工作台</a>
+    </aside>
+    <main>
+      <section class="hero">
+        <h2>AI Employee Command Dashboard</h2>
+        <p>只读查看 AI 员工数量、在线状态、当前任务、成功率、风险与待审批任务；不修改权限、不创建员工、不执行任务。</p>
+      </section>
+      <div id="pageState" class="state">正在加载员工总览...</div>
+      <section class="grid metrics">
+        <div class="card metric"><div class="label">AI员工数量</div><div id="totalEmployees" class="value">-</div></div>
+        <div class="card metric"><div class="label">在线员工</div><div id="onlineEmployees" class="value">-</div></div>
+        <div class="card metric"><div class="label">执行任务数量</div><div id="runningTasks" class="value">-</div></div>
+        <div class="card metric"><div class="label">成功率</div><div id="successRate" class="value">-</div></div>
+        <div class="card metric"><div class="label">风险数量</div><div id="riskCount" class="value">-</div></div>
+        <div class="card metric"><div class="label">待审批任务</div><div id="approvalCount" class="value">-</div></div>
+      </section>
+      <section class="grid two">
+        <div class="card">
+          <h3>当前员工状态</h3>
+          <div id="employeeTable"></div>
+        </div>
+        <div class="card">
+          <h3>安全边界</h3>
+          <div id="safetyPanel" class="chips"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script>
+    const safe = (value) => {
+      if (value === null || value === undefined || value === '') return '暂无';
+      if (Array.isArray(value)) return value.length ? value.map(safe).join(', ') : '暂无数据';
+      if (typeof value === 'object') return JSON.stringify(value);
+      if (typeof value === 'boolean') return value ? '是' : '否';
+      return String(value);
+    };
+    const percent = (value) => `${Math.round(Number(value || 0) * 100)}%`;
+    const badge = (value) => `<span class="badge ${value ? 'ok' : 'bad'}">${safe(value)}</span>`;
+    async function api(path) {
+      const res = await fetch(path, { credentials:'include' });
+      if (res.status === 401) { location.href = '/login.html'; return null; }
+      if (res.status === 403) throw new Error('无权限访问');
+      if (res.status === 404) throw new Error('接口或数据不存在');
+      if (!res.ok) throw new Error('服务器异常');
+      return res.json();
+    }
+    function render(data) {
+      const overview = data.overview || {};
+      totalEmployees.textContent = safe(overview.total_ai_employees);
+      onlineEmployees.textContent = safe(overview.online_employees);
+      runningTasks.textContent = safe(overview.executing_task_count);
+      successRate.textContent = percent(overview.success_rate);
+      riskCount.textContent = safe(overview.risk_count);
+      approvalCount.textContent = safe(overview.pending_approval_tasks);
+      const rows = data.employee_details || [];
+      employeeTable.innerHTML = rows.length ? `<table><thead><tr><th>员工</th><th>状态</th><th>当前任务</th><th>成功率</th><th>风险</th><th></th></tr></thead><tbody>${rows.map(row => `<tr>
+        <td><strong>${safe(row.identity && row.identity.employee_name)}</strong><br><span class="muted">${safe(row.identity && row.identity.employee_code)}</span></td>
+        <td>${safe(row.identity && row.identity.status)}</td>
+        <td>${safe(row.current_task && row.current_task.title)}</td>
+        <td>${percent(row.success_rate)}</td>
+        <td>${safe(row.metrics && row.metrics.risk_count)}</td>
+        <td><a class="btn" href="/dashboard/employees.html?employee_code=${encodeURIComponent(row.identity.employee_code)}">查看详情</a></td>
+      </tr>`).join('')}</tbody></table>` : '<div class="muted">暂无数据</div>';
+      const safety = data.safety || {};
+      safetyPanel.innerHTML = Object.entries(safety).map(([key, value]) => `<span class="badge ${value ? 'ok' : 'bad'}">${key}: ${safe(value)}</span>`).join('');
+    }
+    async function load() {
+      try {
+        const data = await api('/api/ceo-dashboard/employee-command-dashboard');
+        if (!data) return;
+        pageState.textContent = '员工总览已刷新。';
+        render(data);
+      } catch (err) {
+        pageState.className = 'state error';
+        pageState.textContent = safe(err.message);
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

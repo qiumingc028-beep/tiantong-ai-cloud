@@ -3,7 +3,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from backend.deploy_models import DeployHealthCheck
+from backend.deploy_models import DeployHealthCheck, HealthCheckRecord
 
 
 def auth_headers(client, username: str):
@@ -54,7 +54,7 @@ def test_deploy_center_migration(client, owner_headers):
     response = client.get("/api/deploy-center/migration", headers=owner_headers)
     assert response.status_code == 200
     data = response.json()
-    assert data["expected_version"] == "0011_orchestrator_task_links"
+    assert data["expected_version"] == "0013_sprint17_auto_dispatch"
     assert data["status"] in {"up_to_date", "outdated"}
 
 
@@ -77,6 +77,10 @@ def test_deploy_center_health_check_writes_rows(client, owner_headers, test_db):
         rows = db.query(DeployHealthCheck).all()
         assert len(rows) == 5
         assert {row.check_type for row in rows} == {"backend", "database", "redis", "migration", "nginx"}
+        health_records = db.query(HealthCheckRecord).all()
+        assert len(health_records) == 5
+        assert {row.service for row in health_records} == {"backend", "database", "redis", "migration", "nginx"}
+        assert all(row.latency is not None for row in health_records)
     finally:
         db.close()
 
@@ -93,4 +97,4 @@ def test_alembic_has_single_head():
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert heads == ["0011_orchestrator_task_links"]
+    assert heads == ["0013_sprint17_auto_dispatch"]

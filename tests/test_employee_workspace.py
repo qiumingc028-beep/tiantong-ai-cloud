@@ -6,12 +6,15 @@ from pathlib import Path
 import pytest
 from sqlalchemy import event
 
+from backend.auth import hash_password
 from backend.deploy_models import DeployRecord
-from backend.models import AiEmployee, TaskCenterAuditLog, TaskCenterTask
+from backend.models import AiEmployee, TaskCenterAuditLog, TaskCenterTask, User
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
+from backend.task_queue import ORCHESTRATOR_QUEUE_NAME
 
 
 API_PATH = "/api/employee-workspace/overview"
+HOME_PATH = "/api/employee-workspace/employees/{employee_code}/home"
 SENSITIVE_KEYS = {
     "input_excerpt",
     "prompt_draft",
@@ -315,6 +318,135 @@ def test_employee_workspace_does_not_add_alembic_migration():
     versions = {path.name for path in Path("alembic/versions").glob("*.py")}
     assert "0011_orchestrator_task_links.py" in versions
     assert "0012_employee_workspace.py" not in versions
+
+
+def test_employee_workspace_home_shows_identity_capabilities_tasks_and_growth(client, owner_headers, test_db):
+    db = test_db()
+    try:
+        db.add(
+            AiEmployee(
+                employee_code="tianshang",
+                employee_name="天商：商品运营中心",
+                legion="电商运营军团",
+                duty="商品运营、商品分析与运营动作",
+                status="active",
+                task_types='["product_ops"]',
+                default_permissions='["task_center.execute"]',
+                is_legacy=False,
+                sort_order=180,
+            )
+        )
+        db.add_all(
+            [
+                TaskCenterTask(
+                    title="优化京东60店商品详情页转化",
+                    status="assigned",
+                    assigned_ai_employee_code="tianshang",
+                    assigned_ai_employee_name="天商：商品运营中心",
+                ),
+                TaskCenterTask(
+                    title="商品卖点复盘",
+                    status="completed",
+                    assigned_ai_employee_code="tianshang",
+                    assigned_ai_employee_name="天商：商品运营中心",
+                ),
+                TaskCenterTask(
+                    title="商品价格方案失败",
+                    status="failed",
+                    assigned_ai_employee_code="tianshang",
+                    assigned_ai_employee_name="天商：商品运营中心",
+                ),
+            ]
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(HOME_PATH.format(employee_code="tianshang"), headers=owner_headers)
+
+    assert response.status_code == 200
+    data = response.json()
+    home = data["employee_home"]
+    assert home["identity"]["employee_code"] == "tianshang"
+    assert "product_optimization" in home["capability_tags"]
+    assert "ecommerce_operation" in home["skill_list"]
+    assert home["current_task"]["title"] == "优化京东60店商品详情页转化"
+    assert len(home["history_completed_tasks"]) == 1
+    assert data["task_center_linkage"]["pending_tasks"]
+    assert data["task_center_linkage"]["failed_tasks"][0]["failure_reason"] == "任务失败"
+    assert data["growth"]["success_rate"] == 0.5
+    assert data["growth"]["can_auto_expand_permission"] is False
+    assert data["safety"]["authorized_tasks_only"] is True
+
+
+def test_employee_workspace_home_marks_high_risk_task_for_tian_shen(client, owner_headers, test_db):
+    db = test_db()
+    try:
+        db.add(
+            AiEmployee(
+                employee_code="tiantou",
+                employee_name="天投：广告投放中心",
+                legion="增长投放军团",
+                duty="投放策略、预算建议和关键词分析",
+                status="active",
+                task_types='["ad_analysis"]',
+                default_permissions='["task_center.execute"]',
+                is_legacy=False,
+                sort_order=190,
+            )
+        )
+        db.add(
+            TaskCenterTask(
+                title="检查京东60店广告预算异常",
+                description="涉及广告预算和投放风险，只允许审批后处理。",
+                status="assigned",
+                assigned_ai_employee_code="tiantou",
+                assigned_ai_employee_name="天投：广告投放中心",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(HOME_PATH.format(employee_code="tiantou"), headers=owner_headers)
+
+    assert response.status_code == 200
+    task = response.json()["task_center_linkage"]["pending_tasks"][0]
+    assert task["requires_tian_shen"] is True
+    assert task["can_execute_without_approval"] is False
+    assert response.json()["growth"]["requires_tian_shen_for_high_risk_skill"] is True
+
+
+def test_employee_workspace_home_allows_employee_to_view_only_self(client, test_db):
+    db = test_db()
+    try:
+        db.add(
+            User(
+                username="tianshang",
+                password_hash=hash_password("password"),
+                role="viewer",
+                display_name="天商员工账号",
+                active=True,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+    headers = auth_headers(client, "tianshang")
+
+    own = client.get(HOME_PATH.format(employee_code="tianshang"), headers=headers)
+    other = client.get(HOME_PATH.format(employee_code="tiantong"), headers=headers)
+
+    assert own.status_code == 200
+    assert other.status_code == 403
+
+
+def test_employee_workspace_home_is_read_only_and_does_not_queue(client, owner_headers):
+    response = client.get(HOME_PATH.format(employee_code="tiantong"), headers=owner_headers)
+
+    assert response.status_code == 200
+    redis_client = __import__("backend.database", fromlist=["get_redis"]).get_redis()
+    assert redis_client.llen(ORCHESTRATOR_QUEUE_NAME) == 0
 
 
 def assert_sensitive_keys_absent(value):

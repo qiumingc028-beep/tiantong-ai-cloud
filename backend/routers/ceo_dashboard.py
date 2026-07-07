@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 from ..auth import current_user
 from ..auth_data import normalize_role
 from ..database import get_db
-from ..deploy_models import DeployHealthCheck, DeployRecord
+from ..deploy_models import DeployHealthCheck, DeployRecord, HealthCheckRecord
+from ..employee_command_dashboard import build_employee_command_dashboard, build_employee_detail
+from ..employee_organization import build_employee_organization_center
+from ..employee_performance import build_ai_employee_business_board
 from ..models import AiEmployee, TaskCenterTask
 from . import deploy_center
 
@@ -37,6 +40,36 @@ def get_ceo_dashboard_summary(request: Request, db: Session = Depends(get_db)):
     return build_ceo_dashboard_summary(db)
 
 
+@router.get("/deployment-history")
+def get_deployment_history(request: Request, limit: int = 8, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_deployment_history(db, limit)
+
+
+@router.get("/latest-deploy")
+def get_latest_deploy(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return {"latest_deploy": latest_deploy_summary(db)}
+
+
+@router.get("/health-check-history")
+def get_health_check_history(request: Request, limit: int = 20, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_health_check_history(db, limit)
+
+
+@router.get("/employee-command-dashboard")
+def get_employee_command_dashboard(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_employee_command_dashboard(db)
+
+
+@router.get("/employee-command-dashboard/employees/{employee_code}")
+def get_employee_command_dashboard_detail(employee_code: str, request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_employee_detail(db, employee_code)
+
+
 def require_ceo_dashboard_user(request: Request, db: Session):
     user = current_user(request, db)
     role_code = normalize_role(user.role)
@@ -50,6 +83,9 @@ def build_ceo_dashboard_summary(db: Session):
     task_summary = build_task_summary(db)
     employee_summary = build_employee_summary(db)
     deploy_summary = build_deploy_summary(db, system_health)
+    ai_employee_business_board = build_ai_employee_business_board(db)
+    ai_employee_organization_board = build_employee_organization_center(db)
+    ai_employee_command_dashboard = build_employee_command_dashboard(db)
     pending_actions = build_pending_actions(task_summary, system_health, deploy_summary)
     alerts = build_alerts(system_health, task_summary, employee_summary, deploy_summary, pending_actions)
     return {
@@ -59,6 +95,9 @@ def build_ceo_dashboard_summary(db: Session):
         "task_summary": task_summary,
         "pending_actions": pending_actions,
         "employee_summary": employee_summary,
+        "ai_employee_business_board": ai_employee_business_board,
+        "ai_employee_organization_board": ai_employee_organization_board,
+        "ai_employee_command_dashboard": ai_employee_command_dashboard,
         "deploy_summary": deploy_summary,
         "alerts": alerts,
     }
@@ -123,8 +162,11 @@ def build_employee_summary(db: Session):
 
 def build_deploy_summary(db: Session, system_health: dict):
     alembic_version = deploy_center.get_current_alembic_version(db)
-    last_record = db.query(DeployRecord).order_by(DeployRecord.id.desc()).first()
+    last_record = latest_deploy_record(db)
     last_check = db.query(DeployHealthCheck).order_by(DeployHealthCheck.id.desc()).first()
+    last_health_record = db.query(HealthCheckRecord).order_by(HealthCheckRecord.checked_at.desc(), HealthCheckRecord.id.desc()).first()
+    deploy_records = deployment_records(db, 8)
+    health_records = db.query(HealthCheckRecord).order_by(HealthCheckRecord.checked_at.desc(), HealthCheckRecord.id.desc()).limit(50).all()
     statuses = [system_health["database"], system_health["redis"], system_health["migration"]]
     return {
         "overall_status": normalize_deploy_status(statuses),
@@ -132,8 +174,12 @@ def build_deploy_summary(db: Session, system_health: dict):
         "redis_status": system_health["redis"],
         "alembic_version": alembic_version,
         "expected_version": EXPECTED_ALEMBIC_VERSION,
-        "last_deploy_status": last_record.status if last_record else None,
-        "last_health_check_status": last_check.status if last_check else None,
+        "last_deploy_status": deploy_status(last_record),
+        "last_health_check_status": health_status(last_health_record, last_check),
+        "deployment_history": [deploy_record_summary(record) for record in deploy_records],
+        "latest_deploy": deploy_record_summary(last_record) if last_record else None,
+        "last_health_check_time": latest_health_check_time(last_health_record, last_check),
+        "service_stability_score": service_stability_score(health_records, statuses),
     }
 
 
@@ -197,6 +243,95 @@ def normalize_deploy_status(statuses: list[str]):
     return "healthy"
 
 
+def build_deployment_history(db: Session, limit: int = 8) -> dict:
+    safe_limit = max(1, min(limit, 50))
+    records = deployment_records(db, safe_limit)
+    return {
+        "deployment_history": [deploy_record_summary(record) for record in records],
+        "total": len(records),
+        "readonly": True,
+    }
+
+
+def build_health_check_history(db: Session, limit: int = 20) -> dict:
+    safe_limit = max(1, min(limit, 100))
+    records = (
+        db.query(HealthCheckRecord)
+        .order_by(HealthCheckRecord.checked_at.desc(), HealthCheckRecord.id.desc())
+        .limit(safe_limit)
+        .all()
+    )
+    return {
+        "health_check_history": [health_check_record_summary(record) for record in records],
+        "latest_checked_at": iso(records[0].checked_at) if records else None,
+        "total": len(records),
+        "readonly": True,
+    }
+
+
+def latest_deploy_summary(db: Session) -> dict | None:
+    record = latest_deploy_record(db)
+    return deploy_record_summary(record) if record else None
+
+
+def latest_deploy_record(db: Session) -> DeployRecord | None:
+    return db.query(DeployRecord).order_by(DeployRecord.id.desc()).first()
+
+
+def deployment_records(db: Session, limit: int) -> list[DeployRecord]:
+    return db.query(DeployRecord).order_by(DeployRecord.id.desc()).limit(limit).all()
+
+
+def deploy_status(record: DeployRecord | None) -> str | None:
+    if not record:
+        return None
+    return record.deploy_status or record.status
+
+
+def health_status(record: HealthCheckRecord | None, legacy_record: DeployHealthCheck | None) -> str | None:
+    if record:
+        return record.status
+    if legacy_record:
+        return legacy_record.status
+    return None
+
+
+def latest_health_check_time(record: HealthCheckRecord | None, legacy_record: DeployHealthCheck | None) -> str | None:
+    if record:
+        return iso(record.checked_at)
+    if legacy_record:
+        return iso(legacy_record.checked_at)
+    return None
+
+
+def service_stability_score(records: list[HealthCheckRecord], current_statuses: list[str]) -> int:
+    if records:
+        healthy = sum(1 for record in records if record.status in {"healthy", "running", "ok", "success"})
+        return round(healthy / len(records) * 100)
+    healthy = sum(1 for status in current_statuses if status in {"healthy", "running", "ok", "success"})
+    return round(healthy / len(current_statuses) * 100) if current_statuses else 0
+
+
+def deploy_record_summary(record: DeployRecord) -> dict:
+    return {
+        "deploy_id": record.deploy_id or str(record.id),
+        "version": record.version or record.deploy_version,
+        "commit_id": record.commit_id or record.commit_hash,
+        "deploy_time": iso(record.deploy_time or record.finished_at or record.started_at or record.created_at),
+        "deploy_status": deploy_status(record),
+        "operator": record.operator,
+    }
+
+
+def health_check_record_summary(record: HealthCheckRecord) -> dict:
+    return {
+        "service": record.service,
+        "status": record.status,
+        "checked_at": iso(record.checked_at),
+        "latency": record.latency,
+    }
+
+
 def action(level: str, action_type: str, message: str, count: int | None = None):
     data = {"level": level, "type": action_type, "message": message}
     if count is not None:
@@ -206,6 +341,10 @@ def action(level: str, action_type: str, message: str, count: int | None = None)
 
 def alert(level: str, alert_type: str, message: str):
     return {"level": level, "type": alert_type, "message": message}
+
+
+def iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
 
 
 def task_brief(task: TaskCenterTask):

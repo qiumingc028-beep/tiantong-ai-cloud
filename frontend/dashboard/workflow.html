@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tian Command Center - Workflow</title>
+  <style>
+    :root { --bg:#f7f7f5; --panel:#fff; --ink:#111; --muted:#6b7280; --line:#deded8; --ok:#047857; --warn:#b45309; --bad:#b91c1c; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    .layout { display:grid; grid-template-columns:248px 1fr; min-height:100vh; }
+    aside { background:#0b0b0b; color:#f5f5f5; padding:22px 16px; border-right:1px solid #222; }
+    aside h1 { margin:0 0 18px; font-size:18px; }
+    aside a { display:block; color:#c7c7c7; text-decoration:none; padding:10px 12px; margin:4px 0; border-radius:6px; }
+    aside a.active, aside a:hover { background:#fff; color:#000; }
+    main { padding:24px; }
+    .hero,.card { background:white; border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:14px; }
+    .hero { background:#111; color:white; }
+    .hero h2 { margin:0 0 8px; font-size:25px; }
+    .hero p { margin:0; color:#d1d5db; }
+    .dag { display:grid; grid-template-columns:repeat(7,minmax(120px,1fr)); gap:10px; align-items:stretch; }
+    .node { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px; min-height:100px; position:relative; }
+    .node:not(:last-child)::after { content:"→"; position:absolute; right:-15px; top:38px; color:#525252; font-weight:800; }
+    .node.active { border-color:#111; box-shadow:0 0 0 3px rgba(0,0,0,.08); animation:pulse 1.5s infinite; }
+    .node.failed { border-color:#fecaca; background:#fef2f2; }
+    @keyframes pulse { 0% { transform:translateY(0); } 50% { transform:translateY(-2px); } 100% { transform:translateY(0); } }
+    .node .title { font-weight:800; margin-bottom:8px; }
+    .node .desc { color:var(--muted); font-size:12px; line-height:1.45; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { border-bottom:1px solid var(--line); padding:9px 8px; text-align:left; vertical-align:top; }
+    th { background:#fafafa; color:var(--muted); }
+    .badge { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:3px 8px; font-size:12px; background:#f5f5f5; }
+    .badge.ok { color:var(--ok); background:#f0fdf4; border-color:#bbf7d0; }
+    .badge.warn { color:var(--warn); background:#fff7ed; border-color:#fed7aa; }
+    .badge.bad { color:var(--bad); background:#fef2f2; border-color:#fecaca; }
+    .empty { color:var(--muted); padding:18px; text-align:center; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+    pre { margin:0; white-space:pre-wrap; word-break:break-word; font-size:12px; }
+    @media (max-width: 1100px) { .dag,.grid { grid-template-columns:1fr; } .node::after { display:none; } .layout { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <h1>Tian Command Center</h1>
+      <a href="/dashboard/overview.html">总览页</a>
+      <a href="/dashboard/workflow.html" class="active">任务流可视化</a>
+      <a href="/dashboard/employees.html">AI员工状态</a>
+      <a href="/orchestrator.html">Orchestrator</a>
+    </aside>
+    <main>
+      <section class="hero">
+        <h2>任务流可视化</h2>
+        <p>Notion + Airflow DAG 风格视图，展示 input → parse → allocate → approve → queue → execute → feedback。</p>
+      </section>
+
+      <section class="dag" id="dag">
+        <div class="node" data-stage="input"><div class="title">input</div><div class="desc">老板自然语言输入任务目标。</div></div>
+        <div class="node" data-stage="parse"><div class="title">parse</div><div class="desc">Command Center 拆解任务类型和上下文。</div></div>
+        <div class="node" data-stage="allocate"><div class="title">allocate</div><div class="desc">分配天采、天策、天创、天商、天检、天盾。</div></div>
+        <div class="node" data-stage="approve"><div class="title">approve</div><div class="desc">TianShen + TianBrain 判定风险。</div></div>
+        <div class="node" data-stage="queue"><div class="title">queue</div><div class="desc">进入 Redis Orchestrator queue。</div></div>
+        <div class="node" data-stage="execute"><div class="title">execute</div><div class="desc">queue_worker 消费任务并执行。</div></div>
+        <div class="node" data-stage="feedback"><div class="title">feedback</div><div class="desc">结果回写，用于状态和后续优化。</div></div>
+      </section>
+
+      <div class="grid" style="margin-top:14px;">
+        <section class="card">
+          <h3>最新命令步骤</h3>
+          <div id="steps" class="empty">暂无数据</div>
+        </section>
+        <section class="card">
+          <h3>队列事件 / 失败定位 / 自动重试</h3>
+          <div id="events" class="empty">暂无数据</div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script>
+    const safe = (value) => {
+      if (value === null || value === undefined || value === '') return '暂无';
+      if (Array.isArray(value)) return value.length ? value.map(safe).join(', ') : '暂无数据';
+      if (typeof value === 'object') return JSON.stringify(value, null, 2);
+      if (typeof value === 'boolean') return value ? '是' : '否';
+      return String(value);
+    };
+    const badge = (status) => `<span class="badge ${status === 'completed' ? 'ok' : status === 'failed' ? 'bad' : status === 'running' ? 'warn' : ''}">${safe(status)}</span>`;
+    async function api(path) {
+      const res = await fetch(path, { credentials:'include' });
+      if (res.status === 401) { location.href = '/login.html'; return null; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }
+    async function refresh() {
+      try {
+        const history = await api('/command/history?limit=1');
+        if (!history || !(history.commands || []).length) return;
+        const commandId = history.commands[0].command_id;
+        const data = await api(`/command/status?command_id=${encodeURIComponent(commandId)}`);
+        if (!data) return;
+        renderSteps(data.command.parsed && data.command.parsed.steps || []);
+        renderEvents(data.command.events || []);
+        renderDagState(data.command);
+      } catch (err) {
+        document.getElementById('events').innerHTML = `<div class="empty">${safe(err.message)}</div>`;
+      }
+    }
+    function renderSteps(rows) {
+      if (!rows.length) {
+        document.getElementById('steps').innerHTML = '<div class="empty">暂无数据</div>';
+        return;
+      }
+      document.getElementById('steps').innerHTML = `<table><thead><tr><th>#</th><th>员工</th><th>角色</th><th>任务类型</th></tr></thead><tbody>
+        ${rows.map(row => `<tr><td>${safe(row.step_id)}</td><td>${safe(row.employee_code)}</td><td>${safe(row.role)}</td><td>${safe(row.task_type)}</td></tr>`).join('')}
+      </tbody></table>`;
+    }
+    function renderEvents(rows) {
+      if (!rows.length) {
+        document.getElementById('events').innerHTML = '<div class="empty">暂无数据</div>';
+        return;
+      }
+      document.getElementById('events').innerHTML = `<table><thead><tr><th>event</th><th>状态</th><th>重试</th><th>自愈</th><th>结果</th></tr></thead><tbody>
+        ${rows.map(row => `<tr>
+          <td class="mono">${safe(row.event_id)}</td>
+          <td>${badge(row.status)}</td>
+          <td>${safe(row.attempt)} / ${safe(row.max_retries)}</td>
+          <td><pre>${safe(row.self_healing)}</pre></td>
+          <td><pre>${safe(row.result)}</pre></td>
+        </tr>`).join('')}
+      </tbody></table>`;
+    }
+    function renderDagState(command) {
+      const events = command.events || [];
+      const hasFailed = events.some(row => row.status === 'failed');
+      const hasRunning = events.some(row => ['queued','running','retrying'].includes(row.status));
+      document.querySelectorAll('.node').forEach(node => node.classList.remove('active','failed'));
+      if (hasFailed) {
+        document.querySelector('[data-stage="execute"]').classList.add('failed');
+        document.querySelector('[data-stage="feedback"]').classList.add('failed');
+        return;
+      }
+      if (hasRunning) {
+        document.querySelector('[data-stage="queue"]').classList.add('active');
+        document.querySelector('[data-stage="execute"]').classList.add('active');
+        return;
+      }
+      if (events.length) {
+        document.querySelector('[data-stage="feedback"]').classList.add('active');
+      }
+    }
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
