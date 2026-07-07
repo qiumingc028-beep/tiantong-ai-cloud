@@ -12,6 +12,7 @@ from ..auth import current_user, require_permission_user
 from ..auth_data import normalize_role
 from ..database import get_db
 from ..dispatch_models import DispatchRecord, EmployeeCapability, EmployeeExecutionLog, TaskRoutingRule
+from ..execution_engine import ExecutionEngineError, ExecutionSafetyError, enqueue_execution_task
 from ..models import AiEmployee, TaskCenterAuditLog, TaskCenterTask, User
 
 
@@ -335,13 +336,26 @@ def confirm_dispatch(task_id: int, payload: ConfirmPayload, request: Request, db
         )
     )
     write_task_audit_log(db, task, user, "auto_dispatch_confirmed", old_status, "assigned", employee_code)
-    db.commit()
+    try:
+        queue_item = enqueue_execution_task(
+            db,
+            task,
+            boss_confirmed=payload.boss_confirmed,
+            security_audited=payload.security_audited,
+        )
+    except ExecutionSafetyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ExecutionEngineError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     db.refresh(task)
     return {
         "ok": True,
         "task": task_to_dispatch_dict(task),
         "confirmed_employee": {"employee_code": employee_code, "employee_name": employee_name},
         "risk_level": analysis["risk_level"],
+        "queue_item": queue_item,
     }
 
 

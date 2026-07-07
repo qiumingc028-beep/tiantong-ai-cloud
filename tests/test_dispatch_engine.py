@@ -3,8 +3,9 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
+from backend.execution_engine import process_next_execution_task
 from backend.dispatch_models import DispatchRecord, EmployeeExecutionLog
-from backend.models import TaskCenterTask
+from backend.models import TaskCenterResult, TaskCenterTask
 
 
 def create_task(client, headers, title="实现后端 API", description="新增 backend api 并补 pytest", priority="normal"):
@@ -110,6 +111,8 @@ def test_low_risk_confirm_assigns_task_without_changing_status_flow(client, owne
     data = response.json()
     assert data["task"]["status"] == "assigned"
     assert data["task"]["assigned_ai_employee_code"] == "tianyan"
+    assert data["queue_item"]["task_id"] == task_id
+    assert data["queue_item"]["employee_code"] == "tianyan"
     db = test_db()
     try:
         task = db.get(TaskCenterTask, task_id)
@@ -117,6 +120,44 @@ def test_low_risk_confirm_assigns_task_without_changing_status_flow(client, owne
         assert task.assigned_ai_employee_code == "tianyan"
         record = db.query(DispatchRecord).filter(DispatchRecord.task_id == task_id, DispatchRecord.dispatch_status == "confirmed").one()
         assert record.employee_code == "tianyan"
+        queued_log = db.query(EmployeeExecutionLog).filter(EmployeeExecutionLog.task_id == task_id, EmployeeExecutionLog.status == "assigned").one()
+        assert queued_log.employee_code == "tianyan"
+    finally:
+        db.close()
+
+
+def test_confirmed_dispatch_enters_execution_queue_and_worker_completes(client, owner_headers, test_db):
+    task_id = create_task(client, owner_headers, title="分析最近手表市场趋势", description="分析最近手表市场趋势")
+
+    confirmed = client.post(
+        f"/api/auto-dispatch/tasks/{task_id}/confirm",
+        headers=owner_headers,
+        json={"employee_code": "tianshang", "boss_confirmed": True, "security_audited": True},
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["task"]["status"] == "assigned"
+    assert confirmed.json()["queue_item"]["task_id"] == task_id
+
+    db = test_db()
+    try:
+        assert process_next_execution_task(db, timeout=1, worker_id="test-worker") is True
+        task = db.get(TaskCenterTask, task_id)
+        assert task.status == "completed"
+        logs = (
+            db.query(EmployeeExecutionLog)
+            .filter(EmployeeExecutionLog.task_id == task_id)
+            .order_by(EmployeeExecutionLog.id.asc())
+            .all()
+        )
+        assert [row.status for row in logs] == ["assigned", "running", "completed"]
+        assert all(row.employee_code == "tianshang" for row in logs)
+        assert all(row.task_id == task_id for row in logs)
+        assert logs[0].input_data
+        assert logs[-1].output_data
+        assert logs[-1].tool_used
+        assert logs[-1].error_message is None
+        result = db.query(TaskCenterResult).filter(TaskCenterResult.task_id == task_id).one()
+        assert "mock_execution" in result.result_content
     finally:
         db.close()
 

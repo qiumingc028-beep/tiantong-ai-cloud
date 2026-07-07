@@ -128,7 +128,7 @@ def process_next_execution_task(db: Session, timeout: int = 1, worker_id: str = 
             security_audited=truthy(item.get("security_audited")),
         )
         output = build_mock_execution_output(task)
-        complete_task_execution(db, task, output_data=output, waiting_review=True, worker_id=worker_id)
+        complete_task_execution(db, task, output_data=output, waiting_review=False, worker_id=worker_id)
         return True
     except Exception as exc:
         fail_task_execution(db, task, error_message=str(exc), worker_id=worker_id)

@@ -57,7 +57,7 @@ def test_execution_routes_are_registered():
     assert routes["/api/execution/logs"] == {"GET"}
 
 
-def test_assigned_task_enters_worker_queue_and_waits_for_review(client, owner_headers, test_db):
+def test_assigned_task_enters_worker_queue_and_completes(client, owner_headers, test_db):
     task_id = create_assigned_task(test_db)
 
     claim = client.post(f"/api/execution/tasks/{task_id}/claim", headers=owner_headers)
@@ -68,9 +68,9 @@ def test_assigned_task_enters_worker_queue_and_waits_for_review(client, owner_he
     try:
         assert process_next_execution_task(db, timeout=1, worker_id="test-worker") is True
         task = db.get(TaskCenterTask, task_id)
-        assert task.status == "waiting_review"
+        assert task.status == "completed"
         logs = db.query(EmployeeExecutionLog).filter(EmployeeExecutionLog.task_id == task_id).order_by(EmployeeExecutionLog.id.asc()).all()
-        assert [row.status for row in logs] == ["assigned", "running", "waiting_review"]
+        assert [row.status for row in logs] == ["assigned", "running", "completed"]
         assert logs[-1].tool_used
         assert "mock_execution" in (logs[-1].output_data or "")
     finally:
