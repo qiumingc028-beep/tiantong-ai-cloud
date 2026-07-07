@@ -10,6 +10,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from .ai_employees import DEFAULT_COLLECTOR_EMPLOYEE, DEFAULT_STRATEGY_EMPLOYEE, FLOW_EMPLOYEE_CODES, FLOW_TASK_TYPES, employee_name, normalize_employee_code
 from .core.orchestrator import handle_event
 from .database import SessionLocal, get_redis
+from .execution_engine import process_next_execution_task
 from .logging_config import configure_json_logging
 from .models import EmployeeLog, JdSyncLog, TaskCenterResult, TaskCenterTask
 from .queue_worker import process_next_event
@@ -541,8 +542,23 @@ def main():
     while True:
         update_worker_heartbeat()
         run_daily_scheduler()
-        process_next_task()
+        if not process_next_employee_execution():
+            process_next_task()
         time.sleep(0.1)
+
+
+def process_next_employee_execution():
+    db = SessionLocal()
+    try:
+        return process_next_execution_task(db, timeout=1, worker_id="employee_worker")
+    except (RedisTimeoutError, RedisConnectionError) as exc:
+        logger.warning("execution_queue_warning: %s: %s", type(exc).__name__, exc)
+        return False
+    except Exception as exc:
+        logger.exception("employee_execution_failed: %s", exc)
+        return False
+    finally:
+        db.close()
 
 
 def process_next_task():

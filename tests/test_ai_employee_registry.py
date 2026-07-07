@@ -126,7 +126,7 @@ def test_alembic_heads_has_single_head():
     )
 
     heads = [line for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0013_sprint17_auto_dispatch (head)"]
+    assert heads == ["0014_sprint18_execution_engine (head)"]
 
 
 def create_task(client, headers):
