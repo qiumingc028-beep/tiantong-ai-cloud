@@ -3,7 +3,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from backend.deploy_models import DeployHealthCheck
+from backend.deploy_models import DeployHealthCheck, HealthCheckRecord
 
 
 def auth_headers(client, username: str):
@@ -77,6 +77,10 @@ def test_deploy_center_health_check_writes_rows(client, owner_headers, test_db):
         rows = db.query(DeployHealthCheck).all()
         assert len(rows) == 5
         assert {row.check_type for row in rows} == {"backend", "database", "redis", "migration", "nginx"}
+        health_records = db.query(HealthCheckRecord).all()
+        assert len(health_records) == 5
+        assert {row.service for row in health_records} == {"backend", "database", "redis", "migration", "nginx"}
+        assert all(row.latency is not None for row in health_records)
     finally:
         db.close()
 
