@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI员工复盘学习中心 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#0f766e;--blue:#1d4ed8;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar,.links{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f172a,#0f766e 56%,#1d4ed8);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#d1fae5;line-height:1.6;margin:8px 0 0}.hero .note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#e0f2fe;border-radius:8px;padding:10px 12px;max-width:480px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.empty{border-style:dashed;text-align:center;padding:24px}.stats{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:12px;margin-bottom:16px}.stat,.card{background:white;border:1px solid var(--line);border-radius:8px}.stat{padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.card{padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2,.card h2{font-size:18px;margin:0}.layout{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:16px}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.toolbar input,.toolbar select{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:0 10px;min-width:170px}.review-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.review-card{border:1px solid var(--line);background:#fff;border-radius:8px;padding:14px;cursor:pointer}.review-card:hover,.review-card.selected{border-color:var(--brand);box-shadow:0 8px 22px rgba(15,23,42,.08)}.review-card.failed{border-color:#fecaca;background:#fef2f2}.review-card.success{border-color:#bbf7d0;background:#f8fffb}.title-row{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.title-row h3{margin:0;font-size:17px}.code{font-family:Consolas,monospace;color:#0f766e}.muted{color:var(--muted);line-height:1.65}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.good,.badge.success,.badge.applied{background:#dcfce7;color:#166534}.badge.warn,.badge.draft,.badge.reviewing{background:#fef3c7;color:#92400e}.badge.bad,.badge.failed{background:#fee2e2;color:#991b1b}.badge.owner{background:#dbeafe;color:#1d4ed8}.cap-list{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.kv{display:grid;grid-template-columns:150px minmax(0,1fr);gap:7px 10px;font-size:14px}.kv div:nth-child(odd){color:var(--muted)}.detail-row{border-top:1px solid var(--line);padding:12px 0}.detail-row:first-of-type{border-top:0}.list-item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit;align-items:center;justify-content:center}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}button:disabled{opacity:.55;cursor:not-allowed}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;background:#f8fafc}.bar{height:8px;background:#e5e7eb;border-radius:999px;overflow:hidden;margin-top:8px}.bar span{display:block;height:100%;background:linear-gradient(90deg,#0f766e,#1d4ed8);border-radius:999px}@media(max-width:1180px){.layout,.grid-2{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.review-list{grid-template-columns:1fr}}@media(max-width:760px){.app{grid-template-columns:1fr}.top,.hero{align-items:flex-start;flex-direction:column}.content{padding:18px}.stats{grid-template-columns:1fr}.toolbar input,.toolbar select{width:100%;min-width:0}.kv{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>AI员工复盘学习中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>AI员工复盘学习中心</h1><p>自动读取执行日志，展示任务复盘、员工评分趋势、成长等级和 Skill 优化建议。</p></div>
+        <div class="note">第一阶段只做复盘分析和建议展示；不修改 Task Center 状态、不修改 Orchestrator 规则、不修改 Deploy Center 流程、不展示敏感凭据。</div>
+      </div>
+      <div id="pageState" class="state">正在加载复盘学习中心...</div>
+      <section id="summaryStats" class="stats"></section>
+
+      <div class="card">
+        <div class="head"><h2>顶部：当前员工与复盘范围</h2><span id="scopeBadge" class="badge">读取中</span></div>
+        <div class="toolbar">
+          <select id="employeeSelect" onchange="selectEmployee(this.value)"></select>
+          <input id="taskIdInput" type="number" min="1" placeholder="输入任务 ID 生成复盘">
+          <button id="generateBtn" onclick="generateReview()">生成复盘报告</button>
+          <button class="secondary" onclick="loadAll()">刷新</button>
+          <a class="btn secondary" href="/employee-workspace.html">AI员工工作台</a>
+          <a class="btn secondary" href="/employee-activity-log.html">执行日志中心</a>
+          <a class="btn secondary" href="/employee-activity-trace.html">执行追溯中心</a>
+        </div>
+      </div>
+
+      <div class="layout">
+        <section>
+          <div class="card">
+            <div class="head"><h2>我的复盘</h2><span id="reviewCount" class="pill">0 条</span></div>
+            <div id="reviewList" class="review-list"></div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>AI评分趋势</h2></div><div id="scoreTrend"></div></div>
+            <div class="card"><div class="head"><h2>Skill优化建议</h2></div><div id="skillAdvice"></div></div>
+          </div>
+
+          <div class="card">
+            <div class="head"><h2>全部员工评分</h2><span class="muted">Owner/Admin 可见</span></div>
+            <div id="employeeScoreTable"></div>
+          </div>
+        </section>
+        <aside>
+          <div id="detailPanel" class="card"><h2>复盘详情</h2><div class="muted">点击复盘卡片查看成功原因、失败原因和改进建议。</div></div>
+          <div class="card"><div class="head"><h2>权限边界</h2></div><div id="permissionBox"></div></div>
+          <div class="card"><div class="head"><h2>安全边界</h2></div><div id="safetyBox"></div></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI员工复盘学习中心','/review-learning-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
+let state={user:null,employees:[],reviews:[],activeEmployee:'',activeReview:null,lastGenerated:null};
+
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/review-learning-center.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,emptyText='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;if(Array.isArray(value))return value.length?value.map(x=>text(x,'')).filter(Boolean).join('、'):emptyText;if(value&&typeof value==='object')return Object.values(value).map(x=>text(x,'')).filter(Boolean).join(' · ')||emptyText;return emptyText}
+function arr(value){return Array.isArray(value)?value:[]}
+function obj(value){return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
+function num(value){const n=Number(value);return Number.isFinite(n)?n:0}
+function pct(value){return `${Math.round(num(value))}%`}
+function fmt(value){return value?String(value).slice(0,19).replace('T',' '):'暂无'}
+function badge(value,type=''){return `<span class="badge ${esc(type||String(value||'').toLowerCase())}">${esc(text(value))}</span>`}
+function progress(value){const n=Math.max(0,Math.min(100,num(value)));return `<div class="bar"><span style="width:${n}%"></span></div>`}
+
+async function api(url,options={}){
+  let res;
+  try{res=await fetch(url,{credentials:'include',...options})}catch(e){throw new Error('网络异常，请稍后重试')}
+  if(res.status===401){pageState.className='state error';pageState.innerText='登录已过期，请重新登录';setTimeout(()=>location.href='/login.html',600);throw new Error('登录已过期，请重新登录')}
+  const data=res.ok?null:await res.json().catch(()=>({}));
+  if(res.status===403)throw new Error((data&&data.detail)||'无权限访问');
+  if(res.status===404)throw new Error((data&&data.detail)||'接口或数据不存在');
+  if(res.status===422)throw new Error((data&&data.detail)||'参数错误');
+  if(res.status>=500)throw new Error((data&&data.detail)||'服务器异常');
+  if(!res.ok)throw new Error((data&&data.detail)||'请求失败，请稍后重试');
+  return res.json();
+}
+
+function isPrivileged(){const role=(state.user&&String(state.user.role_code||state.user.role||'').toLowerCase())||'';return role==='owner'||role==='admin'||role==='boss'}
+function employeeCode(){return state.activeEmployee||((state.user&&state.user.username)||'')}
+
+async function init(){
+  renderMenu();tick();setInterval(tick,1000);renderStaticBoxes();
+  try{
+    state.user=await api('/api/me');
+    me.innerText=`${text(state.user.display_name||state.user.username,'当前用户')} · ${text(state.user.role_label||state.user.role)}`;
+    state.activeEmployee=state.user.username||'';
+  }catch(e){pageState.className='state error';pageState.innerText=e.message;return}
+  await loadAll();
+}
+
+async function loadAll(){
+  pageState.className='state';pageState.innerText='正在加载复盘学习中心...';
+  try{
+    const tasks=await api('/api/reviews/tasks');
+    state.reviews=arr(obj(tasks).reviews);
+    if(isPrivileged()){
+      try{
+        const employees=await api('/api/reviews/employees');
+        state.employees=arr(obj(employees).employees);
+        if(!state.activeEmployee&&state.employees.length)state.activeEmployee=state.employees[0].employee_code;
+      }catch(e){state.employees=[]}
+    }else{
+      const detail=await api(`/api/reviews/employee/${encodeURIComponent(employeeCode())}`);
+      state.employees=obj(detail).score?[obj(detail).score]:[];
+    }
+    if(!state.activeEmployee&&state.reviews.length)state.activeEmployee=state.reviews[0].employee_code;
+    pageState.className='state ok';pageState.innerText='复盘学习中心已更新。';
+  }catch(e){
+    pageState.className='state error';pageState.innerText=e.message||'复盘学习中心加载失败';
+    state.reviews=[];state.employees=[];
+  }
+  renderAll();
+}
+
+async function selectEmployee(code){
+  state.activeEmployee=code;
+  if(!isPrivileged()&&code!==state.user.username){pageState.className='state error';pageState.innerText='只能查看自己的复盘';return}
+  try{
+    const detail=await api(`/api/reviews/employee/${encodeURIComponent(code)}`);
+    const score=obj(detail).score;
+    if(score){
+      const idx=state.employees.findIndex(row=>row.employee_code===score.employee_code);
+      if(idx>=0)state.employees[idx]=score;else state.employees.push(score);
+    }
+    state.reviews=arr(obj(detail).reviews);
+    pageState.className='state ok';pageState.innerText='员工复盘已更新。';
+  }catch(e){pageState.className='state error';pageState.innerText=e.message||'员工复盘加载失败'}
+  renderAll();
+}
+
+async function generateReview(){
+  const taskId=num(taskIdInput.value);
+  if(!taskId){pageState.className='state warn';pageState.innerText='请输入任务 ID';return}
+  generateBtn.disabled=true;pageState.className='state';pageState.innerText='正在生成复盘报告...';
+  try{
+    const data=await api('/api/reviews/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_id:taskId,include_feedback:true})});
+    state.lastGenerated=data;
+    pageState.className='state ok';pageState.innerText='复盘报告已生成。';
+    await selectEmployee(obj(data.review).employee_code||employeeCode());
+  }catch(e){pageState.className='state error';pageState.innerText=e.message||'复盘生成失败'}
+  generateBtn.disabled=false;
+}
+
+function renderAll(){renderEmployeeSelect();renderSummary();renderReviews();renderScoreTrend();renderSkillAdvice();renderEmployeeScores();renderStaticBoxes()}
+
+function renderEmployeeSelect(){
+  if(isPrivileged()){
+    const rows=state.employees.length?state.employees:[...new Map(state.reviews.map(r=>[r.employee_code,{employee_code:r.employee_code}])).values()];
+    employeeSelect.disabled=false;
+    employeeSelect.innerHTML=rows.length?rows.map(row=>`<option value="${esc(row.employee_code)}" ${row.employee_code===state.activeEmployee?'selected':''}>${esc(text(row.employee_code))}</option>`).join(''):'<option value="">暂无员工评分</option>';
+  }else{
+    employeeSelect.disabled=true;
+    employeeSelect.innerHTML=`<option value="${esc(employeeCode())}">${esc(employeeCode())}</option>`;
+  }
+  scopeBadge.outerHTML=isPrivileged()?'<span id="scopeBadge" class="badge owner">Owner/Admin · 全部可见</span>':'<span id="scopeBadge" class="badge">员工 · 仅本人</span>';
+}
+
+function activeScore(){
+  return state.employees.find(row=>row.employee_code===employeeCode())||state.employees[0]||null;
+}
+
+function filteredReviews(){const code=employeeCode();return code?state.reviews.filter(row=>row.employee_code===code):state.reviews}
+
+function renderSummary(){
+  const score=activeScore();
+  const reviews=filteredReviews();
+  const successCount=reviews.filter(row=>row.success).length;
+  const recentCount=reviews.length;
+  const growth=score?num(score.skill_growth):0;
+  const level=growth>=85?'卓越成长':growth>=70?'稳定成长':growth>=50?'成长中':'待积累';
+  const items=[
+    ['当前员工',employeeCode()||'暂无'],
+    ['评分',score?score.average_score:'暂无'],
+    ['成长等级',level],
+    ['最近任务数量',recentCount],
+    ['成功率',score?pct(score.success_rate):(recentCount?pct(successCount/recentCount*100):'暂无')],
+    ['成长值',score?score.skill_growth:'暂无'],
+    ['成功任务',successCount],
+    ['失败任务',recentCount-successCount]
+  ];
+  summaryStats.innerHTML=items.map(([label,value])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(text(value,'0'))}</div></div>`).join('');
+  reviewCount.innerText=`${recentCount} 条`;
+}
+
+function renderReviews(){
+  const rows=filteredReviews();
+  if(!rows.length){reviewList.innerHTML='<div class="state empty">暂无数据</div>';detailPanel.innerHTML='<h2>复盘详情</h2><div class="muted">暂无数据</div>';return}
+  reviewList.innerHTML=rows.map(row=>`<article class="review-card ${row.success?'success':'failed'}" onclick="showReview(${row.id})">
+    <div class="title-row"><div><h3>任务 #${esc(row.task_id)}</h3><div class="code">${esc(row.employee_code)}</div></div>${badge(row.success?'成功':'失败',row.success?'success':'failed')}</div>
+    <div class="muted">评分 ${esc(text(row.score,'0'))} · ${esc(fmt(row.created_at))}</div>
+    <div class="detail-row"><strong>${row.success?'成功原因':'失败原因'}</strong><div class="muted">${esc(text(row.problem_reason))}</div></div>
+    <div class="detail-row"><strong>改进建议</strong><div class="muted">${esc(text(row.improvement))}</div></div>
+  </article>`).join('');
+  if(!state.activeReview)showReview(rows[0].id);
+}
+
+function showReview(id){
+  const row=state.reviews.find(item=>item.id===id);
+  if(!row)return;
+  state.activeReview=row;
+  detailPanel.innerHTML=`<div class="head"><h2>任务 #${esc(row.task_id)} 复盘</h2>${badge(row.success?'成功':'失败',row.success?'success':'failed')}</div>
+    <div class="detail-row"><div class="kv"><div>employee_code</div><div>${esc(text(row.employee_code))}</div><div>score</div><div>${esc(text(row.score,'0'))}</div><div>created_at</div><div>${esc(fmt(row.created_at))}</div></div></div>
+    <div class="detail-row"><strong>成功原因 / 失败原因</strong><div class="muted">${esc(text(row.problem_reason))}</div></div>
+    <div class="detail-row"><strong>改进建议</strong><div class="muted">${esc(text(row.improvement))}</div></div>`;
+}
+
+function renderScoreTrend(){
+  const score=activeScore();
+  if(!score){scoreTrend.innerHTML='<div class="muted">暂无数据</div>';return}
+  const rows=[['历史评分',score.average_score],['成功率',score.success_rate],['成长值',score.skill_growth],['任务数量',score.task_count]];
+  scoreTrend.innerHTML=rows.map(([label,value])=>`<div class="list-item"><strong>${esc(label)}</strong><div class="muted">${esc(text(value,'0'))}</div>${label==='任务数量'?'':progress(value)}</div>`).join('');
+}
+
+function renderSkillAdvice(){
+  const rows=filteredReviews();
+  const generated=obj(state.lastGenerated||{}).knowledge_feedback;
+  const items=[];
+  if(generated)items.push(generated);
+  rows.slice(0,5).forEach(row=>items.push({source_task:row.task_id,problem:row.problem_reason,solution:row.improvement,skill_update:row.success?'将成功路径沉淀为同类任务经验。':'补充失败处理 SOP 与 Skill 检查项。',status:'draft'}));
+  if(!items.length){skillAdvice.innerHTML='<div class="muted">暂无数据</div>';return}
+  skillAdvice.innerHTML=items.map(item=>`<div class="list-item"><div class="title-row"><strong>任务 #${esc(text(item.source_task))}</strong>${badge(item.status||'draft','draft')}</div><div class="muted">${esc(text(item.skill_update))}</div><div class="detail-row"><strong>问题</strong><div class="muted">${esc(text(item.problem))}</div></div><div class="detail-row"><strong>建议优化方向</strong><div class="muted">${esc(text(item.solution))}</div></div></div>`).join('');
+}
+
+function renderEmployeeScores(){
+  if(!isPrivileged()){employeeScoreTable.innerHTML='<div class="muted">当前员工账号只能查看自己的评分。</div>';return}
+  if(!state.employees.length){employeeScoreTable.innerHTML='<div class="muted">暂无数据</div>';return}
+  employeeScoreTable.innerHTML=`<table><thead><tr><th>员工</th><th>任务数</th><th>成功率</th><th>平均分</th><th>成长值</th><th>更新时间</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" onclick="selectEmployee('${esc(row.employee_code)}')">查看</button><div class="code">${esc(text(row.employee_code))}</div></td><td>${esc(text(row.task_count,'0'))}</td><td>${esc(pct(row.success_rate))}</td><td>${esc(text(row.average_score,'0'))}</td><td>${esc(text(row.skill_growth,'0'))}</td><td>${esc(fmt(row.updated_at))}</td></tr>`).join('')}</tbody></table>`;
+}
+
+function renderStaticBoxes(){
+  permissionBox.innerHTML=['Owner/Admin：查看全部复盘与员工评分','AI员工：只能查看自己的复盘和评分','Viewer：禁止访问复盘学习中心'].map(x=>`<div class="list-item">${esc(x)}</div>`).join('');
+  safetyBox.innerHTML=['复盘生成只写复盘、评分和经验建议表','不修改 Task Center 状态','不修改 Orchestrator 规则','不修改 Deploy Center 流程','不展示敏感凭据'].map(x=>`<div class="list-item">${esc(x)}</div>`).join('');
+}
+
+init().catch(e=>{pageState.className='state error';pageState.innerText=e.message||'页面加载失败'});
+</script>
+</body>
+</html>
