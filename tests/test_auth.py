@@ -1,7 +1,10 @@
 import re
 from pathlib import Path
 
+from backend.auth import verify_password
 from backend.models import User
+from backend.seed import seed_defaults
+from scripts.admin_login_recovery import ensure_core_admin_accounts, list_admin_accounts, reset_admin_password
 
 
 def test_backend_main_imports():
@@ -37,6 +40,30 @@ def test_login_success_sets_token_and_http_only_cookie(client):
     assert "httponly" in response.headers["set-cookie"].lower()
 
 
+def test_seed_defaults_creates_login_ready_boss_account(client, test_db):
+    db = test_db()
+    try:
+        db.query(User).filter(User.username == "boss").delete()
+        db.commit()
+        seed_defaults(db)
+        boss = db.query(User).filter(User.username == "boss").one()
+        assert boss.role == "boss"
+        assert boss.active is True
+        assert verify_password("Tiantong@2026", boss.password_hash)
+    finally:
+        db.close()
+
+    response = client.post("/api/login", json={"username": "boss", "password": "Tiantong@2026"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user"]["username"] == "boss"
+    assert data["user"]["role"] == "boss"
+    assert data["user"]["role_code"] == "owner"
+    assert "password" not in data
+    assert "password_hash" not in str(data)
+
+
 def test_login_rejects_wrong_password(client):
     response = client.post("/api/login", json={"username": "owner", "password": "wrong"})
 
@@ -66,6 +93,83 @@ def test_passwords_are_stored_as_hashes(test_db):
         assert user.password_hash.startswith("pbkdf2_sha256$")
     finally:
         db.close()
+
+
+def test_admin_login_recovery_lists_privileged_accounts_without_hashes(test_db):
+    db = test_db()
+    try:
+        rows = list_admin_accounts(db)
+        usernames = {row.username for row in rows}
+        boss = next(row for row in rows if row.username == "boss")
+
+        assert "owner" in usernames
+        assert "boss" in usernames
+        assert boss.role == "boss"
+        assert boss.active is True
+        assert boss.password_hash_algorithm == "pbkdf2_sha256"
+        assert all("$" not in row.password_hash_algorithm for row in rows)
+    finally:
+        db.close()
+
+
+def test_admin_login_recovery_resets_password_without_printing_or_returning_plaintext(client, test_db):
+    db = test_db()
+    try:
+        summary = reset_admin_password(db, "boss", "NewBossPassword2026!", role="boss")
+        assert summary.username == "boss"
+        assert summary.role == "boss"
+        assert summary.active is True
+        assert summary.password_hash_algorithm == "pbkdf2_sha256"
+        assert "NewBossPassword2026!" not in repr(summary)
+    finally:
+        db.close()
+
+    old_login = client.post("/api/login", json={"username": "boss", "password": "Tiantong@2026"})
+    assert old_login.status_code == 401
+
+    new_login = client.post("/api/login", json={"username": "boss", "password": "NewBossPassword2026!"})
+    assert new_login.status_code == 200
+    assert new_login.json()["user"]["username"] == "boss"
+
+
+def test_admin_login_recovery_ensures_owner_boss_admin_login_and_permissions(client, test_db):
+    db = test_db()
+    try:
+        db.query(User).filter(User.username.in_(["owner", "boss", "admin"])).delete(synchronize_session=False)
+        db.commit()
+        summaries = ensure_core_admin_accounts(db, "RecoveredAdminPassword2026!")
+        by_username = {row.username: row for row in summaries}
+
+        assert set(by_username) == {"owner", "boss", "admin"}
+        assert by_username["owner"].role == "owner"
+        assert by_username["boss"].role == "boss"
+        assert by_username["admin"].role == "admin"
+        assert all(row.active is True for row in summaries)
+        assert all(row.password_hash_algorithm == "pbkdf2_sha256" for row in summaries)
+        assert "RecoveredAdminPassword2026!" not in repr(summaries)
+
+        rows = db.query(User).filter(User.username.in_(["owner", "boss", "admin"])).all()
+        assert all(verify_password("RecoveredAdminPassword2026!", row.password_hash) for row in rows)
+    finally:
+        db.close()
+
+    owner_login = client.post("/api/login", json={"username": "owner", "password": "RecoveredAdminPassword2026!"})
+    assert owner_login.status_code == 200
+    owner_token = owner_login.json()["token"]
+    assert owner_login.json()["user"]["role_code"] == "owner"
+    assert "password_hash" not in str(owner_login.json())
+
+    admin_login = client.post("/api/login", json={"username": "admin", "password": "RecoveredAdminPassword2026!"})
+    assert admin_login.status_code == 200
+    assert admin_login.json()["user"]["role_code"] == "admin"
+
+    boss_login = client.post("/api/login", json={"username": "boss", "password": "RecoveredAdminPassword2026!"})
+    assert boss_login.status_code == 200
+    assert boss_login.json()["user"]["role"] == "boss"
+    assert boss_login.json()["user"]["role_code"] == "owner"
+
+    users = client.get("/api/users", headers={"Authorization": f"Bearer {owner_token}"})
+    assert users.status_code == 200
 
 
 def test_repository_does_not_contain_local_env_file():
