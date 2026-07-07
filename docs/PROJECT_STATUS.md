@@ -2,7 +2,73 @@
 
 ## 当前进度
 
-Sprint 14：天赋 Skill / 插件赋能中心 ✅
+Sprint 19：天复：AI员工复盘学习中心 ✅
+
+## Sprint 19 完成状态
+
+Sprint 19：AI员工复盘学习中心已完成。
+
+已完成节点：
+
+- 天道产品设计 ✅
+- 天工架构设计 ✅
+- 天王后端开发 ✅
+- 天检后端验收 ✅
+- 天监后端安全审计 ✅
+- 天颜前端页面 ✅
+- 天检前端验收 ✅
+- 天监前端安全审计 ✅
+
+## Sprint 19 后端 API
+
+后端 API 已完成：
+
+- `GET /api/reviews/tasks`
+- `GET /api/reviews/employees`
+- `POST /api/reviews/generate`
+- `GET /api/reviews/employee/{code}`
+
+## Sprint 19 数据闭环
+
+新增复盘学习数据结构：
+
+- `task_reviews`
+- `employee_scores`
+- `knowledge_feedback`
+
+能力已完成：
+
+- 自动读取 execution_logs 生成任务复盘
+- 保存成功 / 失败原因
+- 生成 AI 员工评分
+- 计算成功率、平均分、成长值
+- 生成经验沉淀与 Skill 优化建议
+
+## Sprint 19 前端页面
+
+前端页面已完成：
+
+- `/review-learning-center.html`
+
+页面功能已完成：
+
+- 当前员工、评分、成长等级、最近任务数量
+- 我的复盘
+- AI 评分趋势
+- Skill 优化建议
+- Owner/Admin 全员评分视图
+- 员工只看自己数据
+- Viewer 禁止访问
+
+## Sprint 19 安全边界
+
+- 不修改 Task Center 状态
+- 不修改 Orchestrator 规则
+- 不修改 Execution Engine 执行权限
+- 不修改 Deploy Center 流程
+- 不展示 password_hash / token / secret / API Key
+- 复盘生成只写复盘、评分和经验建议表
+- Skill 优化建议保持 draft，不自动应用到生产规则
 
 ## Sprint 14 完成状态
 
