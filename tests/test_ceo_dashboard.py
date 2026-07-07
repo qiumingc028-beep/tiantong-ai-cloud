@@ -93,7 +93,7 @@ def test_ceo_dashboard_deploy_summary_returns_alembic_version(client, owner_head
     db = test_db()
     try:
         db.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-        db.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0013_sprint17_auto_dispatch')"))
+        db.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0014_sprint18_execution_engine')"))
         db.add(DeployRecord(deploy_version="Sprint 4", status="success"))
         db.add(DeployHealthCheck(check_type="database", target="database", status="healthy"))
         db.commit()
@@ -103,8 +103,8 @@ def test_ceo_dashboard_deploy_summary_returns_alembic_version(client, owner_head
     response = client.get("/api/ceo-dashboard/summary", headers=owner_headers)
     assert response.status_code == 200
     deploy_summary = response.json()["deploy_summary"]
-    assert deploy_summary["alembic_version"] == "0013_sprint17_auto_dispatch"
-    assert deploy_summary["expected_version"] == "0013_sprint17_auto_dispatch"
+    assert deploy_summary["alembic_version"] == "0014_sprint18_execution_engine"
+    assert deploy_summary["expected_version"] == "0014_sprint18_execution_engine"
     assert deploy_summary["last_deploy_status"] == "success"
     assert deploy_summary["last_health_check_status"] == "healthy"
 
@@ -284,4 +284,4 @@ def test_ceo_dashboard_does_not_add_unexpected_alembic_migration():
     assert "0010_orchestrator_tables.py" in versions
     assert "0011_orchestrator_task_links.py" in versions
     assert "0012_sprint16_ceo_deploy_loop.py" in versions
-    assert "0013_sprint17_auto_dispatch.py" in versions
+    assert "0014_sprint18_execution_engine.py" in versions

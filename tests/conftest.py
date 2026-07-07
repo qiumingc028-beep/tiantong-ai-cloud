@@ -81,6 +81,7 @@ def test_db(monkeypatch):
     monkeypatch.setattr("backend.auth.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.queue.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.task_queue.get_redis", lambda: fake_redis)
+    monkeypatch.setattr("backend.execution_engine.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.command_center.orchestration_view.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.routers.metrics.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.routers.ai_employees.get_redis", lambda: fake_redis)
