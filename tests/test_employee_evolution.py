@@ -90,7 +90,7 @@ def test_employee_evolution_migration_head_and_tables():
     tables = set(EmployeeGrowth.metadata.tables)
     assert {"employee_growth", "review_analysis", "skill_suggestions", "risk_events"} <= tables
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0020_sprint21_tool_router"]
+    assert script.get_heads() == ["0021_sprint22_brain_tool_router"]
 
 
 def test_employee_evolution_routes_require_login_and_reject_viewer(client, viewer_headers):

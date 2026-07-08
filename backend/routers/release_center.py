@@ -123,7 +123,7 @@ def build_release_check() -> dict:
     result = {
         "commit": bool(current_commit_id()),
         "test": (BASE_DIR / "tests").is_dir() and any((BASE_DIR / "tests").glob("test_*.py")),
-        "migration": (BASE_DIR / "alembic" / "versions" / "0020_sprint21_tool_router.py").is_file(),
+        "migration": (BASE_DIR / "alembic" / "versions" / "0021_sprint22_brain_tool_router.py").is_file(),
         "docker": any((BASE_DIR / name).is_file() for name in ("Dockerfile", "Dockerfile.backend", "docker-compose.yml", "docker-compose.prod.yml")),
         "nginx": (BASE_DIR / "nginx" / "default.conf").is_file(),
         "docs": (BASE_DIR / "docs").is_dir(),

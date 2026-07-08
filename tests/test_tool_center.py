@@ -216,5 +216,5 @@ def test_tool_center_migration_head_and_tables():
     assert "employee_tool_binding" in set(EmployeeToolBinding.metadata.tables)
     assert "tool_execution_logs" in set(ToolExecutionLog.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0020_sprint21_tool_router"]
+    assert script.get_heads() == ["0021_sprint22_brain_tool_router"]
 

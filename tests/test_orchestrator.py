@@ -281,7 +281,7 @@ def test_orchestrator_migration_is_single_head():
         check=True,
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0020_sprint21_tool_router (head)"]
+    assert heads == ["0021_sprint22_brain_tool_router (head)"]
 
 
 def add_employee(test_db, employee_code: str, employee_name: str, task_type: str, sort_order: int):
