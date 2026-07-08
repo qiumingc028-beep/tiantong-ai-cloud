@@ -11,6 +11,7 @@ from sqlalchemy import text
 from .core.orchestrator import handle_event as orchestrator_handle_event
 from .database import SessionLocal, ensure_tables, engine, get_redis
 from .logging_config import configure_json_logging
+from .archive_sync import router as archive_sync_router
 from .command_center import controller as command_center
 from .routers import auto_dispatch
 from .brain_execution import router as brain_execution_router
@@ -93,6 +94,7 @@ app.include_router(tool_center.router)
 app.include_router(tool_router.router)
 app.include_router(brain_tool_router.router)
 app.include_router(brain_execution_router.router)
+app.include_router(archive_sync_router)
 app.include_router(ai_capabilities.router)
 app.include_router(tiancang.router)
 app.include_router(knowledge_center.router)
