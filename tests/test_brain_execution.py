@@ -17,6 +17,7 @@ def test_brain_execution_routes_registered():
     assert paths["/api/brain/plan"] == {"POST"}
     assert paths["/api/brain/approve"] == {"POST"}
     assert paths["/api/brain/start"] == {"POST"}
+    assert paths["/api/brain/queue/status"] == {"GET"}
     assert paths["/api/brain/tasks/{execution_id}"] == {"GET"}
     assert paths["/api/brain/executions/{execution_id}"] == {"GET"}
     assert paths["/api/brain/logs"] == {"GET"}
@@ -96,8 +97,8 @@ def test_brain_execution_high_risk_blocks_start_until_double_approval(client, ow
 
     started = client.post("/api/brain/start", headers=owner_headers, json={"execution_id": execution_id})
     assert started.status_code == 200
-    assert started.json()["run"]["status"] == "SUCCESS"
-    assert started.json()["dry_run"] is True
+    assert started.json()["queued"] is True
+    assert started.json()["status"] == "APPROVED"
 
 
 def test_brain_execution_start_is_dry_run_and_writes_execution_logs(client, owner_headers):
@@ -115,13 +116,13 @@ def test_brain_execution_start_is_dry_run_and_writes_execution_logs(client, owne
     assert approved.status_code == 200
     started = client.post("/api/brain/start", headers=owner_headers, json={"execution_id": execution_id})
     assert started.status_code == 200
-    assert started.json()["run"]["status"] == "SUCCESS"
+    assert started.json()["queued"] is True
 
     logs = client.get("/api/brain/logs", headers=owner_headers)
     assert logs.status_code == 200
     rows = logs.json()["logs"]
     assert rows
-    assert any(row["run_id"] == str(execution_id) and row["status"] == "SUCCESS" for row in rows)
+    assert any(row["run_id"] == str(execution_id) and row["action"] == "queued_for_worker" for row in rows)
     assert all("password_hash" not in str(row) for row in rows)
 
 

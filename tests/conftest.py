@@ -24,6 +24,12 @@ class FakeRedis:
     def get(self, key):
         return self.values.get(key)
 
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        return True
+
     def delete(self, key):
         self.values.pop(key, None)
 
@@ -81,6 +87,7 @@ def test_db(monkeypatch):
     monkeypatch.setattr("backend.auth.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.queue.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.task_queue.get_redis", lambda: fake_redis)
+    monkeypatch.setattr("backend.brain_execution.queue.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.execution_engine.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.command_center.orchestration_view.get_redis", lambda: fake_redis)
     monkeypatch.setattr("backend.routers.metrics.get_redis", lambda: fake_redis)

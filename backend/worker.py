@@ -10,6 +10,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from .ai_employees import DEFAULT_COLLECTOR_EMPLOYEE, DEFAULT_STRATEGY_EMPLOYEE, FLOW_EMPLOYEE_CODES, FLOW_TASK_TYPES, employee_name, normalize_employee_code
 from .core.orchestrator import handle_event
 from .database import SessionLocal, get_redis
+from .brain_execution.worker import process_next_execution as process_next_brain_execution
 from .execution_engine import process_next_execution_task
 from .logging_config import configure_json_logging
 from .models import EmployeeLog, JdSyncLog, TaskCenterResult, TaskCenterTask
@@ -542,7 +543,7 @@ def main():
     while True:
         update_worker_heartbeat()
         run_daily_scheduler()
-        if not process_next_employee_execution():
+        if not process_next_employee_execution() and not process_next_brain_runtime_execution():
             process_next_task()
         time.sleep(0.1)
 
@@ -556,6 +557,21 @@ def process_next_employee_execution():
         return False
     except Exception as exc:
         logger.exception("employee_execution_failed: %s", exc)
+        return False
+    finally:
+        db.close()
+
+
+def process_next_brain_runtime_execution():
+    db = SessionLocal()
+    try:
+        result = process_next_brain_execution(db, timeout=1)
+        return bool(result.get("processed"))
+    except (RedisTimeoutError, RedisConnectionError) as exc:
+        logger.warning("brain_execution_queue_warning: %s: %s", type(exc).__name__, exc)
+        return False
+    except Exception as exc:
+        logger.exception("brain_execution_failed: %s", exc)
         return False
     finally:
         db.close()

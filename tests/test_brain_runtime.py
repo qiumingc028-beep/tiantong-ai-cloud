@@ -6,6 +6,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from backend.brain_execution.models import BrainExecutionEvent, BrainExecutionRun
+from backend.brain_execution.worker import process_next_execution
 from backend.brain_tool_router.models import BrainExecutionLog
 
 
@@ -45,9 +46,14 @@ def test_brain_runtime_state_flow_and_event_logs(client, owner_headers, test_db)
 
     started = client.post("/api/brain/start", headers=owner_headers, json={"execution_id": execution_id})
     assert started.status_code == 200
-    assert started.json()["run"]["status"] == "SUCCESS"
-    assert started.json()["run"]["started_at"]
-    assert started.json()["run"]["finished_at"]
+    assert started.json()["queued"] is True
+
+    db = test_db()
+    try:
+        result = process_next_execution(db, timeout=1)
+        assert result["run"]["status"] == "SUCCESS"
+    finally:
+        db.close()
 
     detail = client.get(f"/api/brain/executions/{execution_id}", headers=owner_headers)
     assert detail.status_code == 200
@@ -57,7 +63,7 @@ def test_brain_runtime_state_flow_and_event_logs(client, owner_headers, test_db)
     assert "state_planned" in event_types
     assert "state_wait_approval" in event_types
     assert "state_approved" in event_types
-    assert "queued_for_worker" in event_types
+    assert "worker_started" in event_types
     assert "state_success" in event_types
 
     db = test_db()

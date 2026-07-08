@@ -7,8 +7,9 @@ from ..auth import current_user
 from ..auth_data import normalize_role
 from ..database import get_db
 from ..models import User
-from .executor import start_dry_run
+from .executor import enqueue_approved_execution
 from .planner import analyze_goal, approve_run, create_plan, get_task_chain, list_execution_events, list_execution_logs
+from .queue import get_queue_status
 from .schemas import AnalyzePayload, ApprovePayload, PlanPayload, StartPayload
 
 
@@ -56,10 +57,16 @@ def approve(payload: ApprovePayload, request: Request, db: Session = Depends(get
 @router.post("/start")
 def start(payload: StartPayload, request: Request, db: Session = Depends(get_db)):
     require_privileged_user(request, db)
-    result = start_dry_run(db, payload.execution_id)
+    result = enqueue_approved_execution(db, payload.execution_id)
     if result.get("error"):
         raise HTTPException(status_code=404, detail="执行记录不存在")
     return result
+
+
+@router.get("/queue/status")
+def queue_status(request: Request, db: Session = Depends(get_db)):
+    require_brain_user(request, db)
+    return get_queue_status()
 
 
 @router.get("/tasks/{execution_id}")
