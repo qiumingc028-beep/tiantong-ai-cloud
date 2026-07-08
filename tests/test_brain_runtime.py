@@ -47,6 +47,7 @@ def test_brain_runtime_state_flow_and_event_logs(client, owner_headers, test_db)
     started = client.post("/api/brain/start", headers=owner_headers, json={"execution_id": execution_id})
     assert started.status_code == 200
     assert started.json()["queued"] is True
+    assert started.json()["status"] == "QUEUED"
 
     db = test_db()
     try:
@@ -63,6 +64,7 @@ def test_brain_runtime_state_flow_and_event_logs(client, owner_headers, test_db)
     assert "state_planned" in event_types
     assert "state_wait_approval" in event_types
     assert "state_approved" in event_types
+    assert "state_queued" in event_types
     assert "worker_started" in event_types
     assert "state_success" in event_types
 
@@ -136,4 +138,4 @@ def test_brain_runtime_source_has_no_real_execution_calls():
 def test_brain_runtime_migration_head_and_event_table():
     assert "brain_execution_events" in set(BrainExecutionEvent.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0024_sprint25_brain_runtime"]
+    assert script.get_heads() == ["0025_sprint25_3_execution_engine_enhancement"]

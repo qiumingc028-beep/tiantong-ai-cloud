@@ -5,7 +5,7 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from backend.brain_execution.models import BrainApprovalRecord, BrainExecutionRun, BrainToolCall
+from backend.brain_execution.models import BrainApprovalRecord, BrainExecutionContext, BrainExecutionRun, BrainToolCall, BrainWorkerStatus
 from backend.brain_orchestrator.models import BrainTaskNode
 from backend.brain_tool_router.models import BrainExecutionLog
 from backend.main import app
@@ -18,8 +18,10 @@ def test_brain_execution_routes_registered():
     assert paths["/api/brain/approve"] == {"POST"}
     assert paths["/api/brain/start"] == {"POST"}
     assert paths["/api/brain/queue/status"] == {"GET"}
+    assert paths["/api/brain/workers/status"] == {"GET"}
     assert paths["/api/brain/tasks/{execution_id}"] == {"GET"}
     assert paths["/api/brain/executions/{execution_id}"] == {"GET"}
+    assert paths["/api/brain/executions/{execution_id}/context"] == {"GET"}
     assert paths["/api/brain/logs"] == {"GET"}
 
 
@@ -98,7 +100,7 @@ def test_brain_execution_high_risk_blocks_start_until_double_approval(client, ow
     started = client.post("/api/brain/start", headers=owner_headers, json={"execution_id": execution_id})
     assert started.status_code == 200
     assert started.json()["queued"] is True
-    assert started.json()["status"] == "APPROVED"
+    assert started.json()["status"] == "QUEUED"
 
 
 def test_brain_execution_start_is_dry_run_and_writes_execution_logs(client, owner_headers):
@@ -163,5 +165,7 @@ def test_brain_execution_migration_head_and_tables():
     assert "brain_execution_runs" in set(BrainExecutionRun.metadata.tables)
     assert "brain_approval_records" in set(BrainApprovalRecord.metadata.tables)
     assert "brain_tool_calls" in set(BrainToolCall.metadata.tables)
+    assert "execution_context" in set(BrainExecutionContext.metadata.tables)
+    assert "brain_worker_status" in set(BrainWorkerStatus.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0024_sprint25_brain_runtime"]
+    assert script.get_heads() == ["0025_sprint25_3_execution_engine_enhancement"]

@@ -53,10 +53,12 @@ class FakeRedis:
         return len(self.lists.get(key, []))
 
     def blpop(self, key, timeout=0):
-        values = self.lists.get(key, [])
-        if not values:
-            return None
-        return key, values.pop(0)
+        keys = key if isinstance(key, list) else [key]
+        for item_key in keys:
+            values = self.lists.get(item_key, [])
+            if values:
+                return item_key, values.pop(0)
+        return None
 
     def ping(self):
         return True

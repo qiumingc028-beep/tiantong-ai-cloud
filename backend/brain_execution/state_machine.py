@@ -15,21 +15,25 @@ class ExecutionState(str, Enum):
     PLANNED = "PLANNED"
     WAIT_APPROVAL = "WAIT_APPROVAL"
     APPROVED = "APPROVED"
+    QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
+    TIMEOUT = "TIMEOUT"
     REVIEWED = "REVIEWED"
 
 
 ALLOWED_TRANSITIONS: dict[ExecutionState, set[ExecutionState]] = {
     ExecutionState.CREATED: {ExecutionState.ANALYZED, ExecutionState.FAILED},
     ExecutionState.ANALYZED: {ExecutionState.PLANNED, ExecutionState.WAIT_APPROVAL, ExecutionState.FAILED},
-    ExecutionState.PLANNED: {ExecutionState.WAIT_APPROVAL, ExecutionState.APPROVED, ExecutionState.RUNNING, ExecutionState.FAILED},
+    ExecutionState.PLANNED: {ExecutionState.WAIT_APPROVAL, ExecutionState.FAILED},
     ExecutionState.WAIT_APPROVAL: {ExecutionState.PLANNED, ExecutionState.APPROVED, ExecutionState.FAILED},
-    ExecutionState.APPROVED: {ExecutionState.RUNNING, ExecutionState.FAILED},
-    ExecutionState.RUNNING: {ExecutionState.SUCCESS, ExecutionState.FAILED},
+    ExecutionState.APPROVED: {ExecutionState.QUEUED, ExecutionState.FAILED},
+    ExecutionState.QUEUED: {ExecutionState.RUNNING, ExecutionState.FAILED, ExecutionState.TIMEOUT},
+    ExecutionState.RUNNING: {ExecutionState.SUCCESS, ExecutionState.FAILED, ExecutionState.TIMEOUT, ExecutionState.QUEUED},
     ExecutionState.SUCCESS: {ExecutionState.REVIEWED},
     ExecutionState.FAILED: {ExecutionState.REVIEWED},
+    ExecutionState.TIMEOUT: {ExecutionState.REVIEWED},
     ExecutionState.REVIEWED: set(),
 }
 
@@ -40,8 +44,10 @@ def normalize_state(value: str | None) -> ExecutionState:
         "PLANNED": ExecutionState.PLANNED,
         "BLOCKED": ExecutionState.WAIT_APPROVAL,
         "APPROVED": ExecutionState.APPROVED,
+        "QUEUED": ExecutionState.QUEUED,
         "RUNNING": ExecutionState.RUNNING,
         "COMPLETED": ExecutionState.SUCCESS,
+        "TIMEOUT": ExecutionState.TIMEOUT,
     }
     if clean in legacy:
         return legacy[clean]

@@ -11,6 +11,12 @@ from ..database import get_redis
 
 
 BRAIN_EXECUTION_QUEUE = "brain_execution_queue"
+BRAIN_EXECUTION_PRIORITY_QUEUES = {
+    "high": "brain_execution_queue:high",
+    "normal": "brain_execution_queue:normal",
+    "low": "brain_execution_queue:low",
+}
+BRAIN_EXECUTION_QUEUE_ORDER = ["high", "normal", "low"]
 BRAIN_EXECUTION_STATUS_PREFIX = "brain_execution_queue:status:"
 BRAIN_EXECUTION_RECENT_STATUS = "brain_execution_queue:recent"
 BRAIN_EXECUTION_STATUS_TTL_SECONDS = 7 * 24 * 3600
@@ -35,14 +41,14 @@ def enqueue_execution(
         "created_at": utc_now(),
         "payload": payload or {},
     }
-    get_redis().rpush(BRAIN_EXECUTION_QUEUE, json.dumps(item, ensure_ascii=False))
+    get_redis().rpush(queue_name_for_priority(item["priority"]), json.dumps(item, ensure_ascii=False))
     update_queue_status(item, "waiting", "Brain execution queued")
     return item
 
 
 def dequeue_execution(timeout: int = 5) -> dict | None:
     try:
-        result = get_redis().blpop(BRAIN_EXECUTION_QUEUE, timeout=timeout)
+        result = get_redis().blpop([BRAIN_EXECUTION_PRIORITY_QUEUES[name] for name in BRAIN_EXECUTION_QUEUE_ORDER], timeout=timeout)
     except (RedisTimeoutError, RedisConnectionError):
         return None
     if not result:
@@ -56,7 +62,7 @@ def requeue_execution(item: dict, message: str) -> dict:
     item["retry_count"] = item["attempt"]
     item["status"] = "waiting"
     item["created_at"] = utc_now()
-    get_redis().rpush(BRAIN_EXECUTION_QUEUE, json.dumps(item, ensure_ascii=False))
+    get_redis().rpush(queue_name_for_priority(item["priority"]), json.dumps(item, ensure_ascii=False))
     update_queue_status(item, "retrying", message)
     return item
 
@@ -85,7 +91,12 @@ def update_queue_status(item: dict, status: str, message: str = "") -> dict:
 
 def get_queue_status(limit: int = 100) -> dict:
     redis_client = get_redis()
-    waiting = redis_client.llen(BRAIN_EXECUTION_QUEUE) if hasattr(redis_client, "llen") else None
+    priority_waiting = {
+        priority: redis_client.llen(queue_name) if hasattr(redis_client, "llen") else 0
+        for priority, queue_name in BRAIN_EXECUTION_PRIORITY_QUEUES.items()
+    }
+    legacy_waiting = redis_client.llen(BRAIN_EXECUTION_QUEUE) if hasattr(redis_client, "llen") else 0
+    waiting = sum(priority_waiting.values()) + legacy_waiting
     rows = [json.loads(row) for row in redis_client.lrange(BRAIN_EXECUTION_RECENT_STATUS, 0, max(0, limit - 1))]
     counts = {"waiting": waiting or 0, "running": 0, "success": 0, "failed": 0, "timeout": 0, "retrying": 0}
     for row in rows:
@@ -94,6 +105,8 @@ def get_queue_status(limit: int = 100) -> dict:
             counts[status] += 1
     return {
         "queue": BRAIN_EXECUTION_QUEUE,
+        "priority_queues": BRAIN_EXECUTION_PRIORITY_QUEUES,
+        "priority_waiting": priority_waiting,
         "waiting": counts["waiting"],
         "running": counts["running"],
         "success": counts["success"],
@@ -106,3 +119,8 @@ def get_queue_status(limit: int = 100) -> dict:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def queue_name_for_priority(priority: str | None) -> str:
+    clean = (priority or "normal").lower()
+    return BRAIN_EXECUTION_PRIORITY_QUEUES.get(clean, BRAIN_EXECUTION_PRIORITY_QUEUES["normal"])

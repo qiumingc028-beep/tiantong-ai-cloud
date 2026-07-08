@@ -8,7 +8,7 @@ from ..auth_data import normalize_role
 from ..database import get_db
 from ..models import User
 from .executor import enqueue_approved_execution
-from .planner import analyze_goal, approve_run, create_plan, get_task_chain, list_execution_events, list_execution_logs
+from .planner import analyze_goal, approve_run, create_plan, get_task_chain, list_execution_contexts, list_execution_events, list_execution_logs, list_worker_statuses
 from .queue import get_queue_status
 from .schemas import AnalyzePayload, ApprovePayload, PlanPayload, StartPayload
 
@@ -69,6 +69,12 @@ def queue_status(request: Request, db: Session = Depends(get_db)):
     return get_queue_status()
 
 
+@router.get("/workers/status")
+def workers_status(request: Request, db: Session = Depends(get_db)):
+    require_privileged_user(request, db)
+    return {"workers": list_worker_statuses(db)}
+
+
 @router.get("/tasks/{execution_id}")
 def tasks(execution_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_brain_user(request, db)
@@ -91,6 +97,18 @@ def execution_detail(execution_id: int, request: Request, db: Session = Depends(
         result["nodes"] = [row for row in result["nodes"] if row["employee_code"] == user.username]
     result["events"] = list_execution_events(db, execution_id)
     return result
+
+
+@router.get("/executions/{execution_id}/context")
+def execution_context(execution_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_brain_user(request, db)
+    result = get_task_chain(db, execution_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="执行记录不存在")
+    contexts = list_execution_contexts(db, execution_id)
+    if not can_view_all(user):
+        contexts = [row for row in contexts if row["employee_code"] == user.username]
+    return {"execution_id": execution_id, "contexts": contexts}
 
 
 @router.get("/logs")

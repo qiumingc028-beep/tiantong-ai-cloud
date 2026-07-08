@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy.orm import Session
 
 from .models import BrainApprovalRecord, BrainExecutionRun
 from .planner import approval_decision, write_execution_log
 from .queue import enqueue_execution
-from .state_machine import ExecutionState
+from .state_machine import ExecutionState, transition_run
 
 
 def enqueue_approved_execution(db: Session, execution_id: int) -> dict:
@@ -25,8 +27,17 @@ def enqueue_approved_execution(db: Session, execution_id: int) -> dict:
         db.commit()
         return {"execution_id": run.id, "status": "blocked", "queued": False, "approval": decision}
 
-    item = enqueue_execution(run.id, task_id=run.task_id or f"brain-{run.id}", priority="normal")
-    write_execution_log(db, run, action="queued_for_worker", status=ExecutionState.APPROVED.value, output_data={"queue_item": item})
+    if run.status != ExecutionState.QUEUED.value:
+        transition_run(db, run, ExecutionState.QUEUED, event_data={"queue": "brain_execution_queue", "priority": run.priority})
+    run.queued_at = datetime.now(timezone.utc)
+    item = enqueue_execution(
+        run.id,
+        task_id=run.task_id or f"brain-{run.id}",
+        priority=run.priority or "normal",
+        max_retry=run.max_retry,
+        payload={"timeout_seconds": run.timeout_seconds if hasattr(run, "timeout_seconds") else None},
+    )
+    write_execution_log(db, run, action="queued_for_worker", status=ExecutionState.QUEUED.value, output_data={"queue_item": item})
     db.commit()
     return {"execution_id": run.id, "status": run.status, "queued": True, "queue_item": item}
 

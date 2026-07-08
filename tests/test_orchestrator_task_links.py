@@ -161,7 +161,7 @@ def test_orchestrator_task_links_migration_is_single_head():
         check=True,
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0024_sprint25_brain_runtime (head)"]
+    assert heads == ["0025_sprint25_3_execution_engine_enhancement (head)"]
 
 
 def create_analysis(

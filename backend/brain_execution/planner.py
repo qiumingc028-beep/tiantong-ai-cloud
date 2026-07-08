@@ -10,7 +10,7 @@ from ..brain_orchestrator.task_graph import build_task_graph
 from ..brain_tool_router.models import BrainExecutionLog
 from ..tool_center.gateway import clean_text
 from ..tool_router.router_engine import check_route_permission
-from .models import BrainApprovalRecord, BrainExecutionEvent, BrainExecutionRun, BrainTaskEdge, BrainTaskNode, BrainToolCall
+from .models import BrainApprovalRecord, BrainExecutionContext, BrainExecutionEvent, BrainExecutionRun, BrainTaskEdge, BrainTaskNode, BrainToolCall, BrainWorkerStatus
 from .state_machine import ExecutionState, transition_run
 
 
@@ -292,16 +292,25 @@ def run_to_dict(row: BrainExecutionRun) -> dict:
     return {
         "id": row.id,
         "task_id": clean_text(row.task_id),
+        "employee_id": clean_text(row.employee_id),
         "goal": clean_text(row.goal),
         "status": clean_text(row.status),
+        "priority": clean_text(row.priority),
+        "context": parse_json(row.context),
         "current_node": clean_text(row.current_node),
         "risk_level": clean_text(row.risk_level),
         "approval_required": bool(row.approval_required),
         "dry_run": bool(row.dry_run),
         "created_by": clean_text(row.created_by),
+        "queued_at": row.queued_at.isoformat() if row.queued_at else None,
+        "retry_count": int(row.retry_count or 0),
+        "max_retry": int(row.max_retry or 0),
+        "timeout_seconds": int(row.timeout_seconds or 0),
+        "worker_id": clean_text(row.worker_id),
         "started_at": row.started_at.isoformat() if row.started_at else None,
         "finished_at": row.finished_at.isoformat() if row.finished_at else None,
         "error_message": clean_text(row.error_message),
+        "last_error": clean_text(row.last_error),
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -383,6 +392,56 @@ def event_to_dict(row: BrainExecutionEvent) -> dict:
         "event_type": clean_text(row.event_type),
         "event_data": parse_json(row.event_data),
         "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def list_execution_contexts(db: Session, execution_id: int) -> list[dict]:
+    rows = (
+        db.query(BrainExecutionContext)
+        .filter(BrainExecutionContext.execution_id == execution_id)
+        .order_by(BrainExecutionContext.id.asc())
+        .all()
+    )
+    return [context_to_dict(row) for row in rows]
+
+
+def list_worker_statuses(db: Session) -> list[dict]:
+    rows = db.query(BrainWorkerStatus).order_by(BrainWorkerStatus.worker_id.asc()).all()
+    return [worker_status_to_dict(row) for row in rows]
+
+
+def context_to_dict(row: BrainExecutionContext) -> dict:
+    return {
+        "id": row.id,
+        "execution_id": row.execution_id,
+        "node_id": clean_text(row.node_id),
+        "employee_code": clean_text(row.employee_code),
+        "current_task": clean_text(row.current_task),
+        "input_data": parse_json(row.input_data),
+        "tool_permissions": parse_json(row.tool_permissions),
+        "risk_level": clean_text(row.risk_level),
+        "historical_execution": parse_json(row.historical_execution),
+        "approval_status": clean_text(row.approval_status),
+        "context_data": parse_json(row.context_data),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def worker_status_to_dict(row: BrainWorkerStatus) -> dict:
+    return {
+        "id": row.id,
+        "worker_id": clean_text(row.worker_id),
+        "status": clean_text(row.status),
+        "current_execution_id": row.current_execution_id,
+        "current_node_id": clean_text(row.current_node_id),
+        "current_task": clean_text(row.current_task),
+        "heartbeat": row.heartbeat_at.isoformat() if row.heartbeat_at else None,
+        "heartbeat_at": row.heartbeat_at.isoformat() if row.heartbeat_at else None,
+        "processed_count": int(row.processed_count or 0),
+        "success_count": int(row.success_count or 0),
+        "failed_count": int(row.failed_count or 0),
+        "timeout_count": int(row.timeout_count or 0),
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
 

@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user
 from ..auth_data import normalize_role
+from ..brain_execution.models import BrainExecutionRun, BrainWorkerStatus
+from ..brain_execution.queue import get_queue_status
 from ..database import get_db
 from ..deploy_models import DeployHealthCheck, DeployRecord, HealthCheckRecord
 from ..employee_command_dashboard import build_employee_command_dashboard, build_employee_detail
@@ -70,6 +72,12 @@ def get_employee_command_dashboard_detail(employee_code: str, request: Request, 
     return build_employee_detail(db, employee_code)
 
 
+@router.get("/brain-execution-summary")
+def get_brain_execution_summary(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_brain_execution_summary(db)
+
+
 def require_ceo_dashboard_user(request: Request, db: Session):
     user = current_user(request, db)
     role_code = normalize_role(user.role)
@@ -100,6 +108,45 @@ def build_ceo_dashboard_summary(db: Session):
         "ai_employee_command_dashboard": ai_employee_command_dashboard,
         "deploy_summary": deploy_summary,
         "alerts": alerts,
+    }
+
+
+def build_brain_execution_summary(db: Session) -> dict:
+    rows = db.query(BrainExecutionRun.status, func.count(BrainExecutionRun.id)).group_by(BrainExecutionRun.status).all()
+    counts = {status: count for status, count in rows}
+    success = counts.get("SUCCESS", 0)
+    failed = counts.get("FAILED", 0)
+    timeout = counts.get("TIMEOUT", 0)
+    finished = success + failed + timeout
+    workers = db.query(BrainWorkerStatus).order_by(BrainWorkerStatus.worker_id.asc()).all()
+    recent_failures = (
+        db.query(BrainExecutionRun)
+        .filter(BrainExecutionRun.status.in_(["FAILED", "TIMEOUT"]))
+        .order_by(BrainExecutionRun.finished_at.desc(), BrainExecutionRun.id.desc())
+        .limit(8)
+        .all()
+    )
+    durations = [
+        (row.finished_at - row.started_at).total_seconds()
+        for row in db.query(BrainExecutionRun).filter(BrainExecutionRun.started_at.isnot(None), BrainExecutionRun.finished_at.isnot(None)).all()
+        if row.finished_at and row.started_at
+    ]
+    queue_status = get_queue_status()
+    return {
+        "readonly": True,
+        "mode": "simulation",
+        "current_execution_count": counts.get("RUNNING", 0),
+        "queued_count": counts.get("QUEUED", 0) + int(queue_status.get("waiting", 0)),
+        "worker_count": len(workers),
+        "worker_statuses": [brain_worker_summary(row) for row in workers],
+        "success_rate": round(success / finished * 100, 2) if finished else 0,
+        "failed_count": failed,
+        "timeout_count": timeout,
+        "average_execution_seconds": round(sum(durations) / len(durations), 2) if durations else 0,
+        "queue_status": queue_status,
+        "status_counts": counts,
+        "recent_failures": [brain_execution_failure_summary(row) for row in recent_failures],
+        "forbidden_actions": ["shell", "external_api", "auto_install_skill", "code_change", "deploy"],
     }
 
 
@@ -329,6 +376,33 @@ def health_check_record_summary(record: HealthCheckRecord) -> dict:
         "status": record.status,
         "checked_at": iso(record.checked_at),
         "latency": record.latency,
+    }
+
+
+def brain_worker_summary(record: BrainWorkerStatus) -> dict:
+    return {
+        "worker_id": record.worker_id,
+        "status": record.status,
+        "heartbeat": iso(record.heartbeat_at),
+        "current_execution_id": record.current_execution_id,
+        "current_node_id": record.current_node_id,
+        "current_task": record.current_task,
+        "processed_count": record.processed_count,
+        "success_count": record.success_count,
+        "failed_count": record.failed_count,
+        "timeout_count": record.timeout_count,
+    }
+
+
+def brain_execution_failure_summary(record: BrainExecutionRun) -> dict:
+    return {
+        "execution_id": record.id,
+        "task_id": record.task_id,
+        "employee_id": record.employee_id,
+        "status": record.status,
+        "risk_level": record.risk_level,
+        "last_error": record.last_error or record.error_message,
+        "finished_at": iso(record.finished_at),
     }
 
 
