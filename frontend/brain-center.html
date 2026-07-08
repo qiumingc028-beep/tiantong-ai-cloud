@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>天统AI Brain Center - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#0f766e;--blue:#2563eb;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar,.tags{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#111827,#0f766e 56%,#2563eb);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#d1fae5;line-height:1.6;margin:8px 0 0}.note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#eff6ff;border-radius:8px;padding:10px 12px;max-width:520px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.stats{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:12px;margin-bottom:16px}.stat,.card{background:white;border:1px solid var(--line);border-radius:8px}.stat{padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:16px}.card{padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2{font-size:18px;margin:0}.muted{color:var(--muted);line-height:1.65}.mono{font-family:Consolas,monospace}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.low,.badge.allowed,.badge.ok{background:#dcfce7;color:#166534}.badge.medium,.badge.pending,.badge.dry-run{background:#fef3c7;color:#92400e}.badge.high,.badge.blocked,.badge.error{background:#fee2e2;color:#991b1b}.badge.simulation{background:#dbeafe;color:#1d4ed8}.input-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:start}textarea{width:100%;min-height:96px;resize:vertical;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-family:inherit}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}button.good{background:var(--good)}.list-item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}.steps{counter-reset:step}.step{position:relative;border-left:3px solid #cbd5e1;padding:10px 10px 10px 16px;margin-left:8px}.step:before{counter-increment:step;content:counter(step);position:absolute;left:-14px;top:10px;width:24px;height:24px;border-radius:999px;background:#111827;color:white;display:grid;place-items:center;font-size:12px}.risk-low{border-left:4px solid #16a34a}.risk-medium{border-left:4px solid #f59e0b}.risk-high{border-left:4px solid #dc2626}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;background:#f8fafc}.safe-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}@media(max-width:1120px){.layout,.input-row,.safe-grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.hero{align-items:flex-start;flex-direction:column}}@media(max-width:760px){.app{grid-template-columns:1fr}.content{padding:18px}.top{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>天统AI Brain Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>天统AI Brain Center</h1><p>老板输入任务后，由 Brain Center 标准化意图，再联动 Tool Router 生成安全模拟执行计划。</p></div>
+        <div class="note">第一阶段只做 simulation / dry-run：不真实调用工具、不控制浏览器、不执行 Shell、不修改 Skill、不修改 Prompt。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 Brain Center...</div>
+      <section id="stats" class="stats"></section>
+      <div class="layout">
+        <section>
+          <div class="card">
+            <div class="head"><h2>任务输入区</h2><span class="badge simulation">simulation</span></div>
+            <div class="input-row">
+              <textarea id="requestText" placeholder="例如：分析今天销售下降原因">分析今天销售下降原因</textarea>
+              <button onclick="analyzeTask()">提交分析</button>
+              <button class="secondary" onclick="generatePlan()">生成计划</button>
+            </div>
+            <div id="analysisBox" class="list-item muted">等待提交任务分析。</div>
+          </div>
+          <div class="card">
+            <div class="head"><h2>执行计划展示</h2><span id="planMode" class="badge dry-run">dry-run</span></div>
+            <div id="planBox" class="muted">暂无执行计划。</div>
+          </div>
+          <div class="card">
+            <div class="head"><h2>日志区域</h2><button class="secondary" onclick="loadLogs()">刷新日志</button></div>
+            <div id="logTable" class="table-wrap"></div>
+          </div>
+        </section>
+        <aside>
+          <div class="card">
+            <div class="head"><h2>审批区域</h2></div>
+            <div id="approvalBox" class="list-item muted">先完成任务分析后再检查审批。</div>
+            <div class="tags" style="margin-top:10px">
+              <label><input id="bossConfirmed" type="checkbox"> boss_confirmed</label>
+              <label><input id="securityAudited" type="checkbox"> security_audited</label>
+            </div>
+            <div class="tags" style="margin-top:10px"><button class="good" onclick="checkApproval()">审批检查</button></div>
+          </div>
+          <div class="card">
+            <div class="head"><h2>风险等级说明</h2></div>
+            <div class="list-item risk-low"><strong>低风险</strong><div class="muted">允许生成模拟计划。</div></div>
+            <div class="list-item risk-medium"><strong>中风险</strong><div class="muted">需要老板确认。</div></div>
+            <div class="list-item risk-high"><strong>高风险</strong><div class="muted">必须 boss_confirmed + security_audited。</div></div>
+          </div>
+          <div class="card">
+            <div class="head"><h2>安全限制</h2></div>
+            <div id="safetyBox" class="safe-grid"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['天统AI Brain Center','/brain-center.html'],['Tool Router 工具路由中心','/tool-router.html'],['Tool Center 工具中心','/tool-center.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['天盾部署中心','/deploy-center.html'],['Release Center','/release-center.html'],['系统设置','/settings.html']];
+const blockedWords=['pass'+'word_hash','tok'+'en','sec'+'ret','API '+'Key','Authori'+'zation','Bear'+'er'];
+let state={analysis:null,plan:null,logs:[]};
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/brain-center.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+function clean(value){let text=String(value??'');for(const word of blockedWords){text=text.replaceAll(word,'[REDACTED]')}return text}
+function esc(value){return clean(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,empty='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;if(Array.isArray(value))return value.length?value.map(v=>text(v,'')).filter(Boolean).join('、'):empty;if(value&&typeof value==='object')return JSON.stringify(value);return empty}
+function badge(value,type=''){const v=String(value??'unknown');return `<span class="badge ${esc(type||v.toLowerCase())}">${esc(text(value))}</span>`}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+async function api(url,options={}){
+  let res;
+  try{res=await fetch(url,{credentials:'include',...options})}catch(e){throw new Error('网络异常，请稍后重试')}
+  const payload=await res.json().catch(()=>({}));
+  if(res.status===401){location.href='/login.html';throw new Error('登录已过期，请重新登录')}
+  if(res.status===403)throw new Error(typeof payload.detail==='string'?payload.detail:(payload.detail&&payload.detail.reason)||'无权限访问');
+  if(res.status===404)throw new Error('接口或数据不存在');
+  if(res.status===422)throw new Error('参数错误');
+  if(res.status>=500)throw new Error('服务器异常');
+  if(!res.ok)throw new Error(payload.detail||'请求失败');
+  return payload;
+}
+async function init(){renderMenu();tick();setInterval(tick,1000);renderSafety();renderStats();try{const user=await api('/api/me');me.innerText=`${text(user.display_name||user.username)} · ${text(user.role_label||user.role)}`;await loadLogs();pageState.className='state ok';pageState.innerText='Brain Center 已就绪。'}catch(e){pageState.className='state error';pageState.innerText=e.message}}
+function payload(){return{request_text:requestText.value.trim()||'分析今天销售下降原因'}}
+async function analyzeTask(){pageState.className='state';pageState.innerText='正在分析任务...';try{const data=await api('/api/brain-tool-router/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload())});state.analysis=data;renderAnalysis();renderApproval();renderStats();await loadLogs();pageState.className='state ok';pageState.innerText='任务分析完成。'}catch(e){pageState.className='state error';pageState.innerText=e.message}}
+async function generatePlan(){pageState.className='state';pageState.innerText='正在生成 dry-run 计划...';try{const data=await api('/api/brain-tool-router/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload(),boss_confirmed:bossConfirmed.checked,security_audited:securityAudited.checked})});state.plan=data;renderPlan();renderStats();await loadLogs();pageState.className='state ok';pageState.innerText='模拟执行计划已生成。'}catch(e){pageState.className='state error';pageState.innerText=e.message}}
+async function checkApproval(){const risk=(state.analysis&&state.analysis.risk_level)||(state.plan&&state.plan.risk_level)||'low';try{const data=await api('/api/brain-tool-router/approval-check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({risk_level:risk,boss_confirmed:bossConfirmed.checked,security_audited:securityAudited.checked,employee_code:employeeCode()})});approvalBox.className=`list-item risk-${data.risk_level}`;approvalBox.innerHTML=`${badge(data.approval_status,'ok')}<div class="muted">${esc(data.reason)}</div>`;await loadLogs()}catch(e){approvalBox.className='list-item risk-high';approvalBox.innerHTML=`${badge('blocked','blocked')}<div class="muted">${esc(e.message)}</div>`;await loadLogs()}}
+async function loadLogs(){try{const data=await api('/api/brain-tool-router/logs');state.logs=Array.isArray(data.logs)?data.logs:[]}catch(e){state.logs=[]}renderLogs();renderStats()}
+function employeeCode(){return state.analysis&&state.analysis.recommended_employee?state.analysis.recommended_employee.employee_code:undefined}
+function renderAnalysis(){const data=state.analysis;if(!data){analysisBox.className='list-item muted';analysisBox.innerText='等待提交任务分析。';return}analysisBox.className=`list-item risk-${data.risk_level}`;analysisBox.innerHTML=`<div class="tags">${badge(data.task_type)}${badge(data.risk_level)}${data.approval_required?badge('需要审批','pending'):badge('无需审批','allowed')}</div><p><strong>推荐员工：</strong>${esc(data.recommended_employee.employee_code)} · ${esc(data.recommended_employee.employee_role)}</p><p><strong>需要工具：</strong>${esc(text(data.required_tools))}</p><p><strong>任务ID：</strong><span class="mono">${esc(data.task_intent.task_id)}</span></p>`}
+function renderPlan(){const data=state.plan;if(!data){planBox.innerHTML='暂无执行计划。';return}planMode.innerText=data.dry_run?'dry-run':'unknown';planBox.innerHTML=`<div class="tags">${badge(data.employee)}${badge(data.risk_level)}${badge(data.dry_run?'dry-run':'unknown','dry-run')}</div><div class="steps">${(data.steps||[]).map(step=>`<div class="step">${esc(step)}</div>`).join('')}</div><h3>工具选择</h3>${(data.tools||[]).map(tool=>`<div class="list-item risk-${tool.risk_level}"><strong>${esc(tool.tool_name)}</strong><div class="tags">${badge(tool.risk_level)}${tool.allowed?badge('允许','allowed'):badge('阻断','blocked')}${tool.require_approval?badge('需要审批','pending'):badge('无需审批','allowed')}</div><div class="muted">${esc(tool.reason)}</div></div>`).join('')||'<div class="muted">暂无工具</div>'}`}
+function renderApproval(){const risk=state.analysis?state.analysis.risk_level:'low';const cls=`list-item risk-${risk}`;approvalBox.className=cls;if(risk==='high'){approvalBox.innerHTML=`${badge('高风险','high')}<div class="muted">需要 boss_confirmed + security_audited。</div>`}else if(risk==='medium'){approvalBox.innerHTML=`${badge('中风险','medium')}<div class="muted">需要老板确认。</div>`}else{approvalBox.innerHTML=`${badge('低风险','low')}<div class="muted">允许生成模拟计划。</div>`}}
+function renderLogs(){logTable.innerHTML=state.logs.length?`<table><thead><tr><th>时间</th><th>任务</th><th>员工</th><th>工具</th><th>结果</th></tr></thead><tbody>${state.logs.map(log=>`<tr><td>${esc(text(log.created_at))}</td><td>${esc(text(log.user_request))}</td><td>${esc(text(log.recommended_employee))}</td><td>${esc(text((log.tool_selection&&log.tool_selection.required_tools)||(log.tool_selection&&log.tool_selection.tools)))}</td><td>${esc(text(log.execution_result||log.approval_status))}</td></tr>`).join('')}</tbody></table>`:'<div class="state">暂无日志</div>'}
+function renderStats(){const waiting=state.logs.filter(log=>String(log.approval_status||'').includes('pending')||String(log.approval_status||'').includes('needs')).length;const plans=state.logs.filter(log=>log.execution_result==='plan_generated_dry_run').length;stats.innerHTML=[['当前任务数量',state.analysis?1:0],['分析次数',state.logs.filter(log=>log.approval_status==='analysis_only').length],['审批等待',waiting],['执行日志',state.logs.length+plans*0]].map(([label,value])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`).join('')}
+function renderSafety(){safetyBox.innerHTML=['禁止真实工具调用','禁止浏览器控制','禁止 Shell 执行','禁止修改 Skill','禁止修改 Prompt','只做模拟大脑控制台'].map(item=>`<div class="list-item">${esc(item)}</div>`).join('')}
+init();
+</script>
+</body>
+</html>
