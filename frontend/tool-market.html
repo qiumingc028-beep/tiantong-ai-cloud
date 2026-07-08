@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tool Market 工具市场 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#0f766e;--brand2:#2563eb;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#111827,#0f766e 58%,#2563eb);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#d1fae5;line-height:1.6;margin:8px 0 0}.hero .note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#eff6ff;border-radius:8px;padding:10px 12px;max-width:540px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.stats{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:12px;margin-bottom:16px}.stat,.card{background:white;border:1px solid var(--line);border-radius:8px}.stat{padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.card{padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2,.card h2{font-size:18px;margin:0}.toolbar input,.toolbar select{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:0 10px;min-width:180px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:16px}.market-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.tool-card{border:1px solid var(--line);background:#fff;border-radius:8px;padding:14px;min-height:210px;cursor:pointer}.tool-card:hover,.tool-card.selected{border-color:var(--brand2);box-shadow:0 8px 22px rgba(15,23,42,.08)}.tool-card.high,.tool-card.critical{border-color:#fed7aa;background:#fff7ed}.icon{width:42px;height:42px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#ecfeff;color:#0f766e;font-size:22px;margin-bottom:10px}.muted{color:var(--muted);line-height:1.65}.mono{font-family:Consolas,monospace}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.low,.badge.enabled,.badge.approved,.badge.allowed{background:#dcfce7;color:#166534}.badge.medium,.badge.simulation,.badge.pending{background:#fef3c7;color:#92400e}.badge.high,.badge.critical,.badge.blocked,.badge.disabled,.badge.denied{background:#fee2e2;color:#991b1b}.tag-list{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.list-item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}.approval{border-left:4px solid #f59e0b}.risk{border-left:4px solid #dc2626}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}button.danger{background:#991b1b}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;background:#f8fafc}@media(max-width:1180px){.layout{grid-template-columns:1fr}.market-grid{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.hero{align-items:flex-start;flex-direction:column}}@media(max-width:760px){.app{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.content{padding:18px}.stats,.market-grid{grid-template-columns:1fr}.toolbar input,.toolbar select{width:100%;min-width:0}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>Tool Market 工具市场</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>Tool Market 工具市场</h1><p>老板查看 AI 员工具备哪些工具能力、谁能使用、哪些工具需要审批、调用日志是否安全。</p></div>
+        <div class="note">全部保持 simulation / dry-run：不真实调用外部工具、不自动安装、不自动联网、不执行代码、不修改 Skill。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 Tool Market...</div>
+      <section id="stats" class="stats"></section>
+      <div class="card">
+        <div class="toolbar">
+          <input id="searchInput" placeholder="搜索工具 / 员工 / 类型" oninput="renderAll()">
+          <select id="riskFilter" onchange="renderAll()"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
+          <select id="statusFilter" onchange="renderAll()"><option value="">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select>
+          <button onclick="loadAll()">刷新</button>
+          <a class="btn secondary" href="/tool-center.html">Tool Center</a>
+        </div>
+      </div>
+      <div class="layout">
+        <section>
+          <div class="card"><div class="head"><h2>工具市场</h2><span class="muted">Browser / File / Excel / Image / Search / Code / Data</span></div><div id="marketGrid" class="market-grid"></div></div>
+          <div class="card"><div class="head"><h2>AI员工绑定中心</h2></div><div id="bindingBox"></div></div>
+          <div class="card"><div class="head"><h2>工具日志</h2></div><div id="logTable" class="table-wrap"></div></div>
+        </section>
+        <aside>
+          <div id="detailPanel" class="card"><h2>工具详情</h2><div class="muted">点击工具查看详情。</div></div>
+          <div class="card"><div class="head"><h2>工具审批中心</h2></div><div id="approvalBox"></div></div>
+          <div class="card"><div class="head"><h2>安全边界</h2></div><div id="safetyBox"></div></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['AI工具调用权限中心','/tool-permissions.html'],['Tool Center 工具中心','/tool-center.html'],['Tool Market 工具市场','/tool-market.html'],['AI员工能力档案','/employee-capabilities.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['天盾部署中心','/deploy-center.html'],['Release Center','/release-center.html'],['系统设置','/settings.html']];
+const employeeCodes=['tiancai','tiancai_data','tianchuang','tianyu','tiancai_finance'];
+const employeeNames={tiancai:'天采',tiancai_data:'天采：数据采集',tianchuang:'天创',tianyu:'天誉',tiancai_finance:'天财'};
+const iconMap={web_search:'🔎',web_reader:'🌐',file:'📄',vision:'🖼️',api:'🔌',analysis:'📈',finance:'💳',database:'🗄️',dangerous:'⛔'};
+const blockedWords=['pass'+'word_hash','tok'+'en','sec'+'ret','API '+'Key','Bear'+'er'];
+let state={tools:[],bindings:{},logs:[],selected:null};
+
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/tool-market.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+function clean(value){let text=String(value??'');for(const word of blockedWords){text=text.replaceAll(word,'[REDACTED]')}return text}
+function esc(value){return clean(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,empty='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;if(Array.isArray(value))return value.length?value.map(v=>text(v,'')).filter(Boolean).join('、'):empty;if(value&&typeof value==='object')return text(value.tool_name||value.employee_code||value.description,empty);return empty}
+function badge(value,type=''){const v=String(value??'unknown');return `<span class="badge ${esc(type||v.toLowerCase())}">${esc(text(value))}</span>`}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+async function api(url){
+  let res;
+  try{res=await fetch(url,{credentials:'include'})}catch(e){throw new Error('网络异常，请稍后重试')}
+  if(res.status===401){location.href='/login.html';throw new Error('登录已过期，请重新登录')}
+  const data=res.ok?null:await res.json().catch(()=>({}));
+  if(res.status===403)throw new Error((data&&data.detail)||'无权限访问');
+  if(res.status===404)throw new Error((data&&data.detail)||'接口或数据不存在');
+  if(res.status>=500)throw new Error((data&&data.detail)||'服务器异常');
+  if(!res.ok)throw new Error((data&&data.detail)||'请求失败');
+  return res.json();
+}
+async function init(){renderMenu();tick();setInterval(tick,1000);try{const user=await api('/api/me');me.innerText=`${text(user.display_name||user.username)} · ${text(user.role_label||user.role)}`}catch(e){pageState.className='state error';pageState.innerText=e.message;return}await loadAll()}
+async function loadAll(){
+  pageState.className='state';pageState.innerText='正在加载 Tool Market...';
+  try{
+    const [toolData,logData,...bindingData]=await Promise.all([
+      api('/api/tools/list'),
+      api('/api/tools/logs'),
+      ...employeeCodes.map(code=>api(`/api/tools/employees/${encodeURIComponent(code)}`).catch(()=>({employee_code:code,tools:[]})))
+    ]);
+    state.tools=Array.isArray(toolData.tools)?toolData.tools:[];
+    state.logs=Array.isArray(logData.logs)?logData.logs:[];
+    state.bindings={};
+    bindingData.forEach(item=>{state.bindings[item.employee_code]=Array.isArray(item.tools)?item.tools:[]});
+    pageState.className='state ok';pageState.innerText='Tool Market 已更新，当前仅展示 simulation / dry-run 配置。';
+  }catch(e){
+    pageState.className='state error';pageState.innerText=e.message||'Tool Market 加载失败';
+    state={tools:[],bindings:{},logs:[],selected:null};
+  }
+  renderAll();
+}
+function filterTools(){
+  const q=searchInput.value.trim().toLowerCase(),risk=riskFilter.value,status=statusFilter.value;
+  return state.tools.filter(tool=>{
+    const hay=[tool.tool_name,tool.tool_type,tool.description,tool.provider,applicableEmployees(tool.tool_name)].join(' ').toLowerCase();
+    const enabled=tool.enabled?'enabled':'disabled';
+    return (!q||hay.includes(q))&&(!risk||tool.risk_level===risk)&&(!status||enabled===status);
+  });
+}
+function applicableEmployees(toolName){
+  const rows=[];
+  Object.entries(state.bindings).forEach(([code,tools])=>{if(tools.some(tool=>tool.tool_name===toolName&&tool.allowed))rows.push(employeeNames[code]||code)});
+  return rows.join('、');
+}
+function bindingRows(){return Object.entries(state.bindings).flatMap(([employee,tools])=>tools.map(tool=>({employee,...tool})))}
+function renderAll(){renderStats();renderMarket();renderBindings();renderLogs();renderApprovals();renderSafety();renderDetail(state.selected)}
+function renderStats(){
+  const total=state.tools.length,enabled=state.tools.filter(t=>t.enabled).length,risky=state.tools.filter(t=>['high','critical'].includes(String(t.risk_level))).length,pending=bindingRows().filter(row=>row.require_approval).length;
+  stats.innerHTML=[['工具数量',total],['启用工具',enabled],['高风险工具',risky],['待审批绑定',pending]].map(([label,value])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`).join('');
+}
+function renderMarket(){
+  const rows=filterTools();
+  marketGrid.innerHTML=rows.length?rows.map(tool=>`<article class="tool-card ${esc(tool.risk_level)} ${state.selected===tool.tool_name?'selected':''}" onclick="selectTool('${esc(tool.tool_name)}')"><div class="icon">${esc(iconMap[tool.tool_type]||'🧰')}</div><strong class="mono">${esc(tool.tool_name)}</strong><div class="muted">${esc(text(tool.description))}</div><div class="tag-list">${badge(tool.tool_type)}${badge(tool.risk_level)}${tool.enabled?badge('启用','enabled'):badge('停用','disabled')}</div><div class="muted">适用员工：${esc(text(applicableEmployees(tool.tool_name),'暂无绑定'))}</div></article>`).join(''):'<div class="state">暂无工具</div>';
+}
+function renderBindings(){
+  const rows=bindingRows();
+  bindingBox.innerHTML=rows.length?rows.map(row=>`<div class="list-item"><strong>${esc(employeeNames[row.employee]||row.employee)}</strong><div class="tag-list">${badge(row.tool_name)}${badge(row.permission_level)}${row.allowed?badge('允许','allowed'):badge('禁止','denied')}${row.require_approval?badge('需要审批','pending'):badge('无需审批','enabled')}</div><div class="muted">调用次数：${countCalls(row.employee,row.tool_name)} · 风险状态：${esc(text(row.risk_level))}</div></div>`).join(''):'<div class="muted">暂无绑定</div>';
+}
+function renderLogs(){
+  logTable.innerHTML=state.logs.length?`<table><thead><tr><th>员工</th><th>工具</th><th>时间</th><th>结果</th><th>耗时</th><th>风险等级</th></tr></thead><tbody>${state.logs.map(log=>`<tr><td>${esc(employeeNames[log.employee_code]||log.employee_code)}</td><td class="mono">${esc(text(log.tool_name))}</td><td>${esc(text(log.created_at))}</td><td>${badge(log.status)}</td><td>${esc(text(log.duration,'0'))} ms</td><td>${badge(riskOf(log.tool_name))}</td></tr>`).join('')}</tbody></table>`:'<div class="state">暂无日志</div>';
+}
+function renderApprovals(){
+  const rows=bindingRows().filter(row=>row.require_approval||['high','critical'].includes(String(row.risk_level)));
+  approvalBox.innerHTML=rows.length?rows.map(row=>`<div class="list-item approval"><strong>${esc(row.tool_name)}</strong> ${badge(row.risk_level)}<div class="muted">申请员工：${esc(employeeNames[row.employee]||row.employee)} · 申请时间：暂无</div><div class="tag-list"><button onclick="localDecision('允许','${esc(row.tool_name)}')">允许</button><button class="danger" onclick="localDecision('拒绝','${esc(row.tool_name)}')">拒绝</button><button class="secondary" onclick="selectTool('${esc(row.tool_name)}')">查看详情</button></div></div>`).join(''):'<div class="muted">暂无待审批工具</div>';
+}
+function renderSafety(){safetyBox.innerHTML=['不真实调用外部工具','不自动安装工具','不自动联网','不执行代码','不修改 Skill','所有审批按钮仅本地 simulation 提示'].map(item=>`<div class="list-item risk">${esc(item)}</div>`).join('')}
+function renderDetail(toolName){
+  const tool=state.tools.find(item=>item.tool_name===toolName);
+  if(!tool){detailPanel.innerHTML='<h2>工具详情</h2><div class="muted">点击工具查看详情。</div>';return}
+  detailPanel.innerHTML=`<div class="head"><h2>${esc(tool.tool_name)}</h2>${badge(tool.risk_level)}</div><div class="list-item"><strong>功能介绍</strong><div class="muted">${esc(text(tool.description))}</div><div class="tag-list">${badge(tool.tool_type)}${badge(tool.version)}${tool.enabled?badge('启用','enabled'):badge('停用','disabled')}</div></div><div class="list-item"><strong>适用员工</strong><div class="muted">${esc(text(applicableEmployees(tool.tool_name),'暂无绑定'))}</div></div>`;
+}
+function selectTool(toolName){state.selected=toolName;renderAll()}
+function localDecision(action,toolName){pageState.className='state warn';pageState.innerText=`${action} ${toolName} 已记录为前端 simulation 提示；第一阶段不会写入后端，也不会启用或调用工具。`}
+function riskOf(toolName){const tool=state.tools.find(item=>item.tool_name===toolName);return tool?tool.risk_level:'unknown'}
+function countCalls(employeeCode,toolName){return state.logs.filter(log=>log.employee_code===employeeCode&&log.tool_name===toolName).length}
+init();
+</script>
+</body>
+</html>
