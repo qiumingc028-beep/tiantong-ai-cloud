@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brain Orchestrator 可视化控制台 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#0f766e;--blue:#2563eb;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.row,.tags{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#111827,#0f766e 58%,#2563eb);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#d1fae5;line-height:1.6;margin:8px 0 0}.note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#eff6ff;border-radius:8px;padding:10px 12px;max-width:560px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.stats{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:12px;margin-bottom:16px}.stat,.card{background:white;border:1px solid var(--line);border-radius:8px}.stat{padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 410px;gap:16px}.card{padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2{font-size:18px;margin:0}.muted{color:var(--muted);line-height:1.65}.mono{font-family:Consolas,monospace}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.low,.badge.allowed,.badge.approved,.badge.completed{background:#dcfce7;color:#166534}.badge.medium,.badge.pending,.badge.running,.badge.dry-run{background:#fef3c7;color:#92400e}.badge.high,.badge.blocked,.badge.error{background:#fee2e2;color:#991b1b}.badge.simulation{background:#dbeafe;color:#1d4ed8}textarea{width:100%;min-height:92px;resize:vertical;border:1px solid #cbd5e1;border-radius:8px;padding:10px;font-family:inherit}.input-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:start}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}.graph{display:flex;flex-direction:column;gap:10px}.node{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:12px;position:relative}.node:after{content:"↓";display:block;text-align:center;color:var(--muted);font-weight:800;margin:10px 0 -4px}.node:last-child:after{display:none}.node.pending{border-left:4px solid #94a3b8}.node.running{border-left:4px solid #f59e0b}.node.approved,.node.completed{border-left:4px solid #16a34a}.node.blocked{border-left:4px solid #dc2626}.subgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.list-item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}.tool{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;background:#f8fafc}.safe-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}@media(max-width:1180px){.layout,.input-row,.subgrid,.safe-grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.hero{align-items:flex-start;flex-direction:column}}@media(max-width:760px){.app{grid-template-columns:1fr}.content{padding:18px}.top{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>Brain Orchestrator 可视化控制台</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>Brain Center × Orchestrator</h1><p>把老板一句话转换为 Task Graph、AI员工任务链、工具权限检查和审批节点。</p></div>
+        <div class="note">第一阶段只做可视化、模拟和审批展示。禁止自动执行任务、浏览器控制、Shell 执行、修改 Skill、自动联网。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 Brain Orchestrator...</div>
+      <section id="stats" class="stats"></section>
+      <div class="layout">
+        <section>
+          <div class="card">
+            <div class="head"><h2>任务输入区</h2><span class="badge simulation">simulation</span></div>
+            <div class="input-row">
+              <textarea id="requestText">分析今天销售下降原因</textarea>
+              <button onclick="analyzeTask()">分析</button>
+              <button class="secondary" onclick="generatePlan()">生成计划</button>
+            </div>
+            <div id="analysisBox" class="list-item muted">等待 Brain 分析结果。</div>
+          </div>
+          <div class="card">
+            <div class="head"><h2>Task Graph 可视化</h2><span class="badge dry-run">dry-run</span></div>
+            <div id="graphBox" class="graph"></div>
+          </div>
+          <div class="card">
+            <div class="head"><h2>Tool Router 展示</h2><span class="muted">只显示 dry-run 结果</span></div>
+            <div id="toolBox"></div>
+          </div>
+        </section>
+        <aside>
+          <div class="card">
+            <div class="head"><h2>AI员工推荐区域</h2></div>
+            <div id="employeeBox"></div>
+          </div>
+          <div class="card">
+            <div class="head"><h2>审批中心</h2></div>
+            <div id="approvalBox"></div>
+          </div>
+          <div class="card">
+            <div class="head"><h2>执行日志</h2><button class="secondary" onclick="loadLogs()">刷新</button></div>
+            <div id="logBox" class="table-wrap"></div>
+          </div>
+          <div class="card">
+            <div class="head"><h2>安全边界</h2></div>
+            <div id="safetyBox" class="safe-grid"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['天统AI Brain Center','/brain-center.html'],['Brain Orchestrator','/brain-orchestrator.html'],['Tool Router 工具路由中心','/tool-router.html'],['Tool Center 工具中心','/tool-center.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['天盾部署中心','/deploy-center.html']];
+const sensitiveWords=['pass'+'word_hash','tok'+'en','sec'+'ret','API '+'Key','Authori'+'zation','Bear'+'er'];
+let state={analysis:null,plan:null,logs:[]};
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/brain-orchestrator.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+function clean(value){let text=String(value??'');for(const word of sensitiveWords){text=text.replaceAll(word,'[REDACTED]')}return text}
+function esc(value){return clean(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,empty='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;if(Array.isArray(value))return value.length?value.map(v=>text(v,'')).filter(Boolean).join('、'):empty;if(value&&typeof value==='object')return JSON.stringify(value);return empty}
+function badge(value,type=''){const v=String(value??'unknown');return `<span class="badge ${esc(type||v.toLowerCase())}">${esc(text(value))}</span>`}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+async function api(url,options={}){
+  let res;
+  try{res=await fetch(url,{credentials:'include',...options})}catch(e){throw new Error('网络异常，请稍后重试')}
+  const payload=await res.json().catch(()=>({}));
+  if(res.status===401){location.href='/login.html';throw new Error('登录已过期，请重新登录')}
+  if(res.status===403)throw new Error(typeof payload.detail==='string'?payload.detail:'无权限访问');
+  if(res.status===404)throw new Error('接口或数据不存在');
+  if(res.status===422)throw new Error('参数错误');
+  if(res.status>=500)throw new Error('服务器异常');
+  if(!res.ok)throw new Error(payload.detail||'请求失败');
+  return payload;
+}
+async function init(){renderMenu();tick();setInterval(tick,1000);renderSafety();renderStats();renderGraph();renderApprovals();try{const user=await api('/api/me');me.innerText=`${text(user.display_name||user.username)} · ${text(user.role_label||user.role)}`;await loadLogs();pageState.className='state ok';pageState.innerText='Brain Orchestrator 已就绪。'}catch(e){pageState.className='state error';pageState.innerText=e.message}}
+function requestPayload(){return{request_text:requestText.value.trim()||'分析今天销售下降原因'}}
+async function analyzeTask(){pageState.className='state';pageState.innerText='正在分析任务...';try{const data=await api('/api/orchestrator/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(requestPayload())});state.analysis=data;renderAll();pageState.className='state ok';pageState.innerText='Brain 分析完成。'}catch(e){pageState.className='state error';pageState.innerText=e.message}}
+async function generatePlan(){pageState.className='state';pageState.innerText='正在生成 dry-run Task Graph...';try{const data=await api('/api/orchestrator/plan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(requestPayload())});state.plan=data;renderAll();await loadGraphDetail(data.graph_id);await loadLogs();pageState.className='state ok';pageState.innerText='dry-run 执行计划已生成。'}catch(e){pageState.className='state error';pageState.innerText=e.message}}
+async function loadGraphDetail(graphId){if(!graphId)return;try{const data=await api(`/api/orchestrator/tasks/${encodeURIComponent(graphId)}`);state.graphDetail=data}catch(e){}}
+async function loadLogs(){try{const data=await api('/api/orchestrator/logs');state.logs=Array.isArray(data.logs)?data.logs:[]}catch(e){state.logs=[]}renderLogs();renderStats()}
+function renderAll(){renderStats();renderAnalysis();renderEmployees();renderGraph();renderTools();renderApprovals()}
+function renderStats(){const tasks=state.plan&&state.plan.nodes?state.plan.nodes.length:(state.analysis&&state.analysis.tasks?state.analysis.tasks.length:0);const blocked=state.plan&&state.plan.nodes?state.plan.nodes.filter(n=>n.status==='waiting_approval'||n.risk_level==='high').length:0;stats.innerHTML=[['任务节点',tasks],['推荐员工',employeeRows().length],['审批节点',approvalNodes().length],['日志记录',state.logs.length]].map(([label,value])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`).join('')}
+function renderAnalysis(){const data=state.analysis;if(!data){analysisBox.className='list-item muted';analysisBox.innerText='等待 Brain 分析结果。';return}analysisBox.className=`list-item`;analysisBox.innerHTML=`<div class="tags">${badge(data.task_type)}${badge(data.risk_level)}${data.approval_required?badge('需要审批','pending'):badge('无需审批','allowed')}${badge(data.dry_run?'dry-run':'unknown','dry-run')}</div><p><strong>目标：</strong>${esc(data.goal)}</p><p><strong>工具：</strong>${esc(text(data.tools))}</p>`}
+function employeeRows(){if(state.plan&&state.plan.nodes)return uniqueBy(state.plan.nodes.map(n=>({employee_code:n.employee_code,employee_name:n.employee_name,employee_role:n.employee_role,reason:n.task_goal,node_name:n.node_name})), 'employee_code');if(state.analysis&&state.analysis.employees)return state.analysis.employees;return[]}
+function renderEmployees(){const rows=employeeRows();employeeBox.innerHTML=rows.length?rows.map(row=>`<div class="list-item"><strong>${esc(row.employee_name||row.employee_code)}</strong><div class="mono muted">${esc(row.employee_code)}</div><div>${badge(row.employee_role||'AI员工')}</div><div class="muted">负责任务：${esc(row.node_name||row.reason||'待规划')}</div><div class="muted">预计结果：输出${esc(row.employee_role||'任务')}结论</div></div>`).join(''):'<div class="state">暂无推荐员工</div>'}
+function renderGraph(){const nodes=state.plan&&state.plan.nodes?state.plan.nodes:(state.analysis&&state.analysis.tasks?state.analysis.tasks:[]);if(!nodes.length){graphBox.innerHTML='<div class="node pending"><strong>目标</strong><div class="muted">等待生成 Task Graph</div></div>';return}const goal=(state.plan&&state.plan.goal)||(state.analysis&&state.analysis.goal)||'目标';const goalNode=`<div class="node approved"><strong>目标</strong><div>${esc(goal)}</div>${badge('approved')}</div>`;const taskNodes=nodes.map(node=>`<div class="node ${nodeStatus(node)}"><strong>${esc(node.node_name||node.task_goal)}</strong><div class="muted">AI员工：${esc(node.employee_name)} · ${esc(node.employee_role)}</div><div class="muted">工具节点：${esc(text(node.required_tools))}</div><div class="tags">${badge(node.risk_level)}${badge(nodeStatus(node))}${node.approval_required?badge('审批节点','pending'):badge('自动通过','allowed')}</div></div>`).join('');graphBox.innerHTML=goalNode+taskNodes+`<div class="node ${state.plan&&state.plan.status==='blocked'?'blocked':'pending'}"><strong>执行状态</strong><div class="muted">${esc(state.plan?state.plan.status:'pending')}</div>${badge(state.plan&&state.plan.dry_run?'dry-run':'pending','dry-run')}</div>`}
+function renderTools(){const rows=state.plan&&state.plan.tool_router_results?state.plan.tool_router_results:[];toolBox.innerHTML=rows.length?rows.map(row=>`<div class="list-item tool"><div><strong>${esc(row.tool_name)}</strong><div class="muted">${esc(row.employee_code)} · ${esc(row.node_id)}</div><div class="muted">${esc(row.reason)}</div></div><div class="tags">${row.allowed?badge('允许','allowed'):(row.require_approval?badge('需要审批','pending'):badge('拒绝','blocked'))}${badge(row.risk_level)}${badge('dry-run','dry-run')}</div></div>`).join(''):'<div class="state">暂无工具 dry-run 结果</div>'}
+function approvalNodes(){const nodes=state.plan&&state.plan.nodes?state.plan.nodes:(state.analysis&&state.analysis.tasks?state.analysis.tasks:[]);return nodes.filter(node=>node.approval_required)}
+function renderApprovals(){const nodes=approvalNodes();if(!nodes.length){approvalBox.innerHTML='<div class="list-item">'+badge('低风险','low')+'<div class="muted">自动通过，仅生成 dry-run 计划。</div></div>';return}approvalBox.innerHTML=nodes.map(node=>{const label=node.risk_level==='high'?'高风险 blocked':'中风险等待老板确认';const cls=node.risk_level==='high'?'blocked':'pending';return `<div class="list-item"><div class="tags">${badge(label,cls)}${badge(node.risk_level)}</div><strong>${esc(node.node_name)}</strong><div class="muted">${node.risk_level==='high'?'必须 boss_confirmed + security_audited':'等待老板确认'}</div></div>`}).join('')}
+function renderLogs(){logBox.innerHTML=state.logs.length?`<table><thead><tr><th>时间</th><th>任务</th><th>图</th><th>结果</th></tr></thead><tbody>${state.logs.map(log=>`<tr><td>${esc(text(log.created_at))}</td><td>${esc(text(log.user_request))}</td><td class="mono">${esc(text(log.graph_id))}</td><td>${badge(log.execution_result)}</td></tr>`).join('')}</tbody></table>`:'<div class="state">暂无日志</div>'}
+function renderSafety(){safetyBox.innerHTML=['只做可视化','只做模拟','只做审批展示','禁止自动执行任务','禁止调用浏览器','禁止 Shell 执行','禁止修改 Skill','禁止自动联网'].map(item=>`<div class="list-item">${esc(item)}</div>`).join('')}
+function nodeStatus(node){if(node.status==='waiting_approval'||node.risk_level==='high')return 'blocked';if(node.status==='running')return 'running';if(node.status==='completed')return 'completed';return node.approval_required?'pending':'approved'}
+function uniqueBy(rows,key){const seen=new Set();return rows.filter(row=>{const value=row[key];if(seen.has(value))return false;seen.add(value);return true})}
+init();
+</script>
+</body>
+</html>

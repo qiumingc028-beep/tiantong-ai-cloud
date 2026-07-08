@@ -27,7 +27,7 @@ HTML_PAGES = {
     "ai-assets.html", "workflows.html", "ai-employees.html", "settings.html",
     "account-center.html", "template-center.html", "brands.html", "store-groups.html",
     "knowledge-center.html", "tiancang.html", "task-center.html", "orchestrator.html", "auto-dispatch-center.html", "deploy-center.html",
-    "ai-execution.html", "release-center.html", "tool-center.html", "tool-router.html", "brain-center.html",
+    "ai-execution.html", "release-center.html", "tool-center.html", "tool-router.html", "brain-center.html", "brain-orchestrator.html",
 }
 DASHBOARD_HTML_PAGES = {
     "overview.html",
