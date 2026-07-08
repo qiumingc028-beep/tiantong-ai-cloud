@@ -126,7 +126,7 @@ def test_alembic_heads_has_single_head():
     )
 
     heads = [line for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0021_sprint22_brain_tool_router (head)"]
+    assert heads == ["0022_sprint23_brain_orchestrator (head)"]
 
 
 def create_task(client, headers):

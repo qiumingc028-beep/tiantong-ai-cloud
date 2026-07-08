@@ -1,6 +1,7 @@
 import subprocess
 import sys
 
+from backend.brain_orchestrator.models import BrainOrchestratorLog, BrainTaskEdge, BrainTaskGraph, BrainTaskNode
 from backend.models import AiEmployee, TaskCenterTask
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorPromptConfirmation
 
@@ -28,6 +29,131 @@ def test_orchestrator_allows_boss_owner_admin(client, boss_headers, owner_header
     for headers in [boss_headers, owner_headers, admin_headers]:
         response = client.get("/api/orchestrator/analysis-records", headers=headers)
         assert response.status_code == 200
+
+
+def test_brain_orchestrator_analyze_decomposes_task_and_matches_employees(client, owner_headers):
+    response = client.post(
+        "/api/orchestrator/analyze",
+        headers=owner_headers,
+        json={"request_text": "分析京东60店最近销量下降原因"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["goal"] == "分析京东60店最近销量下降原因"
+    assert data["task_type"] == "sales_diagnosis"
+    assert data["dry_run"] is True
+    employee_codes = {row["employee_code"] for row in data["employees"]}
+    assert {"tiancai_data", "tianshu", "tianshang", "tiance_strategy"} <= employee_codes
+    assert "excel_analyzer" in data["tools"]
+    assert data["risk_level"] == "low"
+    assert data["approval_required"] is False
+
+
+def test_brain_orchestrator_plan_generates_task_graph_and_tool_checks(client, owner_headers, test_db):
+    response = client.post(
+        "/api/orchestrator/plan",
+        headers=owner_headers,
+        json={"request_text": "分析京东60店最近销量下降原因"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dry_run"] is True
+    assert data["mode"] == "simulation"
+    assert data["execution_order"]
+    assert data["nodes"]
+    assert data["edges"]
+    assert data["tool_router_results"]
+    assert data["status"] in {"planned", "blocked"}
+    assert all(result["mode"] == "simulation" for result in data["tool_router_results"])
+    graph_id = data["graph_id"]
+
+    detail = client.get(f"/api/orchestrator/tasks/{graph_id}", headers=owner_headers)
+    assert detail.status_code == 200
+    assert detail.json()["graph"]["graph_id"] == graph_id
+    assert detail.json()["dry_run"] is True
+
+    db = test_db()
+    try:
+        assert db.query(BrainTaskGraph).filter(BrainTaskGraph.graph_id == graph_id).count() == 1
+        assert db.query(BrainTaskNode).filter(BrainTaskNode.graph_id == graph_id).count() >= 4
+        assert db.query(BrainTaskEdge).filter(BrainTaskEdge.graph_id == graph_id).count() >= 3
+        assert db.query(BrainOrchestratorLog).filter(BrainOrchestratorLog.graph_id == graph_id).count() == 1
+    finally:
+        db.close()
+
+
+def test_brain_orchestrator_high_risk_requires_double_approval(client, owner_headers):
+    blocked = client.post(
+        "/api/orchestrator/plan",
+        headers=owner_headers,
+        json={"request_text": "分析销售下降原因并部署生产修复"},
+    )
+    assert blocked.status_code == 200
+    blocked_data = blocked.json()
+    assert blocked_data["risk_level"] == "high"
+    assert blocked_data["status"] == "blocked"
+    assert blocked_data["approval_required"] is True
+
+    approved = client.post(
+        "/api/orchestrator/plan",
+        headers=owner_headers,
+        json={
+            "request_text": "分析销售下降原因并部署生产修复",
+            "boss_confirmed": True,
+            "security_audited": True,
+        },
+    )
+    assert approved.status_code == 200
+    assert approved.json()["risk_level"] == "high"
+    assert approved.json()["dry_run"] is True
+
+
+def test_brain_orchestrator_requires_orchestrator_permission(client, operator_headers, viewer_headers):
+    payload = {"request_text": "分析京东60店最近销量下降原因"}
+    client.cookies.clear()
+    assert client.post("/api/orchestrator/analyze", json=payload).status_code == 401
+    assert client.post("/api/orchestrator/analyze", headers=operator_headers, json=payload).status_code == 403
+    assert client.post("/api/orchestrator/plan", headers=viewer_headers, json=payload).status_code == 403
+
+
+def test_brain_orchestrator_logs_endpoint(client, owner_headers):
+    client.post(
+        "/api/orchestrator/plan",
+        headers=owner_headers,
+        json={"request_text": "分析京东60店最近销量下降原因"},
+    )
+    response = client.get("/api/orchestrator/logs", headers=owner_headers)
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    assert logs
+    assert {"graph_id", "brain_analysis", "task_graph", "tool_router_result", "execution_result"} <= set(logs[0])
+
+
+def test_brain_orchestrator_does_not_touch_task_center_or_deploy_center(client, owner_headers, test_db):
+    db = test_db()
+    try:
+        task = TaskCenterTask(title="existing task", status="created")
+        db.add(task)
+        db.commit()
+        task_id = task.id
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/orchestrator/plan",
+        headers=owner_headers,
+        json={"request_text": "分析京东60店最近销量下降原因"},
+    )
+    assert response.status_code == 200
+
+    db = test_db()
+    try:
+        task = db.get(TaskCenterTask, task_id)
+        assert task.status == "created"
+    finally:
+        db.close()
 
 
 def test_analyze_reply_detects_backend_completion_and_writes_safe_record(client, owner_headers, test_db):
@@ -281,7 +407,7 @@ def test_orchestrator_migration_is_single_head():
         check=True,
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0021_sprint22_brain_tool_router (head)"]
+    assert heads == ["0022_sprint23_brain_orchestrator (head)"]
 
 
 def add_employee(test_db, employee_code: str, employee_name: str, task_type: str, sort_order: int):

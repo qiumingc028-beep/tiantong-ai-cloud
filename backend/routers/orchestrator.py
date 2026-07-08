@@ -10,6 +10,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..auth import require_permission_user
+from ..brain_orchestrator import router as brain_orchestrator_router
+from ..brain_orchestrator.schemas import AnalyzePayload as BrainAnalyzePayload
+from ..brain_orchestrator.schemas import PlanPayload as BrainPlanPayload
 from ..database import get_db
 from ..models import AiEmployee
 from ..orchestrator_models import OrchestratorAnalysisRecord, OrchestratorPromptConfirmation
@@ -140,6 +143,26 @@ class ConfirmPromptPayload(BaseModel):
     confirmed_prompt: str
     confirm_status: str = "confirmed"
     note: str | None = None
+
+
+@router.post("/analyze")
+def analyze_brain_orchestrator(payload: BrainAnalyzePayload, request: Request, db: Session = Depends(get_db)):
+    return brain_orchestrator_router.analyze(payload, request, db)
+
+
+@router.post("/plan")
+def plan_brain_orchestrator(payload: BrainPlanPayload, request: Request, db: Session = Depends(get_db)):
+    return brain_orchestrator_router.plan(payload, request, db)
+
+
+@router.get("/tasks/{graph_id}")
+def get_brain_orchestrator_task(graph_id: str, request: Request, db: Session = Depends(get_db)):
+    return brain_orchestrator_router.get_task(graph_id, request, db)
+
+
+@router.get("/logs")
+def get_brain_orchestrator_logs(request: Request, db: Session = Depends(get_db)):
+    return brain_orchestrator_router.logs(request, db)
 
 
 @dataclass

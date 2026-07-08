@@ -203,4 +203,4 @@ def test_auto_dispatch_overview_and_reference_data(client, owner_headers):
 def test_auto_dispatch_migration_is_single_head():
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0021_sprint22_brain_tool_router"]
+    assert script.get_heads() == ["0022_sprint23_brain_orchestrator"]

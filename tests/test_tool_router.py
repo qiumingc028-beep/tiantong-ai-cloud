@@ -163,5 +163,5 @@ def test_tool_router_migration_head_and_tables():
     assert {"tool_routes", "tool_route_logs"} <= set(ToolRoute.metadata.tables)
     assert "tool_route_logs" in set(ToolRouteLog.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0021_sprint22_brain_tool_router"]
+    assert script.get_heads() == ["0022_sprint23_brain_orchestrator"]
 
