@@ -9,6 +9,7 @@ class AnalyzePayload(BaseModel):
 
 class PlanPayload(BaseModel):
     goal: str = Field(min_length=1, max_length=2000)
+    execution_id: int | None = None
     boss_confirm: bool = False
     security_audited: bool = False
 
@@ -23,4 +24,3 @@ class ApprovePayload(BaseModel):
 
 class StartPayload(BaseModel):
     execution_id: int
-

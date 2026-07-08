@@ -18,7 +18,7 @@ from ..deploy_models import DeployHealthCheck, DeployRecord, HealthCheckRecord
 
 router = APIRouter(prefix="/api/deploy-center")
 
-EXPECTED_ALEMBIC_VERSION = "0023_sprint24_brain_execution"
+EXPECTED_ALEMBIC_VERSION = "0024_sprint25_brain_runtime"
 BASE_DIR = Path(__file__).resolve().parents[2]
 STATE_FILES = [BASE_DIR / "deploy-state.json", BASE_DIR / "runtime-status.json"]
 

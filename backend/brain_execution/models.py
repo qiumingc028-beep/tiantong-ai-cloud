@@ -14,12 +14,27 @@ class BrainExecutionRun(Base):
     __tablename__ = "brain_execution_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[str | None] = mapped_column(String(120), index=True)
     goal: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(40), nullable=False, default="planned", index=True)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="CREATED", index=True)
+    current_node: Mapped[str | None] = mapped_column(String(120), index=True)
     risk_level: Mapped[str] = mapped_column(String(40), nullable=False, default="low", index=True)
     approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_by: Mapped[str | None] = mapped_column(String(100), index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class BrainExecutionEvent(Base):
+    __tablename__ = "brain_execution_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    execution_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    event_data: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
@@ -56,10 +71,10 @@ class BrainToolCall(Base):
 
 __all__ = [
     "BrainApprovalRecord",
+    "BrainExecutionEvent",
     "BrainExecutionLog",
     "BrainExecutionRun",
     "BrainTaskEdge",
     "BrainTaskNode",
     "BrainToolCall",
 ]
-

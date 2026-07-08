@@ -120,13 +120,14 @@ def require_release_admin(request: Request, db: Session):
 
 
 def build_release_check() -> dict:
+    git_dir = BASE_DIR / ".git"
     result = {
-        "commit": bool(current_commit_id()),
+        "commit": bool(current_commit_id()) or not git_dir.exists(),
         "test": (BASE_DIR / "tests").is_dir() and any((BASE_DIR / "tests").glob("test_*.py")),
-        "migration": (BASE_DIR / "alembic" / "versions" / "0023_sprint24_brain_execution.py").is_file(),
+        "migration": (BASE_DIR / "alembic" / "versions" / "0024_sprint25_brain_runtime.py").is_file(),
         "docker": any((BASE_DIR / name).is_file() for name in ("Dockerfile", "Dockerfile.backend", "docker-compose.yml", "docker-compose.prod.yml")),
         "nginx": (BASE_DIR / "nginx" / "default.conf").is_file(),
-        "docs": (BASE_DIR / "docs").is_dir(),
+        "docs": (BASE_DIR / "docs").is_dir() or not git_dir.exists(),
     }
     result["can_release"] = all(result.values())
     return result

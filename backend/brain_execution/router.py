@@ -8,7 +8,7 @@ from ..auth_data import normalize_role
 from ..database import get_db
 from ..models import User
 from .executor import start_dry_run
-from .planner import analyze_goal, approve_run, create_plan, get_task_chain, list_execution_logs
+from .planner import analyze_goal, approve_run, create_plan, get_task_chain, list_execution_events, list_execution_logs
 from .schemas import AnalyzePayload, ApprovePayload, PlanPayload, StartPayload
 
 
@@ -19,8 +19,8 @@ EMPLOYEE_ROLES = {"operator", "customer_service", "designer", "editor", "finance
 
 @router.post("/analyze")
 def analyze(payload: AnalyzePayload, request: Request, db: Session = Depends(get_db)):
-    require_brain_user(request, db)
-    return analyze_goal(payload.goal)
+    user = require_brain_user(request, db)
+    return analyze_goal(payload.goal, db=db, created_by=user.username)
 
 
 @router.post("/plan")
@@ -29,6 +29,7 @@ def plan(payload: PlanPayload, request: Request, db: Session = Depends(get_db)):
     return create_plan(
         db,
         payload.goal,
+        execution_id=payload.execution_id,
         created_by=user.username,
         boss_confirm=payload.boss_confirm,
         security_audited=payload.security_audited,
@@ -73,6 +74,18 @@ def tasks(execution_id: int, request: Request, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/executions/{execution_id}")
+def execution_detail(execution_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_brain_user(request, db)
+    result = get_task_chain(db, execution_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="执行记录不存在")
+    if not can_view_all(user):
+        result["nodes"] = [row for row in result["nodes"] if row["employee_code"] == user.username]
+    result["events"] = list_execution_events(db, execution_id)
+    return result
+
+
 @router.get("/logs")
 def logs(request: Request, db: Session = Depends(get_db)):
     user = require_brain_user(request, db)
@@ -99,4 +112,3 @@ def require_privileged_user(request: Request, db: Session) -> User:
 
 def can_view_all(user: User) -> bool:
     return normalize_role(user.role) in PRIVILEGED_ROLES
-

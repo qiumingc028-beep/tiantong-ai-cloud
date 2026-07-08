@@ -107,4 +107,4 @@ def test_release_center_does_not_leak_sensitive_fields(client, owner_headers):
 def test_release_center_migration_head_and_table():
     assert "release_versions" in set(ReleaseVersion.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0023_sprint24_brain_execution"]
+    assert script.get_heads() == ["0024_sprint25_brain_runtime"]

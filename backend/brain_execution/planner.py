@@ -10,12 +10,13 @@ from ..brain_orchestrator.task_graph import build_task_graph
 from ..brain_tool_router.models import BrainExecutionLog
 from ..tool_center.gateway import clean_text
 from ..tool_router.router_engine import check_route_permission
-from .models import BrainApprovalRecord, BrainExecutionRun, BrainTaskEdge, BrainTaskNode, BrainToolCall
+from .models import BrainApprovalRecord, BrainExecutionEvent, BrainExecutionRun, BrainTaskEdge, BrainTaskNode, BrainToolCall
+from .state_machine import ExecutionState, transition_run
 
 
-def analyze_goal(goal: str) -> dict:
+def analyze_goal(goal: str, db: Session | None = None, created_by: str | None = None) -> dict:
     graph = build_task_graph(goal)
-    return {
+    result = {
         "goal": graph.goal,
         "task_type": graph.task_type,
         "employees": unique_employees(graph),
@@ -27,20 +28,12 @@ def analyze_goal(goal: str) -> dict:
         "dry_run": True,
         "mode": "simulation",
     }
+    if db is None:
+        return result
 
-
-def create_plan(
-    db: Session,
-    goal: str,
-    created_by: str | None = None,
-    boss_confirm: bool = False,
-    security_audited: bool = False,
-) -> dict:
-    graph = build_task_graph(goal)
-    approval = approval_decision(graph.risk_level, boss_confirm=boss_confirm, security_audited=security_audited)
     run = BrainExecutionRun(
         goal=graph.goal,
-        status="blocked" if approval["blocked"] else "planned",
+        status=ExecutionState.CREATED.value,
         risk_level=graph.risk_level,
         approval_required=graph.approval_required,
         dry_run=True,
@@ -48,13 +41,61 @@ def create_plan(
     )
     db.add(run)
     db.flush()
+    transition_run(db, run, ExecutionState.ANALYZED, event_data={"goal": graph.goal, "task_type": graph.task_type})
+    write_execution_log(
+        db,
+        run,
+        action="goal_analyzed",
+        status=ExecutionState.ANALYZED.value,
+        output_data={"task_type": graph.task_type, "risk_level": graph.risk_level, "dry_run": True},
+    )
+    db.commit()
+    result["execution_id"] = run.id
+    result["run"] = run_to_dict(run)
+    return result
 
+
+def create_plan(
+    db: Session,
+    goal: str,
+    execution_id: int | None = None,
+    created_by: str | None = None,
+    boss_confirm: bool = False,
+    security_audited: bool = False,
+) -> dict:
+    graph = build_task_graph(goal)
+    approval = approval_decision(graph.risk_level, boss_confirm=boss_confirm, security_audited=security_audited)
+    run = db.get(BrainExecutionRun, execution_id) if execution_id else None
+    if run:
+        run.goal = graph.goal
+        run.risk_level = graph.risk_level
+        run.approval_required = True
+        if run.status == ExecutionState.CREATED.value:
+            transition_run(db, run, ExecutionState.ANALYZED, event_data={"goal": graph.goal, "task_type": graph.task_type})
+    else:
+        run = BrainExecutionRun(
+            goal=graph.goal,
+            status=ExecutionState.CREATED.value,
+            risk_level=graph.risk_level,
+            approval_required=True,
+            dry_run=True,
+            created_by=clean_text(created_by)[:100],
+        )
+        db.add(run)
+        db.flush()
+        transition_run(db, run, ExecutionState.ANALYZED, event_data={"goal": graph.goal, "task_type": graph.task_type})
+
+    transition_run(db, run, ExecutionState.PLANNED, event_data={"node_count": len(graph.nodes), "edge_count": len(graph.edges)})
+    transition_run(db, run, ExecutionState.WAIT_APPROVAL, event_data={"reason": "Brain Runtime V2 requires boss confirmation and security audit before execution"})
+
+    db.query(BrainTaskNode).filter(BrainTaskNode.execution_id == run.id).delete(synchronize_session=False)
+    db.query(BrainTaskEdge).filter(BrainTaskEdge.execution_id == run.id).delete(synchronize_session=False)
+    db.query(BrainToolCall).filter(BrainToolCall.execution_id == run.id).delete(synchronize_session=False)
     nodes = []
     edges = []
     tool_checks = []
     for node in graph.nodes:
         first_tool = node.required_tools[0] if node.required_tools else None
-        status = "blocked" if graph.risk_level == "high" and approval["blocked"] else node.status
         row = BrainTaskNode(
             graph_id=f"run-{run.id}",
             execution_id=run.id,
@@ -71,7 +112,7 @@ def create_plan(
             approval_required=node.approval_required,
             estimated_cost_level=node.estimated_cost_level,
             sequence_order=node.sequence_order,
-            status=status,
+            status=ExecutionState.WAIT_APPROVAL.value,
         )
         db.add(row)
         nodes.append(node_to_dict(row))
@@ -115,8 +156,8 @@ def create_plan(
             execution_id=run.id,
             node_id=None,
             approve_user=clean_text(created_by)[:100],
-            decision="blocked" if approval["blocked"] else "not_required",
-            reason=approval["reason"],
+            decision="pending",
+            reason="Brain Runtime V2 requires boss confirmation and security audit before execution",
             boss_confirmed=boss_confirm,
             security_audited=security_audited,
         )
@@ -126,7 +167,7 @@ def create_plan(
         run,
         action="plan_generated",
         status=run.status,
-        output_data={"approval": approval, "dry_run": True},
+        output_data={"approval": approval, "dry_run": True, "state": run.status},
     )
     db.commit()
     return get_task_chain(db, run.id) or {"execution_id": run.id}
@@ -148,9 +189,10 @@ def approve_run(
     final_decision = clean_text(decision or "approved")
     if approval["blocked"]:
         final_decision = "blocked"
-        run.status = "blocked"
+        if run.status != ExecutionState.WAIT_APPROVAL.value:
+            run.status = ExecutionState.WAIT_APPROVAL.value
     elif final_decision == "approved":
-        run.status = "approved"
+        transition_run(db, run, ExecutionState.APPROVED, event_data={"approved_by": approve_user})
     db.add(
         BrainApprovalRecord(
             execution_id=run.id,
@@ -168,11 +210,9 @@ def approve_run(
 
 def approval_decision(risk_level: str, boss_confirm: bool, security_audited: bool) -> dict:
     risk = clean_text(risk_level or "low")
-    if risk == "high" and not (boss_confirm and security_audited):
-        return {"blocked": True, "allowed": False, "reason": "高风险任务必须老板确认和天监审核", "risk_level": risk}
-    if risk == "medium" and not boss_confirm:
-        return {"blocked": True, "allowed": False, "reason": "中风险任务必须老板确认", "risk_level": risk}
-    return {"blocked": False, "allowed": True, "reason": "审批条件满足或无需审批", "risk_level": risk}
+    if not (boss_confirm and security_audited):
+        return {"blocked": True, "allowed": False, "reason": "Brain Runtime V2 执行必须老板确认和天监审核", "risk_level": risk}
+    return {"blocked": False, "allowed": True, "reason": "老板确认和天监审核均已完成", "risk_level": risk}
 
 
 def get_task_chain(db: Session, execution_id: int) -> dict | None:
@@ -205,6 +245,16 @@ def list_execution_logs(db: Session, employee_code: str | None = None) -> list[d
     if employee_code:
         query = query.filter(BrainExecutionLog.employee_code == employee_code)
     return [log_to_dict(row) for row in query.limit(100).all()]
+
+
+def list_execution_events(db: Session, execution_id: int) -> list[dict]:
+    rows = (
+        db.query(BrainExecutionEvent)
+        .filter(BrainExecutionEvent.execution_id == execution_id)
+        .order_by(BrainExecutionEvent.id.asc())
+        .all()
+    )
+    return [event_to_dict(row) for row in rows]
 
 
 def write_execution_log(
@@ -241,12 +291,17 @@ def write_execution_log(
 def run_to_dict(row: BrainExecutionRun) -> dict:
     return {
         "id": row.id,
+        "task_id": clean_text(row.task_id),
         "goal": clean_text(row.goal),
         "status": clean_text(row.status),
+        "current_node": clean_text(row.current_node),
         "risk_level": clean_text(row.risk_level),
         "approval_required": bool(row.approval_required),
         "dry_run": bool(row.dry_run),
         "created_by": clean_text(row.created_by),
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        "error_message": clean_text(row.error_message),
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -321,6 +376,16 @@ def log_to_dict(row: BrainExecutionLog) -> dict:
     }
 
 
+def event_to_dict(row: BrainExecutionEvent) -> dict:
+    return {
+        "id": row.id,
+        "execution_id": row.execution_id,
+        "event_type": clean_text(row.event_type),
+        "event_data": parse_json(row.event_data),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
 def to_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)[:8000]
 
@@ -332,4 +397,3 @@ def parse_json(value: str | None) -> Any:
         return json.loads(value)
     except Exception:
         return clean_text(value)
-

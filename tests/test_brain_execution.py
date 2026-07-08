@@ -18,6 +18,7 @@ def test_brain_execution_routes_registered():
     assert paths["/api/brain/approve"] == {"POST"}
     assert paths["/api/brain/start"] == {"POST"}
     assert paths["/api/brain/tasks/{execution_id}"] == {"GET"}
+    assert paths["/api/brain/executions/{execution_id}"] == {"GET"}
     assert paths["/api/brain/logs"] == {"GET"}
 
 
@@ -35,6 +36,8 @@ def test_brain_execution_analyze_returns_dry_run_graph(client, owner_headers):
     data = response.json()
     assert data["dry_run"] is True
     assert data["mode"] == "simulation"
+    assert data["execution_id"]
+    assert data["run"]["status"] == "ANALYZED"
     assert data["nodes"]
     assert data["edges"]
     employee_codes = {row["employee_code"] for row in data["employees"]}
@@ -49,7 +52,7 @@ def test_brain_execution_plan_persists_nodes_tool_checks_and_logs(client, owner_
     execution_id = data["execution_id"]
     assert data["dry_run"] is True
     assert data["mode"] == "simulation"
-    assert data["run"]["status"] in {"planned", "blocked"}
+    assert data["run"]["status"] == "WAIT_APPROVAL"
     assert data["nodes"]
     assert data["edges"]
     assert data["tool_calls"]
@@ -69,7 +72,7 @@ def test_brain_execution_high_risk_blocks_start_until_double_approval(client, ow
     assert plan.status_code == 200
     execution_id = plan.json()["execution_id"]
     assert plan.json()["run"]["risk_level"] == "high"
-    assert plan.json()["run"]["status"] == "blocked"
+    assert plan.json()["run"]["status"] == "WAIT_APPROVAL"
 
     blocked = client.post("/api/brain/start", headers=owner_headers, json={"execution_id": execution_id})
     assert blocked.status_code == 200
@@ -81,7 +84,7 @@ def test_brain_execution_high_risk_blocks_start_until_double_approval(client, ow
         json={"execution_id": execution_id, "boss_confirm": True, "security_audited": False},
     )
     assert half_approval.status_code == 200
-    assert half_approval.json()["status"] == "blocked"
+    assert half_approval.json()["status"] == "WAIT_APPROVAL"
 
     approved = client.post(
         "/api/brain/approve",
@@ -89,11 +92,11 @@ def test_brain_execution_high_risk_blocks_start_until_double_approval(client, ow
         json={"execution_id": execution_id, "boss_confirm": True, "security_audited": True},
     )
     assert approved.status_code == 200
-    assert approved.json()["status"] == "approved"
+    assert approved.json()["status"] == "APPROVED"
 
     started = client.post("/api/brain/start", headers=owner_headers, json={"execution_id": execution_id})
     assert started.status_code == 200
-    assert started.json()["run"]["status"] == "completed"
+    assert started.json()["run"]["status"] == "SUCCESS"
     assert started.json()["dry_run"] is True
 
 
@@ -102,13 +105,23 @@ def test_brain_execution_start_is_dry_run_and_writes_execution_logs(client, owne
     execution_id = plan.json()["execution_id"]
     started = client.post("/api/brain/start", headers=owner_headers, json={"execution_id": execution_id})
     assert started.status_code == 200
-    assert started.json()["run"]["status"] == "completed"
+    assert started.json()["status"] == "blocked"
+
+    approved = client.post(
+        "/api/brain/approve",
+        headers=owner_headers,
+        json={"execution_id": execution_id, "boss_confirm": True, "security_audited": True},
+    )
+    assert approved.status_code == 200
+    started = client.post("/api/brain/start", headers=owner_headers, json={"execution_id": execution_id})
+    assert started.status_code == 200
+    assert started.json()["run"]["status"] == "SUCCESS"
 
     logs = client.get("/api/brain/logs", headers=owner_headers)
     assert logs.status_code == 200
     rows = logs.json()["logs"]
     assert rows
-    assert any(row["run_id"] == str(execution_id) and row["status"] == "completed" for row in rows)
+    assert any(row["run_id"] == str(execution_id) and row["status"] == "SUCCESS" for row in rows)
     assert all("password_hash" not in str(row) for row in rows)
 
 
@@ -150,4 +163,4 @@ def test_brain_execution_migration_head_and_tables():
     assert "brain_approval_records" in set(BrainApprovalRecord.metadata.tables)
     assert "brain_tool_calls" in set(BrainToolCall.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0023_sprint24_brain_execution"]
+    assert script.get_heads() == ["0024_sprint25_brain_runtime"]
