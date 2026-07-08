@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tool Router 工具路由中心 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--brand:#0f766e;--brand2:#2563eb;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;padding:15px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:12px}.meta,.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#111827,#0f766e 58%,#2563eb);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:16px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{color:#d1fae5;line-height:1.6;margin:8px 0 0}.hero .note{border:1px solid rgba(255,255,255,.24);background:rgba(255,255,255,.08);color:#eff6ff;border-radius:8px;padding:10px 12px;max-width:540px}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.stats{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:12px;margin-bottom:16px}.stat,.card{background:white;border:1px solid var(--line);border-radius:8px}.stat{padding:14px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.card{padding:16px;margin-bottom:16px}.head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}.head h2,.card h2{font-size:18px;margin:0}.toolbar input,.toolbar select,textarea{border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:9px 10px}.toolbar input,.toolbar select{height:38px;min-width:180px}textarea{width:100%;min-height:78px;resize:vertical}.layout{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:16px}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;background:#f8fafc}.muted{color:var(--muted);line-height:1.65}.mono{font-family:Consolas,monospace}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569;white-space:nowrap}.badge.low,.badge.enabled,.badge.allowed,.badge.approved{background:#dcfce7;color:#166534}.badge.medium,.badge.pending,.badge.simulation{background:#fef3c7;color:#92400e}.badge.high,.badge.critical,.badge.blocked,.badge.denied{background:#fee2e2;color:#991b1b}.tag-list{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.list-item{border:1px solid var(--line);background:#f8fafc;border-radius:8px;padding:10px;margin-top:8px}.risk{border-left:4px solid #dc2626}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.form-grid label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:13px}.form-grid input{height:38px;border:1px solid #cbd5e1;border-radius:8px;padding:0 10px}button,.btn{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex;font-family:inherit}button.secondary,.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}@media(max-width:1180px){.layout,.grid-2,.form-grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.hero{align-items:flex-start;flex-direction:column}}@media(max-width:760px){.app{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.content{padding:18px}.stats{grid-template-columns:1fr}.toolbar input,.toolbar select{width:100%;min-width:0}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main>
+    <header class="top"><strong>Tool Router 工具路由中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div><h1>Tool Router 工具路由中心</h1><p>统一查看 AI 员工工具路由关系、模拟路由推荐、权限检查、路由日志和审批状态。</p></div>
+        <div class="note">保持 simulation / dry-run：不真实调用工具、不修改路由规则、不修改 Skill / Prompt、不自动执行任务。</div>
+      </div>
+      <div id="pageState" class="state">正在加载 Tool Router...</div>
+      <div class="head"><h2>路由总览</h2><span class="muted">当前规则、风险和调用统计</span></div>
+      <section id="stats" class="stats"></section>
+      <div class="card">
+        <div class="toolbar">
+          <input id="searchInput" placeholder="搜索员工 / 工具 / 任务" oninput="renderAll()">
+          <select id="riskFilter" onchange="renderAll()"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
+          <select id="statusFilter" onchange="renderAll()"><option value="">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select>
+          <button onclick="loadAll()">刷新</button>
+          <a class="btn secondary" href="/tool-center.html">Tool Center</a>
+          <a class="btn secondary" href="/tool-market.html">Tool Market</a>
+        </div>
+      </div>
+      <div class="layout">
+        <section>
+          <div class="card"><div class="head"><h2>AI员工路由关系</h2><span class="muted">只读展示</span></div><div id="routeTable" class="table-wrap"></div></div>
+          <div class="grid-2">
+            <div class="card"><div class="head"><h2>路由规则管理</h2><span class="muted">不开放修改生产规则</span></div><div id="ruleBox"></div></div>
+            <div class="card"><div class="head"><h2>路由日志</h2></div><div id="logTable" class="table-wrap"></div></div>
+          </div>
+        </section>
+        <aside>
+          <div class="card">
+            <div class="head"><h2>模拟路由检查</h2>${badge('simulation')}</div>
+            <div class="form-grid">
+              <label>员工编号<input id="employeeInput" value="tiancai"></label>
+              <label>指定工具<input id="toolInput" value="excel_analyzer"></label>
+              <label>任务<input id="taskInput" value="分析 Excel 销售报表"></label>
+              <label>需求<input id="requirementInput" value="读取表格并输出趋势"></label>
+            </div>
+            <div class="tag-list"><label><input id="bossConfirmed" type="checkbox">老板确认</label><label><input id="securityAudited" type="checkbox">天监审核</label></div>
+            <div class="tag-list"><button onclick="checkRoute()">检查权限</button><button class="secondary" onclick="routeTask()">生成路由推荐</button></div>
+            <div id="simulationResult" class="list-item muted">等待模拟检查。</div>
+          </div>
+          <div class="card"><div class="head"><h2>审批状态</h2></div><div id="approvalBox"></div></div>
+          <div class="card"><div class="head"><h2>安全边界</h2></div><div id="safetyBox"></div></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['AI工具调用权限中心','/tool-permissions.html'],['Tool Center 工具中心','/tool-center.html'],['Tool Market 工具市场','/tool-market.html'],['Tool Router 工具路由中心','/tool-router.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['天盾部署中心','/deploy-center.html'],['Release Center','/release-center.html'],['系统设置','/settings.html']];
+const employeeNames={tiancai:'天采',tiancai_data:'天采：数据采集',tianchuang:'天创',tianyu:'天誉',tiancai_finance:'天财'};
+const blockedWords=['pass'+'word_hash','tok'+'en','sec'+'ret','API '+'Key','Bear'+'er'];
+let state={routes:[],logs:[]};
+function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/tool-router.html'?'active':''}" href="${href}">${esc(label)}</a>`).join('')}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+function clean(value){let text=String(value??'');for(const word of blockedWords){text=text.replaceAll(word,'[REDACTED]')}return text}
+function esc(value){return clean(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function text(value,empty='暂无'){if(value===true)return '是';if(value===false)return '否';if(typeof value==='number')return String(value);if(typeof value==='string'&&value.trim())return value;if(Array.isArray(value))return value.length?value.map(v=>text(v,'')).filter(Boolean).join('、'):empty;if(value&&typeof value==='object')return text(value.recommended_tool||value.tool_name||value.employee_code||value.reason,empty);return empty}
+function badge(value,type=''){const v=String(value??'unknown');return `<span class="badge ${esc(type||v.toLowerCase())}">${esc(text(value))}</span>`}
+async function logout(){try{await fetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'}
+async function api(url,options={}){
+  let res;
+  try{res=await fetch(url,{credentials:'include',...options})}catch(e){throw new Error('网络异常，请稍后重试')}
+  if(res.status===401){location.href='/login.html';throw new Error('登录已过期，请重新登录')}
+  const data=res.ok?null:await res.json().catch(()=>({}));
+  if(res.status===403)throw new Error((data&&data.detail)||'无权限访问');
+  if(res.status===404)throw new Error((data&&data.detail)||'接口或数据不存在');
+  if(res.status>=500)throw new Error((data&&data.detail)||'服务器异常');
+  if(!res.ok)throw new Error((data&&data.detail)||'请求失败');
+  return res.json();
+}
+async function init(){renderMenu();tick();setInterval(tick,1000);try{const user=await api('/api/me');me.innerText=`${text(user.display_name||user.username)} · ${text(user.role_label||user.role)}`}catch(e){pageState.className='state error';pageState.innerText=e.message;return}await loadAll()}
+async function loadAll(){pageState.className='state';pageState.innerText='正在加载 Tool Router...';try{const [routes,logs]=await Promise.all([api('/api/tool-router/routes'),api('/api/tool-router/logs')]);state.routes=Array.isArray(routes.routes)?routes.routes:[];state.logs=Array.isArray(logs.logs)?logs.logs:[];pageState.className='state ok';pageState.innerText='Tool Router 已更新。'}catch(e){pageState.className='state error';pageState.innerText=e.message||'Tool Router 加载失败';state={routes:[],logs:[]}}renderAll()}
+function filteredRoutes(){const q=searchInput.value.trim().toLowerCase(),risk=riskFilter.value,status=statusFilter.value;return state.routes.filter(row=>{const hay=[row.employee_code,row.tool_name,employeeNames[row.employee_code]||''].join(' ').toLowerCase();const enabled=row.enabled?'enabled':'disabled';return(!q||hay.includes(q))&&(!risk||row.risk_level===risk)&&(!status||enabled===status)})}
+function renderAll(){renderStats();renderRoutes();renderRules();renderLogs();renderApprovals();renderSafety()}
+function renderStats(){const routes=state.routes,enabled=routes.filter(r=>r.enabled).length,risky=routes.filter(r=>['high','critical'].includes(String(r.risk_level))).length,today=state.logs.filter(log=>String(log.created_at||'').slice(0,10)===new Date().toISOString().slice(0,10)).length;stats.innerHTML=[['当前路由数量',routes.length],['启用规则',enabled],['风险规则',risky],['今日调用次数',today]].map(([label,value])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`).join('')}
+function renderRoutes(){const rows=filteredRoutes();routeTable.innerHTML=rows.length?`<table><thead><tr><th>员工</th><th>任务类型</th><th>推荐工具</th><th>风险等级</th><th>优先级</th><th>状态</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(employeeNames[row.employee_code]||row.employee_code)}</strong><div class="mono muted">${esc(row.employee_code)}</div></td><td>${esc(taskType(row.tool_name))}</td><td class="mono">${esc(row.tool_name)}</td><td>${badge(row.risk_level)}</td><td>${esc(row.priority)}</td><td>${row.enabled?badge('启用','enabled'):badge('停用','blocked')}</td></tr>`).join('')}</tbody></table>`:'<div class="state">暂无路由</div>'}
+function renderRules(){const rows=filteredRoutes();ruleBox.innerHTML=rows.length?rows.map(row=>`<div class="list-item"><strong>${esc(row.employee_code)} → ${esc(row.tool_name)}</strong><div class="muted">条件：${esc(taskType(row.tool_name))} · 目标工具：${esc(row.tool_name)}</div><div class="tag-list">${badge(row.risk_level)}${row.enabled?badge('启用','enabled'):badge('停用','blocked')}<span class="badge">priority ${esc(row.priority)}</span></div></div>`).join(''):'<div class="muted">暂无规则</div>'}
+function renderLogs(){logTable.innerHTML=state.logs.length?`<table><thead><tr><th>员工</th><th>任务</th><th>选择工具</th><th>时间</th><th>结果</th><th>风险</th></tr></thead><tbody>${state.logs.map(log=>`<tr><td>${esc(employeeNames[log.employee_code]||log.employee_code)}</td><td>${esc(text(log.task))}</td><td class="mono">${esc(text(log.recommended_tool))}</td><td>${esc(text(log.created_at))}</td><td>${log.allowed?badge('已批准','approved'):badge('待确认','pending')}</td><td>${badge(log.risk_level)}</td></tr>`).join('')}</tbody></table>`:'<div class="state">暂无日志</div>'}
+function renderApprovals(){const pending=state.logs.filter(log=>log.require_approval&&!log.allowed),approved=state.logs.filter(log=>log.allowed),rejected=state.logs.filter(log=>log.require_approval&&!log.allowed&&String(log.reason||'').includes('禁止'));approvalBox.innerHTML=[['待老板确认',pending.length,'pending'],['已批准',approved.length,'approved'],['已拒绝',rejected.length,'blocked']].map(([label,count,type])=>`<div class="list-item">${badge(label,type)} <strong>${esc(count)}</strong></div>`).join('')}
+function renderSafety(){safetyBox.innerHTML=['不真实调用工具','不修改路由规则','不修改 Skill','不修改 Prompt','不自动执行任务','POST 仅用于 simulation / dry-run 检查'].map(item=>`<div class="list-item risk">${esc(item)}</div>`).join('')}
+async function checkRoute(){const body=payloadBase();try{const data=await api('/api/tool-router/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,tool_name:toolInput.value.trim()})});showResult(data)}catch(e){simulationResult.className='list-item state error';simulationResult.innerText=e.message}}
+async function routeTask(){const body=payloadBase();try{const data=await api('/api/tool-router/route',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});showResult(data);await loadAll()}catch(e){simulationResult.className='list-item state error';simulationResult.innerText=e.message}}
+function payloadBase(){return{employee_code:employeeInput.value.trim(),task:taskInput.value.trim(),requirement:requirementInput.value.trim(),boss_confirmed:bossConfirmed.checked,security_audited:securityAudited.checked}}
+function showResult(data){simulationResult.className='list-item';simulationResult.innerHTML=`<strong>simulation / dry-run</strong><div class="tag-list">${badge(data.recommended_tool||data.tool_name||'暂无工具')}${badge(data.risk_level)}${data.allowed?badge('已批准','approved'):badge('待确认','pending')}${data.require_approval?badge('需要审批','pending'):badge('无需审批','enabled')}</div><div class="muted">${esc(text(data.reason))}</div>`}
+function taskType(tool){if(tool==='browser_search')return '找爆款数据 / 搜索信息';if(tool==='excel_analyzer')return 'Excel / 表格分析';if(tool==='database_read')return '数据读取 / 指标查询';if(tool==='image_reader')return '图片理解';if(tool==='seo_analyzer')return 'SEO / GEO 分析';if(tool==='financial_reader')return '财务分析';return '通用任务'}
+init();
+</script>
+</body>
+</html>
