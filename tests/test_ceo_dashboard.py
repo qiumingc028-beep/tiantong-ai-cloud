@@ -93,7 +93,7 @@ def test_ceo_dashboard_deploy_summary_returns_alembic_version(client, owner_head
     db = test_db()
     try:
         db.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-        db.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0019_sprint21_tool_center')"))
+        db.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0020_sprint21_tool_router')"))
         db.add(DeployRecord(deploy_version="Sprint 4", status="success"))
         db.add(DeployHealthCheck(check_type="database", target="database", status="healthy"))
         db.commit()
@@ -103,8 +103,8 @@ def test_ceo_dashboard_deploy_summary_returns_alembic_version(client, owner_head
     response = client.get("/api/ceo-dashboard/summary", headers=owner_headers)
     assert response.status_code == 200
     deploy_summary = response.json()["deploy_summary"]
-    assert deploy_summary["alembic_version"] == "0019_sprint21_tool_center"
-    assert deploy_summary["expected_version"] == "0019_sprint21_tool_center"
+    assert deploy_summary["alembic_version"] == "0020_sprint21_tool_router"
+    assert deploy_summary["expected_version"] == "0020_sprint21_tool_router"
     assert deploy_summary["last_deploy_status"] == "success"
     assert deploy_summary["last_health_check_status"] == "healthy"
 

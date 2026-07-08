@@ -126,7 +126,7 @@ def test_alembic_heads_has_single_head():
     )
 
     heads = [line for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0019_sprint21_tool_center (head)"]
+    assert heads == ["0020_sprint21_tool_router (head)"]
 
 
 def create_task(client, headers):
