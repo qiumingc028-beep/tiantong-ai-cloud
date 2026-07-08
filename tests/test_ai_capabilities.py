@@ -175,7 +175,7 @@ def test_ai_capabilities_source_has_no_external_execution_calls():
 def test_ai_capabilities_migration_head_and_tables():
     assert {"ai_capabilities", "tool_permissions"} <= set(AiCapability.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0022_sprint23_brain_orchestrator"]
+    assert script.get_heads() == ["0023_sprint24_brain_execution"]
 
 
 def test_tool_permission_model_registered():

@@ -167,5 +167,5 @@ def test_brain_tool_router_source_has_no_real_execution_calls():
 def test_brain_tool_router_migration_head_and_table():
     assert "brain_execution_logs" in set(BrainExecutionLog.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0022_sprint23_brain_orchestrator"]
+    assert script.get_heads() == ["0023_sprint24_brain_execution"]
 

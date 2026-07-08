@@ -18,5 +18,12 @@ class BrainExecutionLog(Base):
     tool_selection: Mapped[str | None] = mapped_column(Text)
     approval_status: Mapped[str] = mapped_column(String(40), nullable=False, default="not_checked", index=True)
     execution_result: Mapped[str | None] = mapped_column(Text)
+    run_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    node_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    employee_code: Mapped[str | None] = mapped_column(String(100), index=True)
+    action: Mapped[str | None] = mapped_column(String(120))
+    input_data: Mapped[str | None] = mapped_column(Text)
+    output_data: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(String(40), index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
-

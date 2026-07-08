@@ -30,6 +30,7 @@ class BrainTaskNode(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     graph_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    execution_id: Mapped[int | None] = mapped_column(Integer, index=True)
     node_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     node_name: Mapped[str] = mapped_column(String(160), nullable=False)
     node_type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
@@ -38,6 +39,7 @@ class BrainTaskNode(Base):
     employee_role: Mapped[str] = mapped_column(String(160), nullable=False)
     task_goal: Mapped[str] = mapped_column(Text, nullable=False)
     required_tools: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    tool_name: Mapped[str | None] = mapped_column(String(120), index=True)
     risk_level: Mapped[str] = mapped_column(String(40), nullable=False, default="low", index=True)
     approval_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     estimated_cost_level: Mapped[str] = mapped_column(String(40), nullable=False, default="low", index=True)
@@ -51,6 +53,7 @@ class BrainTaskEdge(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     graph_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    execution_id: Mapped[int | None] = mapped_column(Integer, index=True)
     source_node_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     target_node_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     edge_type: Mapped[str] = mapped_column(String(80), nullable=False, default="passes_result_to", index=True)
@@ -72,4 +75,3 @@ class BrainOrchestratorLog(Base):
     risk_summary: Mapped[str | None] = mapped_column(Text)
     execution_result: Mapped[str] = mapped_column(String(80), nullable=False, default="dry_run_plan_generated", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
-

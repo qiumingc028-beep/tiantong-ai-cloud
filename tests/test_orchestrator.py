@@ -407,7 +407,7 @@ def test_orchestrator_migration_is_single_head():
         check=True,
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0022_sprint23_brain_orchestrator (head)"]
+    assert heads == ["0023_sprint24_brain_execution (head)"]
 
 
 def add_employee(test_db, employee_code: str, employee_name: str, task_type: str, sort_order: int):
