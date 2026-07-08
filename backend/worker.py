@@ -24,6 +24,7 @@ from .services.jd_collectors import (
     sync_jd_smart,
     sync_jzt,
 )
+from .workers.tian_shang_worker import process_next_tian_shang_execution
 
 
 WORKER_HEARTBEAT_KEY = "tiantong:worker:heartbeat"
@@ -543,9 +544,23 @@ def main():
     while True:
         update_worker_heartbeat()
         run_daily_scheduler()
-        if not process_next_employee_execution() and not process_next_brain_runtime_execution():
+        if not process_next_tian_shang_worker_execution() and not process_next_employee_execution() and not process_next_brain_runtime_execution():
             process_next_task()
         time.sleep(0.1)
+
+
+def process_next_tian_shang_worker_execution():
+    db = SessionLocal()
+    try:
+        return process_next_tian_shang_execution(db, timeout=1)
+    except (RedisTimeoutError, RedisConnectionError) as exc:
+        logger.warning("tian_shang_queue_warning: %s: %s", type(exc).__name__, exc)
+        return False
+    except Exception as exc:
+        logger.exception("tian_shang_execution_failed: %s", exc)
+        return False
+    finally:
+        db.close()
 
 
 def process_next_employee_execution():

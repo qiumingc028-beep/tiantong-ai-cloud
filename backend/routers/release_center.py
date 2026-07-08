@@ -124,7 +124,7 @@ def build_release_check() -> dict:
     result = {
         "commit": bool(current_commit_id()) or not git_dir.exists(),
         "test": (BASE_DIR / "tests").is_dir() and any((BASE_DIR / "tests").glob("test_*.py")),
-        "migration": (BASE_DIR / "alembic" / "versions" / "0025_sprint25_3_execution_engine_enhancement.py").is_file(),
+        "migration": (BASE_DIR / "alembic" / "versions" / "0026_sprint26_ai_employee_execution_mvp.py").is_file(),
         "docker": any((BASE_DIR / name).is_file() for name in ("Dockerfile", "Dockerfile.backend", "docker-compose.yml", "docker-compose.prod.yml")),
         "nginx": (BASE_DIR / "nginx" / "default.conf").is_file(),
         "docs": (BASE_DIR / "docs").is_dir() or not git_dir.exists(),

@@ -16,6 +16,7 @@ from ..employee_command_dashboard import build_employee_command_dashboard, build
 from ..employee_organization import build_employee_organization_center
 from ..employee_performance import build_ai_employee_business_board
 from ..models import AiEmployee, TaskCenterTask
+from ..workers.tian_shang_worker import latest_tian_shang_status
 from . import deploy_center
 
 
@@ -94,6 +95,7 @@ def build_ceo_dashboard_summary(db: Session):
     ai_employee_business_board = build_ai_employee_business_board(db)
     ai_employee_organization_board = build_employee_organization_center(db)
     ai_employee_command_dashboard = build_employee_command_dashboard(db)
+    tian_shang_execution = latest_tian_shang_status(db)
     pending_actions = build_pending_actions(task_summary, system_health, deploy_summary)
     alerts = build_alerts(system_health, task_summary, employee_summary, deploy_summary, pending_actions)
     return {
@@ -106,6 +108,7 @@ def build_ceo_dashboard_summary(db: Session):
         "ai_employee_business_board": ai_employee_business_board,
         "ai_employee_organization_board": ai_employee_organization_board,
         "ai_employee_command_dashboard": ai_employee_command_dashboard,
+        "tian_shang_execution": tian_shang_execution,
         "deploy_summary": deploy_summary,
         "alerts": alerts,
     }

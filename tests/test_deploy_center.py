@@ -54,7 +54,7 @@ def test_deploy_center_migration(client, owner_headers):
     response = client.get("/api/deploy-center/migration", headers=owner_headers)
     assert response.status_code == 200
     data = response.json()
-    assert data["expected_version"] == "0025_sprint25_3_execution_engine_enhancement"
+    assert data["expected_version"] == "0026_sprint26_ai_employee_execution_mvp"
     assert data["status"] in {"up_to_date", "outdated"}
 
 
@@ -97,4 +97,4 @@ def test_alembic_has_single_head():
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert heads == ["0025_sprint25_3_execution_engine_enhancement"]
+    assert heads == ["0026_sprint26_ai_employee_execution_mvp"]

@@ -138,4 +138,4 @@ def test_brain_runtime_source_has_no_real_execution_calls():
 def test_brain_runtime_migration_head_and_event_table():
     assert "brain_execution_events" in set(BrainExecutionEvent.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0025_sprint25_3_execution_engine_enhancement"]
+    assert script.get_heads() == ["0026_sprint26_ai_employee_execution_mvp"]
