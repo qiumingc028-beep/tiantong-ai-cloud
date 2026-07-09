@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_role_permissions, normalize_role, require_permission_user, current_user
 from ..database import get_db, get_redis
-from ..models import AiEmployee, AiTask, EmployeeLog, TaskCenterTask
+from ..models import AiEmployee, AiTask, EmployeeLog, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
 from ..tool_router.router_engine import list_routes
 
 
@@ -104,6 +104,60 @@ def get_ai_employee_runtime_status(request: Request, db: Session = Depends(get_d
 def get_ai_employee(employee_code: str, request: Request, db: Session = Depends(get_db)):
     require_ai_employee_read(request, db)
     return employee_to_dict(get_employee_or_404(db, employee_code))
+
+
+@router.get("/api/ai-employees/{employee_id}/detail")
+def get_ai_employee_detail(employee_id: str, request: Request, db: Session = Depends(get_db)):
+    require_ai_employee_read(request, db)
+    employee = get_employee_or_404(db, employee_id)
+    employee_codes = [employee.employee_code]
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    current_task = load_current_tasks(db, employee_codes).get(employee.employee_code)
+    today_completed = load_today_completed_counts(db, employee_codes, today_start).get(employee.employee_code, 0)
+    recent_error = load_recent_errors(db, employee_codes).get(employee.employee_code)
+    recent_tasks = attach_task_metadata(db, load_employee_recent_tasks(db, employee.employee_code))
+    success_stats = load_employee_success_stats(db, employee.employee_code)
+    permission_scope = employee_permission_scope(db, employee)
+    current_status = employee_runtime_to_dict(db, employee, current_task, today_completed, recent_error)
+    return {
+        "readonly": True,
+        "employee": employee_to_dict(employee),
+        "department": employee.legion,
+        "role": employee.duty,
+        "current_status": current_status,
+        "current_task": task_detail_brief(current_task) if current_task else None,
+        "historical_tasks": [task_detail_brief(task) for task in recent_tasks],
+        "skills": employee_skills(employee),
+        "executable_task_types": parse_json_list(employee.task_types),
+        "permission_scope": permission_scope,
+        "recent_tasks": [task_detail_brief(task) for task in recent_tasks],
+        "recent_error": task_detail_brief(recent_error) if recent_error else None,
+        "success_rate": success_stats,
+        "recent_logs": load_employee_recent_logs(db, employee.employee_code, recent_tasks),
+        "data_sources": [
+            "ai_employees",
+            "task_center_tasks",
+            "task_center_results",
+            "task_center_reviews",
+            "task_center_audit_logs",
+            "tool_router_routes",
+        ],
+        "safety": {
+            "readonly": True,
+            "does_not_trigger_execution": True,
+            "external_api_called": False,
+            "execution_engine_modified": False,
+            "task_center_core_modified": False,
+            "requires_boss_confirm_for_high_risk": True,
+            "requires_security_audit_for_high_risk": True,
+            "high_risk_requires": {
+                "boss_confirm": True,
+                "security_audited": True,
+            },
+            "dangerous_action_entrypoints_hidden": True,
+            "can_auto_execute": permission_scope["can_auto_execute"],
+        },
+    }
 
 
 @router.post("/api/ai-employees")
@@ -380,6 +434,169 @@ def employee_tool_briefs(db: Session, employee_code: str):
         for route in list_routes(db, employee_code=employee_code)
         if route["enabled"]
     ]
+
+
+def employee_skills(employee: AiEmployee):
+    return [
+        {
+            "skill_code": task_type,
+            "skill_name": task_type.replace("_", " "),
+            "source": "ai_employees.task_types",
+            "enabled": employee.status == "active",
+        }
+        for task_type in parse_json_list(employee.task_types)
+    ]
+
+
+def employee_permission_scope(db: Session, employee: AiEmployee):
+    return {
+        "default_permissions": parse_json_list(employee.default_permissions),
+        "tools": employee_tool_briefs(db, employee.employee_code),
+        "can_auto_execute": False,
+        "can_modify_permissions": False,
+        "requires_boss_confirm_for_high_risk": True,
+    }
+
+
+def load_employee_recent_tasks(db: Session, employee_code: str, limit: int = 10):
+    return (
+        db.query(TaskCenterTask)
+        .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
+        .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def load_employee_success_stats(db: Session, employee_code: str):
+    total = (
+        db.query(func.count(TaskCenterTask.id))
+        .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
+        .scalar()
+        or 0
+    )
+    success_statuses = ("accepted", "audited", "summarized", "completed", "success")
+    failed_statuses = ("failed", "rejected", "timeout")
+    success_count = (
+        db.query(func.count(TaskCenterTask.id))
+        .filter(TaskCenterTask.assigned_ai_employee_code == employee_code, TaskCenterTask.status.in_(success_statuses))
+        .scalar()
+        or 0
+    )
+    failed_count = (
+        db.query(func.count(TaskCenterTask.id))
+        .filter(TaskCenterTask.assigned_ai_employee_code == employee_code, TaskCenterTask.status.in_(failed_statuses))
+        .scalar()
+        or 0
+    )
+    completed_total = success_count + failed_count
+    return {
+        "total_tasks": total,
+        "completed_or_failed_tasks": completed_total,
+        "success_tasks": success_count,
+        "failed_tasks": failed_count,
+        "success_rate": round(success_count / completed_total, 4) if completed_total else 0,
+    }
+
+
+def task_detail_brief(task: TaskCenterTask):
+    return {
+        "task_id": task.id,
+        "title": task.title,
+        "status": task.status,
+        "priority": task.priority,
+        "source": task.source,
+        "assigned_ai_employee_code": task.assigned_ai_employee_code,
+        "assigned_ai_employee_name": task.assigned_ai_employee_name,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        "has_result": bool(task_has_result(task)),
+        "review_count": task_review_count(task),
+    }
+
+
+def task_has_result(task: TaskCenterTask):
+    return getattr(task, "_has_result", False)
+
+
+def task_review_count(task: TaskCenterTask):
+    return getattr(task, "_review_count", 0)
+
+
+def load_employee_recent_logs(db: Session, employee_code: str, recent_tasks: list[TaskCenterTask], limit: int = 10):
+    task_ids = [task.id for task in recent_tasks]
+    rows = []
+    if task_ids:
+        audit_rows = (
+            db.query(TaskCenterAuditLog)
+            .filter(TaskCenterAuditLog.task_id.in_(task_ids))
+            .order_by(TaskCenterAuditLog.created_at.desc(), TaskCenterAuditLog.id.desc())
+            .limit(limit)
+            .all()
+        )
+        rows.extend(
+            {
+                "source": "task_center_audit",
+                "task_id": row.task_id,
+                "event": row.action,
+                "status": row.to_status,
+                "message": safe_log_message(row.detail),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in audit_rows
+        )
+    if len(rows) < limit:
+        employee_rows = (
+            db.query(EmployeeLog)
+            .filter(EmployeeLog.detail.ilike(f"%{employee_code}%"))
+            .order_by(EmployeeLog.created_at.desc(), EmployeeLog.id.desc())
+            .limit(limit - len(rows))
+            .all()
+        )
+        rows.extend(
+            {
+                "source": "employee_log",
+                "task_id": None,
+                "event": row.action,
+                "status": None,
+                "message": safe_log_message(row.detail),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in employee_rows
+        )
+    return rows[:limit]
+
+
+def attach_task_metadata(db: Session, tasks: list[TaskCenterTask]):
+    if not tasks:
+        return tasks
+    task_ids = [task.id for task in tasks]
+    result_counts = dict(
+        db.query(TaskCenterResult.task_id, func.count(TaskCenterResult.id))
+        .filter(TaskCenterResult.task_id.in_(task_ids))
+        .group_by(TaskCenterResult.task_id)
+        .all()
+    )
+    review_counts = dict(
+        db.query(TaskCenterReview.task_id, func.count(TaskCenterReview.id))
+        .filter(TaskCenterReview.task_id.in_(task_ids))
+        .group_by(TaskCenterReview.task_id)
+        .all()
+    )
+    for task in tasks:
+        setattr(task, "_has_result", bool(result_counts.get(task.id, 0)))
+        setattr(task, "_review_count", int(review_counts.get(task.id, 0)))
+    return tasks
+
+
+def safe_log_message(value: str | None):
+    if not value:
+        return ""
+    blocked = ("password", "password_hash", "secret", "token", "api key", "authorization", "bearer", "private_key")
+    lowered = value.lower()
+    if any(word in lowered for word in blocked):
+        return "[redacted]"
+    return value[:240]
 
 
 def require_ai_employee_read(request: Request, db: Session):

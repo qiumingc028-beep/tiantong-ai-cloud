@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI员工详情 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--brand:#0f766e;--brand2:#0ea5e9;--dark:#101827;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.auth-pending .sidebar,.auth-pending .main{visibility:hidden}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.main{min-width:0}.topbar{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:16px}.top-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:13px}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px}.ok{color:var(--good)}button,.button-link{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}button.secondary,.button-link.secondary{background:white;color:var(--ink);border:1px solid var(--line)}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f172a 0%,#0f766e 58%,#0ea5e9 100%);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:18px;align-items:flex-end}.hero h1{font-size:28px;margin:0}.hero p{margin:8px 0 0;color:#d1fae5;line-height:1.6}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.wide{grid-column:span 2}.card{background:white;border:1px solid var(--line);border-radius:8px;padding:16px}.card h2{font-size:18px;margin:0 0 12px}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px 14px;color:var(--muted);margin-bottom:12px}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.empty{border-style:dashed;text-align:center;padding:28px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:12px;margin-bottom:16px}.metric{background:white;border:1px solid var(--line);border-radius:8px;padding:15px}.metric .label{color:var(--muted);font-size:12px}.metric .value{font-size:24px;font-weight:800;margin-top:8px}.row{border-top:1px solid var(--line);padding:12px 0}.row:first-child{border-top:0}.label{font-size:12px;color:var(--muted);margin-bottom:5px}.muted{color:var(--muted);line-height:1.6}.code{font-family:Consolas,monospace;color:#0f766e}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;background:#e2e8f0;color:#475569;margin:2px 4px 2px 0}.badge.good{background:#dcfce7;color:#166534}.badge.warn{background:#fef3c7;color:#92400e}.badge.bad{background:#fee2e2;color:#991b1b}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px;background:white}table{width:100%;border-collapse:collapse;min-width:860px}th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;vertical-align:top}th{background:#f8fafc;color:#475569}.readonly{border:1px solid #bbf7d0;background:#f0fdf4;color:#166534;border-radius:8px;padding:10px 12px;margin-top:12px}.danger-hidden{border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;padding:10px 12px;margin-top:12px}.task-title{font-weight:700}.source-list{display:flex;flex-wrap:wrap;gap:4px}@media(max-width:1100px){.grid{grid-template-columns:1fr}.wide{grid-column:span 1}.metric-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.app{grid-template-columns:1fr}.content{padding:18px}.topbar,.hero{align-items:flex-start;flex-direction:column}.metric-grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body class="auth-pending">
+<script>
+(function(){
+  if (window.__tiantongFrontSecurity) return;
+  window.__tiantongFrontSecurity = true;
+  const ALL_ACCESS = null;
+  const ROLE_ACCESS = {
+    owner: ALL_ACCESS,
+    boss: ALL_ACCESS,
+    admin: ['/index.html','/control.html','/stores.html','/jd-dashboard.html','/jd-integrations.html','/employee-workspace.html','/employee-capabilities.html','/model-routing.html','/tool-permissions.html','/sop-skill-center.html','/skill-plugin-center.html','/employee-activity-log.html','/metrics.html','/import.html','/ai-employees.html','/ai-employee-detail.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/ai-assets.html','/settings.html'],
+    operator: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
+    customer_service: ['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],
+    designer: ['/ai-assets.html','/workflows.html'],
+    editor: ['/ai-assets.html','/workflows.html'],
+    finance: ['/jd-dashboard.html','/metrics.html','/import.html']
+  };
+  const ROLE_ALIASES = {boss:'owner', owner:'owner', administrator:'admin', ads:'operator', ops:'operator', service:'customer_service'};
+  const rawFetch = window.fetch.bind(window);
+  let redirecting = false;
+  function normalizeRole(user){const raw=String((user&&(user.role_code||user.role))||'').trim();return ROLE_ALIASES[raw]||raw||'guest'}
+  function accessFor(role){if(role==='owner')return ALL_ACCESS;return Object.prototype.hasOwnProperty.call(ROLE_ACCESS,role)?ROLE_ACCESS[role]:['/jd-dashboard.html']}
+  function canOpen(role,href){if(!href||href==='#'||href.startsWith('/api/'))return true;const normalizedHref=href==='/'?'/index.html':href;const access=accessFor(role);return access===ALL_ACCESS||access.includes(normalizedHref)}
+  function clearClientAuth(){try{localStorage.removeItem('token');localStorage.removeItem('tiantong_token');localStorage.removeItem('session');localStorage.removeItem('tiantong_session');sessionStorage.clear()}catch(e){}}
+  function safeRedirect(url){if(redirecting)return;redirecting=true;setTimeout(function(){location.href=url},450)}
+  function applyRoleUI(user){const role=normalizeRole(user);document.querySelectorAll('.menu a').forEach(function(link){const href=link.getAttribute('href')||'';const allowed=canOpen(role,href);link.style.display=allowed?'':'none'});document.body.classList.remove('auth-pending')}
+  async function verifyLogin(){try{const res=await rawFetch('/api/me',{credentials:'include'});if(res.status===401){clearClientAuth();safeRedirect('/login.html');return}if(!res.ok)throw new Error('登录状态检查失败');applyRoleUI(await res.json())}catch(e){document.body.classList.remove('auth-pending')}}
+  window.fetch=async function(input,init){const res=await rawFetch(input,init);const url=typeof input==='string'?input:((input&&input.url)||'');if(url.includes('/api/')&&res.status===401){clearClientAuth();safeRedirect('/login.html')}if(url.includes('/api/')&&res.status===403){alert('当前账号没有访问该接口的权限。');safeRedirect('/login.html')}return res};
+  window.secureLogout=async function(){clearClientAuth();try{await rawFetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'};
+  verifyLogin();
+})();
+</script>
+<div class="app">
+  <aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main class="main">
+    <header class="topbar"><strong>AI员工详情</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <section class="content">
+      <div class="hero">
+        <div>
+          <h1 id="employeeTitle">AI员工详情</h1>
+          <p id="employeeSubtitle">只读查看员工档案、能力、权限、任务历史与运行表现。</p>
+          <div class="readonly">只读页面，不触发任务、不调用 Execution Engine、不修改员工权限。</div>
+          <div class="danger-hidden">危险操作入口已隐藏；高风险执行必须 boss_confirm=true 且 security_audited=true。</div>
+        </div>
+        <a class="button-link secondary" href="/ai-employees.html">返回AI员工名册</a>
+      </div>
+      <div id="pageState" class="state">正在加载AI员工详情...</div>
+      <div class="metric-grid">
+        <div class="metric"><div class="label">当前状态</div><div id="metricStatus" class="value">-</div></div>
+        <div class="metric"><div class="label">任务总数</div><div id="metricTasks" class="value">-</div></div>
+        <div class="metric"><div class="label">成功率</div><div id="metricRate" class="value">-</div></div>
+        <div class="metric"><div class="label">今日完成</div><div id="metricToday" class="value">-</div></div>
+      </div>
+      <div class="grid">
+        <section class="card">
+          <h2>员工档案</h2>
+          <div id="profileBox"></div>
+        </section>
+        <section class="card">
+          <h2>能力中心</h2>
+          <div id="capabilityBox"></div>
+        </section>
+        <section class="card">
+          <h2>权限中心</h2>
+          <div id="permissionBox"></div>
+        </section>
+        <section class="card">
+          <h2>当前任务</h2>
+          <div id="currentTaskBox"></div>
+        </section>
+        <section class="card">
+          <h2>最近错误</h2>
+          <div id="recentErrorBox"></div>
+        </section>
+        <section class="card">
+          <h2>安全边界</h2>
+          <div id="safetyBox"></div>
+        </section>
+        <section class="card wide">
+          <h2>任务历史</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>任务</th><th>状态</th><th>优先级</th><th>结果</th><th>更新时间</th></tr></thead>
+              <tbody id="taskRows"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="card">
+          <h2>最近运行日志</h2>
+          <div id="logBox"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+  const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['AI员工名册','/ai-employees.html'],['系统设置','/settings.html']];
+  let detail=null;
+  function renderMenu(){menu.innerHTML=menus.map(([label,href])=>`<a class="${href==='/ai-employees.html'?'active':''}" href="${href}">${escapeHtml(label)}</a>`).join('')}
+  function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+  async function logout(){await window.secureLogout()}
+  function escapeHtml(text){return String(text??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+  function fmtTime(value){return value ? value.slice(0,19).replace('T',' ') : '-'}
+  function chips(items, kind=''){const list=Array.isArray(items)?items:[];return list.length?list.map(item=>`<span class="badge ${kind}">${escapeHtml(item.skill_name||item.tool_name||item)}</span>`).join(''):'<span class="muted">暂无</span>'}
+  function statusBadge(status){const cls=status==='working'?'warn':(status==='error'?'bad':'good');return `<span class="badge ${cls}">${escapeHtml(status||'-')}</span>`}
+  async function api(url){const res=await fetch(url,{credentials:'include'});if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.detail||`${res.status} ${res.statusText}`)}return res.json()}
+  function employeeCode(){return new URLSearchParams(location.search).get('code') || 'tiantong'}
+  async function init(){
+    renderMenu();tick();setInterval(tick,1000);
+    const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;
+    const health=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=health?`服务器正常 · 数据库 ${health.database} · Redis ${health.redis}`:'系统状态获取失败';if(health)systemStatus.classList.add('ok');
+    await loadDetail();
+  }
+  async function loadDetail(){
+    try{
+      pageState.className='state';pageState.innerText='正在加载AI员工详情...';
+      detail=await api(`/api/ai-employees/${encodeURIComponent(employeeCode())}/detail`);
+      renderDetail();
+    }catch(error){
+      pageState.className='state error';pageState.innerText=`AI员工详情加载失败：${error.message}`;
+    }
+  }
+  function renderDetail(){
+    const employee=detail.employee||{};
+    const current=detail.current_status||{};
+    const stats=detail.success_rate||{};
+    employeeTitle.innerText=employee.employee_name||'AI员工详情';
+    employeeSubtitle.innerText=`${employee.employee_code||'-'} · ${detail.department||'-'} · ${employee.duty||'-'}`;
+    metricStatus.innerHTML=statusBadge(current.runtime_status||employee.status);
+    metricTasks.innerText=stats.total_tasks??0;
+    metricRate.innerText=`${Math.round((stats.success_rate||0)*100)}%`;
+    metricToday.innerText=current.today_completed_tasks??0;
+    pageState.className='state';
+    pageState.innerText='详情已加载。该页面只读，不会触发任务或执行器。';
+    profileBox.innerHTML=[
+      row('员工名称', employee.employee_name),
+      row('员工编号', `<span class="code">${escapeHtml(employee.employee_code)}</span>`),
+      row('部门', detail.department||'-'),
+      row('状态', statusBadge(employee.status)),
+      row('职责', employee.duty||'-'),
+      row('最近运行时间', current.current_task ? fmtTime(current.current_task.updated_at) : '-')
+    ].join('');
+    capabilityBox.innerHTML=[
+      row('技能列表', chips(detail.skills,'good')),
+      row('可执行任务类型', chips(detail.executable_task_types)),
+      row('使用工具', toolList((detail.permission_scope||{}).tools))
+    ].join('');
+    permissionBox.innerHTML=[
+      row('权限范围', chips((detail.permission_scope||{}).default_permissions)),
+      row('风险等级', riskSummary((detail.permission_scope||{}).tools)),
+      row('是否需要老板确认', (detail.permission_scope||{}).requires_boss_confirm_for_high_risk ? '<span class="badge warn">高风险需要</span>' : '<span class="badge good">无需</span>'),
+      row('自动执行', (detail.permission_scope||{}).can_auto_execute ? '<span class="badge bad">允许</span>' : '<span class="badge good">禁止</span>')
+    ].join('');
+    renderCurrentTask(detail.current_task||current.current_task);
+    renderRecentError(detail.recent_error||current.recent_error);
+    renderSafety(detail.safety||{}, detail.data_sources||[]);
+    renderTasks(detail.historical_tasks||detail.recent_tasks||[]);
+    renderLogs(detail.recent_logs||[]);
+  }
+  function row(label,value){return `<div class="row"><div class="label">${escapeHtml(label)}</div><div>${typeof value==='string'?value:escapeHtml(value??'-')}</div></div>`}
+  function toolList(tools){return Array.isArray(tools)&&tools.length?tools.map(tool=>`<span class="badge ${tool.risk_level==='high'?'bad':tool.risk_level==='medium'?'warn':'good'}">${escapeHtml(tool.tool_name)} · ${escapeHtml(tool.risk_level)}</span>`).join(''):'<span class="muted">暂无工具绑定</span>'}
+  function riskSummary(tools){const list=Array.isArray(tools)?tools:[];if(list.some(t=>t.risk_level==='high'))return '<span class="badge bad">高风险工具</span>';if(list.some(t=>t.risk_level==='medium'))return '<span class="badge warn">中风险工具</span>';return '<span class="badge good">低风险 / 暂无工具</span>'}
+  function renderCurrentTask(task){
+    currentTaskBox.innerHTML=task?[
+      row('任务名称', `<span class="task-title">${escapeHtml(task.title)}</span>`),
+      row('任务编号', `<span class="code">#${escapeHtml(task.task_id)}</span>`),
+      row('任务状态', statusBadge(task.status)),
+      row('优先级', task.priority||'-'),
+      row('更新时间', fmtTime(task.updated_at))
+    ].join(''):'<div class="state empty">暂无当前任务。</div>';
+  }
+  function renderRecentError(task){
+    recentErrorBox.innerHTML=task?[
+      row('错误任务', `<span class="task-title">${escapeHtml(task.title)}</span>`),
+      row('任务编号', `<span class="code">#${escapeHtml(task.task_id)}</span>`),
+      row('错误状态', statusBadge(task.status)),
+      row('来源', task.source||'-'),
+      row('更新时间', fmtTime(task.updated_at))
+    ].join(''):'<div class="state empty">暂无最近错误。</div>';
+  }
+  function renderSafety(safety, sources){
+    const gate=safety.high_risk_requires||{};
+    safetyBox.innerHTML=[
+      row('页面模式', safety.readonly?'<span class="badge good">只读</span>':'<span class="badge bad">非只读</span>'),
+      row('自动执行', safety.can_auto_execute?'<span class="badge bad">允许</span>':'<span class="badge good">禁止</span>'),
+      row('外部API调用', safety.external_api_called?'<span class="badge bad">已调用</span>':'<span class="badge good">未调用</span>'),
+      row('危险入口', safety.dangerous_action_entrypoints_hidden?'<span class="badge good">已隐藏</span>':'<span class="badge bad">未隐藏</span>'),
+      row('高风险要求', `<span class="badge warn">boss_confirm=${escapeHtml(Boolean(gate.boss_confirm))}</span><span class="badge warn">security_audited=${escapeHtml(Boolean(gate.security_audited))}</span>`),
+      row('数据来源', `<div class="source-list">${chips(sources)}</div>`)
+    ].join('');
+  }
+  function renderTasks(tasks){
+    taskRows.innerHTML=tasks.length?tasks.map(task=>`<tr>
+      <td><strong>${escapeHtml(task.title)}</strong><div class="code">#${escapeHtml(task.task_id)}</div></td>
+      <td>${escapeHtml(task.status)}</td>
+      <td>${escapeHtml(task.priority)}</td>
+      <td>${task.has_result?'<span class="badge good">有结果</span>':'<span class="muted">暂无</span>'}<div class="muted">审核 ${escapeHtml(task.review_count||0)}</div></td>
+      <td>${fmtTime(task.updated_at)}</td>
+    </tr>`).join(''):'<tr><td colspan="5">暂无任务历史。</td></tr>';
+  }
+  function renderLogs(logs){
+    logBox.innerHTML=logs.length?logs.map(log=>`<div class="row"><div><strong>${escapeHtml(log.event)}</strong> ${log.status?`<span class="badge">${escapeHtml(log.status)}</span>`:''}</div><div class="muted">${escapeHtml(log.message||'-')}</div><div class="muted">${fmtTime(log.created_at)}</div></div>`).join(''):'<div class="state empty">暂无运行日志。</div>';
+  }
+  init().catch(error=>{pageState.className='state error';pageState.innerText=`页面加载失败：${error.message}`});
+</script>
+</body>
+</html>
