@@ -91,6 +91,42 @@ def get_brain_execution_summary(request: Request, db: Session = Depends(get_db))
     return build_brain_execution_summary(db)
 
 
+@router.get("/v2/system-health")
+def get_ceo_dashboard_v2_system_health(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_v2_system_health(db)
+
+
+@router.get("/v2/task-summary")
+def get_ceo_dashboard_v2_task_summary(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_v2_task_summary(db)
+
+
+@router.get("/v2/employee-status")
+def get_ceo_dashboard_v2_employee_status(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_v2_employee_status(db)
+
+
+@router.get("/v2/execution-status")
+def get_ceo_dashboard_v2_execution_status(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_v2_execution_status(db)
+
+
+@router.get("/v2/daily-operations")
+def get_ceo_dashboard_v2_daily_operations(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_v2_daily_operations(db)
+
+
+@router.get("/v2/overview")
+def get_ceo_dashboard_v2_overview(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_v2_overview(db)
+
+
 def require_ceo_dashboard_user(request: Request, db: Session):
     user = current_user(request, db)
     role_code = normalize_role(user.role)
@@ -205,6 +241,140 @@ def build_brain_execution_summary(db: Session) -> dict:
         "status_counts": counts,
         "recent_failures": [brain_execution_failure_summary(row) for row in recent_failures],
         "forbidden_actions": ["shell", "external_api", "auto_install_skill", "code_change", "deploy"],
+    }
+
+
+def build_v2_system_health(db: Session) -> dict:
+    system_health = build_system_health(db)
+    deploy_summary = build_deploy_summary(db, system_health)
+    alerts = build_alerts(system_health, build_task_summary(db), build_employee_summary(db), deploy_summary, [])
+    return {
+        "readonly": True,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "overall_status": resolve_overall_status(alerts, []),
+        "services": {
+            "backend": system_health["backend"],
+            "database": system_health["database"],
+            "redis": system_health["redis"],
+            "migration": system_health["migration"],
+        },
+        "deploy_summary": {
+            "overall_status": deploy_summary["overall_status"],
+            "alembic_version": deploy_summary["alembic_version"],
+            "expected_version": deploy_summary["expected_version"],
+            "last_deploy_status": deploy_summary["last_deploy_status"],
+            "last_health_check_status": deploy_summary["last_health_check_status"],
+            "last_health_check_time": deploy_summary["last_health_check_time"],
+            "service_stability_score": deploy_summary["service_stability_score"],
+        },
+        "alerts": alerts,
+    }
+
+
+def build_v2_task_summary(db: Session) -> dict:
+    summary = build_task_summary(db)
+    today_summary = build_today_task_summary(db)
+    return {
+        "readonly": True,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "total": summary["total"],
+        "today_total": today_summary["today_total"],
+        "status_counts": {status: summary.get(status, 0) for status in TASK_STATUSES},
+        "pending_count": summary["pending_count"],
+        "today": today_summary,
+        "recent_pending_tasks": summary["recent_pending_tasks"],
+        "recent_failed_tasks": recent_failed_tasks(db),
+    }
+
+
+def build_v2_employee_status(db: Session) -> dict:
+    summary = build_employee_summary(db)
+    running_codes = running_task_employee_codes(db)
+    employees = (
+        db.query(AiEmployee)
+        .filter(AiEmployee.is_legacy.is_(False))
+        .order_by(AiEmployee.sort_order.asc(), AiEmployee.id.asc())
+        .all()
+    )
+    rows = [employee_v2_status(row, running_codes) for row in employees]
+    error_count = sum(1 for row in rows if row["runtime_status"] == "error")
+    working_count = sum(1 for row in rows if row["runtime_status"] == "working")
+    idle_count = sum(1 for row in rows if row["runtime_status"] == "idle")
+    return {
+        "readonly": True,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "total": summary["total"],
+        "active": summary["active"],
+        "inactive": summary["inactive"],
+        "online": summary["active"],
+        "working": working_count,
+        "idle": idle_count,
+        "error": error_count,
+        "employees": rows,
+    }
+
+
+def build_v2_execution_status(db: Session) -> dict:
+    summary = build_brain_execution_summary(db)
+    return {
+        "readonly": True,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "mode": summary["mode"],
+        "current_execution_count": summary["current_execution_count"],
+        "queued_count": summary["queued_count"],
+        "worker_count": summary["worker_count"],
+        "worker_statuses": summary["worker_statuses"],
+        "success_rate": summary["success_rate"],
+        "failed_count": summary["failed_count"],
+        "timeout_count": summary["timeout_count"],
+        "average_execution_seconds": summary["average_execution_seconds"],
+        "queue_status": summary["queue_status"],
+        "status_counts": summary["status_counts"],
+        "recent_failures": summary["recent_failures"],
+        "forbidden_actions": summary["forbidden_actions"],
+    }
+
+
+def build_v2_daily_operations(db: Session) -> dict:
+    data = build_daily_operations(db)
+    return {
+        "readonly": True,
+        "checked_at": data["checked_at"],
+        "system_status": data["system_status"],
+        "employee_summary": data["employee_summary"],
+        "task_summary": data["task_summary"],
+        "pending_confirmations": data["pending_confirmations"],
+        "risk_alerts": data["risk_alerts"],
+        "recent_failed_tasks": data["recent_failed_tasks"],
+        "forbidden_actions": data["forbidden_actions"],
+    }
+
+
+def build_v2_overview(db: Session) -> dict:
+    system_health = build_v2_system_health(db)
+    task_summary = build_v2_task_summary(db)
+    employee_status = build_v2_employee_status(db)
+    execution_status = build_v2_execution_status(db)
+    daily_operations = build_v2_daily_operations(db)
+    risk_alerts = daily_operations["risk_alerts"]
+    pending_confirmations = daily_operations["pending_confirmations"]
+    return {
+        "readonly": True,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "overall_status": resolve_overall_status(risk_alerts, pending_confirmations),
+        "system_health": system_health,
+        "daily_operations": daily_operations,
+        "employee_status": employee_status,
+        "task_summary": task_summary,
+        "execution_status": execution_status,
+        "pending_action_summary": {
+            "pending_count": len(pending_confirmations),
+            "items": pending_confirmations,
+        },
+        "risk_summary": {
+            "risk_count": len(risk_alerts),
+            "items": risk_alerts,
+        },
     }
 
 
@@ -542,4 +712,22 @@ def employee_brief(employee: AiEmployee):
         "employee_name": employee.employee_name,
         "legion": employee.legion,
         "status": employee.status,
+    }
+
+
+def employee_v2_status(employee: AiEmployee, running_codes: set[str]) -> dict:
+    if employee.status != "active":
+        runtime_status = "offline"
+    elif employee.employee_code in running_codes:
+        runtime_status = "working"
+    else:
+        runtime_status = "idle"
+    return {
+        "employee_code": employee.employee_code,
+        "employee_name": employee.employee_name,
+        "department": employee.legion,
+        "duty": employee.duty,
+        "status": employee.status,
+        "runtime_status": runtime_status,
+        "current_task_status": "running" if runtime_status == "working" else None,
     }
