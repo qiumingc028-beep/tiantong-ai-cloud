@@ -7,23 +7,31 @@ cd "${ROOT_DIR}"
 DEPLOY_MODE="${DEPLOY_MODE:-docker}"
 COMPOSE="${COMPOSE:-docker compose}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
-COMPOSE_CMD="${COMPOSE} -f ${COMPOSE_FILE}"
+ENV_FILE="${ENV_FILE:-.env.production}"
+COMPOSE_CMD="${COMPOSE} --env-file ${ENV_FILE} -f ${COMPOSE_FILE}"
 VENV_DIR="${VENV_DIR:-${ROOT_DIR}/venv}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 GIT_REMOTE="${GIT_REMOTE:-origin}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 
 ensure_env() {
-  if [ ! -f .env ]; then
-    cp .env.example .env
-    echo "Created .env from .env.example. Review secrets before production use."
+  if [ ! -f "${ENV_FILE}" ]; then
+    echo "Missing ${ENV_FILE}. Create it from .env.production.example and replace all placeholders before deployment." >&2
+    exit 2
   fi
+
+  if grep -q '<.*>' "${ENV_FILE}"; then
+    echo "Refusing to deploy: ${ENV_FILE} still contains placeholder values." >&2
+    exit 2
+  fi
+
+  chmod 600 "${ENV_FILE}"
 }
 
 load_env() {
   set -a
   # shellcheck disable=SC1091
-  . ./.env
+  . "./${ENV_FILE}"
   set +a
 }
 

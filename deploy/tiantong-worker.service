@@ -7,7 +7,7 @@ Requires=tiantong-api.service
 [Service]
 Type=simple
 WorkingDirectory=/data/apps/tiantong-ai-cloud
-EnvironmentFile=-/data/apps/tiantong-ai-cloud/.env
+EnvironmentFile=/data/apps/tiantong-ai-cloud/.env.production
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/data/apps/tiantong-ai-cloud/venv/bin/python -m backend.worker
 Restart=always

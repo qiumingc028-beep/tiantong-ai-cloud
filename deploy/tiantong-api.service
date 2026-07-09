@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/data/apps/tiantong-ai-cloud
-EnvironmentFile=-/data/apps/tiantong-ai-cloud/.env
+EnvironmentFile=/data/apps/tiantong-ai-cloud/.env.production
 Environment=PYTHONUNBUFFERED=1
 ExecStartPre=/data/apps/tiantong-ai-cloud/venv/bin/alembic upgrade head
 ExecStart=/data/apps/tiantong-ai-cloud/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000

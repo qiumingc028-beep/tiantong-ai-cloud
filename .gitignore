@@ -6,3 +6,4 @@ __pycache__/
 *.log
 .DS_Store
 node_modules/
+docs/SSH_FIX_REPORT.md
