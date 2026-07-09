@@ -3,9 +3,9 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-tiantong_ai}
-      POSTGRES_USER: ${POSTGRES_USER:-tiantong}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tiantong}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env.production}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?set POSTGRES_ADMIN_USER in .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env.production}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     logging:
@@ -14,7 +14,7 @@ services:
         max-size: "50m"
         max-file: "5"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tiantong} -d ${POSTGRES_DB:-tiantong_ai}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:?set POSTGRES_ADMIN_USER} -d ${POSTGRES_DB:?set POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -23,7 +23,9 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env.production}
+    command: ["sh", "-c", "redis-server --appendonly yes --requirepass \"$${REDIS_PASSWORD}\""]
     volumes:
       - redis_data:/data
     logging:
@@ -32,7 +34,7 @@ services:
         max-size: "50m"
         max-file: "5"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,13 +45,8 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     restart: unless-stopped
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://tiantong:tiantong@postgres:5432/tiantong_ai}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      AI_PROVIDER: ${AI_PROVIDER:-mock}
+    env_file:
+      - ${PRODUCTION_ENV_FILE:-.env.production}
     expose:
       - "8000"
     logging:
@@ -74,13 +71,9 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     restart: unless-stopped
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://tiantong:tiantong@postgres:5432/tiantong_ai}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      AI_PROVIDER: ${AI_PROVIDER:-mock}
+    env_file:
+      - ${PRODUCTION_ENV_FILE:-.env.production}
+    command: ["python", "-m", "backend.worker"]
     logging:
       driver: json-file
       options:
@@ -98,18 +91,23 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        NGINX_CONF: nginx/production.conf
     restart: unless-stopped
     ports:
       - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
     volumes:
       - nginx_logs:/var/log/nginx
+      - ${TLS_CERT_PATH:?set TLS_CERT_PATH in .env.production}:/etc/nginx/certs/fullchain.pem:ro
+      - ${TLS_KEY_PATH:?set TLS_KEY_PATH in .env.production}:/etc/nginx/certs/privkey.pem:ro
     logging:
       driver: json-file
       options:
         max-size: "50m"
         max-file: "5"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1/ >/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 5
