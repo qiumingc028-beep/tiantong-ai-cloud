@@ -28,6 +28,21 @@
         <div class="card metric"><div class="label">数据库状态</div><div id="metricDatabase" class="num">-</div><div class="muted">system_health.database</div></div>
         <div class="card metric"><div class="label">Redis 状态</div><div id="metricRedis" class="num">-</div><div class="muted">system_health.redis</div></div>
       </section>
+      <section class="card" style="margin-bottom:16px">
+        <div class="section-head"><h2>今日运营摘要</h2><span id="dailyCheckedAt" class="muted">暂无</span></div>
+        <div id="dailyMetrics" class="task-grid" style="margin-bottom:12px"></div>
+        <div class="grid section-grid" style="margin-bottom:0">
+          <div><div class="label">待老板确认事项</div><div id="dailyPendingList" class="list"></div></div>
+          <div><div class="label">风险提醒 / 失败任务</div><div id="dailyRiskList" class="list"></div></div>
+        </div>
+      </section>
+      <section class="card" style="margin-bottom:16px">
+        <div class="section-head">
+          <h2>待老板确认</h2>
+          <span id="approvalCount" class="badge unknown">0 项</span>
+        </div>
+        <div id="approvalList" class="list"></div>
+      </section>
       <section class="grid section-grid">
         <div class="card"><div class="section-head"><h2>系统健康</h2></div><div id="healthInfo" class="kv"></div></div>
         <div class="card"><div class="section-head"><h2>AI任务概览</h2><a class="btn secondary" href="/task-center.html">查看任务中心</a></div><div id="taskOverview" class="task-grid"></div></div>
@@ -47,7 +62,7 @@
   const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['天统AI Brain Center','/brain-center.html'],['Brain Orchestrator','/brain-orchestrator.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['Tool Center 工具中心','/tool-center.html'],['Tool Market 工具市场','/tool-market.html'],['Tool Router 工具路由中心','/tool-router.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];
   const roleAccess={owner:null,boss:null,admin:['/index.html','/control.html','/brain-center.html','/brain-orchestrator.html','/stores.html','/jd-dashboard.html','/jd-integrations.html','/employee-workspace.html','/employee-capabilities.html','/model-routing.html','/tool-permissions.html','/tool-center.html','/tool-market.html','/tool-router.html','/sop-skill-center.html','/skill-plugin-center.html','/employee-activity-log.html','/employee-activity-trace.html','/task-center.html','/auto-dispatch-center.html','/orchestrator.html','/metrics.html','/import.html','/ai-employees.html','/deploy-center.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/ai-assets.html','/settings.html']};
   const roleAliases={boss:'owner',owner:'owner',administrator:'admin'};
-  const statusText={normal:'正常',healthy:'正常',running:'正常',warning:'注意',degraded:'注意',critical:'异常',unhealthy:'异常',unknown:'未知'};
+  const statusText={normal:'正常',healthy:'正常',running:'正常',warning:'注意',degraded:'注意',critical:'异常',unhealthy:'异常',high:'高风险',medium:'中风险',low:'低风险',unknown:'未知'};
   const taskNames={total:'总数',created:'待拆解',split:'待分配',assigned:'已分配',running:'执行中',result_submitted:'待验收',accepted:'待审计',rejected:'未通过',audited:'待汇总',summarized:'已汇总',pending_count:'待处理'};
   let currentUser=null;
 
@@ -60,7 +75,7 @@
   function escapeHtml(text){return String(text??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
   function fmtTime(value){return value?String(value).slice(0,19).replace('T',' '):'暂无'}
   function num(value){return Number(value||0).toLocaleString('zh-CN')}
-  function statusClass(status){const s=String(status||'unknown');if(['normal','healthy','running'].includes(s))return 'normal';if(['warning','degraded'].includes(s))return 'warning';if(['critical','unhealthy'].includes(s))return 'critical';return 'unknown'}
+  function statusClass(status){const s=String(status||'unknown');if(['normal','healthy','running','low'].includes(s))return 'normal';if(['warning','degraded','medium'].includes(s))return 'warning';if(['critical','unhealthy','high'].includes(s))return 'critical';return 'unknown'}
   function badge(status){const s=String(status||'unknown');return `<span class="badge ${statusClass(s)}">${escapeHtml(statusText[s]||s)}</span>`}
   function kv(target, rows){target.innerHTML=rows.map(([k,v])=>`<div>${escapeHtml(k)}</div><div>${v}</div>`).join('')}
   async function api(url){const res=await fetch(url,{credentials:'include'});if(res.status===401){clearAuth();location.href='/login.html';throw new Error('登录已失效，请重新登录。')}if(res.status===403){throw new Error('无权限访问老板驾驶舱')}if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.detail||`${res.status} ${res.statusText}`)}return res.json()}
@@ -95,6 +110,8 @@
     renderEmployees(data.employee_summary||{});
     renderDeploy(data.deploy_summary||{});
     renderAlerts(data.alerts||[]);
+    loadDailyOperations().catch(e=>{dailyCheckedAt.innerText=e.message||'今日运营加载失败'});
+    loadApprovalCenter().catch(e=>{approvalList.innerHTML=`<div class="item"><strong>老板确认中心加载失败</strong><div class="muted">${escapeHtml(e.message||'请稍后重试')}</div></div>`});
   }
 
   function renderSummary(data){
@@ -109,6 +126,51 @@
   function renderEmployees(e){kv(employeeInfo,[['total',num(e.total)],['active',num(e.active)],['inactive',num(e.inactive)],['legions',num(e.legions)]]);const rows=(e.active_employees||[]).slice(0,12);employeeList.innerHTML=rows.length?rows.map(item=>`<div class="mini"><strong>${escapeHtml(item.employee_name||item.employee_code)}</strong><div class="muted mono">${escapeHtml(item.employee_code)}</div><div class="muted">${escapeHtml(item.legion||'未设置军团')}</div></div>`).join(''):'<div class="muted">暂无启用 AI 员工。</div>'}
   function renderDeploy(d){kv(deployInfo,[['overall_status',badge(d.overall_status)],['database_status',badge(d.database_status)],['redis_status',badge(d.redis_status)],['alembic_version',`<span class="mono">${escapeHtml(d.alembic_version||'暂无')}</span>`],['expected_version',`<span class="mono">${escapeHtml(d.expected_version||'暂无')}</span>`],['last_deploy_status',escapeHtml(d.last_deploy_status||'暂无')],['last_health_check_status',badge(d.last_health_check_status)]])}
   function renderAlerts(items){alertList.innerHTML=items.length?items.map(item=>`<div class="item"><div>${badge(item.level)}</div><strong>${escapeHtml(item.title||item.type||'提醒')}</strong><div class="muted">${escapeHtml(item.message||'')}</div>${item.target?`<div class="actions"><a class="btn secondary" href="${escapeHtml(item.target)}">查看</a></div>`:''}</div>`).join(''):'<div class="muted">暂无重要提醒，系统运行正常。</div>'}
+
+  async function loadApprovalCenter(){
+    const approvals=await api('/api/approval-center/pending');
+    renderApprovalCenter(approvals||{});
+  }
+  function renderApprovalCenter(approvals){
+    const items=(approvals.items||[]).slice(0,6);
+    approvalCount.className=`badge ${items.some(item=>item.risk_level==='high')?'warning':'normal'}`;
+    approvalCount.innerText=`${num(approvals.pending_count)} 项`;
+    approvalList.innerHTML=items.length?items.map(item=>`<div class="item">
+      <div class="item-row">
+        <div>
+          <div>${badge(item.risk_level)}</div>
+          <strong>${escapeHtml(item.title)}</strong>
+          <div class="muted">${escapeHtml(item.source_ai_employee||'天统AI系统')} · ${fmtTime(item.created_at)} · ${escapeHtml(item.status)}</div>
+          <div class="muted">AI建议：${escapeHtml(item.recommendation||'保持人工确认，不自动执行。')}</div>
+        </div>
+        <a class="btn secondary" href="/task-center.html">查看</a>
+      </div>
+    </div>`).join(''):'<div class="muted">暂无待老板确认事项。</div>';
+  }
+
+  async function loadDailyOperations(){
+    const daily=await api('/api/ceo-dashboard/daily-summary');
+    renderDailyOperations(daily||{});
+  }
+  function renderDailyOperations(daily){
+    const t=daily.task_summary||{}, e=daily.employee_summary||{}, s=daily.system_status||{};
+    dailyCheckedAt.innerText=`最近检查：${fmtTime(daily.checked_at)}`;
+    const rows=[
+      ['系统',badge(s.overall)],
+      ['今日任务',num(t.today_total)],
+      ['完成任务',num(t.completed)],
+      ['失败任务',num(t.failed)],
+      ['执行中',num(t.running)],
+      ['待确认',num((daily.pending_confirmations||[]).length)],
+      ['运行员工',num(e.running)],
+      ['空闲员工',num(e.idle)]
+    ];
+    dailyMetrics.innerHTML=rows.map(([label,value])=>`<div class="mini"><span class="muted">${escapeHtml(label)}</span><strong>${value}</strong></div>`).join('');
+    const pending=(daily.pending_confirmations||[]).slice(0,5);
+    dailyPendingList.innerHTML=pending.length?pending.map(item=>`<div class="item"><div>${badge(item.level)}</div><strong>${escapeHtml(item.message||item.type||'待确认事项')}</strong><div class="muted">${item.count?num(item.count)+' 项':'请进入对应中心查看'}</div></div>`).join(''):'<div class="muted">暂无待老板确认事项。</div>';
+    const risks=[...(daily.risk_alerts||[]).slice(0,4),...(daily.recent_failed_tasks||[]).slice(0,3).map(task=>({level:'warning',message:`失败任务：${task.title||task.id}`,type:'failed_task'}))];
+    dailyRiskList.innerHTML=risks.length?risks.map(item=>`<div class="item"><div>${badge(item.level)}</div><strong>${escapeHtml(item.message||item.title||item.type||'提醒')}</strong><div class="muted">${escapeHtml(item.type||item.status||'运营提醒')}</div></div>`).join(''):'<div class="muted">暂无风险提醒。</div>';
+  }
 
   init();
 </script>

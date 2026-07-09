@@ -7,6 +7,8 @@
   <style>
     :root{--bg:#f4f6f8;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--brand:#0f766e;--brand2:#0ea5e9;--dark:#101827;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
     *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.auth-pending .sidebar,.auth-pending .main{visibility:hidden}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.main{min-width:0}.topbar{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:12px 24px;gap:16px}.top-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:13px}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px}.ok{color:var(--good)}button{border:0;background:var(--dark);color:white;border-radius:8px;padding:9px 13px;cursor:pointer;font-family:inherit}button.secondary{background:white;color:var(--ink);border:1px solid var(--line)}button.good{background:var(--good)}button.warn{background:var(--warn)}button:disabled{opacity:.55;cursor:not-allowed}.content{padding:24px}.hero{background:linear-gradient(135deg,#0f172a 0%,#0f766e 58%,#0ea5e9 100%);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:18px;align-items:flex-end}.hero h1{font-size:28px;margin:0}.hero p{margin:8px 0 0;color:#d1fae5;line-height:1.6}.stats{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;margin-bottom:16px}.stat{background:white;border:1px solid var(--line);border-radius:8px;padding:15px}.stat .label{color:var(--muted);font-size:12px}.stat .value{font-size:25px;font-weight:800;margin-top:8px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px}.card{background:white;border:1px solid var(--line);border-radius:8px;padding:16px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}input,select,textarea{border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit}input,select{height:38px;padding:0 10px}textarea{min-height:90px;padding:10px;resize:vertical}.search{width:280px}.check{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px}.check input{width:auto;height:auto}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px 14px;color:var(--muted);margin-bottom:12px}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.empty{border-style:dashed;text-align:center;padding:28px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px;background:white}table{width:100%;border-collapse:collapse;min-width:1040px}th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;vertical-align:top}th{background:#f8fafc;color:#475569}.code{font-family:Consolas,monospace;color:#0f766e}.muted{color:var(--muted);line-height:1.6}.badge{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;background:#e2e8f0;color:#475569;margin:2px 4px 2px 0}.badge.active{background:#dcfce7;color:#166534}.badge.inactive{background:#f1f5f9;color:#475569}.badge.legacy{background:#fef3c7;color:#92400e}.chips{max-width:250px}.detail h2{margin:0 0 8px;font-size:20px}.detail-row{border-top:1px solid var(--line);padding:12px 0}.detail-row:first-of-type{border-top:0}.detail-label{font-size:12px;color:var(--muted);margin-bottom:5px}.actions{display:flex;gap:8px;flex-wrap:wrap}.modal{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;padding:18px;z-index:50}.modal.open{display:flex}.modal-panel{width:min(820px,100%);max-height:90vh;overflow:auto;background:white;border:1px solid var(--line);border-radius:8px;padding:18px}.modal-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-grid label{display:block;font-size:13px;color:#334155;margin-bottom:6px}.form-grid input,.form-grid select,.form-grid textarea{width:100%;margin:0}.form-grid .full{grid-column:1/-1}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}@media(max-width:1180px){.stats{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.hero{align-items:flex-start;flex-direction:column}}@media(max-width:760px){.app{grid-template-columns:1fr}.content{padding:18px}.topbar{align-items:flex-start;flex-direction:column}.stats{grid-template-columns:1fr}.search{width:100%}.form-grid{grid-template-columns:1fr}}
+    .runtime-card{margin-bottom:16px}.runtime-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}.runtime-head h2{margin:0;font-size:18px}.runtime-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:12px;margin-bottom:12px}.runtime-table table{min-width:1180px}.runtime-status{font-weight:700}.runtime-status.working{color:var(--brand2)}.runtime-status.error{color:var(--bad)}.runtime-status.idle{color:var(--good)}.runtime-status.offline{color:var(--muted)}
+    @media(max-width:1180px){.runtime-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.runtime-grid{grid-template-columns:1fr}}
   </style>
 </head>
 <body class="auth-pending">
@@ -65,6 +67,28 @@
         <div class="stat"><div class="label">军团数量</div><div id="statLegions" class="value">-</div></div>
         <div class="stat"><div class="label">可接任务类型数量</div><div id="statTaskTypes" class="value">-</div></div>
       </div>
+      <section class="card runtime-card">
+        <div class="runtime-head">
+          <div>
+            <h2>AI员工运行状态</h2>
+            <div class="muted">只读展示员工在线、工作、异常和工具配置情况，不触发任务执行。</div>
+          </div>
+          <button class="secondary" onclick="loadRuntimeStatus()">刷新运行状态</button>
+        </div>
+        <div class="runtime-grid">
+          <div class="stat"><div class="label">员工总数</div><div id="runtimeTotal" class="value">-</div></div>
+          <div class="stat"><div class="label">在线数量</div><div id="runtimeOnline" class="value">-</div></div>
+          <div class="stat"><div class="label">工作中数量</div><div id="runtimeWorking" class="value">-</div></div>
+          <div class="stat"><div class="label">异常数量</div><div id="runtimeError" class="value">-</div></div>
+        </div>
+        <div id="runtimeState" class="state">正在加载AI员工运行状态...</div>
+        <div class="table-wrap runtime-table">
+          <table>
+            <thead><tr><th>员工</th><th>当前状态</th><th>当前任务</th><th>今日完成</th><th>最近错误</th><th>使用工具</th></tr></thead>
+            <tbody id="runtimeRows"></tbody>
+          </table>
+        </div>
+      </section>
       <div class="layout">
         <section>
           <div class="card">
@@ -114,6 +138,7 @@
 <script>
   const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI任务中心','/task-center.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
   let employees = [];
+  let runtimeStatus = null;
   let selectedEmployee = null;
   let editingCode = null;
 
@@ -125,7 +150,9 @@
   function listText(value){return Array.isArray(value) ? value : []}
   function splitList(value){return value.split(',').map(s=>s.trim()).filter(Boolean)}
   function statusLabel(row){return row.is_legacy ? '<span class="badge legacy">legacy 旧占位</span>' : `<span class="badge ${row.status}">${row.status==='active'?'启用':'停用'}</span>`}
+  function runtimeLabel(status){const labels={working:'工作中',error:'异常',idle:'空闲',offline:'离线'};return `<span class="runtime-status ${escapeHtml(status)}">${labels[status]||escapeHtml(status||'未知')}</span>`}
   function chips(items){const list=listText(items);return list.length ? list.map(x=>`<span class="badge">${escapeHtml(x)}</span>`).join('') : '<span class="muted">-</span>'}
+  function toolChips(items){const list=listText(items);return list.length ? list.slice(0,5).map(x=>`<span class="badge">${escapeHtml(x.tool_name)} · ${escapeHtml(x.risk_level)}</span>`).join('') : '<span class="muted">暂无</span>'}
   async function api(url, options={}){const res=await fetch(url,{credentials:'include',...options});if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.detail||`${res.status} ${res.statusText}`)}return res.json()}
 
   async function init(){
@@ -133,6 +160,36 @@
     const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;
     const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok');
     await loadEmployees();
+    await loadRuntimeStatus();
+  }
+
+  async function loadRuntimeStatus(){
+    try{
+      runtimeState.className='state';runtimeState.innerText='正在加载AI员工运行状态...';
+      runtimeStatus=await api('/api/ai-employees/runtime-status');
+      renderRuntimeStatus();
+    }catch(e){
+      runtimeState.className='state error';runtimeState.innerText=`AI员工运行状态加载失败：${e.message}`;runtimeRows.innerHTML='<tr><td colspan="6">加载失败，请刷新重试。</td></tr>';
+    }
+  }
+
+  function renderRuntimeStatus(){
+    const summary=runtimeStatus&&runtimeStatus.summary?runtimeStatus.summary:{};
+    const rows=runtimeStatus&&Array.isArray(runtimeStatus.employees)?runtimeStatus.employees:[];
+    runtimeTotal.innerText=summary.total_employees??0;
+    runtimeOnline.innerText=summary.online_count??0;
+    runtimeWorking.innerText=summary.working_count??0;
+    runtimeError.innerText=summary.error_count??0;
+    runtimeState.className=rows.length?'state':'state empty';
+    runtimeState.innerText=rows.length?`运行状态已更新：${fmtTime(runtimeStatus.checked_at)}。`:'暂无AI员工运行状态。';
+    runtimeRows.innerHTML=rows.length?rows.map(row=>`<tr>
+      <td><strong>${escapeHtml(row.employee_name)}</strong><div class="code">${escapeHtml(row.employee_code)}</div></td>
+      <td>${runtimeLabel(row.runtime_status)}<div class="muted">${escapeHtml(row.status)}</div></td>
+      <td>${row.current_task?`<strong>${escapeHtml(row.current_task.title)}</strong><div class="muted">#${escapeHtml(row.current_task.task_id)} · ${escapeHtml(row.current_task.status)}</div>`:'<span class="muted">暂无</span>'}</td>
+      <td>${escapeHtml(row.today_completed_tasks??0)}</td>
+      <td>${row.recent_error?`<strong>${escapeHtml(row.recent_error.title)}</strong><div class="muted">#${escapeHtml(row.recent_error.task_id)} · ${escapeHtml(row.recent_error.status)}</div>`:'<span class="muted">暂无</span>'}</td>
+      <td>${toolChips(row.tools)}</td>
+    </tr>`).join(''):'<tr><td colspan="6">暂无AI员工运行状态。</td></tr>';
   }
 
   async function loadEmployees(){
@@ -226,12 +283,12 @@
         if(!body.employee_code){alert('请填写员工编号');return}
         await api('/api/ai-employees',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       }
-      closeEmployeeModal();await loadEmployees();if(editingCode) await selectEmployee(editingCode);
+      closeEmployeeModal();await loadEmployees();await loadRuntimeStatus();if(editingCode) await selectEmployee(editingCode);
     }catch(e){alert(`保存失败：${e.message}`)}
   }
 
   async function toggleEmployee(code,status){
-    try{await api(`/api/ai-employees/${encodeURIComponent(code)}/${status==='active'?'disable':'enable'}`,{method:'POST'});await loadEmployees();await selectEmployee(code)}
+    try{await api(`/api/ai-employees/${encodeURIComponent(code)}/${status==='active'?'disable':'enable'}`,{method:'POST'});await loadEmployees();await loadRuntimeStatus();await selectEmployee(code)}
     catch(e){alert(`${status==='active'?'停用':'启用'}失败：${e.message}`)}
   }
 

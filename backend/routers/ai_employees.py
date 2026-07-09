@@ -3,11 +3,13 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_role_permissions, normalize_role, require_permission_user, current_user
 from ..database import get_db, get_redis
-from ..models import AiEmployee, AiTask, EmployeeLog
+from ..models import AiEmployee, AiTask, EmployeeLog, TaskCenterTask
+from ..tool_router.router_engine import list_routes
 
 
 router = APIRouter()
@@ -56,6 +58,46 @@ def list_ai_employees(
     if task_type:
         employees = [employee for employee in employees if task_type in parse_json_list(employee.task_types)]
     return [employee_to_dict(employee) for employee in employees]
+
+
+@router.get("/api/ai-employees/runtime-status")
+def get_ai_employee_runtime_status(request: Request, db: Session = Depends(get_db)):
+    require_ai_employee_read(request, db)
+    employees = (
+        db.query(AiEmployee)
+        .filter(AiEmployee.is_legacy.is_(False))
+        .order_by(AiEmployee.sort_order.asc(), AiEmployee.id.asc())
+        .all()
+    )
+    employee_codes = [employee.employee_code for employee in employees]
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    current_tasks = load_current_tasks(db, employee_codes)
+    completed_counts = load_today_completed_counts(db, employee_codes, today_start)
+    recent_errors = load_recent_errors(db, employee_codes)
+
+    rows = [
+        employee_runtime_to_dict(
+            db,
+            employee,
+            current_tasks.get(employee.employee_code),
+            completed_counts.get(employee.employee_code, 0),
+            recent_errors.get(employee.employee_code),
+        )
+        for employee in employees
+    ]
+    summary = {
+        "total_employees": len(rows),
+        "online_count": sum(1 for row in rows if row["status"] == "active"),
+        "working_count": sum(1 for row in rows if row["runtime_status"] == "working"),
+        "error_count": sum(1 for row in rows if row["runtime_status"] == "error"),
+        "idle_count": sum(1 for row in rows if row["runtime_status"] == "idle"),
+    }
+    return {
+        "readonly": True,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "summary": summary,
+        "employees": rows,
+    }
 
 
 @router.get("/api/ai-employees/{employee_code}")
@@ -220,6 +262,124 @@ def employee_to_dict(employee: AiEmployee):
         "created_at": employee.created_at.isoformat() if employee.created_at else None,
         "updated_at": employee.updated_at.isoformat() if employee.updated_at else None,
     }
+
+
+def load_current_tasks(db: Session, employee_codes: list[str]) -> dict[str, TaskCenterTask]:
+    if not employee_codes:
+        return {}
+    rows = (
+        db.query(TaskCenterTask)
+        .filter(
+            TaskCenterTask.assigned_ai_employee_code.in_(employee_codes),
+            TaskCenterTask.status.in_(("assigned", "running")),
+        )
+        .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
+        .all()
+    )
+    tasks: dict[str, TaskCenterTask] = {}
+    for task in rows:
+        if task.assigned_ai_employee_code and task.assigned_ai_employee_code not in tasks:
+            tasks[task.assigned_ai_employee_code] = task
+    return tasks
+
+
+def load_today_completed_counts(db: Session, employee_codes: list[str], today_start: datetime) -> dict[str, int]:
+    if not employee_codes:
+        return {}
+    rows = (
+        db.query(TaskCenterTask.assigned_ai_employee_code, func.count(TaskCenterTask.id))
+        .filter(
+            TaskCenterTask.assigned_ai_employee_code.in_(employee_codes),
+            TaskCenterTask.status.in_(("accepted", "audited", "summarized", "completed")),
+            TaskCenterTask.updated_at >= today_start,
+        )
+        .group_by(TaskCenterTask.assigned_ai_employee_code)
+        .all()
+    )
+    return {code: count for code, count in rows if code}
+
+
+def load_recent_errors(db: Session, employee_codes: list[str]) -> dict[str, TaskCenterTask]:
+    if not employee_codes:
+        return {}
+    rows = (
+        db.query(TaskCenterTask)
+        .filter(
+            TaskCenterTask.assigned_ai_employee_code.in_(employee_codes),
+            TaskCenterTask.status.in_(("failed", "rejected")),
+        )
+        .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
+        .all()
+    )
+    errors: dict[str, TaskCenterTask] = {}
+    for task in rows:
+        if task.assigned_ai_employee_code and task.assigned_ai_employee_code not in errors:
+            errors[task.assigned_ai_employee_code] = task
+    return errors
+
+
+def employee_runtime_to_dict(
+    db: Session,
+    employee: AiEmployee,
+    current_task: TaskCenterTask | None,
+    today_completed_tasks: int,
+    recent_error: TaskCenterTask | None,
+):
+    if recent_error:
+        runtime_status = "error"
+    elif current_task:
+        runtime_status = "working"
+    elif employee.status == "active":
+        runtime_status = "idle"
+    else:
+        runtime_status = "offline"
+    return {
+        "employee_code": employee.employee_code,
+        "employee_name": employee.employee_name,
+        "department": employee.legion,
+        "duty": employee.duty,
+        "status": employee.status,
+        "runtime_status": runtime_status,
+        "current_task": task_runtime_brief(current_task),
+        "today_completed_tasks": today_completed_tasks,
+        "recent_error": task_error_brief(recent_error),
+        "tools": employee_tool_briefs(db, employee.employee_code),
+    }
+
+
+def task_runtime_brief(task: TaskCenterTask | None):
+    if not task:
+        return None
+    return {
+        "task_id": task.id,
+        "title": task.title,
+        "status": task.status,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+
+
+def task_error_brief(task: TaskCenterTask | None):
+    if not task:
+        return None
+    return {
+        "task_id": task.id,
+        "title": task.title,
+        "status": task.status,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+    }
+
+
+def employee_tool_briefs(db: Session, employee_code: str):
+    return [
+        {
+            "tool_name": route["tool_name"],
+            "risk_level": route["risk_level"],
+            "enabled": route["enabled"],
+            "priority": route["priority"],
+        }
+        for route in list_routes(db, employee_code=employee_code)
+        if route["enabled"]
+    ]
 
 
 def require_ai_employee_read(request: Request, db: Session):

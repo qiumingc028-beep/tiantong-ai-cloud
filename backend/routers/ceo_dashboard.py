@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func
@@ -41,6 +41,18 @@ EXPECTED_ALEMBIC_VERSION = deploy_center.EXPECTED_ALEMBIC_VERSION
 def get_ceo_dashboard_summary(request: Request, db: Session = Depends(get_db)):
     require_ceo_dashboard_user(request, db)
     return build_ceo_dashboard_summary(db)
+
+
+@router.get("/daily-operations")
+def get_daily_operations(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_daily_operations(db)
+
+
+@router.get("/daily-summary")
+def get_daily_summary(request: Request, db: Session = Depends(get_db)):
+    require_ceo_dashboard_user(request, db)
+    return build_daily_summary(db)
 
 
 @router.get("/deployment-history")
@@ -114,6 +126,49 @@ def build_ceo_dashboard_summary(db: Session):
     }
 
 
+def build_daily_operations(db: Session) -> dict:
+    data = build_daily_summary(db)
+    return {
+        **data,
+        "forbidden_actions": ["auto_execute", "auto_deploy", "permission_change", "external_api_call"],
+    }
+
+
+def build_daily_summary(db: Session) -> dict:
+    system_health = build_system_health(db)
+    deploy_summary = build_deploy_summary(db, system_health)
+    task_summary = build_task_summary(db)
+    employee_summary = build_employee_summary(db)
+    today_summary = build_today_task_summary(db)
+    pending_confirmations = build_pending_actions(task_summary, system_health, deploy_summary)
+    risk_alerts = build_alerts(system_health, task_summary, employee_summary, deploy_summary, pending_confirmations)
+    running_employee_codes = running_task_employee_codes(db)
+    active_count = employee_summary["active"]
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "readonly": True,
+        "system_status": {
+            "overall": resolve_overall_status(risk_alerts, pending_confirmations),
+            "backend": system_health["backend"],
+            "database": system_health["database"],
+            "redis": system_health["redis"],
+            "migration": system_health["migration"],
+        },
+        "employee_summary": {
+            "total": employee_summary["total"],
+            "active": active_count,
+            "inactive": employee_summary["inactive"],
+            "running": len(running_employee_codes),
+            "idle": max(active_count - len(running_employee_codes), 0),
+            "error": 0,
+        },
+        "task_summary": today_summary,
+        "pending_confirmations": pending_confirmations,
+        "risk_alerts": risk_alerts,
+        "recent_failed_tasks": recent_failed_tasks(db),
+    }
+
+
 def build_brain_execution_summary(db: Session) -> dict:
     rows = db.query(BrainExecutionRun.status, func.count(BrainExecutionRun.id)).group_by(BrainExecutionRun.status).all()
     counts = {status: count for status, count in rows}
@@ -151,6 +206,53 @@ def build_brain_execution_summary(db: Session) -> dict:
         "recent_failures": [brain_execution_failure_summary(row) for row in recent_failures],
         "forbidden_actions": ["shell", "external_api", "auto_install_skill", "code_change", "deploy"],
     }
+
+
+def build_today_task_summary(db: Session) -> dict:
+    start = today_start_utc()
+    rows = (
+        db.query(TaskCenterTask.status, func.count(TaskCenterTask.id))
+        .filter(TaskCenterTask.created_at >= start)
+        .group_by(TaskCenterTask.status)
+        .all()
+    )
+    counts = {status: count for status, count in rows}
+    completed = sum(counts.get(status, 0) for status in ["summarized", "accepted", "audited"])
+    pending = sum(counts.get(status, 0) for status in ["created", "split"])
+    return {
+        "today_total": sum(counts.values()),
+        "pending": pending,
+        "assigned": counts.get("assigned", 0),
+        "running": counts.get("running", 0),
+        "completed": completed,
+        "failed": counts.get("rejected", 0),
+        "result_submitted": counts.get("result_submitted", 0),
+    }
+
+
+def running_task_employee_codes(db: Session) -> set[str]:
+    rows = (
+        db.query(TaskCenterTask.assigned_ai_employee_code)
+        .filter(TaskCenterTask.status == "running", TaskCenterTask.assigned_ai_employee_code.isnot(None))
+        .all()
+    )
+    return {row[0] for row in rows if row[0]}
+
+
+def recent_failed_tasks(db: Session) -> list[dict]:
+    rows = (
+        db.query(TaskCenterTask)
+        .filter(TaskCenterTask.status == "rejected")
+        .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
+        .limit(5)
+        .all()
+    )
+    return [task_brief(row) for row in rows]
+
+
+def today_start_utc() -> datetime:
+    now = datetime.now(timezone.utc)
+    return datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
 
 
 def build_system_health(db: Session):
