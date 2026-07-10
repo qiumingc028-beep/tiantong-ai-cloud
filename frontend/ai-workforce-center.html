@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Workforce Center MVP - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f5f7fb;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--nav:#101827;--blue:#2563eb;--green:#15803d;--yellow:#b45309;--red:#b91c1c;--gray:#64748b}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:var(--nav);color:#cbd5e1;padding:18px 14px}.brand{height:58px;color:white;font-size:18px;font-weight:800;padding:14px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}.top h1{font-size:19px;margin:0}.meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pill{display:inline-flex;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:13px}.pill.readonly{border-color:#bfdbfe;background:#eff6ff;color:#1d4ed8}.content{padding:24px}.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-head h2,.section-head h3{margin:0}.section-head h2{font-size:22px}.section-head h3{font-size:18px}.grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:14px}.card .label{font-size:13px;color:var(--muted)}.card .value{font-size:24px;font-weight:800;margin-top:8px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap}.toolbar input,.toolbar select{border:1px solid var(--line);border-radius:8px;padding:9px 10px;background:#fff;color:var(--ink);min-height:38px}.toolbar input{min-width:220px}.employee-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.employee-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:14px;min-height:252px}.employee-card h4{margin:0;font-size:16px}.muted{color:var(--muted);line-height:1.65}.kv{display:grid;grid-template-columns:96px 1fr;gap:7px 10px;font-size:14px;margin-top:12px}.kv div:nth-child(odd){color:var(--muted)}.tag{border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;background:#f1f5f9;color:#475569;display:inline-flex}.tag.working{background:#dbeafe;color:#1d4ed8}.tag.idle{background:#dcfce7;color:#166534}.tag.frozen,.tag.high{background:#fee2e2;color:#991b1b}.tag.offline{background:#e2e8f0;color:#475569}.tag.low{background:#dcfce7;color:#166534}.tag.medium{background:#ffedd5;color:#9a3412}.empty-state{border:1px dashed var(--line);border-radius:8px;padding:24px;color:var(--muted);background:#fbfdff;text-align:center}.btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:8px 11px;background:#fff;color:var(--ink);font-size:14px}.notice{border:1px solid #bfdbfe;background:#eff6ff;color:#1e40af;border-radius:8px;padding:14px;line-height:1.65}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:16px}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}@media(max-width:1180px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.employee-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}}@media(max-width:760px){.app{grid-template-columns:1fr}.side{display:none}.top{align-items:flex-start;flex-direction:column}.content{padding:16px}.grid,.employee-grid{grid-template-columns:1fr}.toolbar input{min-width:100%;width:100%}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu" aria-label="主导航">
+      <a href="/enterprise-brain-console.html">企业大脑总控台</a>
+      <a class="active" href="/ai-workforce-center.html">AI Workforce Center</a>
+      <a href="/ai-workforce.html">AI员工工作台V2</a>
+      <a href="/ai-employee-dashboard.html">AI员工生态驾驶舱</a>
+      <a href="/ai-employee-health.html">AI员工健康中心</a>
+      <a href="/task-center.html">Task Center</a>
+      <a href="/skill-center.html">Skill Center</a>
+      <a href="/tiancang.html">天藏</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="top" aria-label="顶部状态栏">
+      <h1>AI Workforce Center MVP</h1>
+      <div class="meta">
+        <span id="currentRole" class="pill">角色：加载中</span>
+        <span id="employeeTotalPill" class="pill">员工数量：--</span>
+        <span id="healthPill" class="pill">健康状态：加载中</span>
+        <span class="pill readonly">readonly安全模式</span>
+      </div>
+    </header>
+    <section class="content">
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <h2>AI员工工作台第一版页面</h2>
+            <div class="muted">统一查看 AI员工状态、任务、健康、风险、技能、Memory 和 Growth。所有内容只读展示。</div>
+          </div>
+          <span class="pill readonly">Sprint62.29 MVP</span>
+        </div>
+      </section>
+
+      <div id="pageState" class="state">正在加载 AI Workforce Center 数据...</div>
+
+      <section class="section" aria-label="AI员工总览页面">
+        <div class="section-head">
+          <h3>AI员工总览页面</h3>
+          <span class="pill">只读聚合</span>
+        </div>
+        <div class="grid">
+          <article class="card"><div class="label">员工数量</div><div id="statEmployees" class="value">--</div></article>
+          <article class="card"><div class="label">员工状态</div><div id="statEmployeeStatus" class="value">--</div></article>
+          <article class="card"><div class="label">当前任务</div><div id="statTasks" class="value">--</div></article>
+          <article class="card"><div class="label">健康状态</div><div id="statHealth" class="value">--</div></article>
+          <article class="card"><div class="label">风险状态</div><div id="statRisk" class="value">--</div></article>
+        </div>
+      </section>
+
+      <div class="layout">
+        <section class="section">
+          <div class="section-head">
+            <h3>AI员工列表</h3>
+            <span class="pill">员工详情入口</span>
+          </div>
+          <div class="toolbar" aria-label="AI员工列表优化">
+            <div>
+              <input id="employeeSearch" type="search" placeholder="搜索AI员工名称" oninput="renderEmployees()">
+              <select id="departmentFilter" onchange="renderEmployees()">
+                <option value="">全部部门</option>
+              </select>
+              <select id="statusFilter" onchange="renderEmployees()">
+                <option value="">全部状态</option>
+                <option value="working">working</option>
+                <option value="idle">idle</option>
+                <option value="frozen">frozen</option>
+                <option value="offline">offline</option>
+              </select>
+              <select id="riskFilter" onchange="renderEmployees()">
+                <option value="">全部风险</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
+            </div>
+            <span id="employeeListSummary" class="pill">列表：--</span>
+          </div>
+          <div id="emptyState" class="empty-state">暂无数据</div>
+          <div id="employeeGrid" class="employee-grid"></div>
+        </section>
+
+        <aside class="section">
+          <div class="section-head"><h3>状态摘要</h3></div>
+          <div class="kv">
+            <div>working</div><div id="workingCount">--</div>
+            <div>idle</div><div id="idleCount">--</div>
+            <div>frozen</div><div id="frozenCount">--</div>
+            <div>任务总数</div><div id="taskTotal">--</div>
+            <div>阻塞任务</div><div id="taskBlocked">--</div>
+            <div>技能数量</div><div id="skillTotal">--</div>
+            <div>风险数量</div><div id="riskCount">--</div>
+            <div>数据来源</div><div>只读 API</div>
+          </div>
+          <div class="notice" style="margin-top:14px">
+            只允许查看和进入详情。成长状态为只读派生展示。禁止启动员工、权限变更、升级技能或触发任何任务动作。
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+let workforceData={employee_cards:[]};
+let healthData=null;
+let employeeRows=[];
+
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function num(value){return Number.isFinite(Number(value))?Number(value):0}
+function setText(id,value){const el=document.getElementById(id);if(el)el.innerText=String(value)}
+function tag(value){const safe=esc(value||'unknown');return `<span class="tag ${safe}">${safe}</span>`}
+function clampScore(value){return Math.max(0,Math.min(100,Math.round(num(value))))}
+
+async function fetchJson(url){
+  const res=await fetch(url,{credentials:'include'});
+  if(res.status===401){location.href='/login.html';throw new Error('登录过期')}
+  if(res.status===403)throw new Error('无权访问');
+  if(!res.ok)throw new Error('当前数据不可用');
+  return res.json();
+}
+
+function emptyWorkforce(){
+  return {
+    mode:'readonly',
+    employees:{total:0,working:0,idle:0,frozen:0},
+    employee_cards:[],
+    skills:{total:0},
+    tasks:{total:0,running:0,pending:0,blocked:0},
+    audit:{risk_count:0},
+    security:{readonly:true}
+  };
+}
+
+async function loadPage(){
+  try{
+    const user=await fetchJson('/api/me');
+    setText('currentRole','角色：'+(user.role_label||user.role||'未知'));
+    workforceData=await fetchJson('/api/ai-workforce/overview');
+    try{healthData=await fetchJson('/api/ai-employee-health/overview')}catch(e){healthData=null}
+    renderPage(workforceData,healthData);
+    setState('AI Workforce Center 已加载，只读模式。','ok');
+  }catch(e){
+    workforceData=emptyWorkforce();
+    renderPage(workforceData,null);
+    setState(e.message==='无权访问'?'无权访问 AI Workforce Center':'当前数据不可用','error');
+  }
+}
+
+function setState(text,type){
+  const el=document.getElementById('pageState');
+  if(!el)return;
+  el.className='state '+(type||'');
+  el.innerText=text;
+}
+
+function renderPage(data,health){
+  const employees=data.employees||{};
+  const tasks=data.tasks||{};
+  const skills=data.skills||{};
+  const audit=data.audit||{};
+  const working=num(employees.working),idle=num(employees.idle),frozen=num(employees.frozen),total=num(employees.total);
+  const healthScore=healthScoreValue(health);
+  setText('employeeTotalPill','员工数量：'+total);
+  setText('healthPill','健康状态：'+(healthScore===null?'暂无数据':healthScore));
+  setText('statEmployees',total);
+  setText('statEmployeeStatus',`${working}/${total}`);
+  setText('statTasks',num(tasks.running)||num(tasks.total));
+  setText('statHealth',healthScore===null?'暂无数据':healthScore);
+  setText('statRisk',num(audit.risk_count));
+  setText('workingCount',working);
+  setText('idleCount',idle);
+  setText('frozenCount',frozen);
+  setText('taskTotal',num(tasks.total));
+  setText('taskBlocked',num(tasks.blocked));
+  setText('skillTotal',num(skills.total));
+  setText('riskCount',num(audit.risk_count));
+  employeeRows=buildEmployeeRows(Array.isArray(data.employee_cards)?data.employee_cards:[],healthScore);
+  renderDepartmentFilter(employeeRows);
+  renderEmployees();
+}
+
+function healthScoreValue(health){
+  if(!health)return null;
+  if(Number.isFinite(Number(health.overall_score)))return num(health.overall_score);
+  if(health.score&&Number.isFinite(Number(health.score.overall)))return num(health.score.overall);
+  return null;
+}
+
+function buildEmployeeRows(rows,baseHealthScore){
+  return rows.map(row=>{
+    const status=['working','idle','frozen','offline'].includes(row.status)?row.status:'offline';
+    const risk=['low','medium','high'].includes(row.risk_level)?row.risk_level:'low';
+    const currentTask=row.current_task||'暂无数据';
+    return {
+      ...row,
+      status,
+      risk_level:risk,
+      current_task:currentTask,
+      health_score:employeeHealthScore(row,baseHealthScore),
+      memory_status:row.memory_status||memoryStatusFromTask(currentTask),
+      growth_status:row.growth_status||growthStatusFromRisk(risk,status),
+      introduction:row.introduction||row.role||'暂无员工介绍',
+      skill_list:skillList(row),
+      audit_record:auditRecord(risk,row.requires_review),
+    };
+  }).sort((a,b)=>String(a.department||'').localeCompare(String(b.department||''),'zh-CN')||String(a.employee_name||'').localeCompare(String(b.employee_name||''),'zh-CN'));
+}
+
+function skillList(row){
+  if(Array.isArray(row.skills)&&row.skills.length)return row.skills.join('、');
+  const count=num(row.skill_count);
+  return count?`已关联 ${count} 项技能`:'暂无数据';
+}
+
+function auditRecord(risk,requiresReview){
+  if(risk==='high'||requiresReview)return '需要审核';
+  if(risk==='medium')return '关注中';
+  return '暂无高风险审计';
+}
+
+function renderDepartmentFilter(rows){
+  const select=document.getElementById('departmentFilter');
+  if(!select)return;
+  const current=select.value;
+  const departments=[...new Set(rows.map(row=>row.department||'未分配部门'))].sort((a,b)=>a.localeCompare(b,'zh-CN'));
+  select.innerHTML='<option value="">全部部门</option>'+departments.map(name=>`<option value="${esc(name)}">${esc(name)}</option>`).join('');
+  select.value=departments.includes(current)?current:'';
+}
+
+function employeeHealthScore(row,baseHealthScore){
+  const base=baseHealthScore===null?80:baseHealthScore;
+  const riskPenalty={low:0,medium:10,high:25}[row.risk_level]||0;
+  const statusPenalty={working:0,idle:3,frozen:28,offline:18}[row.status]||10;
+  return clampScore(base-riskPenalty-statusPenalty);
+}
+
+function memoryStatusFromTask(currentTask){
+  return currentTask&&currentTask!=='暂无数据'?'有任务上下文':'暂无数据';
+}
+
+function growthStatusFromRisk(risk,status){
+  if(status==='frozen')return '暂停观察';
+  if(risk==='high')return '需要复盘';
+  if(risk==='medium')return '关注中';
+  return '稳定';
+}
+
+function renderEmployees(){
+  const grid=document.getElementById('employeeGrid');
+  const empty=document.getElementById('emptyState');
+  const query=(document.getElementById('employeeSearch')?.value||'').trim().toLowerCase();
+  const department=document.getElementById('departmentFilter')?.value||'';
+  const status=document.getElementById('statusFilter')?.value||'';
+  const risk=document.getElementById('riskFilter')?.value||'';
+  if(!grid||!empty)return;
+  const rows=employeeRows.filter(row=>{
+    const name=String(row.employee_name||'').toLowerCase();
+    return (!query||name.includes(query))
+      &&(!department||row.department===department)
+      &&(!status||row.status===status)
+      &&(!risk||row.risk_level===risk);
+  });
+  setText('employeeListSummary',`列表：${rows.length}/${employeeRows.length}`);
+  if(!rows.length){
+    empty.style.display='block';
+    empty.innerText='暂无数据';
+    grid.innerHTML='';
+    return;
+  }
+  empty.style.display='none';
+  grid.innerHTML=rows.map(employeeCard).join('');
+}
+
+function employeeCard(row){
+  const status=['working','idle','frozen','offline'].includes(row.status)?row.status:'offline';
+  const risk=['low','medium','high'].includes(row.risk_level)?row.risk_level:'low';
+  const memoryStatus=row.memory_status||'暂无数据';
+  const growthStatus=row.growth_status||'暂无数据';
+  return `<article class="employee-card">
+    <div class="section-head">
+      <h4>${esc(row.employee_name||'未命名AI员工')}</h4>
+      ${tag(status)}
+    </div>
+    <div class="kv">
+      <div>员工名称</div><div>${esc(row.employee_name||'未命名AI员工')}</div>
+      <div>员工介绍</div><div>${esc(row.introduction||'暂无员工介绍')}</div>
+      <div>部门</div><div>${esc(row.department||'未分配部门')}</div>
+      <div>状态</div><div>${esc(status)}</div>
+      <div>技能数量</div><div>${num(row.skill_count)}</div>
+      <div>技能列表</div><div>${esc(row.skill_list||'暂无数据')}</div>
+      <div>当前任务</div><div>${esc(row.current_task||'暂无数据')}</div>
+      <div>健康评分</div><div>${esc(row.health_score??'暂无数据')}</div>
+      <div>Growth状态</div><div>${esc(growthStatus)}</div>
+      <div>风险等级</div><div><span class="tag ${esc(risk)}">${esc(risk)}</span></div>
+      <div>Memory状态</div><div>${esc(memoryStatus)}</div>
+      <div>审计记录</div><div>${esc(row.audit_record||'暂无高风险审计')}</div>
+    </div>
+    <div style="margin-top:12px">
+      <a class="btn" href="${esc(row.detail_url||'/ai-employee-detail.html')}">查看员工详情</a>
+    </div>
+  </article>`;
+}
+
+loadPage();
+</script>
+</body>
+</html>

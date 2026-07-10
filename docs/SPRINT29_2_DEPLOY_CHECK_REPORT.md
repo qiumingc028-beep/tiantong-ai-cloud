@@ -96,7 +96,7 @@
   - `OPENSSH PRIVATE`
   - GitHub token
   - OpenAI `sk-` key
-  - AWS `AKIA` key
+  - AWS `REDACTED_KEY_EXAMPLE`
 
 ## B 风险
 

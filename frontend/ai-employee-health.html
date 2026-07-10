@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Employee Health Center - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f5f7fb;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--nav:#101827;--blue:#1d4ed8;--green:#15803d;--yellow:#b45309;--red:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:var(--nav);color:#cbd5e1;padding:18px 14px}.brand{height:58px;color:#fff;font-size:18px;font-weight:800;padding:14px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.top{min-height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}.top h1{font-size:19px;margin:0}.meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pill{display:inline-flex;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:13px}.pill.readonly{border-color:#bfdbfe;background:#eff6ff;color:var(--blue)}.content{padding:24px}.hero,.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:16px}.hero h2{margin:0;font-size:24px}.hero p{color:var(--muted);line-height:1.65;margin:8px 0 0}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:16px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:14px;min-width:0}.card h4{margin:0 0 8px;font-size:16px}.label{font-size:13px;color:var(--muted)}.value{font-size:26px;font-weight:800;margin-top:8px}.kv{display:grid;grid-template-columns:118px 1fr;gap:7px 10px;font-size:14px;margin-top:10px}.kv div:nth-child(odd){color:var(--muted)}.muted{color:var(--muted);line-height:1.65}.tag{border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;background:#f1f5f9;color:#475569;display:inline-flex;margin:2px}.tag.healthy,.tag.connected,.tag.available,.tag.fresh,.tag.low,.tag.readonly{background:#dcfce7;color:#166534}.tag.degraded,.tag.stale,.tag.warning,.tag.medium,.tag.not_checked{background:#fef3c7;color:#92400e}.tag.unavailable,.tag.high{background:#fee2e2;color:#991b1b}.tag.empty,.tag.not_connected,.tag.unknown{background:#e2e8f0;color:#475569}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-head h3{font-size:18px;margin:0}.empty-state{text-align:center;border:1px dashed var(--line);border-radius:8px;padding:28px;color:var(--muted);background:#fbfdff}.notice{border:1px solid #bfdbfe;background:#eff6ff;color:#1e40af;border-radius:8px;padding:14px;line-height:1.65}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px}table{width:100%;border-collapse:collapse;background:#fff}th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}th{background:#f8fafc;color:#475569;font-weight:700}tr:last-child td{border-bottom:0}@media(max-width:1180px){.stats,.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:760px){.app{grid-template-columns:1fr}.side{display:none}.top{align-items:flex-start;flex-direction:column}.content{padding:16px}.stats,.grid{grid-template-columns:1fr}.kv{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu" aria-label="主导航">
+      <a href="/enterprise-brain-console.html">企业大脑总控台</a>
+      <a href="/ai-employee-dashboard.html">AI员工生态驾驶舱</a>
+      <a class="active" href="/ai-employee-health.html">AI Employee Health Center</a>
+      <a href="/ai-workforce.html">AI Workforce Center</a>
+      <a href="/skill-center.html">Skill Center</a>
+      <a href="/ai-employee-memory.html">Memory Center</a>
+      <a href="/ai-employee-growth.html">Growth Center</a>
+      <a href="/task-center.html">Task Center</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="top" aria-label="顶部状态栏">
+      <h1>AI Employee Health Center</h1>
+      <div class="meta">
+        <span class="pill">当前组织：天统AI</span>
+        <span class="pill">Sprint62.19-F</span>
+        <span class="pill readonly">readonly安全模式</span>
+        <span id="checkedAt" class="pill">最近检查：暂无数据</span>
+      </div>
+    </header>
+    <section class="content">
+      <div class="hero">
+        <h2>AI员工生态健康监控</h2>
+        <p>只读查看 AI Workforce、Skill、Memory、Growth、Audit 与 Task Center 的健康状态、API 状态、数据更新时间和异常记录。</p>
+      </div>
+
+      <div id="pageState" class="state">正在读取 AI Employee Health Overview...</div>
+
+      <section class="section" aria-label="健康总评分展示">
+        <div class="section-head"><h3>健康总评分</h3><span id="overallStatus" class="pill">unknown</span></div>
+        <div class="stats">
+          <article class="card"><div class="label">总健康评分</div><div id="overallScore" class="value">--</div></article>
+          <article class="card"><div class="label">异常数量</div><div id="alertCount" class="value">--</div></article>
+          <article class="card"><div class="label">模块连接</div><div id="moduleScore" class="value">--</div></article>
+          <article class="card"><div class="label">API可用</div><div id="apiScore" class="value">--</div></article>
+        </div>
+      </section>
+
+      <section class="section" aria-label="AI员工数量状态">
+        <div class="section-head"><h3>AI员工数量状态</h3><span class="pill readonly">只读统计</span></div>
+        <div class="stats">
+          <article class="card"><div class="label">员工总数</div><div id="employeeTotal" class="value">--</div></article>
+          <article class="card"><div class="label">working</div><div id="employeeWorking" class="value">--</div></article>
+          <article class="card"><div class="label">idle</div><div id="employeeIdle" class="value">--</div></article>
+          <article class="card"><div class="label">frozen</div><div id="employeeFrozen" class="value">--</div></article>
+        </div>
+      </section>
+
+      <section class="section" aria-label="模块健康地图">
+        <div class="section-head"><h3>模块健康地图</h3><span class="pill">AI Workforce / Skill Center / Memory Center / Growth Center / Audit Center / Task Center</span></div>
+        <div id="moduleGrid" class="grid"></div>
+      </section>
+
+      <section class="section" aria-label="API健康状态">
+        <div class="section-head"><h3>API健康状态</h3><span class="pill">GET /api/ai-employee-health/overview</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>API路径</th><th>状态</th><th>HTTP</th><th>耗时</th><th>最近检查</th></tr></thead>
+            <tbody id="apiTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section" aria-label="数据更新时间">
+        <div class="section-head"><h3>数据更新时间</h3></div>
+        <div id="freshnessGrid" class="grid"></div>
+      </section>
+
+      <section class="section" aria-label="异常记录展示">
+        <div class="section-head"><h3>异常记录</h3><span class="pill">风险等级展示</span></div>
+        <div id="alertList"></div>
+      </section>
+
+      <section class="section" aria-label="安全边界">
+        <div class="section-head"><h3>安全边界</h3></div>
+        <div id="securityBox" class="notice">readonly=true；auto_repair_enabled=false；auto_execute_enabled=false；execution_engine_called=false；openclaw_connected=false；n8n_connected=false。</div>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+const emptyText='暂无数据';
+const moduleOrder=['ai_workforce','skill_center','memory_center','growth_center','audit_center','task_center'];
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function arr(value){return Array.isArray(value)?value:[]}
+function num(value){return Number.isFinite(Number(value))?Number(value):0}
+function text(value){return value===0?'0':(value?String(value):emptyText)}
+function setText(id,value){const el=document.getElementById(id);if(el)el.innerText=String(value)}
+function tag(value){const safe=String(value||'unknown');return `<span class="tag ${esc(safe.toLowerCase())}">${esc(safe)}</span>`}
+async function api(url){
+  const res=await fetch(url,{credentials:'include'});
+  if(res.status===401){location.href='/login.html';throw new Error('请重新登录')}
+  if(res.status===403)throw new Error('无权限查看 AI Employee Health Center');
+  if(!res.ok)throw new Error('当前数据暂不可用');
+  return res.json();
+}
+function safeData(){
+  return {
+    mode:'readonly',
+    status:'unknown',
+    overall_score:0,
+    generated_at:null,
+    alert_count:0,
+    employees:{total:0,working:0,idle:0,frozen:0,offline:0,departments:[]},
+    modules:[],
+    apis:[],
+    freshness:[],
+    score:{overall:0,module_score:0,api_score:0,freshness_score:0,security_score:0,alert_penalty:0,breakdown:{}},
+    alerts:[],
+    empty_state:{message:'暂无数据',no_real_business_data:true},
+    security:{readonly:true,auto_repair_enabled:false,auto_execute_enabled:false,execution_engine_called:false,openclaw_connected:false,n8n_connected:false}
+  };
+}
+function renderHealth(data){
+  const score=data.score||{},employees=data.employees||{},status=data.status||'unknown';
+  setText('overallScore',num(data.overall_score));
+  setText('alertCount',num(data.alert_count));
+  setText('moduleScore',num(score.module_score));
+  setText('apiScore',num(score.api_score));
+  overallStatus.innerHTML=tag(status);
+  setText('employeeTotal',num(employees.total));
+  setText('employeeWorking',num(employees.working));
+  setText('employeeIdle',num(employees.idle));
+  setText('employeeFrozen',num(employees.frozen));
+  setText('checkedAt','最近检查：'+text(data.generated_at));
+  renderModules(data.modules);
+  renderApis(data.apis);
+  renderFreshness(data.freshness);
+  renderAlerts(data.alerts);
+  renderSecurity(data.security||{});
+  const empty=data.empty_state||{};
+  pageState.className=status==='unavailable'?'state error':status==='degraded'?'state warn':'state ok';
+  pageState.innerText=empty.no_real_business_data?text(empty.message):'AI Employee Health Overview 已加载。当前为只读展示。';
+}
+function renderModules(modules){
+  const rows=arr(modules).filter(row=>moduleOrder.includes(row.module_key)).sort((a,b)=>moduleOrder.indexOf(a.module_key)-moduleOrder.indexOf(b.module_key));
+  moduleGrid.innerHTML=rows.length?rows.map(row=>`<article class="card">
+    <h4>${esc(row.module_name)}</h4>
+    <div class="muted">${esc(row.message||emptyText)}</div>
+    <div class="kv">
+      <div>状态</div><div>${tag(row.status)}</div>
+      <div>数量</div><div>${num(row.count)}</div>
+      <div>风险等级</div><div>${tag(row.risk_level)}</div>
+      <div>更新时间</div><div>${esc(text(row.last_updated))}</div>
+      <div>数据来源</div><div>${esc(text(row.source))}</div>
+    </div>
+  </article>`).join(''):'<div class="empty-state">暂无模块健康数据</div>';
+}
+function renderApis(apis){
+  const rows=arr(apis);
+  apiTable.innerHTML=rows.length?rows.map(row=>`<tr>
+    <td>${esc(row.path)}</td>
+    <td>${tag(row.status)}</td>
+    <td>${esc(text(row.http_status))}</td>
+    <td>${esc(text(row.latency_ms))}</td>
+    <td>${esc(text(row.last_checked_at))}</td>
+  </tr>`).join(''):'<tr><td colspan="5">暂无 API 健康数据</td></tr>';
+}
+function renderFreshness(freshness){
+  const rows=arr(freshness);
+  freshnessGrid.innerHTML=rows.length?rows.map(row=>`<article class="card">
+    <h4>${esc(row.data_name)}</h4>
+    <div class="kv">
+      <div>状态</div><div>${tag(row.freshness_status)}</div>
+      <div>最近更新时间</div><div>${esc(text(row.last_updated))}</div>
+      <div>阈值</div><div>${num(row.threshold_minutes)} 分钟</div>
+      <div>说明</div><div>${esc(text(row.message))}</div>
+    </div>
+  </article>`).join(''):'<div class="empty-state">暂无更新时间数据</div>';
+}
+function renderAlerts(alerts){
+  const rows=arr(alerts);
+  alertList.innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>级别</th><th>类型</th><th>模块</th><th>说明</th><th>审核</th></tr></thead><tbody>${rows.map(row=>`<tr>
+    <td>${tag(row.level)}</td>
+    <td>${esc(row.type)}</td>
+    <td>${esc(row.module_key)}</td>
+    <td><strong>${esc(row.title)}</strong><div class="muted">${esc(row.message)}</div></td>
+    <td>${row.requires_boss_confirm?'boss_confirm=true':''} ${row.security_audited_required?'security_audited=true':''}</td>
+  </tr>`).join('')}</tbody></table></div>`:'<div class="empty-state">暂无异常记录</div>';
+}
+function renderSecurity(security){
+  securityBox.innerHTML=[
+    `readonly=${esc(Boolean(security.readonly))}`,
+    `auto_repair_enabled=${esc(Boolean(security.auto_repair_enabled))}`,
+    `auto_execute_enabled=${esc(Boolean(security.auto_execute_enabled))}`,
+    `execution_engine_called=${esc(Boolean(security.execution_engine_called))}`,
+    `openclaw_connected=${esc(Boolean(security.openclaw_connected))}`,
+    `n8n_connected=${esc(Boolean(security.n8n_connected))}`
+  ].join('；');
+}
+function renderError(message){
+  renderHealth(safeData());
+  pageState.className='state error';
+  pageState.innerText=message||'当前数据暂不可用';
+}
+async function init(){
+  try{
+    renderHealth(safeData());
+    pageState.className='state';
+    pageState.innerText='正在读取 AI Employee Health Overview...';
+    const data=await api('/api/ai-employee-health/overview');
+    renderHealth(data);
+  }catch(e){
+    renderError(e.message);
+  }
+}
+init();
+</script>
+</body>
+</html>

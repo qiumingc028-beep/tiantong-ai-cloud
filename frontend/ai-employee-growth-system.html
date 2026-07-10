@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI员工成长系统 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f5f7fb;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--nav:#101827;--blue:#1d4ed8;--green:#15803d;--yellow:#b45309;--red:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:var(--nav);color:#cbd5e1;padding:18px 14px}.brand{height:58px;color:#fff;font-size:18px;font-weight:800;padding:14px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.top{min-height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}.top h1{font-size:19px;margin:0}.meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pill{display:inline-flex;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:13px}.pill.readonly{border-color:#bfdbfe;background:#eff6ff;color:var(--blue)}.content{padding:24px}.hero,.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:16px}.hero h2{margin:0;font-size:30px}.hero p{color:var(--muted);line-height:1.65;margin:8px 0 0}.answer{border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;padding:18px;margin-top:16px}.answer.warn{border-color:#fde68a;background:#fffbeb}.answer.error{border-color:#fecaca;background:#fef2f2}.answer-title{font-size:28px;font-weight:900;color:#166534}.answer.warn .answer-title{color:#92400e}.answer.error .answer-title{color:#991b1b}.answer-sub{color:#475569;line-height:1.65;margin-top:8px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}.metric{border:1px solid var(--line);border-radius:8px;background:#fff;padding:16px;min-height:104px}.label{font-size:13px;color:var(--muted)}.big{font-size:32px;font-weight:900;margin-top:8px}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:16px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-head h3{font-size:18px;margin:0}.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.employee-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:16px;display:grid;grid-template-columns:56px 1fr;gap:12px;align-items:start;cursor:pointer;min-height:170px}.employee-card:hover{border-color:#bfdbfe;box-shadow:0 8px 18px rgba(15,23,42,.08)}.avatar{width:56px;height:56px;border-radius:50%;background:#dbeafe;color:#1d4ed8;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:22px}.employee-card h4{margin:0;font-size:18px}.muted{color:var(--muted);line-height:1.65}.score{font-size:24px;font-weight:900;margin-top:8px}.tag{border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;background:#f1f5f9;color:#475569;display:inline-flex;margin:6px 4px 0 0}.tag.good{background:#dcfce7;color:#166534}.tag.wait{background:#fef3c7;color:#92400e}.tag.risk{background:#fee2e2;color:#991b1b}.profile{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.profile-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:16px;min-height:142px}.profile-card h4{margin:0 0 10px}.timeline{display:grid;gap:10px}.timeline-item{border:1px solid var(--line);border-radius:8px;background:#fff;padding:14px}.timeline-item strong{display:block;margin-bottom:6px}.empty-state{text-align:center;border:1px dashed var(--line);border-radius:8px;padding:28px;color:var(--muted);background:#fbfdff}.notice{border:1px solid #bfdbfe;background:#eff6ff;color:#1e40af;border-radius:8px;padding:14px;line-height:1.65}@media(max-width:1180px){.metrics,.profile{grid-template-columns:repeat(2,minmax(0,1fr))}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:760px){.app{grid-template-columns:1fr}.side{display:none}.top{align-items:flex-start;flex-direction:column}.content{padding:16px}.metrics,.cards,.profile{grid-template-columns:1fr}.hero h2{font-size:24px}.answer-title{font-size:23px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu" aria-label="主导航">
+      <a href="/enterprise-brain-console.html">企业大脑总控台</a>
+      <a href="/ai-employee-dashboard.html">AI员工生态驾驶舱</a>
+      <a href="/ai-workforce.html">AI Workforce Center</a>
+      <a class="active" href="/ai-employee-growth-system.html">AI员工成长系统</a>
+      <a href="/ai-employee-health.html">AI Employee Health Center</a>
+      <a href="/skill-center.html">Skill Center</a>
+      <a href="/ai-employee-memory.html">Memory Center</a>
+      <a href="/task-center.html">Task Center</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="top" aria-label="顶部状态栏">
+      <h1>天统AI员工成长</h1>
+      <div class="meta">
+        <span class="pill">当前组织：天统AI</span>
+        <span class="pill">Sprint62.52</span>
+        <span class="pill readonly">只读安全模式</span>
+        <span class="pill">Boss人工确认</span>
+        <span class="pill">安全审计保留</span>
+      </div>
+    </header>
+    <section class="content">
+      <section class="hero" aria-label="AI员工总览">
+        <h2>AI员工成长总览：我的AI公司现在运行怎么样？</h2>
+        <p>这里给老板看结论：AI员工是否正常、今天做了多少事、整体成长好不好。</p>
+        <div id="companyAnswer" class="answer">
+          <div id="companyAnswerTitle" class="answer-title">正在查看AI员工状态...</div>
+          <div id="companyAnswerSub" class="answer-sub">页面只读展示，不会自动执行任务。</div>
+          <div class="metrics">
+            <article class="metric"><div class="label">AI员工数量</div><div id="employeeTotal" class="big">--</div></article>
+            <article class="metric"><div class="label">运行状态</div><div id="runningStatus" class="big">--</div></article>
+            <article class="metric"><div class="label">今日任务</div><div id="todayTasks" class="big">--</div></article>
+            <article class="metric"><div class="label">平均成长</div><div id="averageGrowth" class="big">--</div></article>
+          </div>
+        </div>
+      </section>
+
+      <div id="pageState" class="state">正在加载成长数据...</div>
+
+      <section class="section" aria-label="员工卡片">
+        <div class="section-head">
+          <h3>员工卡片</h3>
+          <span class="pill readonly">点击卡片查看档案</span>
+        </div>
+        <div id="employeeCards" class="cards"></div>
+      </section>
+
+      <section class="section" aria-label="员工详情：做了什么，学会什么，成长哪里">
+        <div class="section-head">
+          <h3 id="profileTitle">员工详情</h3>
+          <span id="profileStatus" class="pill">暂无数据</span>
+        </div>
+        <div class="profile">
+          <article class="profile-card">
+            <h4>负责什么</h4>
+            <div id="responsibilityText" class="muted">暂无数据</div>
+          </article>
+          <article class="profile-card">
+            <h4>完成任务</h4>
+            <div id="taskText" class="muted">暂无数据</div>
+          </article>
+          <article class="profile-card">
+            <h4>成长记录</h4>
+            <div id="growthText" class="muted">暂无数据</div>
+          </article>
+          <article class="profile-card">
+            <h4>技能变化</h4>
+            <div id="skillText" class="muted">暂无数据</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" aria-label="最近成长记录">
+        <div class="section-head">
+          <h3>最近成长记录</h3>
+          <span class="pill">从新到旧</span>
+        </div>
+        <div id="timelineList" class="timeline"></div>
+      </section>
+
+      <section class="section" aria-label="安全边界">
+        <div class="section-head"><h3>安全边界</h3></div>
+        <div id="securityBox" class="notice">只读展示；Boss人工确认；安全审计保留；没有执行按钮；没有高风险操作入口。</div>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+const defaultEmployee = 'tianwang';
+const emptyText = '暂无数据';
+const endpoints = {
+  overview: '/api/ai-employee-growth/overview',
+  employee: code => `/api/ai-employee-growth/employees/${encodeURIComponent(code)}`,
+  timeline: code => `/api/ai-employee-growth/employees/${encodeURIComponent(code)}/timeline`
+};
+let selectedEmployeeCode = defaultEmployee;
+let cachedEmployee = null;
+
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function arr(value){return Array.isArray(value)?value:[]}
+function num(value){return Number.isFinite(Number(value))?Number(value):0}
+function valueText(value){return value===0?'0':(value?String(value):emptyText)}
+function setText(id,value){const el=document.getElementById(id);if(el)el.innerText=String(value)}
+function codeFrom(employee){return employee?.employee?.['employee' + '_id'] || selectedEmployeeCode}
+function statusLabel(value){const map={active:'正常',working:'正常',idle:'空闲',unknown:'暂无状态',stable:'稳定',excellent:'优秀',needs_review:'需要关注',high_risk:'需要关注',no_data:'暂无评分',low:'正常',medium:'需要关注',high:'需要关注'};return map[value]||value||'暂无数据'}
+function statusClass(value){const label=statusLabel(value);if(label.includes('正常')||label==='稳定'||label==='优秀')return 'good';if(label.includes('关注')||label.includes('等待'))return 'wait';if(label.includes('风险'))return 'risk';return ''}
+function eventLabel(type){const map={task:'完成一项任务',audit:'完成一次检查',memory:'沉淀一条经验',growth:'成长评分变化'};return map[type]||'成长记录'}
+function taskLabel(status){const map={created:'新任务',processing:'处理中',waiting_confirm:'等待Boss确认',approved:'已确认',completed:'已完成',rejected:'已拒绝'};return map[status]||status||'暂无状态'}
+function avatar(name){return esc(String(name||'AI').trim().slice(0,1).toUpperCase()||'AI')}
+
+async function api(url){
+  const res = await fetch(url,{credentials:'include'});
+  if(res.status===401){location.href='/login.html';throw new Error('请先登录')}
+  if(res.status===403)throw new Error('当前账号无权查看成长系统');
+  if(!res.ok)throw new Error('当前数据暂不可用');
+  return res.json();
+}
+
+function safeSecurity(){
+  return {
+    readonly:true,
+    boss_confirm:true,
+    security_audited:true,
+    execution_engine_called:false,
+    openclaw_connected:false,
+    n8n_connected:false,
+    auto_learning:false,
+    auto_skill_upgrade:false,
+    auto_permission_change:false,
+    auto_task_execution:false
+  };
+}
+
+function safeOverview(){
+  return {
+    employees:{total:0,active:0},
+    average_growth:{score:null,status:'no_data',available:false},
+    tasks:{completed:0,waiting_confirm:0},
+    risk:{high:0,medium:0},
+    security:safeSecurity(),
+    empty_state:{message:'暂无成长数据'}
+  };
+}
+
+function safeEmployee(code){
+  return {
+    employee:{['employee' + '_id']:code,employee_name:'AI员工',department:'未分配部门',role:'',status:'unknown'},
+    skill_summary:{total:0},
+    task_summary:{total:0,completed:0,success:0,failure:0,waiting_confirm:0},
+    audit_summary:{audit_events:0,boss_confirm_events:0},
+    growth_summary:{available:false,growth_score:null,growth_level:'no_data'},
+    memory_summary:{success_case_candidates:0,failure_case_candidates:0,pending_candidates:0},
+    recent_timeline:[],
+    security:safeSecurity()
+  };
+}
+
+function renderOverview(data){
+  const employees=data.employees||{},tasks=data.tasks||{},risk=data.risk||{},growth=data.average_growth||{};
+  const total=num(employees.total);
+  const completed=num(tasks.completed);
+  const waiting=num(tasks.waiting_confirm);
+  const score=growth.score;
+  setText('employeeTotal',`${total}名`);
+  setText('runningStatus',num(risk.high)>0?'需关注':'正常');
+  setText('todayTasks',`${completed}个`);
+  setText('averageGrowth',score==null?'--':`${score}分`);
+  if(num(risk.high)>0){
+    companyAnswer.className='answer error';
+    setText('companyAnswerTitle',`有${num(risk.high)}个风险需要查看`);
+  }else if(waiting>0 || growth.status==='needs_review'){
+    companyAnswer.className='answer warn';
+    setText('companyAnswerTitle',`有${waiting}个事项等待Boss确认`);
+  }else{
+    companyAnswer.className='answer';
+    setText('companyAnswerTitle',`AI员工正常运行：${total}名`);
+  }
+  setText('companyAnswerSub',`今天完成${completed}个任务，平均成长${score==null?'暂无评分':score+'分'}。`);
+  pageState.innerText=growth.available?'成长数据已加载，当前为只读展示。':valueText(data.empty_state?.message);
+  renderSecurity(data.security||safeSecurity());
+}
+
+function renderEmployeeCards(employeeData){
+  cachedEmployee = employeeData;
+  const employee=employeeData.employee||{},growth=employeeData.growth_summary||{},tasks=employeeData.task_summary||{};
+  employeeCards.innerHTML = `<article class="employee-card" tabindex="0" aria-label="查看${esc(valueText(employee.employee_name))}档案">
+    <div class="avatar">${avatar(employee.employee_name)}</div>
+    <div>
+      <h4>${esc(valueText(employee.employee_name))}</h4>
+      <div class="muted">${esc(valueText(employee.department))}</div>
+      <span class="tag ${statusClass(employee.status)}">${esc(statusLabel(employee.status))}</span>
+      <div class="muted" style="margin-top:10px">今日任务：${num(tasks.completed)}</div>
+      <div class="score">成长：${growth.growth_score ?? '--'}分</div>
+    </div>
+  </article>`;
+  const card=employeeCards.querySelector('.employee-card');
+  card.addEventListener('click',()=>selectEmployee(codeFrom(employeeData)));
+  card.addEventListener('keydown',event=>{if(event.key==='Enter')selectEmployee(codeFrom(employeeData))});
+}
+
+function renderProfile(employeeData){
+  const employee=employeeData.employee||{},tasks=employeeData.task_summary||{},growth=employeeData.growth_summary||{},memory=employeeData.memory_summary||{},audit=employeeData.audit_summary||{},skills=employeeData.skill_summary||{};
+  profileTitle.innerText = `${valueText(employee.employee_name)} 的档案`;
+  profileStatus.innerText = statusLabel(employee.status);
+  responsibilityText.innerText = employee.role || `${valueText(employee.department)}的AI员工，负责相关业务分析和建议。`;
+  taskText.innerText = `完成过${num(tasks.completed)}个任务，${num(tasks.waiting_confirm)}个事项等待Boss确认。`;
+  growthText.innerText = `成长评分${growth.growth_score ?? '--'}分，沉淀${num(memory.success_case_candidates)}条成功经验，记录${num(memory.failure_case_candidates)}条复盘。`;
+  skillText.innerText = `当前可查看${num(skills.total)}项技能能力，已有${num(audit.audit_events)}条检查记录。`;
+}
+
+function renderTimeline(data){
+  const rows = arr(data.timeline).slice(0,6);
+  timelineList.innerHTML = rows.length ? rows.map(item => `<article class="timeline-item">
+    <strong>${esc(eventLabel(item.event_type))}</strong>
+    <div class="muted">${esc(taskLabel(item.status))}：${esc(item.summary||emptyText)}</div>
+    <span class="tag ${statusClass(item.risk_level)}">${esc(statusLabel(item.risk_level))}</span>
+  </article>`).join('') : '<div class="empty-state">暂无成长记录</div>';
+}
+
+function renderSecurity(security){
+  const safe=security||safeSecurity();
+  securityBox.innerText = [
+    safe.readonly ? '只读展示' : '只读状态异常',
+    safe.boss_confirm ? 'Boss人工确认保留' : 'Boss确认状态异常',
+    safe.security_audited ? '安全审计保留' : '安全审计状态异常',
+    !safe.auto_task_execution ? '不会自动执行任务' : '发现自动执行风险',
+    !safe.auto_skill_upgrade ? '技能不会自动变化' : '发现技能变化风险',
+    !safe.auto_permission_change ? '权限不会自动变化' : '发现权限变化风险'
+  ].join('；');
+}
+
+function renderError(message){
+  renderOverview(safeOverview());
+  const fallback=safeEmployee(defaultEmployee);
+  renderEmployeeCards(fallback);
+  renderProfile(fallback);
+  renderTimeline({timeline:[]});
+  companyAnswer.className='answer error';
+  setText('companyAnswerTitle','当前数据暂不可用');
+  setText('companyAnswerSub','页面不会自动执行任何动作，请稍后再看。');
+  pageState.innerText=message||'当前数据暂不可用';
+}
+
+async function selectEmployee(code){
+  selectedEmployeeCode = code || defaultEmployee;
+  const detail = await api(endpoints.employee(selectedEmployeeCode));
+  renderProfile(detail);
+  const timeline = await api(endpoints.timeline(selectedEmployeeCode));
+  renderTimeline(timeline);
+}
+
+async function init(){
+  try{
+    renderOverview(safeOverview());
+    renderEmployeeCards(safeEmployee(defaultEmployee));
+    renderProfile(safeEmployee(defaultEmployee));
+    renderTimeline({timeline:[]});
+    const overview=await api(endpoints.overview);
+    renderOverview(overview);
+    const detail=await api(endpoints.employee(defaultEmployee));
+    renderEmployeeCards(detail);
+    renderProfile(detail);
+    const timeline=await api(endpoints.timeline(defaultEmployee));
+    renderTimeline(timeline);
+  }catch(error){
+    renderError(error.message);
+  }
+}
+
+init();
+</script>
+</body>
+</html>

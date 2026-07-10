@@ -1,4 +1,12 @@
 from backend.models import TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
+from pathlib import Path
+
+
+DETAIL_PAGE = Path("frontend/ai-employee-detail.html")
+
+
+def read_detail_page() -> str:
+    return DETAIL_PAGE.read_text(encoding="utf-8")
 
 
 def test_ai_employee_detail_returns_aggregated_readonly_profile(client, owner_headers, test_db):
@@ -151,3 +159,74 @@ def test_ai_employee_detail_filters_sensitive_fields(client, owner_headers):
     forbidden = ["password_hash", "secret", "api key", "authorization", "bearer", "private_key"]
     for word in forbidden:
         assert word not in text
+
+
+def test_ai_employee_detail_v2_page_structure_exists():
+    html = read_detail_page()
+
+    for text in [
+        "AI员工详情",
+        "员工第一眼信息",
+        "AI员工",
+        "部门",
+        "当前状态",
+        "成长分",
+        "老板关心的员工信息",
+        "返回AI员工中心",
+        "我的身份：",
+        "我负责：",
+        "今天完成：",
+        "我正在学习：",
+        "我的成长：",
+        "我的成长记录",
+        "最近变化：",
+        "现在几分",
+        "上升趋势",
+        "成长原因",
+        "经验记录",
+        "做过什么",
+        "解决什么问题",
+        "积累什么经验",
+        "我正在学习的能力",
+        "熟练程度",
+        "什么时候会的",
+        "用过几次",
+        "做成比例",
+    ]:
+        assert text in html
+
+
+def test_ai_employee_detail_v2_empty_states_and_security_controls():
+    html = read_detail_page()
+
+    for text in ["暂无数据", "只看不操作", "老板确认", "安全记录", "readonly=true", "boss_confirm=true", "security_audited=true"]:
+        assert text in html
+
+    forbidden = [
+        "employee_id",
+        "数据库字段",
+        "技术日志",
+        "API信息",
+        "数据库信息",
+        "Skill",
+        "Memory",
+        "Timeline",
+        "启动员工",
+        "自动运行",
+        "修改权限",
+        "自动升级",
+        "执行任务",
+        "立即执行",
+        "开始任务",
+        "升级员工",
+        "授权员工",
+        "修改员工",
+        "自动授权",
+        "/api/execution",
+        "/api/brain/start",
+        "/ai-execution.html",
+        "OpenClaw",
+        "n8n",
+    ]
+    for text in forbidden:
+        assert text not in html

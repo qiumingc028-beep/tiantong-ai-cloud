@@ -10,6 +10,71 @@
 - 第四阶段：完成 PostgreSQL、Redis、JWT、SQLAlchemy ORM、Alembic、Docker Compose。
 - 第五阶段：完成京东统一数据采集平台骨架、Redis Queue、后台 worker、京东商智/京准通采集适配器和 AI店长分析任务。
 
+## V1 技术架构
+
+核心分层：
+
+- `frontend/`：静态 HTML 页面，由 Nginx 提供访问。
+- `backend/`：FastAPI 后端，提供登录、老板驾驶舱、Task Center、AI员工中心、Orchestrator 等 API。
+- `backend/routers/`：按业务模块拆分 API Router。
+- `backend/services/`：只读聚合、业务服务和后台能力封装。
+- `backend/models.py` 与扩展模型文件：SQLAlchemy ORM 数据模型。
+- `alembic/`：数据库 migration。
+- `postgres`：业务数据存储。
+- `redis`：队列、缓存和运行状态。
+- `worker`：后台任务 worker。
+- `nginx`：前端静态资源和 API 反向代理。
+
+V1 安全边界：
+
+- AI员工中心保持 `readonly=true`。
+- 高风险动作必须 `boss_confirm=true`。
+- 高风险动作必须 `security_audited=true`。
+- V1 不接入 OpenClaw、n8n。
+- V1 不允许绕过 Task Center / 审批链自动执行业务动作。
+
+## 新人本地启动
+
+本地开发推荐使用 Docker Compose：
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose ps
+```
+
+访问：
+
+```text
+http://127.0.0.1/
+```
+
+常用账号由初始化脚本写入测试/开发环境。首次启动后可先访问：
+
+```text
+http://127.0.0.1/login.html
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1/api/health
+curl http://127.0.0.1/api/ready
+```
+
+停止：
+
+```bash
+docker compose down
+```
+
+注意：
+
+- `.env` 是本地运行配置，不要提交。
+- `.env.example` 必须保留，用于新人复制。
+- 发布验收或 CI 环境不应在仓库根目录保留真实 `.env`。
+- 当前开发版 `docker-compose.yml` 的 `backend` / `worker` 依赖根目录 `.env`，所以本地启动前必须执行 `cp .env.example .env`。
+
 ## 数据库
 
 核心表：
@@ -198,6 +263,27 @@ POSTGRES_PASSWORD=tiantong
 ```bash
 python -m pytest -q
 ```
+
+Docker Python 3.12 测试：
+
+```bash
+docker run --rm \
+  -v "$PWD:/app" \
+  -w /app \
+  -e DATABASE_URL=sqlite:///./test.db \
+  -e REDIS_URL=redis://redis:6379/0 \
+  -e JWT_SECRET=tiantong-test-secret-32-bytes-minimum \
+  tiantong-ai-cloud-backend \
+  python -m pytest tests/
+```
+
+发布安全测试要求仓库根目录不存在真实 `.env`：
+
+```bash
+python -m pytest tests/test_auth.py
+```
+
+如果使用 Docker Compose 本地启动，需要先创建 `.env`；如果执行发布安全测试，需要使用干净工作区或临时移出 `.env`。
 
 当前覆盖：
 

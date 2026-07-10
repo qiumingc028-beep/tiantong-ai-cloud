@@ -15,7 +15,7 @@ from .archive_sync import router as archive_sync_router
 from .command_center import controller as command_center
 from .routers import auto_dispatch
 from .brain_execution import router as brain_execution_router
-from .routers import account_center, ai_capabilities, ai_employees, ai_execution, approval_center, brain_tool_router, business_loop, ceo_dashboard, deploy_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_evolution, employee_execution, employee_workspace, execution_engine, jd_collection, jd_integrations, knowledge_center, metrics, model_routing, orchestrator, orchestrator_hotfix, orchestrator_task_links, release_center, reviews, skill_plugin_center, skill_plugin_research, sop_skill_center, stores, task_center, tiancang, tool_center, tool_permissions, tool_router, users
+from .routers import account_center, ai_capabilities, ai_employee_ecosystem, ai_employee_growth, ai_employee_growth_system, ai_employee_health, ai_employee_skills, ai_employees, ai_execution, ai_workforce, approval_center, brain_tool_router, business_loop, ceo_dashboard, deploy_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_evolution, employee_execution, employee_workspace, enterprise_brain_console, execution_engine, jd_collection, jd_integrations, knowledge_center, metrics, model_routing, orchestrator, orchestrator_hotfix, orchestrator_task_links, release_center, reviews, skill_plugin_center, skill_plugin_research, sop_skill_center, stores, task_center, tiancang, tool_center, tool_permissions, tool_router, users
 from .seed import seed_defaults
 
 
@@ -29,7 +29,7 @@ HTML_PAGES = {
     "ai-assets.html", "workflows.html", "ai-employees.html", "settings.html",
     "account-center.html", "template-center.html", "brands.html", "store-groups.html",
     "knowledge-center.html", "tiancang.html", "task-center.html", "orchestrator.html", "auto-dispatch-center.html", "deploy-center.html",
-    "ai-execution.html", "ai-employee-detail.html", "release-center.html", "tool-center.html", "tool-router.html", "brain-center.html", "brain-orchestrator.html",
+    "ai-execution.html", "ai-employee-detail.html", "ai-employee-capability.html", "ai-employee-dashboard.html", "ai-employee-growth-system.html", "ai-employee-health.html", "ai-workforce.html", "ai-workforce-center.html", "enterprise-brain-console.html", "skill-center.html", "skill-detail.html", "release-center.html", "tool-center.html", "tool-router.html", "brain-center.html", "brain-orchestrator.html",
 }
 DASHBOARD_HTML_PAGES = {
     "overview.html",
@@ -120,6 +120,13 @@ app.include_router(release_center.router)
 app.include_router(business_loop.router)
 app.include_router(dual_engine_business.router)
 app.include_router(employee_workspace.router)
+app.include_router(ai_workforce.router)
+app.include_router(ai_employee_ecosystem.router)
+app.include_router(ai_employee_growth.router)
+app.include_router(ai_employee_growth_system.router)
+app.include_router(ai_employee_health.router)
+app.include_router(ai_employee_skills.router)
+app.include_router(enterprise_brain_console.router)
 app.include_router(orchestrator_hotfix.router)
 app.include_router(orchestrator_task_links.router)
 app.include_router(orchestrator.router)

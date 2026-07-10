@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI员工中心 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f5f7fb;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--nav:#101827;--blue:#1d4ed8;--green:#15803d;--yellow:#b45309;--red:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:var(--nav);color:#cbd5e1;padding:18px 14px}.brand{height:58px;color:#fff;font-size:18px;font-weight:800;padding:14px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.top{min-height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}.top h1{font-size:19px;margin:0}.meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pill{display:inline-flex;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:13px}.pill.readonly{border-color:#bfdbfe;background:#eff6ff;color:var(--blue)}.content{padding:28px;max-width:1180px;margin:0 auto}.hero,.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:22px;margin-bottom:18px}.hero h2{margin:0;font-size:30px}.hero p{color:var(--muted);line-height:1.6;margin:8px 0 0}.answer{border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;padding:20px;margin-top:18px}.answer.warn{border-color:#fde68a;background:#fffbeb}.answer.risk{border-color:#fecaca;background:#fef2f2}.answer-title{font-size:28px;font-weight:900;color:#166534}.answer.warn .answer-title{color:#92400e}.answer.risk .answer-title{color:#991b1b}.answer-sub{color:#475569;line-height:1.6;margin-top:8px}.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:16px;max-width:520px}.metric{border:1px solid var(--line);border-radius:8px;background:#fff;padding:18px;min-height:104px}.label{font-size:13px;color:var(--muted)}.big{font-size:32px;font-weight:900;margin-top:8px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.section-head h3{font-size:18px;margin:0}.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.employee-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:18px;min-height:176px;display:grid;gap:12px}.employee-card:hover{border-color:#bfdbfe;box-shadow:0 8px 18px rgba(15,23,42,.08)}.employee-head{display:grid;grid-template-columns:54px 1fr;gap:12px;align-items:center}.avatar{width:54px;height:54px;border-radius:50%;background:#dbeafe;color:#1d4ed8;display:flex;align-items:center;justify-content:center;font-size:21px;font-weight:900}.employee-card h4{margin:0;font-size:18px}.muted{color:var(--muted);line-height:1.6}.tag{border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;background:#f1f5f9;color:#475569;display:inline-flex;margin-right:6px}.tag.good{background:#dcfce7;color:#166534}.tag.wait{background:#fef3c7;color:#92400e}.tag.risk{background:#fee2e2;color:#991b1b}.card-line{display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding-top:10px}.link{display:inline-flex;color:var(--blue);font-weight:800;text-decoration:none}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:18px}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.empty-state{text-align:center;border:1px dashed var(--line);border-radius:8px;padding:30px;color:var(--muted);background:#fbfdff}.notice{border:1px solid #bfdbfe;background:#eff6ff;color:#1e40af;border-radius:8px;padding:14px;line-height:1.6}@media(max-width:1100px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:760px){.app{grid-template-columns:1fr}.side{display:none}.top{align-items:flex-start;flex-direction:column}.content{padding:16px}.metrics,.cards{grid-template-columns:1fr;max-width:none}.hero h2{font-size:24px}.answer-title{font-size:23px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu" aria-label="主导航">
+      <a href="/enterprise-brain-console.html">企业大脑</a>
+      <a class="active" href="/ai-workforce.html">AI员工中心</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="top" aria-label="顶部状态栏">
+      <h1>AI员工中心</h1>
+      <div class="meta">
+        <span class="pill readonly" data-safety="readonly=true;boss_confirm=true;security_audited=true">只看不操作</span>
+      </div>
+    </header>
+    <section class="content">
+      <section class="hero" aria-label="AI公司状态">
+        <h2>你的AI员工正在帮你工作</h2>
+        <p>点员工，看看他今天做了什么。</p>
+        <div id="companyAnswer" class="answer">
+          <div id="companyAnswerTitle" class="answer-title">正在查看AI员工状态...</div>
+          <div id="companyAnswerSub" class="answer-sub">只看状态，不会自动操作。</div>
+          <div class="metrics">
+            <article class="metric"><div class="label">AI员工</div><div id="employeeTotal" class="big">--</div></article>
+            <article class="metric"><div class="label">正在工作</div><div id="workingTotal" class="big">--</div></article>
+          </div>
+        </div>
+      </section>
+
+      <div id="pageState" class="state">正在加载AI员工中心...</div>
+
+      <section class="section" aria-label="AI员工列表">
+        <div class="section-head">
+          <h3>下面是你的AI员工</h3>
+          <span class="pill readonly">点卡片看详情</span>
+        </div>
+        <div id="employeeCards" class="cards"></div>
+      </section>
+
+      <section class="section" aria-label="安全边界">
+        <div class="notice">只看不操作。重要动作都需要老板确认，并保留安全记录。</div>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+const emptyText='暂无数据';
+
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function arr(value){return Array.isArray(value)?value:[]}
+function num(value){return Number.isFinite(Number(value))?Number(value):0}
+function setText(id,value){const el=document.getElementById(id);if(el)el.innerText=String(value)}
+function codeOf(row){return row['employee'+'_code']||'tianwang'}
+function nameOf(row){return row.employee_name||'未命名AI员工'}
+function avatar(name){return esc(String(name||'AI').trim().slice(0,1).toUpperCase()||'AI')}
+function statusLabel(value){const map={working:'正常',idle:'正常',frozen:'需要关注',offline:'离线',active:'正常',unknown:'暂无状态'};return map[value]||value||'暂无状态'}
+function workStatusLabel(value){const map={working:'正在工作',idle:'正常待命',frozen:'需要老板看看',offline:'暂时离线',active:'正常'};return map[value]||'暂无状态'}
+function tagKind(value){const label=statusLabel(value);if(label.includes('正常'))return 'good';if(label.includes('关注'))return 'wait';if(label.includes('离线'))return 'risk';return ''}
+
+async function api(url){
+  const res=await fetch(url,{credentials:'include'});
+  if(res.status===401){location.href='/login.html';throw new Error('请先登录')}
+  if(res.status===403)throw new Error('当前账号无权查看AI员工中心');
+  if(!res.ok)throw new Error('现在看不到数据，请稍后再看。');
+  return res.json();
+}
+
+function safeWorkforce(){
+  return {
+    employees:{total:0,working:0,idle:0,frozen:0},
+    tasks:{total:0,running:0,pending:0,blocked:0},
+    audit:{risk_count:0},
+    employee_cards:[],
+    security:{readonly:true}
+  };
+}
+
+function safeGrowth(){
+  return {average_growth:{score:null,status:'no_data',available:false},security:{readonly:true,boss_confirm:true,security_audited:true}};
+}
+
+function renderCompany(workforce,growth){
+  const employees=workforce.employees||{}, tasks=workforce.tasks||{}, audit=workforce.audit||{}, avg=growth.average_growth||{};
+  const total=num(employees.total), working=num(employees.working)+num(employees.idle), blocked=num(tasks.blocked), risk=num(audit.risk_count);
+  setText('employeeTotal',`${total}名`);
+  setText('workingTotal',`${num(employees.working)}名`);
+  if(risk||blocked){
+    companyAnswer.className='answer warn';
+    setText('companyAnswerTitle',`有AI员工需要关注`);
+  }else{
+    companyAnswer.className='answer';
+    setText('companyAnswerTitle',`${working || total}个AI员工运行正常`);
+  }
+  setText('companyAnswerSub',`${total}个AI员工，${num(employees.working)}名正在工作。`);
+}
+
+function renderEmployees(rows){
+  const list=arr(rows).slice(0,12);
+  if(!list.length){
+    employeeCards.innerHTML='<div class="empty-state">现在还没有AI员工。</div>';
+    return;
+  }
+  employeeCards.innerHTML=list.map(row=>{
+    const name=nameOf(row), status=row.status||'offline', code=codeOf(row), risk=row.risk_level||'low';
+    return `<article class="employee-card">
+      <div class="employee-head">
+        <div class="avatar">${avatar(name)}</div>
+        <div>
+          <h4>${esc(name)}</h4>
+        </div>
+      </div>
+      <div>
+        <span class="tag ${tagKind(status)}">${esc(workStatusLabel(status))}</span>
+      </div>
+      <div class="card-line"><span class="muted">负责</span><strong>${esc(row.role||row.department||'日常工作')}</strong></div>
+      <a class="link" href="/ai-employee-detail.html?code=${encodeURIComponent(code)}">看详情</a>
+    </article>`;
+  }).join('');
+}
+
+function renderError(message){
+  renderCompany(safeWorkforce(),safeGrowth());
+  renderEmployees([]);
+  pageState.className='state error';
+  pageState.innerText=message||'现在看不到数据，请稍后再看。';
+}
+
+async function init(){
+  try{
+    renderCompany(safeWorkforce(),safeGrowth());
+    renderEmployees([]);
+    const workforce=await api('/api/ai-workforce/overview');
+    const growth=await api('/api/ai-employee-growth/overview').catch(()=>safeGrowth());
+    renderCompany(workforce,growth);
+    renderEmployees(workforce.employee_cards);
+    pageState.className='state';
+    pageState.innerText='已加载。当前只看状态，不会自动操作。';
+  }catch(error){
+    renderError(error.message);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
