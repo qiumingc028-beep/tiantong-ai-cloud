@@ -5,7 +5,8 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-COPY artifacts/wheelhouse/linux-arm64-cp312/requirements-linux-arm64-cp312.lock /tmp/requirements.lock
+ARG REQUIREMENTS_LOCK=artifacts/wheelhouse/linux-amd64-cp312/requirements-linux-amd64-cp312.lock
+COPY ${REQUIREMENTS_LOCK} /tmp/requirements.lock
 RUN pip install --no-cache-dir \
     --index-url=https://pypi.org/simple \
     --require-hashes \

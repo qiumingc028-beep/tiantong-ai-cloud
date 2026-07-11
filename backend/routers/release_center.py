@@ -120,7 +120,7 @@ def require_release_admin(request: Request, db: Session):
 
 
 def build_release_check() -> dict:
-    git_dir = BASE_DIR / ".git"
+    git_dir = git_metadata_dir()
     result = {
         "commit": bool(current_commit_id()) or not git_dir.exists(),
         "test": (BASE_DIR / "tests").is_dir() and any((BASE_DIR / "tests").glob("test_*.py")),
@@ -138,7 +138,9 @@ def current_commit_id() -> str | None:
         value = os.getenv(key)
         if value:
             return value
-    git_dir = BASE_DIR / ".git"
+    git_dir = git_metadata_dir()
+    if not git_dir.exists():
+        return None
     head_path = git_dir / "HEAD"
     try:
         head = head_path.read_text(encoding="utf-8").strip()
@@ -156,7 +158,9 @@ def current_branch() -> str | None:
         value = os.getenv(key)
         if value:
             return value
-    git_dir = BASE_DIR / ".git"
+    git_dir = git_metadata_dir()
+    if not git_dir.exists():
+        return None
     try:
         head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
     except OSError:
@@ -164,6 +168,22 @@ def current_branch() -> str | None:
     if head.startswith("ref: refs/heads/"):
         return head.removeprefix("ref: refs/heads/")
     return None
+
+
+def git_metadata_dir() -> Path:
+    git_path = BASE_DIR / ".git"
+    if git_path.is_dir():
+        return git_path
+    if git_path.is_file():
+        try:
+            content = git_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return git_path
+        prefix = "gitdir: "
+        if content.startswith(prefix):
+            git_dir = (git_path.parent / content.removeprefix(prefix)).resolve()
+            return git_dir
+    return git_path
 
 
 def release_to_dict(row: ReleaseVersion) -> dict:

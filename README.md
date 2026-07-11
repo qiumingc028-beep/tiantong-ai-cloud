@@ -1,6 +1,6 @@
 # 天统AI云中台
 
-当前正式版本：**1.0.0**（TIANTONG AI Cloud V1.0.0）
+当前正式版本：**1.0.1**（TIANTONG AI Cloud V1.0.1）
 产品定位：Enterprise AI Operating System。
 
 天统AI云中台是公司内部电商经营管理系统，覆盖老板驾驶舱、员工登录、京东60店数据中心、今日数据录入、Excel批量导入、京东商智/京准通采集、AI店长分析和AI员工任务系统。
@@ -36,7 +36,7 @@ V1 安全边界：
 - V1 不接入 OpenClaw、n8n。
 - V1 不允许绕过 Task Center / 审批链自动执行业务动作。
 
-V2 的 Agent Runtime、Capability Layer、Skills Engine、Enterprise Memory、Browser/Desktop/Mobile Use、多模型路由及 AI 员工自主执行不属于 V1.0.0 发布范围。
+V2 的 Agent Runtime、Capability Layer、Skills Engine、Enterprise Memory、Browser/Desktop/Mobile Use、多模型路由及 AI 员工自主执行不属于 V1.0.1 发布范围。
 
 ## 生产发布入口
 
@@ -50,7 +50,21 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d --bui
 docker compose --env-file .env.production -f docker-compose.prod.yml ps
 ```
 
-发布前必须先备份数据库，再执行 `alembic upgrade head`；禁止提交真实 `.env.production`、密码、Token 或私钥。详细命令见 `deploy/README.md`，回滚见 `docs/V1_ROLLBACK_PLAN.md`。
+V1.0.1 增加了 linux/amd64 与 linux/arm64 双平台构建路径：
+
+```bash
+# amd64 生产构建
+DOCKER_DEFAULT_PLATFORM=linux/amd64 \
+REQUIREMENTS_LOCK=artifacts/wheelhouse/linux-amd64-cp312/requirements-linux-amd64-cp312.lock \
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+
+# arm64 生产构建
+DOCKER_DEFAULT_PLATFORM=linux/arm64 \
+REQUIREMENTS_LOCK=artifacts/wheelhouse/linux-arm64-cp312/requirements-linux-arm64-cp312.lock \
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+```
+
+发布前必须先备份数据库，再执行 `alembic upgrade head`；禁止提交真实 `.env.production`、密码、Token 或私钥。详细命令见 `docs/DEPLOY.md`，回滚见 `docs/ROLLBACK.md`，安全策略见 `docs/SECURITY.md`。
 
 ## 新人本地启动
 
