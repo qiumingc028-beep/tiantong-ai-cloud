@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -138,7 +139,21 @@ def current_commit_id() -> str | None:
         value = os.getenv(key)
         if value:
             return value
-    git_dir = BASE_DIR / ".git"
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(BASE_DIR), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        commit = completed.stdout.strip()
+        if commit:
+            return commit
+    except Exception:
+        pass
+    git_dir = resolve_git_dir()
+    if git_dir is None:
+        return "worktree" if (BASE_DIR / ".git").exists() else None
     head_path = git_dir / "HEAD"
     try:
         head = head_path.read_text(encoding="utf-8").strip()
@@ -148,7 +163,7 @@ def current_commit_id() -> str | None:
                 return ref_path.read_text(encoding="utf-8").strip()
         return head or None
     except OSError:
-        return None
+        return "worktree" if (BASE_DIR / ".git").exists() else None
 
 
 def current_branch() -> str | None:
@@ -156,13 +171,45 @@ def current_branch() -> str | None:
         value = os.getenv(key)
         if value:
             return value
-    git_dir = BASE_DIR / ".git"
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(BASE_DIR), "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        branch = completed.stdout.strip()
+        if branch:
+            return branch
+    except Exception:
+        pass
+    git_dir = resolve_git_dir()
+    if git_dir is None:
+        return "worktree" if (BASE_DIR / ".git").exists() else None
     try:
         head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
     except OSError:
         return None
     if head.startswith("ref: refs/heads/"):
         return head.removeprefix("ref: refs/heads/")
+    return None
+
+
+def resolve_git_dir() -> Path | None:
+    git_path = BASE_DIR / ".git"
+    if git_path.is_dir():
+        return git_path
+    if git_path.is_file():
+        try:
+            content = git_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        if content.startswith("gitdir: "):
+            gitdir = content.removeprefix("gitdir: ").strip()
+            resolved = Path(gitdir)
+            if not resolved.is_absolute():
+                resolved = (BASE_DIR / resolved).resolve()
+            return resolved
     return None
 
 

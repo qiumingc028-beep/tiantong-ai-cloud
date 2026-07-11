@@ -8,6 +8,7 @@ from alembic.script import ScriptDirectory
 from backend.brain_execution.models import BrainExecutionEvent, BrainExecutionRun
 from backend.brain_execution.worker import process_next_execution
 from backend.brain_tool_router.models import BrainExecutionLog
+from tests.test_helpers import latest_alembic_head
 
 
 def test_brain_runtime_state_machine_requires_auth(client, viewer_headers):
@@ -138,4 +139,4 @@ def test_brain_runtime_source_has_no_real_execution_calls():
 def test_brain_runtime_migration_head_and_event_table():
     assert "brain_execution_events" in set(BrainExecutionEvent.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
+    assert script.get_heads() == [latest_alembic_head()]

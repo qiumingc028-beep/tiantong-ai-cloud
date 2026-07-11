@@ -4,6 +4,7 @@ from sqlalchemy import event, text
 
 from backend.deploy_models import DeployHealthCheck, DeployRecord, HealthCheckRecord
 from backend.models import AiEmployee, TaskCenterTask
+from tests.test_helpers import latest_alembic_head
 
 
 def auth_headers(client, username: str):
@@ -104,7 +105,7 @@ def test_ceo_dashboard_deploy_summary_returns_alembic_version(client, owner_head
     assert response.status_code == 200
     deploy_summary = response.json()["deploy_summary"]
     assert deploy_summary["alembic_version"] == "0027_v1_schema_alignment"
-    assert deploy_summary["expected_version"] == "0027_v1_schema_alignment"
+    assert deploy_summary["expected_version"] == latest_alembic_head()
     assert deploy_summary["last_deploy_status"] == "success"
     assert deploy_summary["last_health_check_status"] == "healthy"
 

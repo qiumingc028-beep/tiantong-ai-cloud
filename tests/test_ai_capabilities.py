@@ -7,6 +7,7 @@ from backend.ai_capabilities.models import AiCapability, ToolPermission
 from backend.auth import hash_password
 from backend.main import app
 from backend.models import Role, User
+from tests.test_helpers import latest_alembic_head
 
 
 def create_employee_user(test_db, username: str, role: str = "operator"):
@@ -175,7 +176,7 @@ def test_ai_capabilities_source_has_no_external_execution_calls():
 def test_ai_capabilities_migration_head_and_tables():
     assert {"ai_capabilities", "tool_permissions"} <= set(AiCapability.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
+    assert script.get_heads() == [latest_alembic_head()]
 
 
 def test_tool_permission_model_registered():

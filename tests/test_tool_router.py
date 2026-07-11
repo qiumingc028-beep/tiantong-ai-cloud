@@ -9,6 +9,7 @@ from backend.auth import hash_password
 from backend.main import app
 from backend.models import Role, User
 from backend.tool_router.models import ToolRoute, ToolRouteLog
+from tests.test_helpers import latest_alembic_head
 
 
 def create_employee_user(test_db, username: str, role: str = "operator"):
@@ -163,5 +164,4 @@ def test_tool_router_migration_head_and_tables():
     assert {"tool_routes", "tool_route_logs"} <= set(ToolRoute.metadata.tables)
     assert "tool_route_logs" in set(ToolRouteLog.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
-
+    assert script.get_heads() == [latest_alembic_head()]

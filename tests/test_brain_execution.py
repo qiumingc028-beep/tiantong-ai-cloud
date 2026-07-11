@@ -9,6 +9,7 @@ from backend.brain_execution.models import BrainApprovalRecord, BrainExecutionCo
 from backend.brain_orchestrator.models import BrainTaskNode
 from backend.brain_tool_router.models import BrainExecutionLog
 from backend.main import app
+from tests.test_helpers import latest_alembic_head
 
 
 def test_brain_execution_routes_registered():
@@ -168,4 +169,4 @@ def test_brain_execution_migration_head_and_tables():
     assert "execution_context" in set(BrainExecutionContext.metadata.tables)
     assert "brain_worker_status" in set(BrainWorkerStatus.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
+    assert script.get_heads() == [latest_alembic_head()]
