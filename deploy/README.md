@@ -6,8 +6,10 @@
 
 ```bash
 cd /data/apps/tiantong-ai-cloud
-chmod +x deploy.sh scripts/*.sh
-./deploy.sh
+cp .env.production.example .env.production
+# 人工填写全部生产秘密，禁止沿用占位符
+docker compose --env-file .env.production -f docker-compose.prod.yml config
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
 ```
 
 如服务器采用 venv + systemd 直部署，使用：
@@ -28,11 +30,27 @@ DEPLOY_MODE=systemd ./deploy.sh
 
 ```bash
 cd /data/apps/tiantong-ai-cloud
-cp .env.example .env
-chmod +x deploy.sh scripts/*.sh
-./deploy.sh
-docker compose ps
-CHECK_DOCKER_INFRA=1 scripts/healthcheck.sh
+scripts/backup_db.sh
+docker compose --env-file .env.production -f docker-compose.prod.yml config
+docker compose --env-file .env.production -f docker-compose.prod.yml run --rm backend alembic upgrade head
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.production -f docker-compose.prod.yml ps
+curl -fsS https://<production-host>/health
+curl -fsS https://<production-host>/ready
+```
+
+`.env.production` 必须显式设置 `APP_ENV=production`、`DATABASE_URL`、带认证的 `REDIS_URL`、至少 32 个非默认字符的 `JWT_SECRET`、非默认 `BOSS_INITIAL_PASSWORD`、非空且不含 `*` 的 `CORS_ALLOWED_ORIGINS`，并设置 `DEBUG=false`。真实值不得进入 Git、日志或工单正文。
+
+停止服务但保留 volume：
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml down
+```
+
+排错入口：
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml logs --tail=100 backend worker nginx postgres redis
 ```
 
 Docker 部署包含：

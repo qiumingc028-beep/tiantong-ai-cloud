@@ -9,7 +9,17 @@ from backend.database import Base
 from backend import models  # noqa: F401
 from backend import deploy_models  # noqa: F401
 from backend import dispatch_models  # noqa: F401
+from backend import evolution_models  # noqa: F401
 from backend import orchestrator_models  # noqa: F401
+from backend import release_models  # noqa: F401
+from backend import review_models  # noqa: F401
+from backend.ai_capabilities import models as ai_capability_models  # noqa: F401
+from backend.brain_execution import models as brain_execution_models  # noqa: F401
+from backend.brain_orchestrator import models as brain_orchestrator_models  # noqa: F401
+from backend.brain_tool_router import models as brain_tool_router_models  # noqa: F401
+from backend.employee_execution import models as employee_execution_models  # noqa: F401
+from backend.tool_center import models as tool_center_models  # noqa: F401
+from backend.tool_router import models as tool_router_models  # noqa: F401
 
 
 config = context.config

@@ -124,4 +124,4 @@ def test_sprint26_has_no_external_or_dangerous_calls():
 def test_sprint26_migration_head_and_table():
     assert "employee_execution_contracts" in set(EmployeeExecutionContract.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0026_sprint26_ai_employee_execution_mvp"]
+    assert script.get_heads() == ["0027_v1_schema_alignment"]

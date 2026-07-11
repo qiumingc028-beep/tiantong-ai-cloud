@@ -407,7 +407,7 @@ def test_orchestrator_migration_is_single_head():
         check=True,
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0026_sprint26_ai_employee_execution_mvp (head)"]
+    assert heads == ["0027_v1_schema_alignment (head)"]
 
 
 def add_employee(test_db, employee_code: str, employee_name: str, task_type: str, sort_order: int):

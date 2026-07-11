@@ -203,4 +203,4 @@ def test_auto_dispatch_overview_and_reference_data(client, owner_headers):
 def test_auto_dispatch_migration_is_single_head():
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0026_sprint26_ai_employee_execution_mvp"]
+    assert script.get_heads() == ["0027_v1_schema_alignment"]

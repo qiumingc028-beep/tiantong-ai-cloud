@@ -168,4 +168,4 @@ def test_brain_execution_migration_head_and_tables():
     assert "execution_context" in set(BrainExecutionContext.metadata.tables)
     assert "brain_worker_status" in set(BrainWorkerStatus.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0026_sprint26_ai_employee_execution_mvp"]
+    assert script.get_heads() == ["0027_v1_schema_alignment"]

@@ -102,7 +102,10 @@ docker compose ps
 生产环境：
 
 ```bash
-./deploy.sh
+scripts/backup_db.sh
+docker compose --env-file .env.production -f docker-compose.prod.yml config
+docker compose --env-file .env.production -f docker-compose.prod.yml run --rm backend alembic upgrade head
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
 docker compose --env-file .env.production -f docker-compose.prod.yml ps
 ```
 
