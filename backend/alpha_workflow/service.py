@@ -289,19 +289,8 @@ def start_alpha_workflow(
         started_at=_utc_now(),
     )
     db.add(run)
-    db.flush()
-    append_event(
-        db,
-        run,
-        event_code="workflow_created",
-        stage="orchestrator",
-        status="成功",
-        message="Alpha Workflow 由 Orchestrator 唯一入口创建",
-        payload={"scenario_code": scenario.scenario_code, "orchestrator_run_id": orchestrator_plan["graph_id"]},
-        span_kind="root",
-        span_id=run.root_span_id,
-        parent_span_id=None,
-    )
+    db.commit()
+    db.refresh(run)
     context = AlphaWorkflowContext(
         workflow_id=run.workflow_id or f"alpha-{trace_id}",
         tenant_id="tiantong",
@@ -339,12 +328,24 @@ def start_alpha_workflow(
         stage_history=[],
         linked_ids={"orchestrator_run_id": orchestrator_plan["graph_id"]},
     )
-    run.workflow_context_json = context.model_dump_json()
-    db.commit()
-
     task: TaskCenterTask | None = None
     result_row: TaskCenterResult | None = None
     try:
+        append_event(
+            db,
+            run,
+            event_code="workflow_created",
+            stage="orchestrator",
+            status="成功",
+            message="Alpha Workflow 由 Orchestrator 唯一入口创建",
+            payload={"scenario_code": scenario.scenario_code, "orchestrator_run_id": orchestrator_plan["graph_id"]},
+            span_kind="root",
+            span_id=run.root_span_id,
+            parent_span_id=None,
+        )
+        run.workflow_context_json = context.model_dump_json()
+        db.commit()
+        db.refresh(run)
         task = _create_task(db, user=user, input_text=input_text, trace_id=trace_id)
         set_task_status(db, task, "assigned", user, "alpha_assigned", "自动派给天采")
         task.assigned_ai_employee_code = employee.employee_code
