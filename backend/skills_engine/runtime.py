@@ -9,6 +9,8 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..agent_runtime.runtime import invoke_agent_runtime
+from ..agent_runtime.executors.computer.runtime import ComputerRuntime
+from ..agent_runtime.executors.computer.schemas import ComputerActionPayload, ComputerSessionCreatePayload
 from ..knowledge_center.knowledge_search import search_knowledge
 from .models import Skill, SkillInvocation
 from .registry import audit_employee_log, json_text, skill_to_dict, utcnow
@@ -97,6 +99,42 @@ def execute_skill(skill: Skill, input_payload: dict, *, db: Session, employee_co
         query = str(payload.get("query") or payload.get("q") or "").strip()
         result = search_knowledge(query or skill.chinese_name, limit=int(payload.get("limit") or 10), knowledge_type=payload.get("knowledge_type"))
         return {"skill": skill_to_dict(skill, include_relations=False), "result": result, "redacted_input": redact_payload(payload)}
+    if skill_code == "computer.sandbox.status_check":
+        session_payload = ComputerSessionCreatePayload(
+            execution_id=payload.get("execution_id"),
+            task_id=payload.get("task_id"),
+            employee_id=payload.get("employee_id"),
+            skill_id=skill.id,
+            executor_type="mock",
+            environment_type=payload.get("environment_type") or "test",
+            risk_level=skill.risk_level,
+            approval_status="无需审批",
+            allowed_applications=["隔离测试浏览器", "隔离文本编辑器", "隔离演示窗口"],
+            allowed_windows=[".*"],
+            trace_id=payload.get("trace_id"),
+        )
+        session = ComputerRuntime.create_session(db, session_payload)
+        action = ComputerActionPayload(
+            action_type="查看屏幕",
+            target_application="隔离测试浏览器",
+            target_window="隔离测试窗口",
+            text_input=None,
+            timeout=30,
+            trace_id=payload.get("trace_id"),
+            approval_context={"skill_code": skill.skill_code},
+            simulate_outcome=payload.get("simulate_outcome"),
+        )
+        result = ComputerRuntime.execute_action(db, session, action)
+        return {
+            "skill": skill_to_dict(skill, include_relations=False),
+            "result": {
+                "session": result["session"],
+                "action": result["action"],
+                "evidence": result["evidence"],
+                "message": "隔离桌面状态检查完成",
+            },
+            "redacted_input": redact_payload(payload),
+        }
     if payload.get("simulate_outcome") == "cancel":
         raise HTTPException(status_code=400, detail="执行已取消")
     return {

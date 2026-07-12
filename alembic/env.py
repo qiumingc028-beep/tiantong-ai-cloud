@@ -14,6 +14,7 @@ from backend import orchestrator_models  # noqa: F401
 from backend import release_models  # noqa: F401
 from backend import review_models  # noqa: F401
 from backend.agent_runtime import models as agent_runtime_models  # noqa: F401
+from backend.agent_runtime.executors.computer import models as computer_executor_models  # noqa: F401
 from backend.ai_capabilities import models as ai_capability_models  # noqa: F401
 from backend.brain_execution import models as brain_execution_models  # noqa: F401
 from backend.brain_orchestrator import models as brain_orchestrator_models  # noqa: F401

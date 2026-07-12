@@ -80,6 +80,17 @@ class Settings:
         self.AGENT_RUNTIME_ENABLED = _boolean("AGENT_RUNTIME_ENABLED", True)
         self.REAL_EXECUTOR_ENABLED = _boolean("REAL_EXECUTOR_ENABLED", False)
         self.COMPUTER_CONTROL_ENABLED = _boolean("COMPUTER_CONTROL_ENABLED", False)
+        self.OPENCLAW_ADAPTER_ENABLED = _boolean("OPENCLAW_ADAPTER_ENABLED", False)
+        self.COMPUTER_EXECUTOR_ENABLED = _boolean("COMPUTER_EXECUTOR_ENABLED", False)
+        self.ISOLATED_DESKTOP_ENABLED = _boolean("ISOLATED_DESKTOP_ENABLED", False)
+        self.SCREEN_CAPTURE_ENABLED = _boolean("SCREEN_CAPTURE_ENABLED", False)
+        self.HUMAN_TAKEOVER_ENABLED = _boolean("HUMAN_TAKEOVER_ENABLED", False)
+        self.COMPUTER_TEXT_INPUT_ENABLED = _boolean("COMPUTER_TEXT_INPUT_ENABLED", False)
+        self.COMPUTER_MOUSE_INPUT_ENABLED = _boolean("COMPUTER_MOUSE_INPUT_ENABLED", False)
+        self.COMPUTER_ALLOWED_APPLICATIONS = [item.strip() for item in os.getenv("COMPUTER_ALLOWED_APPLICATIONS", "").split(",") if item.strip()]
+        self.COMPUTER_BLOCKED_APPLICATIONS = [item.strip() for item in os.getenv("COMPUTER_BLOCKED_APPLICATIONS", "").split(",") if item.strip()]
+        self.COMPUTER_ALLOWED_WINDOW_PATTERNS = [item.strip() for item in os.getenv("COMPUTER_ALLOWED_WINDOW_PATTERNS", "").split(",") if item.strip()]
+        self.COMPUTER_BLOCKED_WINDOW_PATTERNS = [item.strip() for item in os.getenv("COMPUTER_BLOCKED_WINDOW_PATTERNS", "").split(",") if item.strip()]
         self.MOBILE_CONTROL_ENABLED = _boolean("MOBILE_CONTROL_ENABLED", False)
         self.BROWSER_CONTROL_ENABLED = _boolean("BROWSER_CONTROL_ENABLED", False)
         self.BROWSER_READONLY_ENABLED = _boolean("BROWSER_READONLY_ENABLED", False)

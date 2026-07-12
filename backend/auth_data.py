@@ -32,6 +32,7 @@ MENU_ITEMS = [
     {"key": "import", "label": "Excel导入", "href": "/import.html", "permission": "menu.import"},
     {"key": "ai_assets", "label": "AI素材中心", "href": "/ai-assets.html", "permission": "menu.ai_assets"},
     {"key": "skills_center", "label": "技能中心", "href": "/skill-center.html", "permission": "menu.skills_center"},
+    {"key": "computer_executor", "label": "电脑执行中心", "href": "/computer-execution-center.html", "permission": "menu.computer_executor"},
     {"key": "tiancang", "label": "天藏：知识资产中心", "href": "/tiancang.html", "permission": "menu.tiancang"},
     {"key": "workflows", "label": "AI工作流", "href": "/workflows.html", "permission": "menu.workflows"},
     {"key": "ai_employees", "label": "AI员工管理", "href": "/ai-employees.html", "permission": "menu.ai_employees"},

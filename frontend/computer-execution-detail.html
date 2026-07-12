@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>电脑执行详情 - 天统AI云中台</title>
+  <style>
+    body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f4f6f8;color:#111827}
+    .wrap{max-width:1180px;margin:0 auto;padding:24px}
+    .panel{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin-bottom:16px}
+    .sub{color:#64748b;line-height:1.6}
+    pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;line-height:1.6}
+    .badge{display:inline-flex;border:1px solid #e5e7eb;border-radius:999px;padding:3px 8px;font-size:12px;background:#f8fafc}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>电脑执行详情</h1>
+    <div class="sub">展示执行计划、步骤、截图证据、风险检查和人工接管状态。默认只读，不提供真实终端控制入口。</div>
+    <div class="panel">
+      <div><span class="badge">只读查看</span> <span class="badge">隔离桌面</span> <span class="badge">OpenClaw 安全适配层</span></div>
+      <h3>执行目标</h3>
+      <p class="sub">隔离桌面状态检查、窗口查看、截图证据和操作记录。</p>
+      <h3>操作计划</h3>
+      <pre>1. 校验白名单应用
+2. 查看窗口状态
+3. 获取截图证据
+4. 写入审计日志
+5. 结束或接管</pre>
+      <h3>步骤列表</h3>
+      <pre>暂无数据</pre>
+      <h3>截图与证据</h3>
+      <pre>暂无数据</pre>
+      <h3>风险检查</h3>
+      <pre>Terminal 阻断：通过
+Shell 阻断：通过
+密码输入阻断：通过
+验证码输入阻断：通过</pre>
+      <h3>人工接管</h3>
+      <pre>HUMAN_TAKEOVER_ENABLED=false</pre>
+    </div>
+  </div>
+</body>
+</html>
