@@ -155,9 +155,19 @@ def seed_defaults(db: Session):
 
 PERMISSIONS.extend([
 ])
-PERMISSIONS.extend([("menu.knowledge_center", "\u5929\u85cf\uff1a\u77e5\u8bc6\u8d44\u4ea7\u4e2d\u5fc3"), ("knowledge.read", "read knowledge assets"), ("knowledge.manage", "manage knowledge assets")])
+PERMISSIONS.extend([
+    ("menu.knowledge_center", "天藏知识资产中心"),
+    ("knowledge.read", "read knowledge assets"),
+    ("knowledge.manage", "manage knowledge assets"),
+    ("knowledge.submit", "submit knowledge assets"),
+    ("knowledge.review", "review knowledge assets"),
+    ("knowledge.publish", "publish knowledge assets"),
+    ("knowledge.archive", "archive knowledge assets"),
+])
 for role_code in ("owner", "admin", "operator"):
     ROLE_PERMISSIONS.setdefault(role_code, []).extend(["menu.knowledge_center", "knowledge.read", "knowledge.manage"])
+for role_code in ("owner", "admin"):
+    ROLE_PERMISSIONS.setdefault(role_code, []).extend(["knowledge.submit", "knowledge.review", "knowledge.publish", "knowledge.archive"])
 
 PERMISSIONS.extend([
     ("task_center.read", "read task center"),

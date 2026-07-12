@@ -22,6 +22,7 @@ from backend.employee_execution import models as employee_execution_models  # no
 from backend.tool_center import models as tool_center_models  # noqa: F401
 from backend.tool_router import models as tool_router_models  # noqa: F401
 from backend.research_runtime import models as research_runtime_models  # noqa: F401
+from backend.knowledge_center import models as knowledge_center_models  # noqa: F401
 
 
 config = context.config
