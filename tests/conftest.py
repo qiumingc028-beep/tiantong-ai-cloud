@@ -163,6 +163,12 @@ def seed_database(session_factory):
             Permission(code="task_center.audit", name="Task Center Audit"),
             Permission(code="ai_employees.read", name="AI Employees Read"),
             Permission(code="ai_employees.manage", name="AI Employees Manage"),
+            Permission(code="menu.skills_center", name="Skills Center Menu"),
+            Permission(code="skills.read", name="Skills Read"),
+            Permission(code="skills.manage", name="Skills Manage"),
+            Permission(code="skills.install", name="Skills Install"),
+            Permission(code="skills.invoke", name="Skills Invoke"),
+            Permission(code="skills.audit", name="Skills Audit"),
             Permission(code="deploy_center.read", name="Deploy Center Read"),
             Permission(code="deploy_center.manage", name="Deploy Center Manage"),
             Permission(code="orchestrator.read", name="Orchestrator Read"),
@@ -176,6 +182,7 @@ def seed_database(session_factory):
             for p in permissions
             if not p.code.startswith("task_center.")
             and not p.code.startswith("ai_employees.")
+            and not p.code.startswith("skills.")
             and not p.code.startswith("deploy_center.")
             and not p.code.startswith("orchestrator.")
         ]

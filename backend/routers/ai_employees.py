@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..auth import get_role_permissions, normalize_role, require_permission_user, current_user
 from ..database import get_db, get_redis
 from ..models import AiEmployee, AiTask, EmployeeLog, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
+from ..skills_engine.registry import list_employee_skill_cards
 from ..tool_router.router_engine import list_routes
 
 
@@ -127,7 +128,7 @@ def get_ai_employee_detail(employee_id: str, request: Request, db: Session = Dep
         "current_status": current_status,
         "current_task": task_detail_brief(current_task) if current_task else None,
         "historical_tasks": [task_detail_brief(task) for task in recent_tasks],
-        "skills": employee_skills(employee),
+        "skills": employee_skills(db, employee),
         "executable_task_types": parse_json_list(employee.task_types),
         "permission_scope": permission_scope,
         "recent_tasks": [task_detail_brief(task) for task in recent_tasks],
@@ -436,8 +437,8 @@ def employee_tool_briefs(db: Session, employee_code: str):
     ]
 
 
-def employee_skills(employee: AiEmployee):
-    return [
+def employee_skills(db: Session, employee: AiEmployee):
+    legacy_skills = [
         {
             "skill_code": task_type,
             "skill_name": task_type.replace("_", " "),
@@ -446,6 +447,8 @@ def employee_skills(employee: AiEmployee):
         }
         for task_type in parse_json_list(employee.task_types)
     ]
+    engine_skills = list_employee_skill_cards(db, employee.employee_code)
+    return legacy_skills + engine_skills
 
 
 def employee_permission_scope(db: Session, employee: AiEmployee):

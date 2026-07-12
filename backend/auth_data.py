@@ -31,6 +31,7 @@ MENU_ITEMS = [
     {"key": "metrics", "label": "今日数据录入", "href": "/metrics.html", "permission": "menu.metrics"},
     {"key": "import", "label": "Excel导入", "href": "/import.html", "permission": "menu.import"},
     {"key": "ai_assets", "label": "AI素材中心", "href": "/ai-assets.html", "permission": "menu.ai_assets"},
+    {"key": "skills_center", "label": "技能中心", "href": "/skill-center.html", "permission": "menu.skills_center"},
     {"key": "tiancang", "label": "天藏：知识资产中心", "href": "/tiancang.html", "permission": "menu.tiancang"},
     {"key": "workflows", "label": "AI工作流", "href": "/workflows.html", "permission": "menu.workflows"},
     {"key": "ai_employees", "label": "AI员工管理", "href": "/ai-employees.html", "permission": "menu.ai_employees"},
@@ -44,4 +45,4 @@ def normalize_role(role: str) -> str:
 
 
 MENU_ITEMS.insert(-1, {"key": "account_center", "label": "账号资料中心", "href": "/account-center.html", "permission": "menu.account_center"})
-MENU_ITEMS.insert(-1, {"key": "knowledge_center", "label": "天藏知识资产中心", "href": "/knowledge-asset-center.html", "permission": "menu.knowledge_center"})
+MENU_ITEMS.insert(-1, {"key": "knowledge_center", "label": "\u5929\u85cf\uff1a\u77e5\u8bc6\u8d44\u4ea7\u4e2d\u5fc3", "href": "/knowledge-center.html", "permission": "menu.knowledge_center"})

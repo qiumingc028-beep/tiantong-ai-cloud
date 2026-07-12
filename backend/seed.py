@@ -6,6 +6,7 @@ from .auth import hash_password, verify_password
 from .auth_data import ROLE_LABELS
 from .config import get_settings
 from .models import AiEmployee, AiTask, Permission, Role, User
+from .skills_engine.registry import ensure_default_skills, resolve_manager_user
 
 
 BOSS_USERNAME = "boss"
@@ -20,6 +21,7 @@ PERMISSIONS = [
     ("menu.metrics", "今日数据录入"),
     ("menu.import", "Excel导入"),
     ("menu.ai_assets", "AI素材中心"),
+    ("menu.skills_center", "技能中心"),
     ("menu.tiancang", "天藏：知识资产中心"),
     ("menu.workflows", "AI工作流"),
     ("menu.ai_employees", "AI员工管理"),
@@ -30,6 +32,11 @@ PERMISSIONS = [
     ("stores.manage", "管理店铺"),
     ("ai.tasks.read", "读取AI员工任务"),
     ("ai.tasks.manage", "管理AI员工任务"),
+    ("skills.read", "读取技能中心"),
+    ("skills.manage", "管理技能中心"),
+    ("skills.install", "安装技能"),
+    ("skills.invoke", "调用技能"),
+    ("skills.audit", "审计技能"),
 ]
 
 ROLE_PERMISSIONS = {
@@ -39,6 +46,7 @@ ROLE_PERMISSIONS = {
         "menu.dashboard", "menu.stores", "menu.jd_data", "menu.ads",
         "menu.metrics", "menu.import", "menu.workflows",
         "data.metrics.read", "data.metrics.write", "stores.manage", "ai.tasks.read",
+        "skills.read",
     ],
     "customer_service": ["menu.dashboard", "menu.metrics", "data.metrics.read", "data.metrics.write", "ai.tasks.read"],
     "designer": ["menu.ai_assets", "menu.workflows", "ai.tasks.read"],
@@ -152,22 +160,13 @@ def seed_defaults(db: Session):
         employee.sort_order = sort_order
 
     db.commit()
+    ensure_default_skills(db, created_by=(resolve_manager_user(db).id if resolve_manager_user(db) else None))
 
 PERMISSIONS.extend([
 ])
-PERMISSIONS.extend([
-    ("menu.knowledge_center", "天藏知识资产中心"),
-    ("knowledge.read", "read knowledge assets"),
-    ("knowledge.manage", "manage knowledge assets"),
-    ("knowledge.submit", "submit knowledge assets"),
-    ("knowledge.review", "review knowledge assets"),
-    ("knowledge.publish", "publish knowledge assets"),
-    ("knowledge.archive", "archive knowledge assets"),
-])
+PERMISSIONS.extend([("menu.knowledge_center", "\u5929\u85cf\uff1a\u77e5\u8bc6\u8d44\u4ea7\u4e2d\u5fc3"), ("knowledge.read", "read knowledge assets"), ("knowledge.manage", "manage knowledge assets")])
 for role_code in ("owner", "admin", "operator"):
     ROLE_PERMISSIONS.setdefault(role_code, []).extend(["menu.knowledge_center", "knowledge.read", "knowledge.manage"])
-for role_code in ("owner", "admin"):
-    ROLE_PERMISSIONS.setdefault(role_code, []).extend(["knowledge.submit", "knowledge.review", "knowledge.publish", "knowledge.archive"])
 
 PERMISSIONS.extend([
     ("task_center.read", "read task center"),
@@ -197,4 +196,9 @@ for role_code in ("owner", "admin"):
         "orchestrator.read",
         "orchestrator.analyze",
         "orchestrator.confirm",
+        "skills.read",
+        "skills.manage",
+        "skills.install",
+        "skills.invoke",
+        "skills.audit",
     ])
