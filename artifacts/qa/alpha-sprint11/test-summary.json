@@ -1,0 +1,21 @@
+{
+  "contract_commit": "3fe8df6065e3ee028cbde14803a9a0020e6a0ba6",
+  "branch": "test/v2-alpha-e2e-quality",
+  "command": "PYTHONDONTWRITEBYTECODE=1 /private/tmp/tiantong-alpha-qa-venv/bin/python -m pytest -q",
+  "total": 852,
+  "passed": 846,
+  "failed": 6,
+  "warnings": 82,
+  "duration_seconds": 150.74,
+  "baseline": 835,
+  "baseline_count_met": true,
+  "all_passed": false,
+  "failed_gates": [
+    "duplicate start idempotency",
+    "trace event trace_id completeness",
+    "audit append-only enforcement",
+    "audit failure recoverability",
+    "recovery idempotency",
+    "duplicate core migration tables"
+  ]
+}
