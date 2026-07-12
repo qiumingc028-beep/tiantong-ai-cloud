@@ -38,12 +38,9 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", get_settings().DATABASE_URL))
-_skip_sqlite_drift = os.getenv("ALEMBIC_SKIP_SQLITE_DRIFT") == "1"
 
 
 def _include_object(obj, name, type_, reflected, compare_to):
-    if _skip_sqlite_drift:
-        return False
     return True
 
 

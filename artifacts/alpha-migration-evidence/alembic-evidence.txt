@@ -1,32 +1,12 @@
-== alembic heads ==
-0040_v2_alpha_workflow_integrity_constraints (head)
+V2 Alpha Sprint 11.1 Migration Evidence
 
-== upgrade to 0039 ==
-[ok] 0039_v2_alpha_workflow_unified_contract
-
-== current after 0039 ==
-0039_v2_alpha_workflow_unified_contract
-
-== upgrade head to 0040 ==
-[ok] 0040_v2_alpha_workflow_integrity_constraints (head)
-
-== current after head ==
-0040_v2_alpha_workflow_integrity_constraints (head)
-
-== check after head ==
-No new upgrade operations detected.
-
-== repeated upgrade head ==
-[ok] no-op
-
-== downgrade to 0039 ==
-[ok] 0039_v2_alpha_workflow_unified_contract
-
-== current after downgrade ==
-0039_v2_alpha_workflow_unified_contract
-
-== re-upgrade head ==
-[ok] 0040_v2_alpha_workflow_integrity_constraints (head)
-
-== current after re-upgrade ==
-0040_v2_alpha_workflow_integrity_constraints (head)
+- Database engine: PostgreSQL 16
+- SQLite drift skip: not used
+- V1 migration 0001-0027: exact match to v1.0.1 tag after restoration
+- Path A: V1.0.1 -> alpha_evidence_a -> 0041_v2_alpha_migration_history_repair
+- Path B: merge-base (0037) -> alpha_evidence_b -> 0041_v2_alpha_migration_history_repair
+- Final head: 0041_v2_alpha_migration_history_repair
+- alembic check: passed on both paths
+- repeat upgrade head: safe no-op on both paths
+- downgrade / re-upgrade: passed on both paths
+- 0037 migration: PostgreSQL boolean default compatibility adjustment is documented and retained
