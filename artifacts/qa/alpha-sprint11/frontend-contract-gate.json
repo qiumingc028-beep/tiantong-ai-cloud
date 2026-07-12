@@ -1,5 +1,5 @@
 {
-  "frontend_head": "04804fc62f57305b4bc3f45dbe7bc051bab0cfb4",
+  "frontend_head": "2306c5ef7e0444fa41b7b58ce86595065547f3c4",
   "deprecated_fields_found": [],
   "server_owned_stage_order": true,
   "server_owned_actions": true,
@@ -7,6 +7,10 @@
   "fixed_stage_machine_absent": true,
   "committed_pr18_source": true,
   "untracked_file_dependency": false,
+  "network_error_localized": true,
+  "http_detail_preserved": true,
+  "login_redirect_preserved": true,
+  "failed_to_fetch_exposed": false,
   "root_parent_label": true,
   "scope_valid": true,
   "result": "PASS"

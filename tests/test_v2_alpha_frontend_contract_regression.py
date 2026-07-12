@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND_HEAD = "04804fc62f57305b4bc3f45dbe7bc051bab0cfb4"
-PR18_BASE = "eef1ed66638011503c7377d52104258b72ee80d0"
+FRONTEND_HEAD = "2306c5ef7e0444fa41b7b58ce86595065547f3c4"
+FEATURE_REF = "origin/feature/v2-alpha-workflow-engine"
 SOURCE_PATH = "frontend/alpha-workflow.js"
 PR18_FILES = {
     "frontend/alpha-workflow.html",
@@ -86,6 +86,22 @@ def test_report_and_run_actions_are_owned_by_server_contract_fields():
     assert not re.search(r"status\s*(?:===|!==|==|!=|\.includes)", actions)
 
 
+def test_network_failure_is_localized_without_breaking_http_detail_or_login():
+    source = frontend_source()
+    request_body = function_body(source, "request", "showMessage")
+    localized = "网络连接失败，请检查网络后重试。"
+    assert localized in request_body
+    assert re.search(
+        r"try\s*\{[\s\S]*?await\s+fetch\([\s\S]*?\}\s*catch\s*\([^)]*\)\s*\{[\s\S]*?"
+        + re.escape(localized),
+        request_body,
+    )
+    assert "Failed to fetch" not in source
+    assert re.search(r"!response\.ok[\s\S]*?typeof\s+payload\.detail\s*===\s*['\"]string['\"]\s*\?\s*payload\.detail", request_body)
+    assert re.search(r"response\.status\s*===\s*401", request_body)
+    assert re.search(r"location\.href\s*=\s*['\"]/login\.html['\"]", request_body)
+
+
 def test_stage_order_comes_from_server_spans_or_events_only():
     source = frontend_source()
     stages = function_body(source, "renderStages", "renderExecution")
@@ -97,8 +113,8 @@ def test_stage_order_comes_from_server_spans_or_events_only():
 
 
 def test_pr18_scope_is_exactly_four_alpha_frontend_files():
+    pr18_base = git("merge-base", FRONTEND_HEAD, FEATURE_REF).strip()
     changed = set(
-        git("diff", "--name-only", f"{PR18_BASE}..{FRONTEND_HEAD}").splitlines()
+        git("diff", "--name-only", f"{pr18_base}..{FRONTEND_HEAD}").splitlines()
     )
     assert changed == PR18_FILES
-
