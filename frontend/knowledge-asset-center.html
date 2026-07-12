@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>天藏知识资产中心 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--brand:#0f766e;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:white;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:#fff}.main{min-width:0}.topbar{height:64px;background:white;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:0 24px;gap:16px}.top-title{font-weight:700}.top-meta{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;flex-wrap:wrap}.pill{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 9px}.content{padding:24px}.page-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap}h1{font-size:26px;margin:0}.sub{color:var(--muted);margin-top:6px;max-width:920px;line-height:1.6}.grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:16px}.card{background:white;border:1px solid var(--line);border-radius:10px;padding:14px}.card .label{color:var(--muted);font-size:13px}.card .value{font-size:24px;font-weight:700;margin-top:8px}.layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(320px,.75fr);gap:16px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}.toolbar input,.toolbar select,.toolbar textarea{border:1px solid var(--line);border-radius:8px;padding:10px;background:white;min-width:150px}.toolbar textarea{min-height:88px;flex:1}.row{display:flex;gap:10px;flex-wrap:wrap}.row > *{flex:1}.button-row{display:flex;gap:8px;flex-wrap:wrap}.button{border:0;background:#111827;color:#fff;border-radius:8px;padding:9px 12px;cursor:pointer}.button.secondary{background:#fff;color:#111827;border:1px solid var(--line)}.button.good{background:var(--brand)}.button.warn{background:var(--warn)}.button.bad{background:var(--bad)}.button:disabled{opacity:.5;cursor:not-allowed}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px 14px;color:var(--muted);margin-bottom:14px;white-space:pre-wrap;line-height:1.6}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:var(--good)}.state.warn{border-color:#fde68a;background:#fffbeb;color:var(--warn)}.state.error{border-color:#fecaca;background:#fef2f2;color:var(--bad)}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:8px}.table{width:100%;border-collapse:collapse;background:white;min-width:820px}th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;vertical-align:top}th{background:#f8fafc;color:#475569;font-weight:700}.badge{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px 8px;font-size:12px;background:#f8fafc}.badge.published{color:var(--good);border-color:#bbf7d0;background:#f0fdf4}.badge.review{color:var(--warn);border-color:#fde68a;background:#fffbeb}.badge.archive{color:#6b7280}.empty{color:var(--muted);padding:18px;text-align:center}.detail pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px;line-height:1.6;max-height:420px;overflow:auto}.mini-list{display:grid;gap:10px}.mini-item{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff}.mini-item strong{display:block;margin-bottom:6px}.mini-item p{margin:0;color:#475569;white-space:pre-wrap;line-height:1.55}.auth-pending .sidebar,.auth-pending .main{visibility:hidden}@media(max-width:1100px){.app{grid-template-columns:1fr}.layout,.grid{grid-template-columns:1fr}.topbar,.page-head{align-items:flex-start;flex-direction:column;height:auto;padding:14px 18px}.content{padding:18px}}
+  </style>
+</head>
+<body class="auth-pending">
+<script>
+(function(){
+  const ALL_ACCESS=null;
+  const ROLE_ACCESS={owner:ALL_ACCESS,boss:ALL_ACCESS,admin:['/index.html','/control.html','/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/ai-employees.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-asset-center.html','/knowledge-asset-detail.html','/settings.html'],operation:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-asset-center.html','/knowledge-asset-detail.html'],operator:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-asset-center.html','/knowledge-asset-detail.html']};
+  const rawFetch=window.fetch.bind(window);let redirecting=false,currentUser=null;
+  function safeRedirect(url){if(redirecting)return;redirecting=true;setTimeout(()=>location.href=url,200)}
+  function normalizeRole(user){return String((user&&(user.role_code||user.role))||'').trim().toLowerCase()}
+  function canOpen(role,href){const access=role==='owner'?ALL_ACCESS:(Object.prototype.hasOwnProperty.call(ROLE_ACCESS,role)?ROLE_ACCESS[role]:['/jd-dashboard.html']);return access===ALL_ACCESS||access.includes(href)}
+  function applyRole(user){currentUser=user||currentUser;const role=normalizeRole(currentUser);document.querySelectorAll('.menu a').forEach(a=>{const ok=canOpen(role,a.getAttribute('href')||'');a.style.display=ok?'':'none'});if(!canOpen(role,location.pathname)){safeRedirect('/index.html');return}document.body.classList.remove('auth-pending')}
+  window.fetch=async function(input,init){const res=await rawFetch(input,init);const url=typeof input==='string'?input:(input&&input.url)||'';if(url.includes('/api/')&&res.status===401)safeRedirect('/login.html');if(url.includes('/api/')&&res.status===403){statusBox('没有访问权限','error');safeRedirect('/login.html')}return res};
+  window.secureLogout=async function(){try{await rawFetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'};
+  function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+  function statusBox(text, kind='ok'){const box=document.getElementById('notice');box.className=`state ${kind}`;box.textContent=text}
+  function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+  function renderMenu(){menu.innerHTML=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏知识资产中心','/knowledge-asset-center.html'],['系统设置','/settings.html']].map(([l,h])=>`<a class="${h==='/knowledge-asset-center.html'?'active':''}" href="${h}">${l}</a>`).join('')}
+  async function init(){renderMenu();tick();setInterval(tick,1000);const me=await rawFetch('/api/me',{credentials:'include'});if(me.ok){const u=await me.json();userInfo.innerText=`${u.display_name} · ${u.role_label||u.role}`;applyRole(u)}const health=await rawFetch('/api/v2/knowledge-center/health',{credentials:'include'});if(health.ok){const payload=await health.json();healthState(payload)}await load()}
+  function healthState(payload){const flags=payload.feature_flags||{};const text=`知识中心：${payload.status||'unknown'}\n总数：${payload.knowledge_total||0}  待审核：${payload.pending_review||0}  已发布：${payload.published||0}  已归档：${payload.archived||0}\n最近提交：${(payload.recent_submissions||[]).slice(0,3).map(item=>item.title).join('、')||'暂无'}\n功能开关：中心=${flags.KNOWLEDGE_CENTER_ENABLED?'开':'关'} / 提交=${flags.KNOWLEDGE_SUBMISSION_ENABLED?'开':'关'} / 发布=${flags.KNOWLEDGE_PUBLISH_ENABLED?'开':'关'} / 本地检索=${flags.KNOWLEDGE_LOCAL_SEARCH_ENABLED?'开':'关'} / 向量检索=${flags.KNOWLEDGE_VECTOR_SEARCH_ENABLED?'开':'关'}`;statusBox(text,'ok')}
+  async function load(){try{statusBox('正在加载知识资产...');const response=await rawFetch('/api/v2/knowledge?limit=50',{credentials:'include'});const data=await response.json();window.assets=data.items||[];renderStats(window.assets);renderTable(window.assets);statusBox(`已加载 ${window.assets.length} 条知识资产。`,'ok')}catch(err){statusBox(`加载失败：${err.message||err}`,'error')}}
+  function renderStats(items){const total=items.length;const pending=items.filter(item=>['待审核','审核中'].includes(item.status)).length;const published=items.filter(item=>item.status==='已发布').length;const needUpdate=items.filter(item=>['已批准','已发布'].includes(item.status)).length;const archived=items.filter(item=>item.status==='已归档').length;const recent=items.slice(0,5).map(item=>item.title).join('、')||'暂无';document.getElementById('stats').innerHTML=`<div class="card"><div class="label">知识总数</div><div class="value">${total}</div></div><div class="card"><div class="label">待审核</div><div class="value">${pending}</div></div><div class="card"><div class="label">已发布</div><div class="value">${published}</div></div><div class="card"><div class="label">需要更新</div><div class="value">${needUpdate}</div></div><div class="card"><div class="label">已归档</div><div class="value">${archived}</div></div><div class="card"><div class="label">最近提交</div><div class="value" style="font-size:14px;line-height:1.5">${esc(recent)}</div></div>`}
+  function badge(status){const cls=status==='已发布'?'published':(status==='待审核'||status==='审核中'?'review':(status==='已归档'?'archive':''));return `<span class="badge ${cls}">${esc(status||'草稿')}</span>`}
+  function renderTable(items){document.getElementById('tableBody').innerHTML=items.map(item=>`<tr><td><strong>${esc(item.title)}</strong><div class="sub">${esc(item.summary||'')}</div></td><td>${esc(item.knowledge_type||'')}</td><td>${esc(item.category||'')}</td><td>${badge(item.status)}</td><td>${esc(item.version_number||'-')}</td><td>${esc(item.owner_department||'')}</td><td>${esc(item.risk_level||'')}</td><td>${esc(item.updated_at||'')}</td><td><div class="button-row"><button class="secondary" onclick="openDetail('${item.knowledge_id}')">查看详情</button></div></td></tr>`).join('')||'<tr><td colspan="9" class="empty">暂无知识资产</td></tr>'}
+  window.openDetail=function(id){location.href=`/knowledge-asset-detail.html?id=${encodeURIComponent(id)}`}
+  window.createDraft=async function(){try{const payload={title:document.getElementById('newTitle').value.trim(),summary:document.getElementById('newSummary').value.trim(),content:document.getElementById('newContent').value.trim(),knowledge_type:document.getElementById('newType').value,value:'',category:document.getElementById('newCategory').value.trim(),visibility:document.getElementById('newVisibility').value, risk_level:document.getElementById('newRisk').value, tags:document.getElementById('newTags').value.split(',').map(s=>s.trim()).filter(Boolean),owner_department:document.getElementById('newDept').value.trim()};if(!payload.title){statusBox('请输入知识标题','warn');return}const res=await rawFetch('/api/v2/knowledge',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(payload)});const data=await res.json();if(!res.ok)throw new Error(data.detail||'创建失败');statusBox(`已创建知识草稿：${data.knowledge.title}`,'ok');await load();openDetail(data.knowledge.knowledge_id)}catch(err){statusBox(`创建失败：${err.message||err}`,'error')}}
+  window.submitResearch=async function(){try{const reportId=document.getElementById('reportId').value.trim();const submitter=document.getElementById('submitter').value.trim()||'tiancai_data';if(!reportId){statusBox('请输入研究报告编号','warn');return}const payload={submitter_employee_code:submitter,title:document.getElementById('reportTitle').value.trim()||null,summary:document.getElementById('reportSummary').value.trim()||null,knowledge_type:'研究报告',category:document.getElementById('reportCategory').value.trim()||null,visibility:document.getElementById('reportVisibility').value,risk_level:document.getElementById('reportRisk').value,tags:document.getElementById('reportTags').value.split(',').map(s=>s.trim()).filter(Boolean),owner_department:document.getElementById('reportDept').value.trim()||null};const res=await rawFetch(`/api/v2/knowledge/research/${encodeURIComponent(reportId)}/submit-to-knowledge`,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(payload)});const data=await res.json();if(!res.ok)throw new Error(data.detail||'提交失败');statusBox(`已提交知识候选：${data.knowledge.title}`,'ok');await load();openDetail(data.knowledge.knowledge_id)}catch(err){statusBox(`提交失败：${err.message||err}`,'error')}}
+  window.loadLatest=load;
+  init();
+})();
+</script>
+<div class="app">
+  <aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
+  <main class="main">
+    <header class="topbar">
+      <div class="top-title">天藏知识资产中心</div>
+      <div class="top-meta"><span id="currentTime" class="pill">--:--:--</span><span id="userInfo" class="pill">加载中</span><button class="button" onclick="secureLogout()">退出</button></div>
+    </header>
+    <section class="content">
+      <div class="page-head">
+        <div>
+          <h1>天藏知识资产中心</h1>
+          <div class="sub">将研究报告、SOP、运营经验、商品知识、客服知识、技术文档与业务规则统一沉淀为可版本化、可检索、可引用的企业知识资产。</div>
+        </div>
+        <div class="button-row">
+          <button class="secondary" onclick="loadLatest()">刷新</button>
+          <button class="good" onclick="openDetail('new')">查看详情页</button>
+        </div>
+      </div>
+      <div id="notice" class="state">正在加载知识资产...</div>
+      <div id="stats" class="grid"></div>
+      <div class="layout">
+        <section class="panel">
+          <div class="toolbar"><strong>知识资产列表</strong></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>标题</th><th>类型</th><th>分类</th><th>状态</th><th>当前版本</th><th>部门</th><th>风险</th><th>更新时间</th><th>操作</th></tr></thead>
+              <tbody id="tableBody"><tr><td colspan="9" class="empty">正在加载...</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+        <aside class="panel">
+          <div class="toolbar"><strong>新建知识</strong></div>
+          <div class="row"><input id="newTitle" placeholder="知识标题"><input id="newCategory" placeholder="分类，例如：技术文档"></div>
+          <div class="row"><input id="newType" value="研究报告" placeholder="知识类型"><input id="newDept" placeholder="所属部门"></div>
+          <div class="row"><select id="newVisibility"><option>部门可见</option><option>组织可见</option><option>公开</option></select><select id="newRisk"><option>低风险</option><option>中风险</option><option>高风险</option></select></div>
+          <div class="row"><input id="newTags" placeholder="标签，逗号分隔"></div>
+          <textarea id="newSummary" placeholder="知识摘要"></textarea>
+          <textarea id="newContent" placeholder="知识正文"></textarea>
+          <div class="button-row" style="margin-top:10px"><button class="button good" onclick="createDraft()">创建知识草稿</button></div>
+          <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
+          <div class="toolbar"><strong>从研究报告提交</strong></div>
+          <div class="row"><input id="reportId" placeholder="研究报告编号 / execution_id"><input id="submitter" value="tiancai_data" placeholder="提交员工编号"></div>
+          <input id="reportTitle" placeholder="知识标题（可选）">
+          <input id="reportCategory" placeholder="建议分类（可选）">
+          <div class="row"><select id="reportVisibility"><option>部门可见</option><option>组织可见</option><option>公开</option></select><select id="reportRisk"><option>低风险</option><option>中风险</option><option>高风险</option></select></div>
+          <input id="reportDept" placeholder="所属部门（可选）">
+          <input id="reportTags" placeholder="标签，逗号分隔">
+          <textarea id="reportSummary" placeholder="摘要（可选）"></textarea>
+          <div class="button-row" style="margin-top:10px"><button class="button warn" onclick="submitResearch()">提交为知识候选</button></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</div>
+</body>
+</html>
