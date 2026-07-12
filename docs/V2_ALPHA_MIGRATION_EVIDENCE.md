@@ -32,13 +32,16 @@
 - `alembic/versions/0005_knowledge_center_tables.py`
 - `alembic/versions/0039_v2_alpha_workflow_unified_contract.py`
 - `alembic/versions/0040_v2_alpha_workflow_integrity_constraints.py`
+- `alembic/versions/0037_v2_execution_observability_security_ops.py`
 
 最终处理结果：
 
 - `0005_knowledge_center_tables.py` 已恢复为 `v1.0.1` 原始内容，不再保留分支内的降级版改写。
 - `0039`、`0040` 均保持为新增增量 migration。
+- `0037_v2_execution_observability_security_ops.py` 包含一次已明确披露的 PostgreSQL 兼容性调整：将布尔默认值从整数 `1` 统一修正为 PostgreSQL `true` 表达，以保证实库可执行性与 `alembic check` 一致性。
 - `0041_v2_alpha_migration_history_repair.py` 为新增修复 migration，用于修复 Alpha 运行时的 PostgreSQL 约束一致性。
-- 历史 migration 没有通过补丁继续“修补旧文件内容”的方式隐藏问题；新增问题通过增量 migration 解决。
+- V1 正式链 `0001`—`0027` 经过逐文件比对，已确认与 `v1.0.1` 完全一致。
+- V2 预发布链 `0028`—`0041` 仍可继续在隔离环境中用于证据验证，但在 Sprint 11.1 收口后按冻结策略停止进一步修改旧文件。
 
 ## 路径 A：V1.0.1 正式 Tag -> 最新 Head
 
