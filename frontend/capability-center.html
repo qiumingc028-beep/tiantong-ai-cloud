@@ -51,6 +51,7 @@
       <a href="/agent-runtime.html">Agent Runtime</a>
       <a href="/capability-center.html" class="active">能力中心</a>
       <a href="/execution-records.html">执行记录</a>
+      <a href="/browser-readonly-test.html">公开网页采集</a>
       <a href="/task-center.html">任务中心</a>
       <a href="/index.html">老板驾驶舱</a>
     </nav>
@@ -75,8 +76,8 @@
         <div class="panel">
           <h2>能力列表</h2>
           <div class="table"><table>
-            <thead><tr><th>能力</th><th>类型</th><th>风险</th><th>状态</th><th>只读</th><th>审批</th><th>执行器</th><th>操作</th></tr></thead>
-            <tbody id="capRows"><tr><td colspan="8" class="muted">加载中...</td></tr></tbody>
+            <thead><tr><th>能力</th><th>类型</th><th>风险</th><th>状态</th><th>只读</th><th>审批</th><th>允许员工</th><th>执行器</th><th>执行器状态</th><th>操作</th></tr></thead>
+            <tbody id="capRows"><tr><td colspan="10" class="muted">加载中...</td></tr></tbody>
           </table></div>
         </div>
         <div class="panel">
@@ -87,11 +88,11 @@
             <input id="employeeId" placeholder="AI员工ID，例如 1">
             <input id="taskId" placeholder="任务ID（可选）">
             <input id="execCapabilityId" placeholder="能力标识，例如 mock.echo">
-            <select id="executorType"><option value="mock">模拟执行器</option></select>
+            <select id="executorType"><option value="mock">模拟执行器</option><option value="browser">只读浏览器执行器</option></select>
             <textarea id="inputPayload" class="full" placeholder='输入 JSON，例如 {"message":"你好","simulate_mode":"success"}'></textarea>
       <button class="full" onclick="createExecution()">创建执行</button>
       </div>
-      <p class="muted">高风险能力必须走审批；默认只开放模拟执行器。点击“查看能力详情”查看单个能力的完整信息。</p>
+      <p class="muted">高风险能力必须走审批；默认只开放模拟执行器。浏览器只读能力会显示允许员工和执行器状态，但默认保持关闭。</p>
     </div>
   </section>
     </section>
@@ -113,7 +114,7 @@ async function loadCapabilities(){
     $('capTotal').innerText=String(caps.length);
     $('capEnabled').innerText=String(caps.filter(c=>c.enabled).length);
     $('capApproval').innerText=String(caps.filter(c=>c.requires_boss_approval||c.requires_security_audit||['high','critical'].includes(c.risk_level)).length);
-    $('capReal').innerText=caps.some(c=>c.executor_type!=='mock')?'开启':'关闭';
+    $('capReal').innerText=caps.some(c=>c.enabled && c.executor_type!=='mock')?'开启':'关闭';
     $('state').className='tag ok';$('state').innerText='已刷新';
     $('capRows').innerHTML=caps.length?caps.map((c,i)=>`<tr>
       <td><strong>${esc(c.capability_name)}</strong><div class="muted">${esc(c.capability_id)}</div></td>
@@ -122,9 +123,11 @@ async function loadCapabilities(){
       <td>${c.enabled?tag('启用','ok'):tag('停用','bad')}</td>
       <td>${c.readonly?tag('是','ok'):tag('否','warn')}</td>
       <td>${c.requires_boss_approval||c.requires_security_audit?tag('需要','warn'):tag('无需','ok')}</td>
+      <td>${c.allowed_employee_codes&&c.allowed_employee_codes.length?esc(c.allowed_employee_codes.join('、')):'—'}</td>
       <td>${esc(c.executor_type)}</td>
+      <td>${c.executor_status?tag(c.executor_status,c.executor_status==='就绪'?'ok':c.executor_status==='已关闭'?'warn':'bad'):tag('未知','warn')}</td>
       <td><button class="secondary" onclick="showDetail(${i})">查看能力详情</button></td>
-    </tr>`).join(''):'<tr><td colspan="8" class="muted">暂无能力</td></tr>';
+    </tr>`).join(''):'<tr><td colspan="10" class="muted">暂无能力</td></tr>';
     if(caps[0]) showDetail(0);
   }catch(e){
     $('state').className='tag bad';$('state').innerText='加载失败';$('capRows').innerHTML=`<tr><td colspan="8" class="muted">${esc(e.message||'请稍后重试')}</td></tr>`;
@@ -140,7 +143,9 @@ function showDetail(index){
     <div>状态</div><div>${c.enabled?'启用':'停用'}</div>
     <div>只读</div><div>${c.readonly?'是':'否'}</div>
     <div>审批</div><div>${c.requires_boss_approval||c.requires_security_audit?'需要':'无需'}</div>
+    <div>允许员工</div><div>${c.allowed_employee_codes&&c.allowed_employee_codes.length?esc(c.allowed_employee_codes.join('、')):'—'}</div>
     <div>执行器</div><div>${esc(c.executor_type)}</div>
+    <div>执行器状态</div><div>${esc(c.executor_status||'未知')}</div>
     <div>超时</div><div>${esc(c.timeout_seconds)} 秒</div>
     <div>重试</div><div>${esc(c.max_retries)} 次</div>
     <div>说明</div><div class="muted">${esc(c.description||'暂无')}</div>

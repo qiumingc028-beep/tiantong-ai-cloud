@@ -59,6 +59,8 @@ def test_agent_runtime_health_and_builtin_capabilities(client, owner_headers):
     assert payload["real_executor_enabled"] is False
     assert payload["feature_flags"]["AGENT_RUNTIME_ENABLED"] is True
     assert payload["feature_flags"]["REAL_EXECUTOR_ENABLED"] is False
+    assert payload["feature_flags"]["BROWSER_READONLY_ENABLED"] is False
+    assert payload["feature_flags"]["BROWSER_CONTROL_ENABLED"] is False
     assert payload["capabilities"] >= len(DEFAULT_CAPABILITIES)
 
     listing = client.get("/api/v2/capabilities", headers=owner_headers)
@@ -69,6 +71,7 @@ def test_agent_runtime_health_and_builtin_capabilities(client, owner_headers):
     assert "mock.failure" in ids
     assert "mock.timeout" in ids
     assert "mock.retry" in ids
+    assert "browser.public.read" in ids
 
 
 def test_agent_runtime_requires_permission_and_supports_registration(client, viewer_headers, owner_headers):

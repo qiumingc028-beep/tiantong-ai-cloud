@@ -47,14 +47,18 @@ def evaluate_permission(
 
     chosen_executor = resolve_executor_type(capability, executor_type)
     settings = get_settings()
-    if chosen_executor != "mock" and not settings.REAL_EXECUTOR_ENABLED:
+    if chosen_executor == "browser":
+        if capability.readonly:
+            if not settings.BROWSER_READONLY_ENABLED:
+                raise ExecutorUnavailableError("浏览器只读能力已关闭")
+        elif not settings.BROWSER_CONTROL_ENABLED:
+            raise ExecutorUnavailableError("浏览器控制能力已关闭")
+    elif chosen_executor != "mock" and not settings.REAL_EXECUTOR_ENABLED:
         raise ExecutorUnavailableError("真实执行器已关闭")
     if chosen_executor == "desktop" and not settings.COMPUTER_CONTROL_ENABLED:
         raise ExecutorUnavailableError("电脑控制能力已关闭")
     if chosen_executor == "mobile" and not settings.MOBILE_CONTROL_ENABLED:
         raise ExecutorUnavailableError("手机控制能力已关闭")
-    if chosen_executor == "browser" and not settings.BROWSER_CONTROL_ENABLED:
-        raise ExecutorUnavailableError("浏览器控制能力已关闭")
     if chosen_executor == "shell" and not settings.SHELL_EXECUTION_ENABLED:
         raise ExecutorUnavailableError("Shell 执行能力已关闭")
 

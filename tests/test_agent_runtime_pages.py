@@ -4,6 +4,7 @@ from pathlib import Path
 AGENT_RUNTIME_PAGE = Path("frontend/agent-runtime.html")
 CAPABILITY_PAGE = Path("frontend/capability-center.html")
 EXECUTION_PAGE = Path("frontend/execution-records.html")
+BROWSER_READONLY_PAGE = Path("frontend/browser-readonly-test.html")
 
 
 def test_agent_runtime_page_files_exist():
@@ -17,6 +18,7 @@ def test_agent_runtime_pages_are_served(client):
         ("/agent-runtime.html", "Agent Runtime"),
         ("/capability-center.html", "能力中心"),
         ("/execution-records.html", "执行记录"),
+        ("/browser-readonly-test.html", "公开网页采集"),
     ]:
         response = client.get(path)
         assert response.status_code == 200
@@ -25,9 +27,10 @@ def test_agent_runtime_pages_are_served(client):
 
 def test_agent_runtime_pages_contain_core_chinese_copy():
     for page, phrases in [
-        (AGENT_RUNTIME_PAGE, ["统一接收执行请求", "真实执行器默认关闭", "Agent Runtime"]),
-        (CAPABILITY_PAGE, ["统一能力注册表", "查看能力详情", "创建执行", "模拟执行器"]),
-        (EXECUTION_PAGE, ["执行记录与审计链路", "批准并执行", "审计记录", "敏感字段必须脱敏"]),
+        (AGENT_RUNTIME_PAGE, ["统一接收执行请求", "真实执行器默认关闭", "浏览器只读", "Agent Runtime"]),
+        (CAPABILITY_PAGE, ["统一能力注册表", "查看能力详情", "创建执行", "模拟执行器", "公开网页采集"]),
+        (EXECUTION_PAGE, ["执行记录与审计链路", "批准并执行", "审计记录", "敏感字段必须脱敏", "最终网址"]),
+        (BROWSER_READONLY_PAGE, ["公开网页只读采集", "开始只读采集", "公开网页采集"]),
     ]:
         html = page.read_text(encoding="utf-8")
         for phrase in phrases:
@@ -36,8 +39,7 @@ def test_agent_runtime_pages_contain_core_chinese_copy():
 
 def test_agent_runtime_pages_do_not_expose_forbidden_controls():
     forbidden = ["OpenClaw", "真实电脑控制", "真实手机控制", "任意 Shell", "自动发布", "自动部署生产"]
-    for page in [AGENT_RUNTIME_PAGE, CAPABILITY_PAGE, EXECUTION_PAGE]:
+    for page in [AGENT_RUNTIME_PAGE, CAPABILITY_PAGE, EXECUTION_PAGE, BROWSER_READONLY_PAGE]:
         html = page.read_text(encoding="utf-8")
         for phrase in forbidden:
             assert phrase not in html
-

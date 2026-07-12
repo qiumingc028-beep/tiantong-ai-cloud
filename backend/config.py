@@ -36,6 +36,21 @@ def _boolean(name: str, default: bool) -> bool:
     raise ConfigurationError(f"{name} must be a boolean")
 
 
+def _csv_list(name: str, default: str = "") -> list[str]:
+    raw = os.getenv(name, default)
+    return [item.strip().rstrip("/") for item in raw.split(",") if item.strip()]
+
+
+def _integer(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+
+
 def _cors_origins(raw: str, *, production: bool) -> list[str]:
     origins = [item.strip().rstrip("/") for item in raw.split(",") if item.strip()]
     if production and not origins:
@@ -79,6 +94,14 @@ class Settings:
         self.COMPUTER_CONTROL_ENABLED = _boolean("COMPUTER_CONTROL_ENABLED", False)
         self.MOBILE_CONTROL_ENABLED = _boolean("MOBILE_CONTROL_ENABLED", False)
         self.BROWSER_CONTROL_ENABLED = _boolean("BROWSER_CONTROL_ENABLED", False)
+        self.BROWSER_READONLY_ENABLED = _boolean("BROWSER_READONLY_ENABLED", False)
+        self.BROWSER_ALLOW_HTTP = _boolean("BROWSER_ALLOW_HTTP", False)
+        self.BROWSER_ALLOWED_DOMAINS = _csv_list("BROWSER_ALLOWED_DOMAINS")
+        self.BROWSER_BLOCK_PRIVATE_NETWORKS = _boolean("BROWSER_BLOCK_PRIVATE_NETWORKS", True)
+        self.BROWSER_MAX_REDIRECTS = _integer("BROWSER_MAX_REDIRECTS", 3)
+        self.BROWSER_DEFAULT_TIMEOUT_SECONDS = _integer("BROWSER_DEFAULT_TIMEOUT_SECONDS", 20)
+        self.BROWSER_MAX_RESPONSE_BYTES = _integer("BROWSER_MAX_RESPONSE_BYTES", 2_000_000)
+        self.BROWSER_USER_AGENT = os.getenv("BROWSER_USER_AGENT", "TiantongAIReadonlyBrowser/1.0")
         self.SHELL_EXECUTION_ENABLED = _boolean("SHELL_EXECUTION_ENABLED", False)
         self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
         self.DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")

@@ -4,6 +4,7 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 from sqlalchemy.orm import Session
 
@@ -24,9 +25,25 @@ def redact_text(value: str | None) -> str | None:
         return None
     if not value.strip():
         return ""
+    if value.startswith("http://") or value.startswith("https://"):
+        return redact_url(value)
     if SENSITIVE_RE.search(value):
         return "[已脱敏]"
     return value
+
+
+def redact_url(value: str) -> str:
+    split = urlsplit(value)
+    if not split.scheme or not split.netloc:
+        return value
+    query_items: list[tuple[str, str]] = []
+    for key, item in parse_qsl(split.query, keep_blank_values=True):
+        if SENSITIVE_RE.search(key):
+            query_items.append((key, "[已脱敏]"))
+        else:
+            query_items.append((key, item))
+    query = "&".join(f"{key}={value}" for key, value in query_items)
+    return urlunsplit((split.scheme, split.netloc, split.path, query, split.fragment))
 
 
 def sanitize_payload(value: Any) -> Any:

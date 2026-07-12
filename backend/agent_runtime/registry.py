@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from .constants import DEFAULT_CAPABILITIES
 from .models import AgentCapability
 
@@ -111,8 +112,31 @@ def capability_to_dict(capability: AgentCapability) -> dict[str, object]:
         "input_schema_json": capability.input_schema_json,
         "output_schema_json": capability.output_schema_json,
         "allowed_employee_codes": capability_allowed_employee_codes(capability),
+        "allowed_employee_count": len(capability_allowed_employee_codes(capability)),
+        "executor_status": executor_status_for_capability(capability),
         "version": capability.version,
         "created_at": capability.created_at.isoformat() if capability.created_at else None,
         "updated_at": capability.updated_at.isoformat() if capability.updated_at else None,
     }
 
+
+def executor_status_for_capability(capability: AgentCapability) -> str:
+    if not capability.enabled:
+        return "停用"
+    settings = get_settings()
+    executor_type = (capability.executor_type or "mock").strip().lower()
+    if executor_type == "mock":
+        return "就绪"
+    if executor_type == "browser":
+        if capability.readonly and settings.BROWSER_READONLY_ENABLED:
+            return "就绪"
+        if settings.BROWSER_CONTROL_ENABLED:
+            return "就绪"
+        return "已关闭"
+    if executor_type in {"desktop"}:
+        return "就绪" if settings.COMPUTER_CONTROL_ENABLED else "已关闭"
+    if executor_type in {"mobile"}:
+        return "就绪" if settings.MOBILE_CONTROL_ENABLED else "已关闭"
+    if executor_type in {"shell"}:
+        return "就绪" if settings.SHELL_EXECUTION_ENABLED else "已关闭"
+    return "已关闭" if not settings.REAL_EXECUTOR_ENABLED else "就绪"
