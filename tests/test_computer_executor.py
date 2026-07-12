@@ -24,6 +24,16 @@ def enable_computer_flags(monkeypatch, *, take_over: bool = True):
         COMPUTER_MOUSE_INPUT_ENABLED=True,
         COMPUTER_CONTROL_ENABLED=False,
         SHELL_EXECUTION_ENABLED=False,
+        CLIPBOARD_READ_ENABLED=False,
+        CLIPBOARD_WRITE_ENABLED=False,
+        FILE_UPLOAD_ENABLED=False,
+        FILE_DOWNLOAD_ENABLED=False,
+        MAC_SAFE_ACTION_ENABLED=False,
+        MAC_SAFE_MOUSE_MOVE_ENABLED=False,
+        MAC_SAFE_CLICK_ENABLED=False,
+        MAC_SAFE_TEXT_INPUT_ENABLED=False,
+        PER_ACTION_APPROVAL_ENABLED=False,
+        POST_ACTION_VERIFICATION_ENABLED=False,
         COMPUTER_ALLOWED_APPLICATIONS=["隔离测试浏览器", "隔离文本编辑器", "隔离演示窗口"],
         COMPUTER_BLOCKED_APPLICATIONS=[],
         COMPUTER_ALLOWED_WINDOW_PATTERNS=[".*隔离.*", ".*测试.*", ".*演示.*"],
@@ -31,6 +41,7 @@ def enable_computer_flags(monkeypatch, *, take_over: bool = True):
     )
     monkeypatch.setattr("backend.config.get_settings", lambda: settings)
     monkeypatch.setattr("backend.routers.computer_executor_v2.get_settings", lambda: settings)
+    monkeypatch.setattr("backend.agent_runtime.executors.computer.runtime.get_settings", lambda: settings)
     monkeypatch.setattr("backend.agent_runtime.executors.computer.policy.get_settings", lambda: settings)
     monkeypatch.setattr("backend.skills_engine.permissions.get_flag", lambda name: True)
     return settings
@@ -60,7 +71,7 @@ def test_computer_executor_pages_contain_safe_readonly_copy():
         "Terminal 阻断：通过",
         "HUMAN_TAKEOVER_ENABLED=false",
         "/api/v2/computer/sessions",
-        "/api/v2/computer-executor/health",
+            "/api/v2/computer/action-policy/health",
     ]:
         assert text in html
 
@@ -222,3 +233,154 @@ def test_computer_executor_health_and_feature_flags(client, owner_headers, monke
     assert payload["feature_flags"]["COMPUTER_EXECUTOR_ENABLED"] is True
     assert payload["feature_flags"]["OPENCLAW_ADAPTER_ENABLED"] is False
     assert payload["feature_flags"]["COMPUTER_CONTROL_ENABLED"] is False
+
+
+def enable_safe_action_flags(monkeypatch):
+    settings = SimpleNamespace(
+        IS_PRODUCTION=False,
+        COMPUTER_EXECUTOR_ENABLED=True,
+        OPENCLAW_ADAPTER_ENABLED=False,
+        ISOLATED_DESKTOP_ENABLED=True,
+        SCREEN_CAPTURE_ENABLED=True,
+        HUMAN_TAKEOVER_ENABLED=True,
+        COMPUTER_TEXT_INPUT_ENABLED=True,
+        COMPUTER_MOUSE_INPUT_ENABLED=True,
+        COMPUTER_CONTROL_ENABLED=False,
+        SHELL_EXECUTION_ENABLED=False,
+        CLIPBOARD_READ_ENABLED=False,
+        CLIPBOARD_WRITE_ENABLED=False,
+        FILE_UPLOAD_ENABLED=False,
+        FILE_DOWNLOAD_ENABLED=False,
+        MAC_SAFE_ACTION_ENABLED=True,
+        MAC_SAFE_MOUSE_MOVE_ENABLED=True,
+        MAC_SAFE_CLICK_ENABLED=True,
+        MAC_SAFE_TEXT_INPUT_ENABLED=True,
+        PER_ACTION_APPROVAL_ENABLED=True,
+        POST_ACTION_VERIFICATION_ENABLED=True,
+        COMPUTER_ALLOWED_APPLICATIONS=["隔离测试浏览器", "隔离文本编辑器", "隔离演示窗口"],
+        COMPUTER_BLOCKED_APPLICATIONS=[],
+        COMPUTER_ALLOWED_WINDOW_PATTERNS=[".*隔离.*", ".*测试.*", ".*演示.*"],
+        COMPUTER_BLOCKED_WINDOW_PATTERNS=["Terminal", "iTerm", "系统设置", "密码"],
+    )
+    monkeypatch.setattr("backend.config.get_settings", lambda: settings)
+    monkeypatch.setattr("backend.routers.computer_executor_v2.get_settings", lambda: settings)
+    monkeypatch.setattr("backend.agent_runtime.executors.computer.policy.get_settings", lambda: settings)
+    monkeypatch.setattr("backend.agent_runtime.executors.computer.actions.policy.get_settings", lambda: settings)
+    monkeypatch.setattr("backend.agent_runtime.registry.get_settings", lambda: settings)
+    monkeypatch.setattr("backend.skills_engine.permissions.get_flag", lambda name: True)
+    return settings
+
+
+def test_safe_action_pages_and_health(client):
+    assert Path("frontend/computer-action-approval.html").exists()
+    assert Path("frontend/computer-action-test.html").exists()
+    approval = client.get("/computer-action-approval.html")
+    test_page = client.get("/computer-action-test.html")
+    assert approval.status_code == 200
+    assert test_page.status_code == 200
+    assert "操作审批" in approval.text
+    assert "天统 AI 单步操作测试环境" in test_page.text
+
+
+def test_safe_action_plan_approval_execution_and_pause(client, owner_headers, monkeypatch):
+    enable_safe_action_flags(monkeypatch)
+    session = client.post(
+        "/api/v2/computer/sessions",
+        headers=owner_headers,
+        json={
+            "executor_type": "mock",
+            "environment_type": "test",
+            "risk_level": "中低",
+            "approval_status": "等待审批",
+            "allowed_applications": ["隔离测试浏览器", "隔离文本编辑器", "隔离演示窗口"],
+            "allowed_windows": [".*隔离.*", ".*测试.*"],
+            "trace_id": "trace-safe-action-session",
+        },
+    )
+    assert session.status_code == 200
+    session_id = session.json()["session"]["session_id"]
+
+    create = client.post(
+        "/api/v2/computer/action-plans",
+        headers=owner_headers,
+        json={
+            "session_id": session_id,
+            "task_id": 1,
+            "employee_id": 1,
+            "skill_id": 1,
+            "target_application": "隔离测试浏览器",
+            "target_bundle_id": "com.example.test",
+            "target_window": "天统 AI 单步操作测试窗口",
+            "goal": "单步测试按钮",
+            "action_type": "单击",
+            "control_type": "普通按钮",
+            "control_label": "测试按钮",
+            "control_identifier": "btn-test",
+            "target_description": "点击安全测试按钮",
+            "coordinates": {"x": 12, "y": 18},
+            "text_input": None,
+            "approval_mode": "逐步审批",
+            "risk_level": "中低",
+            "max_actions": 1,
+            "trace_id": "trace-safe-action-plan",
+            "allow_coordinate_fallback": False,
+        },
+    )
+    assert create.status_code == 200
+    payload = create.json()
+    plan = payload["plan"]
+    action_id = payload["target"]["action_id"]
+    assert plan["status"] == "等待批准"
+    assert payload["preview"]["expected_result"] == "执行单个动作后自动暂停"
+
+    approve = client.post(f"/api/v2/computer/actions/{action_id}/approve?trace_id=trace-safe-approve", headers=owner_headers)
+    assert approve.status_code == 200
+    assert approve.json()["approval"]["approval_status"] == "已批准"
+
+    repeat_approve = client.post(f"/api/v2/computer/actions/{action_id}/approve?trace_id=trace-safe-approve-2", headers=owner_headers)
+    assert repeat_approve.status_code == 409
+
+    execute = client.post(
+        f"/api/v2/computer/actions/{action_id}/execute?current_application=隔离测试浏览器&current_window=天统 AI 单步操作测试窗口&trace_id=trace-safe-execute",
+        headers=owner_headers,
+    )
+    assert execute.status_code == 200
+    result = execute.json()
+    assert result["plan"]["status"] == "已暂停"
+    assert result["session"]["status"] == "已暂停"
+    assert result["verification"]["verification_status"] in {"结果符合预期", "结果部分符合"}
+
+
+def test_safe_action_blocks_sensitive_text(client, owner_headers, monkeypatch):
+    enable_safe_action_flags(monkeypatch)
+    create = client.post(
+        "/api/v2/computer/sessions",
+        headers=owner_headers,
+        json={
+            "executor_type": "mock",
+            "environment_type": "test",
+            "risk_level": "中低",
+            "approval_status": "等待审批",
+            "allowed_applications": ["隔离文本编辑器"],
+            "allowed_windows": [".*测试.*"],
+        },
+    )
+    session_id = create.json()["session"]["session_id"]
+    blocked = client.post(
+        "/api/v2/computer/action-plans",
+        headers=owner_headers,
+        json={
+            "session_id": session_id,
+            "target_application": "隔离文本编辑器",
+            "target_window": "天统 AI 单步操作测试窗口",
+            "goal": "输入敏感文本",
+            "action_type": "输入普通文本",
+            "control_type": "普通文本框",
+            "control_label": "测试输入框",
+            "control_identifier": "input-test",
+            "target_description": "测试输入",
+            "text_input": "password=123456",
+            "trace_id": "trace-sensitive-block",
+        },
+    )
+    assert blocked.status_code == 403

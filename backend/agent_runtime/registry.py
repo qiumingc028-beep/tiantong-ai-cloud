@@ -160,6 +160,10 @@ def executor_status_for_capability(capability: AgentCapability) -> str:
         return "停用"
     settings = get_settings()
     executor_type = (capability.executor_type or "mock").strip().lower()
+    if capability.capability_id in {"computer.macos.safe_move", "computer.macos.safe_click", "computer.macos.safe_text_input"}:
+        if settings.MAC_SAFE_ACTION_ENABLED and (settings.PER_ACTION_APPROVAL_ENABLED if capability.capability_id != "computer.macos.safe_move" else True):
+            return "就绪"
+        return "已关闭"
     if executor_type == "mock":
         return "就绪"
     if executor_type == "browser":

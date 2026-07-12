@@ -11,6 +11,8 @@ from ....models import AiEmployee
 from ...runtime import invoke_agent_runtime
 from .action_validator import validate_action_payload
 from .base import ComputerExecutorOutcome
+from .actions.models import ComputerActionApproval, ComputerActionPlan, ComputerActionTarget
+from .actions.approval import _normalize_dt
 from .evidence import json_text, make_evidence_reference, make_screenshot_reference, utcnow
 from .mock_executor import MockComputerExecutor
 from .openclaw_adapter import OpenClawAdapter
@@ -53,6 +55,44 @@ class ComputerRuntime:
         ensure_executor_enabled()
         ensure_screen_capture_enabled()
         validate_action_payload(payload)
+        settings = get_settings()
+        safe_action_context = payload.approval_context if isinstance(payload.approval_context, dict) else None
+        safe_action_plan: ComputerActionPlan | None = None
+        safe_action_target: ComputerActionTarget | None = None
+        safe_action_approval: ComputerActionApproval | None = None
+        if settings.MAC_SAFE_ACTION_ENABLED and not safe_action_context:
+            raise HTTPException(status_code=403, detail="安全单步动作必须通过审批流执行")
+        if safe_action_context and settings.MAC_SAFE_ACTION_ENABLED:
+            plan_id = str(safe_action_context.get("plan_id") or "").strip()
+            action_id = str(safe_action_context.get("action_id") or "").strip()
+            if not plan_id or not action_id:
+                raise HTTPException(status_code=400, detail="安全动作缺少审批上下文")
+            safe_action_plan = db.get(ComputerActionPlan, plan_id)
+            if not safe_action_plan:
+                raise HTTPException(status_code=404, detail="动作计划不存在")
+            safe_action_target = db.query(ComputerActionTarget).filter(
+                ComputerActionTarget.plan_id == safe_action_plan.plan_id,
+                ComputerActionTarget.action_id == action_id,
+            ).order_by(ComputerActionTarget.created_at.asc()).first()
+            if not safe_action_target:
+                raise HTTPException(status_code=404, detail="动作目标不存在")
+            safe_action_approval = db.query(ComputerActionApproval).filter(
+                ComputerActionApproval.plan_id == safe_action_plan.plan_id,
+                ComputerActionApproval.action_id == safe_action_target.action_id,
+            ).order_by(ComputerActionApproval.created_at.desc()).first()
+            if not safe_action_approval or safe_action_approval.approval_status != "已批准":
+                raise HTTPException(status_code=403, detail="动作尚未批准")
+            if _normalize_dt(safe_action_approval.expires_at) and _normalize_dt(safe_action_approval.expires_at) < utcnow():
+                safe_action_approval.approval_status = "已过期"
+                db.commit()
+                raise HTTPException(status_code=409, detail="审批已过期")
+            if safe_action_context.get("current_screenshot_hash") and safe_action_approval.before_screenshot_hash and safe_action_context.get("current_screenshot_hash") != safe_action_approval.before_screenshot_hash:
+                safe_action_approval.approval_status = "已过期"
+                db.commit()
+                raise HTTPException(status_code=409, detail="窗口已变化，审批失效")
+            approval_status_value = "已批准"
+        else:
+            approval_status_value = session.approval_status
         executor = _executor_for_settings()
         context = type("Context", (), {
             "session_id": session.session_id,
@@ -80,8 +120,8 @@ class ComputerRuntime:
             },
             screenshot_before=make_screenshot_reference(session.session_id, f"before-{payload.trace_id or 'action'}"),
             screenshot_after=response.screenshot_reference if isinstance(response, ComputerExecutorOutcome) else None,
-            approval_required=session.approval_status == "等待审批",
-            approval_status=session.approval_status,
+            approval_required=bool(safe_action_context) or session.approval_status == "等待审批",
+            approval_status=approval_status_value,
         )
         evidence = add_evidence_row(
             db,
@@ -105,6 +145,14 @@ class ComputerRuntime:
         session.last_screenshot_at = finished
         db.commit()
         db.refresh(session)
+        if safe_action_plan is not None:
+            safe_action_plan.current_action_index = min(safe_action_plan.max_actions, safe_action_plan.current_action_index + 1)
+            safe_action_plan.status = "已暂停"
+            session.approval_status = "已批准"
+            session.status = "已暂停"
+            db.commit()
+            db.refresh(safe_action_plan)
+            db.refresh(session)
         session_dict = {
             "session_id": session.session_id,
             "execution_id": session.execution_id,

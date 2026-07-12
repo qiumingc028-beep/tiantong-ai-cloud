@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>操作审批 - 天统AI云中台</title>
+  <style>
+    body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f4f6f8;color:#111827}
+    .wrap{max-width:980px;margin:0 auto;padding:24px}
+    .panel{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin-bottom:16px}
+    .sub{color:#64748b;line-height:1.6}
+    .badge{display:inline-flex;border:1px solid #e5e7eb;border-radius:999px;padding:3px 8px;font-size:12px;background:#f8fafc;margin-right:6px}
+    .btn{display:inline-block;background:#2563eb;color:#fff;padding:10px 14px;border-radius:8px;text-decoration:none;margin-right:8px}
+    .btn.secondary{background:#e5e7eb;color:#111827}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>操作审批</h1>
+    <div class="sub">每次只批准一个安全步骤，审批不能复用，窗口变化后立即失效。这里只展示测试设备和测试窗口的单步审批信息。</div>
+    <div class="panel">
+      <div><span class="badge">逐步审批</span><span class="badge">单步执行</span><span class="badge">执行后暂停</span></div>
+      <p class="sub">目标设备：测试 Mac 设备</p>
+      <p class="sub">目标窗口：天统 AI 单步操作测试窗口</p>
+      <p class="sub">动作类型：单击 / 鼠标移动 / 普通文本输入 / 安全快捷键</p>
+      <p class="sub">风险等级：中低</p>
+      <p class="sub">审批有效期：短时有效，窗口变化即失效</p>
+      <div>
+        <a class="btn" href="/computer-execution-center.html">返回电脑执行中心</a>
+        <a class="btn secondary" href="/computer-action-test.html">打开测试页面</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

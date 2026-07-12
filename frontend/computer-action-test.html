@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>单步操作测试 - 天统AI云中台</title>
+  <style>
+    body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f4f6f8;color:#111827}
+    .wrap{max-width:1024px;margin:0 auto;padding:24px}
+    .panel{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:16px;margin-bottom:16px}
+    .sub{color:#64748b;line-height:1.6}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    input,button,select,textarea{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box}
+    button{background:#2563eb;color:#fff;border:none;cursor:pointer}
+    .secondary{background:#e5e7eb;color:#111827}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>天统 AI 单步操作测试环境</h1>
+    <div class="sub">仅用于授权测试设备。这里不连接真实账号、不允许连续自动执行。</div>
+    <div class="panel">
+      <div class="grid">
+        <input placeholder="测试按钮名称">
+        <input placeholder="测试文本框内容">
+        <select><option>普通按钮</option><option>普通文本框</option></select>
+        <select><option>单击</option><option>鼠标移动</option><option>普通文本输入</option></select>
+      </div>
+      <div style="margin-top:12px" class="grid">
+        <button>批准本步骤</button>
+        <button class="secondary">拒绝本步骤</button>
+      </div>
+      <p class="sub">状态：等待逐步审批</p>
+      <p class="sub">结果：执行一步后自动暂停，随后等待下一步确认。</p>
+    </div>
+  </div>
+</body>
+</html>

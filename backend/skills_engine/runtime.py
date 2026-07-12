@@ -179,6 +179,58 @@ def execute_skill(skill: Skill, input_payload: dict, *, db: Session, employee_co
             },
             "redacted_input": redact_payload(payload),
         }
+    if skill_code == "computer.macos.single_step_action":
+        from ..agent_runtime.executors.computer.actions.service import create_action_plan
+        from ..agent_runtime.executors.computer.schemas import ComputerActionPlanCreatePayload
+
+        session_id = str(payload.get("session_id") or "").strip()
+        if not session_id:
+            session_payload = ComputerSessionCreatePayload(
+                executor_type="mock",
+                environment_type=payload.get("environment_type") or "test",
+                risk_level="中低",
+                approval_status="等待审批",
+                allowed_applications=payload.get("allowed_applications") or ["隔离测试浏览器", "隔离文本编辑器", "隔离演示窗口"],
+                allowed_windows=payload.get("allowed_windows") or [".*隔离.*", ".*测试.*"],
+                trace_id=payload.get("trace_id"),
+            )
+            session = ComputerRuntime.create_session(db, session_payload)
+            session_id = session.session_id
+        plan_payload = ComputerActionPlanCreatePayload(
+            session_id=session_id,
+            observation_id=payload.get("observation_id"),
+            task_id=payload.get("task_id"),
+            employee_id=payload.get("employee_id"),
+            skill_id=skill.id,
+            target_application=payload.get("target_application") or "隔离测试浏览器",
+            target_bundle_id=payload.get("target_bundle_id"),
+            target_window=payload.get("target_window") or "天统 AI 单步操作测试窗口",
+            goal=payload.get("goal") or "Mac 测试页面单步操作",
+            action_type=payload.get("action_type") or "单击",
+            control_type=payload.get("control_type"),
+            control_label=payload.get("control_label"),
+            control_identifier=payload.get("control_identifier"),
+            target_description=payload.get("target_description") or payload.get("goal") or "Mac 测试页面单步操作",
+            coordinates=payload.get("coordinates"),
+            text_input=payload.get("text_input"),
+            approval_mode="逐步审批",
+            risk_level="中低" if payload.get("action_type") in {"移动鼠标", "输入普通文本"} else "中风险",
+            max_actions=1,
+            trace_id=payload.get("trace_id"),
+            allow_coordinate_fallback=bool(payload.get("allow_coordinate_fallback")),
+        )
+        plan_result = create_action_plan(db, plan_payload)
+        return {
+            "skill": skill_to_dict(skill, include_relations=False),
+            "result": {
+                "plan": plan_result["plan"],
+                "target": plan_result["target"],
+                "approval": plan_result["approval"],
+                "preview": plan_result["preview"],
+                "message": "动作计划已创建，等待逐步审批。",
+            },
+            "redacted_input": redact_payload(payload),
+        }
     if payload.get("simulate_outcome") == "cancel":
         raise HTTPException(status_code=400, detail="执行已取消")
     return {
