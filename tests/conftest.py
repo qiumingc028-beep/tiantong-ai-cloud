@@ -165,6 +165,7 @@ def seed_database(session_factory):
             Permission(code="ai_employees.manage", name="AI Employees Manage"),
             Permission(code="menu.skills_center", name="Skills Center Menu"),
             Permission(code="menu.computer_executor", name="Computer Executor Menu"),
+            Permission(code="menu.device_center", name="Device Center Menu"),
             Permission(code="skills.read", name="Skills Read"),
             Permission(code="skills.manage", name="Skills Manage"),
             Permission(code="skills.install", name="Skills Install"),
@@ -172,6 +173,9 @@ def seed_database(session_factory):
             Permission(code="skills.audit", name="Skills Audit"),
             Permission(code="computer_executor.read", name="Computer Executor Read"),
             Permission(code="computer_executor.manage", name="Computer Executor Manage"),
+            Permission(code="device_center.read", name="Device Center Read"),
+            Permission(code="device_center.manage", name="Device Center Manage"),
+            Permission(code="device_center.audit", name="Device Center Audit"),
             Permission(code="deploy_center.read", name="Deploy Center Read"),
             Permission(code="deploy_center.manage", name="Deploy Center Manage"),
             Permission(code="orchestrator.read", name="Orchestrator Read"),
@@ -187,6 +191,7 @@ def seed_database(session_factory):
             and not p.code.startswith("ai_employees.")
             and not p.code.startswith("skills.")
             and not p.code.startswith("computer_executor.")
+            and not p.code.startswith("device_center.")
             and not p.code.startswith("deploy_center.")
             and not p.code.startswith("orchestrator.")
         ]

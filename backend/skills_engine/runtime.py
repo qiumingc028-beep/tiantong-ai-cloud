@@ -135,6 +135,50 @@ def execute_skill(skill: Skill, input_payload: dict, *, db: Session, employee_co
             },
             "redacted_input": redact_payload(payload),
         }
+    if skill_code == "computer.macos.window_check":
+        from ..device_center.service import record_device_observation_from_snapshot, get_device
+
+        device_id = str(payload.get("device_id") or "").strip()
+        if not device_id:
+            raise HTTPException(status_code=400, detail="设备编号缺失")
+        device = get_device(db, device_id)["device"]
+        snapshot = {
+            "task_id": payload.get("task_id"),
+            "employee_id": payload.get("employee_id"),
+            "skill_id": skill.id,
+            "observation_goal": payload.get("observation_goal") or "Mac 测试窗口状态检查",
+            "allowed_applications": payload.get("allowed_applications") or ["VS Code", "Chrome", "Safari"],
+            "allowed_windows": payload.get("allowed_windows") or [".*测试.*"],
+            "max_screenshots": payload.get("max_screenshots") or 3,
+            "trace_id": payload.get("trace_id"),
+            "windows": payload.get("windows") or [
+                {
+                    "application_name": "Chrome",
+                    "bundle_id": "com.google.Chrome",
+                    "window_title": "天统 AI 测试页面 - 只读观察",
+                    "risk_flags": [],
+                    "suggested_next_step": "继续只读观察",
+                }
+            ],
+            "screen_state": payload.get("screen_state") or "屏幕正常",
+            "suggested_next_step": payload.get("suggested_next_step") or "继续只读观察",
+        }
+        observation = record_device_observation_from_snapshot(db, device_id, snapshot)
+        return {
+            "skill": skill_to_dict(skill, include_relations=False),
+            "result": {
+                "device_id": device["device_id"],
+                "status": "执行成功",
+                "current_application": (snapshot["windows"][0].get("application_name") if snapshot["windows"] else None),
+                "current_window": (snapshot["windows"][0].get("window_title") if snapshot["windows"] else None),
+                "window_count": len(snapshot["windows"]),
+                "screenshot_reference": observation["events"][0]["screenshot_reference"] if observation["events"] else None,
+                "screen_state": snapshot["screen_state"],
+                "suggested_next_step": snapshot["suggested_next_step"],
+                "observation": observation["observation"],
+            },
+            "redacted_input": redact_payload(payload),
+        }
     if payload.get("simulate_outcome") == "cancel":
         raise HTTPException(status_code=400, detail="执行已取消")
     return {

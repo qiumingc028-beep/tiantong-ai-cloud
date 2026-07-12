@@ -23,6 +23,7 @@ PERMISSIONS = [
     ("menu.ai_assets", "AI素材中心"),
     ("menu.skills_center", "技能中心"),
     ("menu.computer_executor", "电脑执行中心"),
+    ("menu.device_center", "测试设备中心"),
     ("menu.tiancang", "天藏：知识资产中心"),
     ("menu.workflows", "AI工作流"),
     ("menu.ai_employees", "AI员工管理"),
@@ -40,6 +41,9 @@ PERMISSIONS = [
     ("skills.audit", "审计技能"),
     ("computer_executor.read", "读取电脑执行中心"),
     ("computer_executor.manage", "管理电脑执行中心"),
+    ("device_center.read", "读取测试设备中心"),
+    ("device_center.manage", "管理测试设备中心"),
+    ("device_center.audit", "审计测试设备中心"),
 ]
 
 ROLE_PERMISSIONS = {
@@ -104,7 +108,9 @@ for role_code in ("owner", "admin", "operator"):
     ROLE_PERMISSIONS.setdefault(role_code, []).extend(["menu.account_center"])
 for role_code in ("owner", "admin"):
     ROLE_PERMISSIONS.setdefault(role_code, []).append("menu.computer_executor")
+    ROLE_PERMISSIONS.setdefault(role_code, []).append("menu.device_center")
     ROLE_PERMISSIONS.setdefault(role_code, []).extend(["computer_executor.read", "computer_executor.manage"])
+    ROLE_PERMISSIONS.setdefault(role_code, []).extend(["device_center.read", "device_center.manage", "device_center.audit"])
 
 
 def seed_defaults(db: Session):

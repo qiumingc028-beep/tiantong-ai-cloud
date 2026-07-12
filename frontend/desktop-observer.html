@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>桌面观察</title>
+</head>
+<body>
+  <main>
+    <h1>桌面观察</h1>
+    <p>仅显示授权测试设备的只读观察结果，不提供自动操作或键盘输入。</p>
+    <section>
+      <h2>基础信息</h2>
+      <ul>
+        <li>测试设备</li>
+        <li>AI 员工</li>
+        <li>观察目标</li>
+        <li>当前应用</li>
+        <li>当前窗口</li>
+      </ul>
+    </section>
+    <section>
+      <h2>观察状态</h2>
+      <ul>
+        <li>当前应用</li>
+        <li>当前窗口</li>
+        <li>当前状态</li>
+        <li>截图数量</li>
+        <li>最近截图</li>
+        <li>风险提示</li>
+        <li>下一步建议</li>
+      </ul>
+    </section>
+    <section>
+      <button type="button">开始观察</button>
+      <button type="button">暂停观察</button>
+      <button type="button">取消观察</button>
+      <button type="button">立即断开</button>
+    </section>
+    <div id="observer-state">暂无数据</div>
+    <script>
+      async function renderObservations() {
+        const target = document.getElementById('observer-state');
+        target.textContent = '正在加载观察记录...';
+        try {
+          const response = await fetch('/api/v2/device-observations');
+          const data = await response.json();
+          target.textContent = (data.items || []).length ? '观察记录已加载' : '暂无数据';
+        } catch (error) {
+          target.textContent = '观察记录加载失败';
+        }
+      }
+      renderObservations();
+    </script>
+  </main>
+</body>
+</html>
