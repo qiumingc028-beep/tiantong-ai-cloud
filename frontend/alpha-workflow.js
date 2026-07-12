@@ -9,7 +9,12 @@
   const stageLabel=code=>STAGE_LABELS[code]||text(code);
 
   async function request(path,options={}){
-    const response=await fetch(`${API}${path}`,{credentials:'include',headers:{'Content-Type':'application/json',...(options.headers||{})},...options});
+    let response;
+    try{
+      response=await fetch(`${API}${path}`,{credentials:'include',headers:{'Content-Type':'application/json',...(options.headers||{})},...options});
+    }catch(_error){
+      throw new Error('网络连接失败，请检查网络后重试。');
+    }
     let payload={};
     try{payload=await response.json();}catch(_error){payload={};}
     if(response.status===401){location.href='/login.html';throw new Error('登录已失效，请重新登录');}
