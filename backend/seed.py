@@ -22,6 +22,7 @@ PERMISSIONS = [
     ("menu.import", "Excel导入"),
     ("menu.ai_assets", "AI素材中心"),
     ("menu.skills_center", "技能中心"),
+    ("menu.computer_executor", "电脑执行中心"),
     ("menu.tiancang", "天藏：知识资产中心"),
     ("menu.workflows", "AI工作流"),
     ("menu.ai_employees", "AI员工管理"),
@@ -37,6 +38,8 @@ PERMISSIONS = [
     ("skills.install", "安装技能"),
     ("skills.invoke", "调用技能"),
     ("skills.audit", "审计技能"),
+    ("computer_executor.read", "读取电脑执行中心"),
+    ("computer_executor.manage", "管理电脑执行中心"),
 ]
 
 ROLE_PERMISSIONS = {
@@ -96,8 +99,12 @@ REAL_AI_EMPLOYEES = [
 
 
 PERMISSIONS.append(("menu.account_center", "账号资料中心"))
+PERMISSIONS.append(("menu.computer_executor", "电脑执行中心"))
 for role_code in ("owner", "admin", "operator"):
-    ROLE_PERMISSIONS.setdefault(role_code, []).append("menu.account_center")
+    ROLE_PERMISSIONS.setdefault(role_code, []).extend(["menu.account_center"])
+for role_code in ("owner", "admin"):
+    ROLE_PERMISSIONS.setdefault(role_code, []).append("menu.computer_executor")
+    ROLE_PERMISSIONS.setdefault(role_code, []).extend(["computer_executor.read", "computer_executor.manage"])
 
 
 def seed_defaults(db: Session):

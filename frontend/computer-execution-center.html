@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>电脑执行中心 - 天统AI云中台</title>
+  <style>
+    body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:#f4f6f8;color:#111827}
+    .app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}
+    .sidebar{background:#101827;color:#cbd5e1;padding:18px 14px}
+    .brand{height:56px;color:#fff;font-size:19px;font-weight:700;display:flex;align-items:center;padding:0 10px}
+    .menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}
+    .menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}
+    .menu a.active,.menu a:hover{background:#1f2937;color:#fff}
+    .main{min-width:0}
+    .topbar{height:64px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;padding:0 24px}
+    .content{padding:24px}
+    .grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:16px}
+    .card,.panel{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px}
+    .label{color:#64748b;font-size:13px}.value{font-size:24px;font-weight:700;margin-top:8px}
+    .state{border:1px solid #e5e7eb;background:#fff;border-radius:8px;padding:12px 14px;color:#64748b;white-space:pre-wrap;line-height:1.6;margin-bottom:14px}
+    .table{width:100%;border-collapse:collapse;background:#fff}.table th,.table td{padding:11px 12px;border-bottom:1px solid #e5e7eb;text-align:left;font-size:13px;vertical-align:top}
+    .sub{color:#64748b;margin-top:6px;line-height:1.6}
+    .empty{text-align:center;color:#64748b;padding:18px}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu">
+      <a href="/index.html">老板驾驶舱</a>
+      <a href="/skill-center.html">技能中心</a>
+      <a class="active" href="/computer-execution-center.html">电脑执行中心</a>
+      <a href="/computer-execution-detail.html">执行详情</a>
+      <a href="/knowledge-asset-center.html">天藏知识资产中心</a>
+      <a href="/settings.html">系统设置</a>
+    </nav>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div>电脑执行中心</div><div>只读 · 隔离桌面 · OpenClaw 安全适配层</div></header>
+    <section class="content">
+      <h1>电脑执行中心</h1>
+      <div class="sub">用于展示隔离桌面会话、操作记录、截图证据和人工接管状态。默认不控制用户真实 Mac 桌面，不执行 Shell，不输入真实账号密码。</div>
+      <div id="notice" class="state">电脑执行中心已加载，当前为只读管理视图。默认关闭真实电脑控制能力。</div>
+      <div class="grid">
+        <div class="card"><div class="label">会话总数</div><div class="value">0</div></div>
+        <div class="card"><div class="label">执行中</div><div class="value">0</div></div>
+        <div class="card"><div class="label">已暂停</div><div class="value">0</div></div>
+        <div class="card"><div class="label">等待接管</div><div class="value">0</div></div>
+        <div class="card"><div class="label">已完成</div><div class="value">0</div></div>
+        <div class="card"><div class="label">已失败</div><div class="value">0</div></div>
+      </div>
+      <div class="panel">
+        <h3>会话列表</h3>
+        <table class="table">
+          <thead><tr><th>任务</th><th>AI 员工</th><th>Skill</th><th>当前应用</th><th>当前窗口</th><th>执行状态</th><th>风险等级</th><th>最近截图时间</th><th>创建时间</th></tr></thead>
+          <tbody><tr><td colspan="9" class="empty">暂无数据</td></tr></tbody>
+        </table>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <h3>页面说明</h3>
+        <ul>
+          <li>只读查看隔离桌面状态。</li>
+          <li>OpenClaw 必须经过 Adapter。</li>
+          <li>高风险动作默认禁止。</li>
+          <li>生产默认关闭。</li>
+        </ul>
+        <div>接口：<code>/api/v2/computer/sessions</code>、<code>/api/v2/computer-executor/health</code></div>
+      </div>
+    </section>
+  </main>
+</div>
+</body>
+</html>
