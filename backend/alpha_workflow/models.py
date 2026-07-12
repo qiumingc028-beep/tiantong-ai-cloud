@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event, func, inspect
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, event, func, inspect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.orm.session import Session
 
@@ -32,12 +32,12 @@ class AlphaWorkflowRun(Base):
     __tablename__ = "alpha_workflow_runs"
     __table_args__ = (
         UniqueConstraint("trace_id", name="uq_alpha_workflow_runs_trace_id"),
-        Index("uq_alpha_workflow_runs_root_span_id", "root_span_id", unique=True),
-        Index("uq_alpha_workflow_runs_workflow_id", "workflow_id", unique=True),
-        Index("uq_alpha_workflow_runs_orchestrator_run_id", "orchestrator_run_id", unique=True),
-        Index("uq_alpha_workflow_runs_research_report_id", "research_report_id", unique=True),
-        Index("uq_alpha_workflow_runs_knowledge_asset_id", "knowledge_asset_id", unique=True),
-        Index("uq_alpha_workflow_runs_skill_invocation_id", "skill_invocation_id", unique=True),
+        UniqueConstraint("root_span_id", name="uq_alpha_workflow_runs_root_span_id"),
+        UniqueConstraint("workflow_id", name="uq_alpha_workflow_runs_workflow_id"),
+        UniqueConstraint("orchestrator_run_id", name="uq_alpha_workflow_runs_orchestrator_run_id"),
+        UniqueConstraint("research_report_id", name="uq_alpha_workflow_runs_research_report_id"),
+        UniqueConstraint("knowledge_asset_id", name="uq_alpha_workflow_runs_knowledge_asset_id"),
+        UniqueConstraint("skill_invocation_id", name="uq_alpha_workflow_runs_skill_invocation_id"),
     )
 
     run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
