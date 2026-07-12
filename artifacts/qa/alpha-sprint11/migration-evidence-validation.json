@@ -1,26 +1,51 @@
 {
+  "evaluated_feature_commit": "cc8c77914dbc79a6821d8781f626b77a003b4f7f",
+  "gate_tests": {
+    "passed": 2,
+    "failed": 7
+  },
   "required_files": {
     "path_a_current.log": false,
     "path_b_current.log": false,
     "alembic-evidence.txt": true,
-    "checksums.sha256": false,
+    "checksums.sha256": true,
     "docs/V2_ALPHA_MIGRATION_EVIDENCE.md": true,
     "docs/V2_MIGRATION_FREEZE_POLICY.md": false
   },
-  "final_revision": "",
+  "final_revision": "0041_v2_alpha_migration_history_repair",
   "path_a": {
     "complete": false,
-    "postgresql": false
+    "postgresql": false,
+    "reason": "path_a_current.log is missing"
   },
   "path_b": {
     "complete": false,
-    "postgresql": false
+    "postgresql": false,
+    "reason": "path_b_current.log is missing"
   },
+  "checksums_relative_paths": false,
   "checksums_valid": false,
-  "v1_migrations_immutable": false,
-  "migration_0005_valid": false,
+  "v1_migrations_immutable": true,
+  "migration_0005_valid": true,
+  "migration_0025_valid": true,
+  "migration_0026_valid": true,
+  "migration_0027_valid": true,
   "migration_0037_disclosed": false,
   "skip_flags_found": [],
   "secret_scan": "BLOCKED_BY_MISSING_REQUIRED_FILES",
+  "closed_items": [
+    "V1 migrations 0001-0027 match v1.0.1 byte-for-byte",
+    "0005 matches v1.0.1",
+    "0025, 0026 and 0027 match v1.0.1"
+  ],
+  "blocking_items": [
+    "path_a_current.log is missing",
+    "path_b_current.log is missing",
+    "docs/V2_MIGRATION_FREEZE_POLICY.md is missing",
+    "checksums.sha256 contains absolute /private/tmp paths instead of repository-relative paths",
+    "checksums cannot be fully recalculated because required targets are missing",
+    "0037 disclosure cannot pass without the freeze policy",
+    "secret scan cannot complete while required evidence files are missing"
+  ],
   "result": "BLOCK"
 }

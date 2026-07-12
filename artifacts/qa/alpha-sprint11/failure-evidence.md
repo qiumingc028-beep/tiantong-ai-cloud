@@ -85,3 +85,20 @@ Migration 正式证据未通过真实性/完整性验收：
 ## 未执行项
 
 - V1.0.1 数据库到最新 Head 的正式升级、develop-v2 Head 升级、`alembic check` 和重复升级：依任务边界只能由①执行，仍等待①提交官方证据。
+## cc8c779 Migration Evidence Gate
+
+评估基线：`cc8c77914dbc79a6821d8781f626b77a003b4f7f`。自动门禁：`2 passed, 7 failed`。
+
+已关闭：V1 0001—0027 全部与 `v1.0.1` 字节一致；0005、0025、0026、0027 分别复核通过。旧的0005不一致结论已撤销。
+
+仍阻塞：
+
+1. `path_a_current.log` 不存在。
+2. `path_b_current.log` 不存在。
+3. `docs/V2_MIGRATION_FREEZE_POLICY.md` 不存在。
+4. `checksums.sha256` 使用 `/private/tmp/tiantong-v2-sprint10-observability/...` 绝对路径，并引用当前分支不存在的 Path A/B 文件，不能按仓库相对路径完整复算。
+5. 0037缺少冻结政策中的明确披露。
+6. 0041只有摘要/文档声明，缺少两条原始路径日志支撑全链路一致性。
+7. 缺失文件导致 Secret、SQLite正式证据及 Drift skip 的全量扫描无法完成。
+
+等待①提交 `MIGRATION_EVIDENCE_FINAL_COMMIT`。Gate通过前不进入完整863项回归，PR #19保持Draft/BLOCK。

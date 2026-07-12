@@ -134,3 +134,26 @@
 ## Merge 建议
 
 **BLOCK**。代码测试已满足APPROVE条件，但必须先补交无绕过且与Git历史一致的Migration正式证据；证据通过后方可将PR #19转为Ready for Review。
+## Migration Evidence Gate 预验收（cc8c779）
+
+测试分支已普通合并 `cc8c77914dbc79a6821d8781f626b77a003b4f7f`，未使用 force push。自动门禁结果为 **2 passed, 7 failed**；由于 Gate 未通过，本轮按验收约定未运行完整 863 项回归。
+
+### 已关闭项
+
+- V1 Migration 0001—0027 与 `v1.0.1` 逐文件字节一致。
+- `0005_knowledge_center_tables.py` 已重新验证通过，不再是阻塞项。
+- 0025、0026、0027 均与 `v1.0.1` 一致。
+
+### 当前仍失败项
+
+- 缺少 `artifacts/alpha-migration-evidence/path_a_current.log`。
+- 缺少 `artifacts/alpha-migration-evidence/path_b_current.log`。
+- 缺少 `docs/V2_MIGRATION_FREEZE_POLICY.md`。
+- `checksums.sha256` 使用 `/private/tmp/tiantong-v2-sprint10-observability/...` 绝对路径，不符合相对路径要求；且所列 Path A/B 文件不存在，无法完整复算和覆盖全部必需证据。
+- 0037 虽在现有摘要中提及，但因冻结政策缺失，无法满足“政策与证据文档双重披露”门禁。
+- 0041 在现有摘要和证据文档中出现，但 Path A/B 原始日志缺失，无法证明全链路一致。
+- 已存在文件未发现明文 Secret 或跳过变量；但必需文件缺失使敏感信息扫描及 SQLite/Skip 全量检查无法最终通过。
+
+### 等待①补充项
+
+等待 `MIGRATION_EVIDENCE_FINAL_COMMIT` 提供两条 PostgreSQL 原始日志、冻结政策，以及使用仓库相对路径且可完整复算的 Checksums。PR #19 保持 Draft/BLOCK，不降低门禁标准。
