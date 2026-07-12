@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>能力中心 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+    .app{min-height:100vh;display:grid;grid-template-columns:240px 1fr}
+    .side{background:#101827;color:#cbd5e1;padding:18px 14px}
+    .brand{font-size:18px;font-weight:700;color:#fff;padding:12px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
+    .menu{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+    .menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px}
+    .menu a.active,.menu a:hover{background:#1f2937;color:#fff}
+    .top{min-height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}
+    .content{padding:24px}
+    .hero{background:linear-gradient(135deg,#0f172a,#0f766e);color:#fff;border-radius:10px;padding:22px;margin-bottom:16px}
+    .hero h1{margin:0;font-size:28px}
+    .hero p{margin:8px 0 0;color:#d1fae5;line-height:1.7}
+    .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+    .card,.panel{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px}
+    .card .label{color:var(--muted);font-size:13px}.card .value{font-size:22px;font-weight:700;margin-top:8px}
+    .two{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);gap:16px}
+    .tags{display:flex;gap:6px;flex-wrap:wrap}
+    .tag{border-radius:999px;padding:4px 9px;background:#e2e8f0;font-size:12px}
+    .tag.ok{background:#dcfce7;color:#166534}.tag.warn{background:#fef3c7;color:#92400e}.tag.bad{background:#fee2e2;color:#991b1b}
+    .muted{color:var(--muted);line-height:1.65}
+    .table{overflow:auto;border:1px solid var(--line);border-radius:8px;background:#fff}
+    table{width:100%;border-collapse:collapse;min-width:1080px}
+    th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;vertical-align:top}
+    th{background:#f8fafc;color:#475569}
+    button,input,select,textarea{font:inherit;border-radius:8px;border:1px solid #cbd5e1;background:#fff}
+    button{background:var(--dark);color:#fff;padding:10px 12px;border:0;cursor:pointer}
+    button.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}
+    input,select,textarea{height:38px;padding:0 10px}
+    textarea{min-height:96px;width:100%;padding:10px;resize:vertical}
+    .form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+    .full{grid-column:1/-1}
+    .detail{display:grid;gap:10px}
+    .row{display:grid;grid-template-columns:160px minmax(0,1fr);gap:8px 10px}
+    .row div:nth-child(odd){color:var(--muted)}
+    @media(max-width:1100px){.app{grid-template-columns:1fr}.two,.grid,.form,.row{grid-template-columns:1fr}.top{flex-direction:column;align-items:flex-start}.content{padding:18px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu">
+      <a href="/agent-runtime.html">Agent Runtime</a>
+      <a href="/capability-center.html" class="active">能力中心</a>
+      <a href="/execution-records.html">执行记录</a>
+      <a href="/task-center.html">任务中心</a>
+      <a href="/index.html">老板驾驶舱</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="top">
+      <strong>能力中心</strong>
+      <div class="tags"><span id="time" class="tag">--</span><span id="state" class="tag warn">加载中</span></div>
+    </header>
+    <section class="content">
+      <section class="hero">
+        <h1>统一能力注册表</h1>
+        <p>只展示能力名称、类型、风险等级、启用状态、只读与审批状态、执行器状态。真实执行默认关闭。</p>
+      </section>
+      <section class="grid">
+        <div class="card"><div class="label">能力总数</div><div id="capTotal" class="value">0</div></div>
+        <div class="card"><div class="label">启用能力</div><div id="capEnabled" class="value">0</div></div>
+        <div class="card"><div class="label">需要审批</div><div id="capApproval" class="value">0</div></div>
+        <div class="card"><div class="label">真实执行</div><div id="capReal" class="value">关闭</div></div>
+      </section>
+      <section class="two">
+        <div class="panel">
+          <h2>能力列表</h2>
+          <div class="table"><table>
+            <thead><tr><th>能力</th><th>类型</th><th>风险</th><th>状态</th><th>只读</th><th>审批</th><th>执行器</th><th>操作</th></tr></thead>
+            <tbody id="capRows"><tr><td colspan="8" class="muted">加载中...</td></tr></tbody>
+          </table></div>
+        </div>
+        <div class="panel">
+      <h2>能力详情</h2>
+      <div id="detail" class="detail"><div class="muted">请选择一条能力查看。</div></div>
+          <h2 style="margin-top:18px">创建执行</h2>
+          <div class="form">
+            <input id="employeeId" placeholder="AI员工ID，例如 1">
+            <input id="taskId" placeholder="任务ID（可选）">
+            <input id="execCapabilityId" placeholder="能力标识，例如 mock.echo">
+            <select id="executorType"><option value="mock">模拟执行器</option></select>
+            <textarea id="inputPayload" class="full" placeholder='输入 JSON，例如 {"message":"你好","simulate_mode":"success"}'></textarea>
+      <button class="full" onclick="createExecution()">创建执行</button>
+      </div>
+      <p class="muted">高风险能力必须走审批；默认只开放模拟执行器。点击“查看能力详情”查看单个能力的完整信息。</p>
+    </div>
+  </section>
+    </section>
+  </main>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function tick(){$('time').innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+function tag(text,cls=''){return `<span class="tag ${cls}">${esc(text)}</span>`}
+async function api(url,options={}){const res=await fetch(url,{credentials:'include',...options});if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.detail||`${res.status} ${res.statusText}`)}return res.json()}
+let caps=[];
+async function init(){tick();setInterval(tick,1000);await loadCapabilities()}
+async function loadCapabilities(){
+  $('state').className='tag warn';$('state').innerText='加载中';
+  try{
+    const data=await api('/api/v2/capabilities');
+    caps=data.items||[];
+    $('capTotal').innerText=String(caps.length);
+    $('capEnabled').innerText=String(caps.filter(c=>c.enabled).length);
+    $('capApproval').innerText=String(caps.filter(c=>c.requires_boss_approval||c.requires_security_audit||['high','critical'].includes(c.risk_level)).length);
+    $('capReal').innerText=caps.some(c=>c.executor_type!=='mock')?'开启':'关闭';
+    $('state').className='tag ok';$('state').innerText='已刷新';
+    $('capRows').innerHTML=caps.length?caps.map((c,i)=>`<tr>
+      <td><strong>${esc(c.capability_name)}</strong><div class="muted">${esc(c.capability_id)}</div></td>
+      <td>${esc(c.capability_type)}</td>
+      <td>${tag(c.risk_level,c.risk_level==='low'?'ok':c.risk_level==='medium'?'warn':'bad')}</td>
+      <td>${c.enabled?tag('启用','ok'):tag('停用','bad')}</td>
+      <td>${c.readonly?tag('是','ok'):tag('否','warn')}</td>
+      <td>${c.requires_boss_approval||c.requires_security_audit?tag('需要','warn'):tag('无需','ok')}</td>
+      <td>${esc(c.executor_type)}</td>
+      <td><button class="secondary" onclick="showDetail(${i})">查看能力详情</button></td>
+    </tr>`).join(''):'<tr><td colspan="8" class="muted">暂无能力</td></tr>';
+    if(caps[0]) showDetail(0);
+  }catch(e){
+    $('state').className='tag bad';$('state').innerText='加载失败';$('capRows').innerHTML=`<tr><td colspan="8" class="muted">${esc(e.message||'请稍后重试')}</td></tr>`;
+  }
+}
+function showDetail(index){
+  const c=caps[index]; if(!c) return;
+  $('detail').innerHTML=`<div class="row">
+    <div>能力标识</div><div><strong>${esc(c.capability_id)}</strong></div>
+    <div>能力名称</div><div>${esc(c.capability_name)}</div>
+    <div>能力类型</div><div>${esc(c.capability_type)}</div>
+    <div>风险等级</div><div>${esc(c.risk_level)}</div>
+    <div>状态</div><div>${c.enabled?'启用':'停用'}</div>
+    <div>只读</div><div>${c.readonly?'是':'否'}</div>
+    <div>审批</div><div>${c.requires_boss_approval||c.requires_security_audit?'需要':'无需'}</div>
+    <div>执行器</div><div>${esc(c.executor_type)}</div>
+    <div>超时</div><div>${esc(c.timeout_seconds)} 秒</div>
+    <div>重试</div><div>${esc(c.max_retries)} 次</div>
+    <div>说明</div><div class="muted">${esc(c.description||'暂无')}</div>
+  </div>`;
+  $('execCapabilityId').value=c.capability_id;
+}
+async function createExecution(){
+  try{
+    const payload={
+      employee_id:Number($('employeeId').value.trim()),
+      task_id:$('taskId').value.trim()?Number($('taskId').value.trim()):null,
+      capability_id:$('execCapabilityId').value.trim(),
+      executor_type:$('executorType').value,
+      input_payload:JSON.parse($('inputPayload').value||'{}'),
+      link_task_result:true
+    };
+    const data=await api('/api/v2/executions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    $('state').className='tag ok';$('state').innerText='执行已创建';
+    alert(`执行创建成功：${data.execution.execution_id}`);
+    location.href='/execution-records.html';
+  }catch(e){
+    $('state').className='tag bad';$('state').innerText=e.message||'创建失败';
+  }
+}
+init();
+</script>
+</body>
+</html>

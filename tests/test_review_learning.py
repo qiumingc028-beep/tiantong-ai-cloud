@@ -11,6 +11,7 @@ from backend.models import Role, TaskCenterResult, TaskCenterTask, User
 from backend.review_analyzer import generate_task_review
 from backend.review_models import EmployeeScore, KnowledgeFeedback, TaskReview
 from backend.score_calculator import calculate_employee_score
+from tests.test_helpers import latest_alembic_head
 
 
 def create_task_with_execution(test_db, status="completed", employee_code="tianshang", error_message=None):
@@ -87,7 +88,7 @@ def login_headers(client, username: str):
 def test_review_learning_tables_and_migration_head():
     assert {"task_reviews", "employee_scores", "knowledge_feedback"} <= set(TaskReview.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
+    assert script.get_heads() == [latest_alembic_head()]
 
 
 def test_reviews_routes_require_login_and_reject_viewer(client, viewer_headers):

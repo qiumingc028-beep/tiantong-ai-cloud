@@ -4,6 +4,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from backend.release_models import ReleaseVersion
+from tests.test_helpers import latest_alembic_head
 
 
 def test_release_center_page_exists(client):
@@ -107,4 +108,4 @@ def test_release_center_does_not_leak_sensitive_fields(client, owner_headers):
 def test_release_center_migration_head_and_table():
     assert "release_versions" in set(ReleaseVersion.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
+    assert script.get_heads() == [latest_alembic_head()]

@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -18,7 +20,6 @@ from ..deploy_models import DeployHealthCheck, DeployRecord, HealthCheckRecord
 
 router = APIRouter(prefix="/api/deploy-center")
 
-EXPECTED_ALEMBIC_VERSION = "0027_v1_schema_alignment"
 BASE_DIR = Path(__file__).resolve().parents[2]
 STATE_FILES = [BASE_DIR / "deploy-state.json", BASE_DIR / "runtime-status.json"]
 
@@ -78,10 +79,11 @@ def get_version(request: Request, db: Session = Depends(get_db)):
 def get_migration_status(request: Request, db: Session = Depends(get_db)):
     require_deploy_center_user(request, db)
     current_version = get_current_alembic_version(db)
+    expected_version = expected_alembic_version()
     return {
         "current_version": current_version,
-        "expected_version": EXPECTED_ALEMBIC_VERSION,
-        "status": "up_to_date" if current_version == EXPECTED_ALEMBIC_VERSION else "outdated",
+        "expected_version": expected_version,
+        "status": "up_to_date" if current_version == expected_version else "outdated",
     }
 
 
@@ -177,11 +179,12 @@ def check_redis():
 
 def check_migration(db: Session):
     current_version = get_current_alembic_version(db)
-    status = "healthy" if current_version == EXPECTED_ALEMBIC_VERSION else "warning"
+    expected_version = expected_alembic_version()
+    status = "healthy" if current_version == expected_version else "warning"
     return {
         "target": "alembic_version",
         "status": status,
-        "message": f"current={current_version or 'none'}, expected={EXPECTED_ALEMBIC_VERSION}",
+        "message": f"current={current_version or 'none'}, expected={expected_version}",
     }
 
 
@@ -228,6 +231,15 @@ def read_runtime_state():
         except Exception:
             continue
     return {}
+
+
+def expected_alembic_version() -> str:
+    script = ScriptDirectory.from_config(Config(str(BASE_DIR / "alembic.ini")))
+    heads = script.get_heads()
+    return heads[-1] if heads else "unknown"
+
+
+EXPECTED_ALEMBIC_VERSION = expected_alembic_version()
 
 
 def iso(value: datetime | None):

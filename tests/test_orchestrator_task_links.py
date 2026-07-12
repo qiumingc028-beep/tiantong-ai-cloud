@@ -1,6 +1,8 @@
 import subprocess
 import sys
 
+from tests.test_helpers import latest_alembic_head_line
+
 from backend.models import TaskCenterTask
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
 
@@ -161,7 +163,7 @@ def test_orchestrator_task_links_migration_is_single_head():
         check=True,
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0027_v1_schema_alignment (head)"]
+    assert heads == [latest_alembic_head_line()]
 
 
 def create_analysis(

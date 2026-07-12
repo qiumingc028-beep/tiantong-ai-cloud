@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Agent Runtime - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+    .app{min-height:100vh;display:grid;grid-template-columns:240px 1fr}
+    .side{background:#101827;color:#cbd5e1;padding:18px 14px}
+    .brand{font-size:18px;font-weight:700;color:#fff;padding:12px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
+    .menu{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+    .menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px}
+    .menu a.active,.menu a:hover{background:#1f2937;color:#fff}
+    .top{min-height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}
+    .content{padding:24px}
+    .hero{background:linear-gradient(135deg,#0f172a,#0f766e);color:#fff;border-radius:10px;padding:24px;margin-bottom:16px}
+    .hero h1{margin:0;font-size:30px}
+    .hero p{margin:8px 0 0;color:#d1fae5;line-height:1.7}
+    .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+    .card,.panel{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px}
+    .card .label{color:var(--muted);font-size:13px}
+    .card .value{font-size:22px;font-weight:700;margin-top:8px}
+    .two{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,.9fr);gap:16px}
+    .tags{display:flex;gap:6px;flex-wrap:wrap}
+    .tag{border-radius:999px;padding:4px 9px;background:#e2e8f0;font-size:12px}
+    .tag.ok{background:#dcfce7;color:#166534}.tag.warn{background:#fef3c7;color:#92400e}.tag.bad{background:#fee2e2;color:#991b1b}
+    .list{display:grid;gap:10px}
+    .item{border:1px solid var(--line);border-radius:8px;padding:12px}
+    .muted{color:var(--muted);line-height:1.65}
+    button,input,select,textarea{font:inherit;border-radius:8px;border:1px solid #cbd5e1;background:#fff}
+    button{background:var(--dark);color:#fff;padding:10px 12px;border:0;cursor:pointer}
+    button.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}
+    input,select,textarea{height:38px;padding:0 10px}
+    textarea{min-height:88px;width:100%;padding:10px;resize:vertical}
+    .form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+    .full{grid-column:1/-1}
+    .table{overflow:auto;border:1px solid var(--line);border-radius:8px}
+    table{width:100%;border-collapse:collapse;min-width:900px;background:#fff}
+    th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;vertical-align:top}
+    th{background:#f8fafc;color:#475569}
+    @media(max-width:1100px){.app{grid-template-columns:1fr}.two,.grid,.form{grid-template-columns:1fr}.top{flex-direction:column;align-items:flex-start}.content{padding:18px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu">
+      <a href="/agent-runtime.html" class="active">Agent Runtime</a>
+      <a href="/capability-center.html">能力中心</a>
+      <a href="/execution-records.html">执行记录</a>
+      <a href="/task-center.html">任务中心</a>
+      <a href="/index.html">老板驾驶舱</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="top">
+      <strong>V2 Agent Runtime</strong>
+      <div class="tags"><span id="time" class="tag">--</span><span id="runtimeState" class="tag warn">加载中</span></div>
+    </header>
+    <section class="content">
+      <section class="hero">
+        <h1>Agent Runtime 与统一能力中心</h1>
+        <p>统一接收执行请求、做权限与风险判断、调用模拟执行器、记录审计日志。真实电脑 / 浏览器 / 手机 / Shell 执行默认关闭。</p>
+      </section>
+      <section class="grid">
+        <div class="card"><div class="label">能力数量</div><div id="capCount" class="value">0</div></div>
+        <div class="card"><div class="label">执行记录</div><div id="exeCount" class="value">0</div></div>
+        <div class="card"><div class="label">真实执行器</div><div id="realExecutor" class="value">关闭</div></div>
+        <div class="card"><div class="label">特性开关</div><div id="flags" class="value">正常</div></div>
+      </section>
+      <section class="two">
+        <div class="panel">
+          <h2>统一入口</h2>
+          <p class="muted">进入能力中心查看能力注册表，进入执行记录查看审批、执行、结果和审计链路。</p>
+          <div class="tags">
+            <a href="/capability-center.html"><button>进入能力中心</button></a>
+            <a href="/execution-records.html"><button class="secondary">进入执行记录</button></a>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>安全边界</h2>
+          <div class="list" id="safetyBox"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function tick(){$('time').innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function api(url,options={}){const res=await fetch(url,{credentials:'include',...options});if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.detail||`${res.status} ${res.statusText}`)}return res.json()}
+async function init(){
+  tick();setInterval(tick,1000);
+  try{
+    const data=await api('/api/v2/agent-runtime/health');
+    $('runtimeState').className='tag ok';
+    $('runtimeState').innerText='运行正常';
+    $('capCount').innerText=String(data.capabilities||0);
+    $('exeCount').innerText='—';
+    $('realExecutor').innerText=data.real_executor_enabled?'开启':'关闭';
+    $('flags').innerText=`Agent ${data.feature_flags.AGENT_RUNTIME_ENABLED?'开':'关'} / 真实执行 ${data.feature_flags.REAL_EXECUTOR_ENABLED?'开':'关'}`;
+    $('safetyBox').innerHTML=[
+      ['真实执行器默认关闭',data.real_executor_enabled===false],
+      ['电脑控制关闭',true],
+      ['手机控制关闭',true],
+      ['浏览器控制关闭',true],
+      ['Shell 执行关闭',true],
+      ['所有执行留痕',true],
+    ].map(([label,ok])=>`<div class="item"><strong>${esc(label)}</strong><div class="muted">${ok?'通过':'异常'}</div></div>`).join('');
+  }catch(e){
+    $('runtimeState').className='tag bad';
+    $('runtimeState').innerText='不可用';
+    $('safetyBox').innerHTML=`<div class="item"><strong>加载失败</strong><div class="muted">${esc(e.message||'请稍后重试')}</div></div>`;
+  }
+}
+init();
+</script>
+</body>
+</html>
+

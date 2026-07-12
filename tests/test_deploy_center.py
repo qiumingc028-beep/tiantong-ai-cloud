@@ -4,6 +4,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from backend.deploy_models import DeployHealthCheck, HealthCheckRecord
+from tests.test_helpers import latest_alembic_head
 
 
 def auth_headers(client, username: str):
@@ -54,7 +55,7 @@ def test_deploy_center_migration(client, owner_headers):
     response = client.get("/api/deploy-center/migration", headers=owner_headers)
     assert response.status_code == 200
     data = response.json()
-    assert data["expected_version"] == "0027_v1_schema_alignment"
+    assert data["expected_version"] == latest_alembic_head()
     assert data["status"] in {"up_to_date", "outdated"}
 
 
@@ -97,4 +98,4 @@ def test_alembic_has_single_head():
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    assert heads == ["0027_v1_schema_alignment"]
+    assert heads == [latest_alembic_head()]

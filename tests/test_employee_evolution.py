@@ -10,6 +10,7 @@ from backend.dispatch_models import EmployeeExecutionLog
 from backend.evolution_models import EmployeeGrowth, ReviewAnalysis, RiskEvent, SkillSuggestion
 from backend.models import Role, TaskCenterTask, User
 from backend.review_models import EmployeeScore, TaskReview
+from tests.test_helpers import latest_alembic_head
 
 
 def create_user(test_db, username: str, role: str):
@@ -90,7 +91,7 @@ def test_employee_evolution_migration_head_and_tables():
     tables = set(EmployeeGrowth.metadata.tables)
     assert {"employee_growth", "review_analysis", "skill_suggestions", "risk_events"} <= tables
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
+    assert script.get_heads() == [latest_alembic_head()]
 
 
 def test_employee_evolution_routes_require_login_and_reject_viewer(client, viewer_headers):
