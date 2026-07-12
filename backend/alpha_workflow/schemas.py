@@ -17,7 +17,7 @@ class AlphaWorkflowScenarioCreate(BaseModel):
 
 
 class AlphaWorkflowStartRequest(BaseModel):
-    input_text: str = Field(min_length=1, max_length=500)
+    input_text: str = Field(max_length=500)
     trace_id: str | None = None
     scenario_code: str | None = None
 
