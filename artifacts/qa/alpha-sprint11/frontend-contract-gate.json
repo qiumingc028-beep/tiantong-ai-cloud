@@ -1,0 +1,9 @@
+{
+  "frontend_head": "04804fc62f57305b4bc3f45dbe7bc051bab0cfb4",
+  "deprecated_fields_found": [],
+  "server_owned_stage_order": true,
+  "server_owned_actions": true,
+  "root_parent_label": true,
+  "scope_valid": true,
+  "result": "PASS"
+}

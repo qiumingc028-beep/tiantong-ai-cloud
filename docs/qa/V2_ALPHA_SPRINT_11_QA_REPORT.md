@@ -157,3 +157,8 @@
 ### 等待①补充项
 
 等待 `MIGRATION_EVIDENCE_FINAL_COMMIT` 提供两条 PostgreSQL 原始日志、冻结政策，以及使用仓库相对路径且可完整复算的 Checksums。PR #19 保持 Draft/BLOCK，不降低门禁标准。
+## Alpha 前端契约防回退门禁
+
+新增 `tests/test_v2_alpha_frontend_contract_regression.py`，以 PR #18 最终前端 Commit `04804fc62f57305b4bc3f45dbe7bc051bab0cfb4` 为审查基线，使用 Git 对象和仓库相对路径，不依赖未推送文件或本机绝对路径。
+
+门禁精确禁止废弃字段及状态机副本，允许 `STAGE_LABELS`、`skill_version_id`、`root_span_id`、`report_content`、`approval_ids`；并验证报告、恢复、取消由服务端字段控制，阶段按服务端 spans/events 顺序渲染，Root Span 显示“根节点（无父级）”。PR #18 相对最终后端基线的变更范围严格为四个 Alpha 前端文件。
