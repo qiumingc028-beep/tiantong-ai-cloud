@@ -23,6 +23,7 @@ from ..alpha_workflow.service import (
     recover_alpha_workflow,
     start_alpha_workflow,
 )
+from ..brain_orchestrator.orchestrator import plan_dry_run
 
 
 router = APIRouter(prefix="/api/v2/alpha-workflows")
@@ -121,7 +122,15 @@ def api_run_demo(payload: AlphaWorkflowStartRequest, request: Request, db: Sessi
     require_alpha_workflow_enabled()
     user = require_alpha_workflow_user(request, db)
     try:
-        run = start_alpha_workflow(db, user=user, input_text=payload.input_text, trace_id=payload.trace_id, scenario_code=payload.scenario_code)
+        orchestrator_plan = plan_dry_run(db, payload.input_text, created_by=user.username, boss_confirmed=True, security_audited=True)
+        run = start_alpha_workflow(
+            db,
+            user=user,
+            input_text=payload.input_text,
+            trace_id=payload.trace_id or orchestrator_plan.get("graph_id"),
+            scenario_code=payload.scenario_code,
+            orchestrator_plan=orchestrator_plan,
+        )
     except (AlphaWorkflowDependencyError, AlphaWorkflowValidationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "run": run}
