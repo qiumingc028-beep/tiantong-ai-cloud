@@ -1,5 +1,13 @@
 # V2 Alpha Sprint 11.1 QA 报告
 
+## Migration Evidence Automated Gate
+
+自动门禁已建立于 `tests/test_v2_alpha_migration_evidence.py`，机器可读当前结果位于 `artifacts/qa/alpha-sprint11/migration-evidence-validation.json`。
+
+门禁会自动验证：6个必需文件、0041最终Head一致性、两条独立PostgreSQL路径的完整字段与命令、禁用SQLite正式证据和Drift跳过变量、SHA256复算及覆盖率、V1.0.1的0001—0027逐文件字节一致性、0005专项一致性、0037冻结政策披露，以及密码/Token/Secret/完整连接串/生产数据扫描。
+
+当前①最终文件尚未到达，因此机器结果为 `BLOCK`，相关测试会明确失败而非skip或xfail。收到 `MIGRATION_EVIDENCE_FINAL_COMMIT` 后立即普通Merge并执行门禁；如Backend或Migration有变化，再执行不少于863项的全量回归。本门禁不修改业务实现、Migration、Contract或CI配置，也不降低任何既有测试标准。
+
 ## PR #17 fa9067 新证据阻塞矩阵（等待最终证据 Commit）
 
 只读审计时间：2026-07-13。审计对象：PR #17，Head `fa9067fac27ac44264bf4c4df706ccb23366f987`。该 Head 已修改 Migration、Alembic Env 与 Backend Models，因此此前 `eef1ed6` 上的 `863 passed, 0 failed` 不能作为 `fa9067` 的完整回归证明。

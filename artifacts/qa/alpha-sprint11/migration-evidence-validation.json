@@ -1,0 +1,26 @@
+{
+  "required_files": {
+    "path_a_current.log": false,
+    "path_b_current.log": false,
+    "alembic-evidence.txt": true,
+    "checksums.sha256": false,
+    "docs/V2_ALPHA_MIGRATION_EVIDENCE.md": true,
+    "docs/V2_MIGRATION_FREEZE_POLICY.md": false
+  },
+  "final_revision": "",
+  "path_a": {
+    "complete": false,
+    "postgresql": false
+  },
+  "path_b": {
+    "complete": false,
+    "postgresql": false
+  },
+  "checksums_valid": false,
+  "v1_migrations_immutable": false,
+  "migration_0005_valid": false,
+  "migration_0037_disclosed": false,
+  "skip_flags_found": [],
+  "secret_scan": "BLOCKED_BY_MISSING_REQUIRED_FILES",
+  "result": "BLOCK"
+}
