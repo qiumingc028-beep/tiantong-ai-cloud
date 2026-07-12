@@ -30,6 +30,7 @@
 - `GET /api/v2/alpha-workflows/runs/{run_id}/report`
 - `GET /api/v2/alpha-workflows/runs/{run_id}/stages`
 - `POST /api/v2/alpha-workflows/runs/{run_id}/recover`
+  - 恢复会生成新的 recovery trace_id 与 root_span_id，但 `recovered_from_run_id` 必须保留原始 run_id。
 - `POST /api/v2/alpha-workflows/runs/{run_id}/cancel`（若实现）
 
 ### 追踪与审计
@@ -41,8 +42,8 @@
   - `dashboard_summary`
 - `events`
 - `spans`
-- 每条 `event` 必须包含 `event_code`、`stage`、`status`、`trace_id`、`span_id`、`parent_span_id`、`span_kind`、`created_at`
-- `spans` 必须包含 `span_id`、`parent_span_id`、`span_name`、`stage`、`status`、`started_at`、`finished_at`
+- 每条 `event` 必须包含 `event_code`、`stage`、`status`、`module_name`、`trace_id`、`span_id`、`parent_span_id`、`span_kind`、`created_at`
+- `spans` 必须包含 `span_id`、`parent_span_id`、`span_name`、`module_name`、`stage`、`status`、`started_at`、`finished_at`
 
 ### Dashboard
 

@@ -1,0 +1,32 @@
+== alembic heads ==
+0040_v2_alpha_workflow_integrity_constraints (head)
+
+== upgrade to 0039 ==
+[ok] 0039_v2_alpha_workflow_unified_contract
+
+== current after 0039 ==
+0039_v2_alpha_workflow_unified_contract
+
+== upgrade head to 0040 ==
+[ok] 0040_v2_alpha_workflow_integrity_constraints (head)
+
+== current after head ==
+0040_v2_alpha_workflow_integrity_constraints (head)
+
+== check after head ==
+No new upgrade operations detected.
+
+== repeated upgrade head ==
+[ok] no-op
+
+== downgrade to 0039 ==
+[ok] 0039_v2_alpha_workflow_unified_contract
+
+== current after downgrade ==
+0039_v2_alpha_workflow_unified_contract
+
+== re-upgrade head ==
+[ok] 0040_v2_alpha_workflow_integrity_constraints (head)
+
+== current after re-upgrade ==
+0040_v2_alpha_workflow_integrity_constraints (head)

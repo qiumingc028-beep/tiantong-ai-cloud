@@ -186,6 +186,34 @@ def _append_span(context: AlphaWorkflowContext, *, stage: str, status: str, mess
     return span
 
 
+def _emit_stage_event(
+    context: AlphaWorkflowContext,
+    db: Session,
+    run: AlphaWorkflowRun,
+    *,
+    event_code: str,
+    stage: str,
+    status: str,
+    message: str,
+    payload: dict[str, object] | None = None,
+    span_kind: str = "child",
+) -> AlphaWorkflowTraceSpan:
+    span = _append_span(context, stage=stage, status=status, message=message, metadata=payload or {})
+    append_event(
+        db,
+        run,
+        event_code=event_code,
+        stage=stage,
+        status=status,
+        message=message,
+        payload=payload or {},
+        span_id=span.span_id,
+        parent_span_id=span.parent_span_id,
+        span_kind=span_kind,
+    )
+    return span
+
+
 def _default_browser_reader(url: str, *, trace_id: str, allowed_domains: list[str], blocked_domains: list[str]) -> dict[str, object]:
     domain = url.split("//", 1)[1].split("/", 1)[0] if "//" in url else url
     return {
@@ -372,20 +400,28 @@ def start_alpha_workflow(
             "report_format": "中文研究报告",
             "task_title": task.title,
         }
-        append_event(db, run, event_code="workflow_started", stage="task_center", status="成功", message="任务中心已创建任务", payload={"task_id": task.id, "task_title": task.title}, parent_span_id=run.root_span_id)
+        append_event(
+            db,
+            run,
+            event_code="workflow_started",
+            stage="task_center",
+            status="成功",
+            message="任务中心已创建任务",
+            payload={"task_id": task.id, "task_title": task.title},
+            parent_span_id=run.root_span_id,
+        )
         agent_execution = _create_agent_execution(db, task=task, employee=employee, trace_id=trace_id, input_text=input_text)
-        append_event(db, run, event_code="research_executed", stage="research", status="成功", message="Research 执行已完成", payload={"execution_id": agent_execution.execution_id}, parent_span_id=run.root_span_id)
         research_output = execute_research_workflow(research_input, trace_id=trace_id, browser_reader=_default_browser_reader)
         persist_research_result(db, agent_execution, research_input, research_output)
-        append_event(
+        _emit_stage_event(
+            context,
             db,
             run,
             event_code="research_executed",
             stage="research",
             status="成功",
-            message="Research 结果已持久化",
+            message="Research 执行已完成并持久化",
             payload={"research_execution_id": agent_execution.execution_id, "report_hash": research_output.get("report_hash")},
-            parent_span_id=run.root_span_id,
         )
 
         knowledge_result = submit_research_report(
@@ -409,7 +445,8 @@ def start_alpha_workflow(
             .order_by(KnowledgeChunk.chunk_index.asc())
             .first()
         )
-        append_event(
+        _emit_stage_event(
+            context,
             db,
             run,
             event_code="knowledge_candidate_created",
@@ -417,7 +454,6 @@ def start_alpha_workflow(
             status="成功",
             message="已创建知识候选",
             payload={"knowledge_id": knowledge_id, "version_id": version_id, "chunk_id": chunk.chunk_id if chunk else None},
-            parent_span_id=run.root_span_id,
         )
 
         ensure_default_skills(db, created_by=user.id)
@@ -445,7 +481,8 @@ def start_alpha_workflow(
             ),
             user,
         )
-        append_event(
+        _emit_stage_event(
+            context,
             db,
             run,
             event_code="skill_invoked",
@@ -453,7 +490,6 @@ def start_alpha_workflow(
             status="成功",
             message="已调用知识检索技能",
             payload={"skill_invocation_id": invocation["invocation_id"], "skill_code": skill.skill_code, "skill_version_id": installation.skill_version_id},
-            parent_span_id=run.root_span_id,
         )
 
         citation = record_use(
@@ -511,7 +547,6 @@ def start_alpha_workflow(
         context.report_content = report_content
         context.dashboard_status = "已完成"
         context.status = "已完成"
-        context.current_stage = "dashboard"
         context.linked_ids = {
             "task_id": task.id,
             "orchestrator_run_id": orchestrator_plan["graph_id"],
@@ -525,18 +560,49 @@ def start_alpha_workflow(
             "agent_execution_id": agent_execution.execution_id,
             "verification_id": f"{trace_id}:verification",
         }
-        for stage, message, metadata in [
-            ("orchestrator", "任务已进入唯一 Orchestrator 主链路", {"orchestrator_run_id": orchestrator_plan["graph_id"]}),
-            ("task_center", "任务已创建", {"task_id": task.id}),
-            ("research", "Research 已执行并持久化", {"execution_id": agent_execution.execution_id}),
-            ("knowledge", "知识候选已创建", {"knowledge_asset_id": knowledge_id, "knowledge_version_id": version_id, "chunk_id": chunk.chunk_id if chunk else None}),
-            ("skills", "知识检索技能已调用", {"skill_invocation_id": invocation["invocation_id"], "skill_code": skill.skill_code}),
-            ("verification", "结果已完成验证", {"verification_id": f"{trace_id}:verification"}),
-            ("dashboard", "Alpha 页面已可查看", {}),
-        ]:
-            _append_span(context, stage=stage, status="成功", message=message, metadata=metadata)
+        _emit_stage_event(
+            context,
+            db,
+            run,
+            event_code="workflow_verified",
+            stage="verification",
+            status="成功",
+            message="结果已完成验证",
+            payload={"verification_id": f"{trace_id}:verification"},
+        )
         quality_score, quality_grade, quality_detail = _score_quality(context)
         risk_score, risk_level, risk_detail = _score_risk(context)
+        _emit_stage_event(
+            context,
+            db,
+            run,
+            event_code="workflow_audited",
+            stage="audit",
+            status="成功",
+            message="审计时间线已写入",
+            payload={"task_id": task.id, "report_hash": research_output.get("report_hash")},
+        )
+        write_audit_log(db, task, user, "alpha_workflow_completed", "running", "summarized", f"quality={quality_score};risk={risk_score}")
+        _emit_stage_event(
+            context,
+            db,
+            run,
+            event_code="workflow_feedback_recorded",
+            stage="feedback",
+            status="成功",
+            message="任务反馈已回写",
+            payload={"task_id": task.id, "result_id": None if result_row is None else getattr(result_row, "id", None)},
+        )
+        _emit_stage_event(
+            context,
+            db,
+            run,
+            event_code="dashboard_refreshed",
+            stage="dashboard",
+            status="成功",
+            message="Alpha 页面已可查看",
+            payload={"task_id": task.id},
+        )
         run.status = "已完成"
         run.quality_score = quality_score
         run.quality_grade = quality_grade
@@ -571,9 +637,7 @@ def start_alpha_workflow(
         )
         run.finished_at = _utc_now()
         run.updated_at = _utc_now()
-        append_event(db, run, event_code="dashboard_refreshed", stage="dashboard", status="成功", message="Dashboard 已刷新", payload={"quality_score": quality_score, "risk_score": risk_score}, parent_span_id=run.root_span_id)
         append_event(db, run, event_code="workflow_completed", stage="workflow", status="成功", message="Alpha Workflow 全链路完成", payload={"quality_score": quality_score, "risk_score": risk_score}, parent_span_id=run.root_span_id)
-        write_audit_log(db, task, user, "alpha_workflow_completed", "running", "summarized", f"quality={quality_score};risk={risk_score}")
         db.commit()
         db.refresh(run)
         db.refresh(task)
@@ -651,15 +715,22 @@ def recover_alpha_workflow(db: Session, *, user: User, run_id: str, reason: str 
             linked_ids={},
             recovery_from_run_id=run.run_id,
         )
+    recovery_trace_id = f"{run.trace_id}-recovery-{uuid4().hex[:12]}"
+    recovery_root_span_id = f"{recovery_trace_id}:root"
     context.recovery_from_run_id = run.run_id
+    context.trace_id = recovery_trace_id
+    context.root_span_id = recovery_root_span_id
     context.status = "已恢复"
     context.dashboard_status = "已恢复"
     recovery_span = _append_span(context, stage="recovery", status="成功", message=reason or "从安全检查点恢复", metadata={"recovered_from_run_id": run.run_id})
     run.recovery_status = "已恢复"
+    run.recovered_from_run_id = run.run_id
     run.status = "已完成" if run.status != "已完成" else run.status
     run.current_stage = "recovery"
     run.finished_at = run.finished_at or _utc_now()
     run.updated_at = _utc_now()
+    run.trace_id = recovery_trace_id
+    run.root_span_id = recovery_root_span_id
     run.workflow_context_json = context.model_dump_json()
     append_event(
         db,
@@ -821,6 +892,7 @@ def _run_to_dict(db: Session, run: AlphaWorkflowRun | None, *, include_events: b
                 "span_id": item.span_id,
                 "parent_span_id": item.parent_span_id,
                 "span_kind": item.span_kind,
+                "module_name": item.stage,
                 "trace_id": item.trace_id,
                 "created_at": item.created_at.isoformat() if item.created_at else None,
             }
@@ -842,6 +914,7 @@ def get_trace(db: Session, run_id: str) -> dict[str, object]:
                 "span_id": span.span_id,
                 "parent_span_id": span.parent_span_id,
                 "span_name": span.span_name,
+                "module_name": span.module_name,
                 "span_kind": span.span_kind,
                 "stage": span.stage,
                 "status": span.status,
@@ -871,6 +944,7 @@ def get_trace(db: Session, run_id: str) -> dict[str, object]:
                 "span_id": event.span_id,
                 "parent_span_id": event.parent_span_id,
                 "span_kind": event.span_kind,
+                "module_name": event.stage,
                 "trace_id": event.trace_id,
                 "created_at": event.created_at.isoformat() if event.created_at else None,
             }
