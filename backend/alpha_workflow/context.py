@@ -12,6 +12,7 @@ class AlphaWorkflowTraceSpan(BaseModel):
     span_id: str
     parent_span_id: str | None = None
     span_name: str
+    module_name: str | None = None
     span_kind: str = "child"
     stage: str
     status: str
@@ -71,6 +72,7 @@ class AlphaWorkflowContext(BaseModel):
             span_id=f"{self.root_span_id}:{stage}:{len(self.step_trace) + 1}",
             parent_span_id=self.root_span_id,
             span_name=stage,
+            module_name=stage,
             stage=stage,
             status=status,
             started_at=now,

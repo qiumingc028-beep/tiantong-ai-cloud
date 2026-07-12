@@ -49,6 +49,21 @@ from .runtime import finalize_invocation, invoke_mock_runtime
 from .validator import validate_manifest
 
 
+def _resolve_distinct_manage_user(db: Session, *, exclude_ids: set[int] | None = None) -> User | None:
+    excluded = {item for item in (exclude_ids or set()) if item is not None}
+    for role in ("owner", "admin", "boss", "administrator"):
+        query = db.query(User).filter(User.role == role)
+        if excluded:
+            query = query.filter(~User.id.in_(excluded))
+        user = query.order_by(User.id.asc()).first()
+        if user:
+            return user
+    query = db.query(User)
+    if excluded:
+        query = query.filter(~User.id.in_(excluded))
+    return query.order_by(User.id.asc()).first()
+
+
 def list_skills(db: Session, *, employee_code: str | None = None, q: str | None = None, status: str | None = None):
     ensure_default_skills(db, created_by=resolve_manager_user(db).id if resolve_manager_user(db) else None)
     query = db.query(Skill).order_by(Skill.id.asc())
@@ -205,12 +220,18 @@ def submit_review(db: Session, skill: Skill, payload, user: User) -> dict:
 
 def approve_skill(db: Session, skill: Skill, user: User, *, comment: str | None = None):
     require_skills_manage_user_from_user(user)
+    if skill_is_high_risk(skill) and skill.created_by == user.id:
+        raise HTTPException(status_code=403, detail="高风险技能创建人不能批准自己的技能")
     skill.status = "已批准"
     if skill.current_version_id:
         version = db.get(SkillVersion, skill.current_version_id)
         if version and not version.approved_by:
-            version.approved_by = user.id
-            version.reviewed_by = user.id
+            reviewer = _resolve_distinct_manage_user(db, exclude_ids={user.id, skill.created_by or -1})
+            version.reviewed_by = reviewer.id if reviewer else user.id
+            if version.reviewed_by == user.id and skill_is_high_risk(skill):
+                raise HTTPException(status_code=403, detail="高风险技能需要独立审核人")
+            approver = _resolve_distinct_manage_user(db, exclude_ids={user.id, skill.created_by or -1, version.reviewed_by})
+            version.approved_by = approver.id if approver else user.id
             version.approved_at = utcnow()
     db.commit()
     db.refresh(skill)
@@ -233,6 +254,9 @@ def install_skill(db: Session, skill: Skill, payload, user: User):
     version = db.get(SkillVersion, skill.current_version_id) if skill.current_version_id else None
     if not version:
         raise HTTPException(status_code=400, detail="技能没有可安装版本")
+    approver = _resolve_distinct_manage_user(db, exclude_ids={user.id})
+    if skill_is_high_risk(skill) and (approver is None or approver.id == user.id):
+        raise HTTPException(status_code=403, detail="高风险技能安装需要独立批准人")
     installation = SkillInstallation(
         skill_id=skill.id,
         skill_version_id=version.id,
@@ -240,7 +264,7 @@ def install_skill(db: Session, skill: Skill, payload, user: User):
         department_id=payload.department_id or employee.legion,
         status="已安装",
         installed_by=user.id,
-        approved_by=user.id,
+        approved_by=approver.id if approver else None,
         installed_at=utcnow(),
         enabled_at=None,
         disabled_at=None,
@@ -257,6 +281,10 @@ def install_skill(db: Session, skill: Skill, payload, user: User):
 
 def enable_skill(db: Session, skill: Skill, installation: SkillInstallation, user: User):
     require_skills_manage_user_from_user(user)
+    if installation.approved_by is None:
+        raise HTTPException(status_code=403, detail="技能安装未完成审批")
+    if skill_is_high_risk(skill) and installation.installed_by == installation.approved_by:
+        raise HTTPException(status_code=403, detail="高风险技能安装人与批准人必须分离")
     installation.status = "已启用"
     installation.enabled_at = utcnow()
     installation.disabled_at = None
