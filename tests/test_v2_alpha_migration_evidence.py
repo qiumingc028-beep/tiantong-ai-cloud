@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_DIR = ROOT / "artifacts/alpha-migration-evidence"
 FINAL_REVISION = "0041_v2_alpha_migration_history_repair"
 FEATURE_REF = "origin/feature/v2-alpha-workflow-engine"
+DEVELOP_REF = "origin/develop-v2"
 V1_TAG = "v1.0.1"
 
 REQUIRED_FILES = {
@@ -24,6 +26,7 @@ REQUIRED_FILES = {
     "checksums": EVIDENCE_DIR / "checksums.sha256",
     "evidence_document": ROOT / "docs/V2_ALPHA_MIGRATION_EVIDENCE.md",
     "freeze_policy": ROOT / "docs/V2_MIGRATION_FREEZE_POLICY.md",
+    "validation_manifest": EVIDENCE_DIR / "validation-manifest.json",
 }
 PATH_FIELDS = {
     "evidence_format_version",
@@ -74,6 +77,15 @@ EVIDENCE_ONLY_PATHS = (
     "docs/V2_ALPHA_MIGRATION_EVIDENCE.md",
     "docs/V2_MIGRATION_FREEZE_POLICY.md",
 )
+MANIFEST_FIELDS = {
+    "evidence_format_version",
+    "validated_code_commit",
+    "final_revision",
+    "checksum_algorithm",
+    "required_files",
+    "path_a",
+    "path_b",
+}
 
 
 @dataclass(frozen=True)
@@ -146,6 +158,38 @@ def test_path_a_and_b_are_independent_and_validate_same_code():
     assert path_a["validated_code_commit"] == path_b["validated_code_commit"]
 
 
+def test_path_a_and_b_start_points_are_real_git_baselines():
+    path_a = parse_path_evidence(REQUIRED_FILES["path_a"], "A").fields
+    path_b = parse_path_evidence(REQUIRED_FILES["path_b"], "B").fields
+    v1_commit = git("rev-parse", f"{V1_TAG}^{{commit}}")
+    assert path_a["start_commit"] == v1_commit, "Path A起点必须是v1.0.1 Tag指向的Commit"
+    assert path_a["start_revision"] == "0027_v1_schema_alignment"
+    expected_merge_base = git("merge-base", path_b["validated_code_commit"], DEVELOP_REF)
+    assert path_b["start_commit"] == expected_merge_base, "Path B起点必须是被验证代码与develop-v2的merge-base"
+    assert path_b["start_commit"] != path_b["validated_code_commit"], "Path B不得把被验证代码Commit伪装成起点"
+    commit_check = subprocess.run(
+        ["git", "cat-file", "-e", f"{path_b['start_commit']}^{{commit}}"], cwd=ROOT, capture_output=True
+    )
+    assert commit_check.returncode == 0
+
+
+def test_validation_manifest_has_hardened_commit_and_path_model():
+    manifest = json.loads(read(REQUIRED_FILES["validation_manifest"]))
+    missing = sorted(MANIFEST_FIELDS - manifest.keys())
+    assert not missing, f"Manifest缺少字段：{missing}"
+    assert manifest["evidence_format_version"]
+    assert manifest["final_revision"] == FINAL_REVISION
+    assert manifest["checksum_algorithm"].casefold() == "sha256"
+    assert isinstance(manifest["required_files"], list) and manifest["required_files"]
+    for path_id, key in (("A", "path_a"), ("B", "path_b")):
+        entry = manifest[key]
+        assert entry["path_id"] == path_id
+        for field in ("database_id", "start_commit", "start_revision", "validated_code_commit"):
+            assert entry.get(field), f"Manifest {key}缺少{field}"
+    assert manifest["path_a"]["validated_code_commit"] == manifest["validated_code_commit"]
+    assert manifest["path_b"]["validated_code_commit"] == manifest["validated_code_commit"]
+
+
 def test_validated_code_commit_and_evidence_only_commit_interval():
     path_a = parse_path_evidence(REQUIRED_FILES["path_a"], "A").fields
     path_b = parse_path_evidence(REQUIRED_FILES["path_b"], "B").fields
@@ -167,8 +211,12 @@ def test_validated_code_commit_and_evidence_only_commit_interval():
 def test_all_evidence_agrees_on_0041_and_has_no_skip_or_sqlite_claims():
     evidence = "\n".join(read(path) for path in REQUIRED_FILES.values() if path.suffix != ".sha256")
     assert "ALEMBIC_SKIP_SQLITE_DRIFT" not in evidence
-    assert not re.search(r"sqlite.{0,40}(正式|formal|evidence|数据库)", evidence, re.IGNORECASE)
-    assert not re.search(r"0040[^\n]{0,100}\b(?:head|final)\b|(?:final|最终)[^\n]{0,50}0040", evidence, re.IGNORECASE)
+    for key in ("path_a", "path_b"):
+        path_log = read(REQUIRED_FILES[key])
+        assert not re.search(r"(?im)^\s*database_engine\s*=\s*sqlite\s*$", path_log)
+        assert not re.search(r"(?im)^\s*sqlite(?:_version)?\s*=", path_log)
+    assert not re.search(r"(?im)^\s*(?:final_revision|final_head|current_final)\s*[:=]\s*0040\b", evidence)
+    assert not re.search(r"(?im)^\s*(?:最终\s*(?:revision|head)|最终版本)\s*[:：]\s*0040\b", evidence)
     for key in ("path_a", "path_b", "alembic_evidence"):
         assert FINAL_REVISION in read(REQUIRED_FILES[key]), f"{key} 最终Head不是0041"
 

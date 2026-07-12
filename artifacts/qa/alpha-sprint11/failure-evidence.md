@@ -114,3 +114,12 @@ Gate实现整改完成，但当前证据包仍为BLOCK：
 - 前端Gate复验 `10 passed, 0 failed`。
 
 等待 `MIGRATION_EVIDENCE_FINAL_COMMIT`，不进入全量回归，不修改业务代码。
+## 85586868 Final Gate 预检阻塞
+
+- Migration Gate：`5 passed, 8 failed`。
+- Path A格式：缺少规定的结构字段和 `--- RAW OUTPUT ---`；起点Commit `483ebf5` 不等于 `v1.0.1^{commit}` 的 `60335cd`，且所谓V1阶段结束时已显示0041。
+- Path B格式：缺少规定的结构字段和RAW OUTPUT；起点Commit错误使用 `cc8c779`，真实develop-v2 merge-base为 `2ca1a2579569324ce3ca82f68332fb7f96be004d`。
+- 0037：Freeze Policy缺少完整文件路径，双文档均未提供完整一致的结构化八项披露。
+- Checksums：Freeze Policy Hash复算失败；未覆盖 `validation-manifest.json`；并包含精确Required Files集合外条目。
+- Manifest缺少：`evidence_format_version`、`validated_code_commit`、`final_revision`、`checksum_algorithm`、`required_files`、`path_a`、`path_b`。
+- 未执行Backend全量回归。等待 `MIGRATION_EVIDENCE_FINAL_COMMIT`。

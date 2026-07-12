@@ -1,66 +1,54 @@
 {
-  "evaluated_feature_commit": "cc8c77914dbc79a6821d8781f626b77a003b4f7f",
-  "gate_tests": {
-    "passed": 2,
-    "failed": 9
-  },
-  "gate_implementation": {
-    "absolute_paths_rejected": true,
-    "basename_fallback_removed": true,
-    "parent_traversal_rejected": true,
-    "resolved_path_must_be_inside_repository": true,
-    "structured_path_parser": true,
-    "path_independence_checked": true,
-    "validated_code_commit_model": true,
-    "evidence_only_diff_checked": true,
-    "strict_0037_disclosure": true
-  },
+  "evaluated_feature_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
+  "gate_tests": {"passed": 5, "failed": 8},
   "required_files": {
-    "path_a_current.log": false,
-    "path_b_current.log": false,
+    "path_a_current.log": true,
+    "path_b_current.log": true,
     "alembic-evidence.txt": true,
     "checksums.sha256": true,
     "docs/V2_ALPHA_MIGRATION_EVIDENCE.md": true,
-    "docs/V2_MIGRATION_FREEZE_POLICY.md": false
+    "docs/V2_MIGRATION_FREEZE_POLICY.md": true,
+    "validation-manifest.json": true
   },
   "final_revision": "0041_v2_alpha_migration_history_repair",
   "path_a": {
     "complete": false,
-    "postgresql": false,
-    "reason": "path_a_current.log is missing"
+    "structured_format": false,
+    "start_commit_claim": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
+    "expected_v1_tag_commit": "60335cdb5eec9975b03c6d19b34c8669a96e8cc3",
+    "start_revision_claim": "0027_v1_schema_alignment",
+    "start_authentic": false,
+    "reason": "missing required structured fields/RAW OUTPUT; claimed commit differs from v1.0.1 tag and current_after_v1 is already 0041"
   },
   "path_b": {
     "complete": false,
-    "postgresql": false,
-    "reason": "path_b_current.log is missing"
+    "structured_format": false,
+    "start_commit_claim": "cc8c77914dbc79a6821d8781f626b77a003b4f7f",
+    "expected_merge_base": "2ca1a2579569324ce3ca82f68332fb7f96be004d",
+    "start_revision_claim": "0037_v2_execution_observability_security_ops",
+    "start_authentic": false,
+    "reason": "missing required structured fields/RAW OUTPUT; start commit equals validated code instead of develop-v2 merge-base"
   },
-  "checksums_relative_paths": false,
-  "checksums_valid": false,
+  "checksums": {
+    "relative_paths": true,
+    "hashes_valid": false,
+    "mismatches": ["docs/V2_MIGRATION_FREEZE_POLICY.md"],
+    "required_set_exact": false,
+    "missing_required": ["artifacts/alpha-migration-evidence/validation-manifest.json"],
+    "unexpected_entries": "README and migration files outside the exact Required Files set"
+  },
+  "manifest": {
+    "valid": false,
+    "missing_fields": [
+      "evidence_format_version", "validated_code_commit", "final_revision",
+      "checksum_algorithm", "required_files", "path_a", "path_b"
+    ]
+  },
+  "migration_0037_disclosed": false,
+  "migration_0037_reason": "Freeze Policy lacks the full path and both documents lack the required consistent structured disclosure fields",
   "v1_migrations_immutable": true,
   "migration_0005_valid": true,
-  "migration_0025_valid": true,
-  "migration_0026_valid": true,
-  "migration_0027_valid": true,
-  "migration_0037_disclosed": false,
-  "validated_code_commit": "BLOCKED_BY_MISSING_PATH_LOGS",
-  "evidence_bundle_commit": "not_self_referenced",
-  "evidence_only_diff": "BLOCKED_BY_MISSING_PATH_LOGS",
   "skip_flags_found": [],
-  "secret_scan": "BLOCKED_BY_MISSING_REQUIRED_FILES",
-  "closed_items": [
-    "V1 migrations 0001-0027 match v1.0.1 byte-for-byte",
-    "0005 matches v1.0.1",
-    "0025, 0026 and 0027 match v1.0.1"
-  ],
-  "blocking_items": [
-    "path_a_current.log is missing",
-    "path_b_current.log is missing",
-    "docs/V2_MIGRATION_FREEZE_POLICY.md is missing",
-    "checksums.sha256 contains absolute /private/tmp paths instead of repository-relative paths",
-    "checksums cannot be fully recalculated because required targets are missing",
-    "0037 disclosure cannot pass without the freeze policy",
-    "secret scan cannot complete while required evidence files are missing"
-  ],
-  "implementation_result": "PASS",
+  "secret_scan": "PASS_FOR_PRESENT_FILES",
   "result": "BLOCK"
 }
