@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, event, func, inspect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm.session import Session
 
 from ..database import Base
 
@@ -79,7 +80,7 @@ class AlphaWorkflowEvent(Base):
     __table_args__ = (UniqueConstraint("event_id", name="uq_alpha_workflow_events_id"),)
 
     event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    run_id: Mapped[str] = mapped_column(ForeignKey("alpha_workflow_runs.run_id", ondelete="CASCADE"), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("alpha_workflow_runs.run_id", ondelete="RESTRICT"), nullable=False, index=True)
     event_code: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     stage: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
@@ -92,3 +93,15 @@ class AlphaWorkflowEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
     run = relationship("AlphaWorkflowRun")
+
+
+@event.listens_for(Session, "before_flush")
+def _protect_alpha_workflow_audit(session, flush_context, instances):
+    for obj in list(session.dirty):
+        if isinstance(obj, AlphaWorkflowEvent):
+            state = inspect(obj)
+            if state.persistent and session.is_modified(obj, include_collections=False):
+                raise ValueError("alpha_workflow_events is append-only")
+    for obj in list(session.deleted):
+        if isinstance(obj, AlphaWorkflowEvent):
+            raise ValueError("alpha_workflow_events is append-only")
