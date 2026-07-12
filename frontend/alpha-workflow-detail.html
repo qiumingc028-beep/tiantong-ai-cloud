@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Alpha 任务详情</title>
+  <link rel="stylesheet" href="/alpha-workflow.css">
+</head>
+<body data-page="detail">
+  <main class="shell">
+    <nav class="back-row"><a href="/alpha-workflow.html">← 返回 Alpha 任务</a><button class="button button-light" data-action="refresh">刷新进度</button></nav>
+    <div id="page-message" class="message message-loading" role="status">正在读取全链路进度…</div>
+
+    <div id="detail-content" hidden>
+      <header class="detail-hero">
+        <div><p class="eyebrow">ALPHA WORKFLOW</p><h1 id="task-title">Alpha 任务</h1><p id="task-next" class="lead"></p></div>
+        <div class="hero-actions" id="primary-actions"></div>
+      </header>
+
+      <section class="score-grid">
+        <article class="score-card"><span>当前状态</span><strong id="run-status">—</strong><small id="current-stage">—</small></article>
+        <article class="score-card"><span>风险评分</span><strong id="risk-score">—</strong><small id="risk-level">尚未评分</small></article>
+        <article class="score-card"><span>质量评分</span><strong id="quality-score">—</strong><small id="quality-grade">尚未评分</small></article>
+        <article class="score-card"><span>审批状态</span><strong id="approval-status">—</strong><small id="approval-count">暂无审批记录</small></article>
+      </section>
+
+      <section class="panel stage-panel">
+        <div class="section-head"><div><p class="section-kicker">任务走到哪里</p><h2>完整阶段流程</h2></div><span id="progress-text" class="legend"></span></div>
+        <ol id="stage-flow" class="stage-flow"></ol>
+      </section>
+
+      <div class="content-grid">
+        <section class="panel result-panel">
+          <p class="section-kicker">老板优先查看</p><h2>最终交付结果</h2>
+          <div id="report-summary" class="summary-box"></div>
+          <button id="report-button" class="button" type="button">查看最终报告</button>
+        </section>
+        <section class="panel">
+          <p class="section-kicker">执行主体</p><h2>AI 员工与 Skill</h2>
+          <dl id="execution-facts" class="facts"></dl>
+        </section>
+        <section class="panel">
+          <p class="section-kicker">可信依据</p><h2>知识引用</h2>
+          <div id="knowledge-facts" class="stack"></div>
+        </section>
+        <section class="panel">
+          <p class="section-kicker">异常处理</p><h2>失败与恢复</h2>
+          <div id="recovery-facts" class="stack"></div>
+        </section>
+      </div>
+
+      <section id="report-panel" class="panel report" hidden>
+        <div class="section-head"><div><p class="section-kicker">最终报告</p><h2 id="report-title">研究报告</h2></div><button class="button button-light" data-action="close-report">收起报告</button></div>
+        <div id="report-content" class="report-content"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head"><div><p class="section-kicker">发生了什么</p><h2>审计时间线</h2></div><span id="audit-count" class="legend"></span></div>
+        <div id="audit-timeline" class="timeline"></div>
+      </section>
+
+      <details class="panel tech-details">
+        <summary>查看技术追踪信息</summary>
+        <dl id="trace-facts" class="facts"></dl>
+        <div id="span-list" class="span-list"></div>
+      </details>
+    </div>
+  </main>
+
+  <dialog id="reason-dialog">
+    <form id="reason-form" method="dialog">
+      <h2 id="reason-title">确认操作</h2><p id="reason-help" class="subtle"></p>
+      <label>原因<textarea id="reason-input" maxlength="300" placeholder="请填写原因（可选）"></textarea></label>
+      <div class="dialog-actions"><button class="button button-light" value="cancel">返回</button><button id="reason-confirm" class="button" value="default">确认</button></div>
+    </form>
+  </dialog>
+  <script src="/alpha-workflow.js" defer></script>
+</body>
+</html>
