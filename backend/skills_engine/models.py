@@ -10,7 +10,7 @@ from ..database import Base
 
 class Skill(Base):
     __tablename__ = "skills"
-    __table_args__ = (UniqueConstraint("skill_code", name="uq_skills_skill_code"),)
+    __table_args__ = (UniqueConstraint("skill_code"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     skill_code: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
