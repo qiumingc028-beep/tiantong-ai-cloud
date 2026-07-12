@@ -162,3 +162,12 @@
 新增 `tests/test_v2_alpha_frontend_contract_regression.py`，以 PR #18 最终前端 Commit `04804fc62f57305b4bc3f45dbe7bc051bab0cfb4` 为审查基线，使用 Git 对象和仓库相对路径，不依赖未推送文件或本机绝对路径。
 
 门禁精确禁止废弃字段及状态机副本，允许 `STAGE_LABELS`、`skill_version_id`、`root_span_id`、`report_content`、`approval_ids`；并验证报告、恢复、取消由服务端字段控制，阶段按服务端 spans/events 顺序渲染，Root Span 显示“根节点（无父级）”。PR #18 相对最终后端基线的变更范围严格为四个 Alpha 前端文件。
+## Migration Gate 硬化整改
+
+Gate实现已整改：Checksum只接受仓库相对路径，直接拒绝绝对路径、`..`逃逸和ROOT外解析结果；已移除basename回退，并要求精确覆盖全部Required Files且禁止校验Checksum自身。
+
+Path A/B现要求顶部结构化 `key=value` 元数据及独立RAW OUTPUT区域，验证数据库标识、不同起点、相同 `validated_code_commit`、规定结果值和原始命令输出一致性。`validated_code_commit` 必须为有效Git Commit且为远程主功能分支Head祖先，其后至Head仅允许证据文件变化；Backend或Alembic变化会直接BLOCK并要求重测。Evidence Bundle不再被要求自引用自身Commit。
+
+0037披露现要求Freeze Policy与Evidence Document同时给出完整路径、基线Commit/Hash、修改后Hash、Boolean `server_default`变化、原因、生产部署状态、预发布例外、批准角色和Sprint 11.1后冻结规则，并逐字段一致。
+
+硬化后使用当前旧证据运行结果：**2 passed, 9 failed**，符合预期BLOCK；前端契约Gate复验：**10 passed, 0 failed**。PR #19继续Draft/BLOCK，等待①最终证据。

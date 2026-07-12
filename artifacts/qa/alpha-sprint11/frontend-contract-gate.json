@@ -3,6 +3,10 @@
   "deprecated_fields_found": [],
   "server_owned_stage_order": true,
   "server_owned_actions": true,
+  "stage_labels_allowed": true,
+  "fixed_stage_machine_absent": true,
+  "committed_pr18_source": true,
+  "untracked_file_dependency": false,
   "root_parent_label": true,
   "scope_valid": true,
   "result": "PASS"

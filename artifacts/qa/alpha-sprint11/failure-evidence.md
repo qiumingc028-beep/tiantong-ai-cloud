@@ -102,3 +102,15 @@ Migration 正式证据未通过真实性/完整性验收：
 7. 缺失文件导致 Secret、SQLite正式证据及 Drift skip 的全量扫描无法完成。
 
 等待①提交 `MIGRATION_EVIDENCE_FINAL_COMMIT`。Gate通过前不进入完整863项回归，PR #19保持Draft/BLOCK。
+## Gate Implementation Fixes
+
+Gate实现整改完成，但当前证据包仍为BLOCK：
+
+- Checksum绝对路径直接失败；basename回退已删除；`..`与ROOT外路径被拒绝。
+- Path A/B必须为结构化元数据加RAW OUTPUT，不再以关键词摘要代替数据库执行证据。
+- 引入 `validated_code_commit` / Evidence Bundle分离模型；验证Git Commit、祖先关系和evidence-only区间，出现Backend/Alembic变化必须重测。
+- 0037必须在政策和证据文档中完成八项一致披露。
+- 当前旧证据运行结果为 `2 passed, 9 failed`：Path A/B及Freeze Policy仍缺失，旧Checksum绝对路径被严格拒绝。
+- 前端Gate复验 `10 passed, 0 failed`。
+
+等待 `MIGRATION_EVIDENCE_FINAL_COMMIT`，不进入全量回归，不修改业务代码。

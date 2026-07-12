@@ -2,7 +2,18 @@
   "evaluated_feature_commit": "cc8c77914dbc79a6821d8781f626b77a003b4f7f",
   "gate_tests": {
     "passed": 2,
-    "failed": 7
+    "failed": 9
+  },
+  "gate_implementation": {
+    "absolute_paths_rejected": true,
+    "basename_fallback_removed": true,
+    "parent_traversal_rejected": true,
+    "resolved_path_must_be_inside_repository": true,
+    "structured_path_parser": true,
+    "path_independence_checked": true,
+    "validated_code_commit_model": true,
+    "evidence_only_diff_checked": true,
+    "strict_0037_disclosure": true
   },
   "required_files": {
     "path_a_current.log": false,
@@ -31,6 +42,9 @@
   "migration_0026_valid": true,
   "migration_0027_valid": true,
   "migration_0037_disclosed": false,
+  "validated_code_commit": "BLOCKED_BY_MISSING_PATH_LOGS",
+  "evidence_bundle_commit": "not_self_referenced",
+  "evidence_only_diff": "BLOCKED_BY_MISSING_PATH_LOGS",
   "skip_flags_found": [],
   "secret_scan": "BLOCKED_BY_MISSING_REQUIRED_FILES",
   "closed_items": [
@@ -47,5 +61,6 @@
     "0037 disclosure cannot pass without the freeze policy",
     "secret scan cannot complete while required evidence files are missing"
   ],
+  "implementation_result": "PASS",
   "result": "BLOCK"
 }
