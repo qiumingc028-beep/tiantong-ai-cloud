@@ -16,6 +16,7 @@ ALLOWED_SCHEMES = {"https"}
 @dataclass(slots=True)
 class BrowserPolicy:
     allowed_domains: list[str]
+    blocked_domains: list[str]
     block_private_networks: bool
     max_redirects: int
     default_timeout_seconds: int
@@ -28,6 +29,7 @@ class BrowserPolicy:
         settings = get_settings()
         return cls(
             allowed_domains=[domain.lower().strip().rstrip(".") for domain in settings.BROWSER_ALLOWED_DOMAINS if domain.strip()],
+            blocked_domains=[],
             block_private_networks=settings.BROWSER_BLOCK_PRIVATE_NETWORKS,
             max_redirects=max(0, int(settings.BROWSER_MAX_REDIRECTS)),
             default_timeout_seconds=max(1, int(settings.BROWSER_DEFAULT_TIMEOUT_SECONDS)),
@@ -37,7 +39,7 @@ class BrowserPolicy:
         )
 
 
-def normalize_url(url: str) -> str:
+def normalize_url(url: str, *, allowed_domains: list[str] | None = None, blocked_domains: list[str] | None = None) -> str:
     split = urlsplit(url.strip())
     if not split.scheme or not split.netloc:
         raise BrowserPolicyError("必须提供完整 URL", "URL_NOT_ALLOWED")
@@ -53,21 +55,33 @@ def normalize_url(url: str) -> str:
     if is_ip_literal(host):
         raise BrowserPolicyError("禁止访问 IP 形式地址", "DOMAIN_NOT_ALLOWED")
     policy = BrowserPolicy.from_settings()
-    if not is_allowed_domain(host, policy.allowed_domains):
+    effective_allowed_domains = [domain.lower().strip().rstrip(".") for domain in (allowed_domains if allowed_domains is not None else policy.allowed_domains) if domain and str(domain).strip()]
+    effective_blocked_domains = [domain.lower().strip().rstrip(".") for domain in (blocked_domains if blocked_domains is not None else policy.blocked_domains) if domain and str(domain).strip()]
+    if effective_blocked_domains and is_blocked_domain(host, effective_blocked_domains):
+        raise BrowserPolicyError("域名在黑名单中", "DOMAIN_NOT_ALLOWED")
+    if not is_allowed_domain(host, effective_allowed_domains):
         raise BrowserPolicyError("域名不在白名单中", "DOMAIN_NOT_ALLOWED")
     if policy.block_private_networks:
         block_private_address(host)
     return urlunsplit((scheme, split.netloc, split.path or "/", split.query, ""))
 
 
-def validate_redirect_target(url: str) -> str:
-    return normalize_url(url)
+def validate_redirect_target(url: str, *, allowed_domains: list[str] | None = None, blocked_domains: list[str] | None = None) -> str:
+    return normalize_url(url, allowed_domains=allowed_domains, blocked_domains=blocked_domains)
 
 
 def is_allowed_domain(host: str, allowed_domains: list[str]) -> bool:
     if not allowed_domains:
         return False
     for domain in allowed_domains:
+        domain = domain.lower().strip().rstrip(".")
+        if host == domain or host.endswith(f".{domain}"):
+            return True
+    return False
+
+
+def is_blocked_domain(host: str, blocked_domains: list[str]) -> bool:
+    for domain in blocked_domains:
         domain = domain.lower().strip().rstrip(".")
         if host == domain or host.endswith(f".{domain}"):
             return True

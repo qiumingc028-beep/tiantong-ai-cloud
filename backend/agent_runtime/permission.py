@@ -53,6 +53,9 @@ def evaluate_permission(
                 raise ExecutorUnavailableError("浏览器只读能力已关闭")
         elif not settings.BROWSER_CONTROL_ENABLED:
             raise ExecutorUnavailableError("浏览器控制能力已关闭")
+    elif chosen_executor == "research":
+        if not settings.PUBLIC_RESEARCH_ENABLED:
+            raise ExecutorUnavailableError("公开研究能力已关闭")
     elif chosen_executor != "mock" and not settings.REAL_EXECUTOR_ENABLED:
         raise ExecutorUnavailableError("真实执行器已关闭")
     if chosen_executor == "desktop" and not settings.COMPUTER_CONTROL_ENABLED:

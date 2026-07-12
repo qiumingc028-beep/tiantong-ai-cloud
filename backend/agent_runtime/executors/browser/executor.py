@@ -37,7 +37,9 @@ class ReadonlyHttpBrowserExecutor:
         if not settings.BROWSER_READONLY_ENABLED and not settings.BROWSER_CONTROL_ENABLED:
             raise BrowserPolicyError("浏览器只读执行器未启用", "BROWSER_DISABLED")
         request_url = str(context.input_payload.get("url") or context.input_payload.get("target_url") or "").strip()
-        normalize_url(request_url)
+        allowed_domains = _task_allowed_domains(context.input_payload)
+        blocked_domains = _task_blocked_domains(context.input_payload)
+        normalize_url(request_url, allowed_domains=allowed_domains, blocked_domains=blocked_domains)
 
     def execute(self, context: ExecutorContext) -> ExecutorResult:
         self.validate(context)
@@ -45,7 +47,9 @@ class ReadonlyHttpBrowserExecutor:
         started_at = datetime.now(timezone.utc)
         start_clock = time.perf_counter()
         request_url = str(context.input_payload.get("url") or context.input_payload.get("target_url") or "").strip()
-        request_url = normalize_url(request_url)
+        allowed_domains = _task_allowed_domains(context.input_payload)
+        blocked_domains = _task_blocked_domains(context.input_payload)
+        request_url = normalize_url(request_url, allowed_domains=allowed_domains, blocked_domains=blocked_domains)
         allow_redirects = bool(context.input_payload.get("allow_redirects", True))
         method = str(context.input_payload.get("method") or "GET").strip().upper()
         if method not in {"GET", "HEAD"}:
@@ -59,6 +63,8 @@ class ReadonlyHttpBrowserExecutor:
             fetched = fetch_document(
                 request_url=request_url,
                 policy=policy,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
                 allow_redirects=allow_redirects,
                 method=method,
                 timeout_seconds=timeout_seconds,
@@ -207,6 +213,8 @@ def fetch_document(
     *,
     request_url: str,
     policy: BrowserPolicy,
+    allowed_domains: list[str] | None,
+    blocked_domains: list[str] | None,
     allow_redirects: bool,
     method: str,
     timeout_seconds: int,
@@ -221,7 +229,7 @@ def fetch_document(
         "Accept": "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.1",
     }
     for _ in range(policy.max_redirects + 1):
-        validate_request_url(current_url, policy)
+        validate_request_url(current_url, policy, allowed_domains=allowed_domains, blocked_domains=blocked_domains)
         request = urllib.request.Request(current_url, headers=headers, method=method)
         try:
             with opener.open(request, timeout=timeout_seconds) as response:
@@ -250,7 +258,7 @@ def fetch_document(
                 location = exc.headers.get("Location") if exc.headers else None
                 if not location:
                     raise BrowserFetchError("重定向缺少目标地址", "REDIRECT_BLOCKED", http_status=status_code)
-                next_url = validate_redirect_target(urljoin(current_url, location))
+                next_url = validate_redirect_target(urljoin(current_url, location), allowed_domains=allowed_domains, blocked_domains=blocked_domains)
                 redirect_chain.append(sanitize_url(next_url))
                 current_url = next_url
                 continue
@@ -266,13 +274,33 @@ def fetch_document(
     raise BrowserFetchError("重定向次数超限", "REDIRECT_BLOCKED", retryable=False)
 
 
-def validate_request_url(url: str, policy: BrowserPolicy) -> None:
-    normalized = normalize_url(url)
+def validate_request_url(url: str, policy: BrowserPolicy, *, allowed_domains: list[str] | None, blocked_domains: list[str] | None) -> None:
+    normalized = normalize_url(url, allowed_domains=allowed_domains, blocked_domains=blocked_domains)
     if policy.block_private_networks:
         # normalize_url already checks private addresses and domain whitelist.
         return
     if not normalized:
         raise BrowserPolicyError("URL 无效", "URL_NOT_ALLOWED")
+
+
+def _task_allowed_domains(payload: dict[str, Any]) -> list[str] | None:
+    raw = payload.get("allowed_domains") or payload.get("allowedDomains") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return None
+    items = [str(item).strip().rstrip("/") for item in raw if str(item).strip()]
+    return items or None
+
+
+def _task_blocked_domains(payload: dict[str, Any]) -> list[str] | None:
+    raw = payload.get("blocked_domains") or payload.get("blockedDomains") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return None
+    items = [str(item).strip().rstrip("/") for item in raw if str(item).strip()]
+    return items or None
 
 
 def extract_structured_fields_from_json(parsed_json: Any, payload: dict[str, Any]) -> dict[str, Any]:

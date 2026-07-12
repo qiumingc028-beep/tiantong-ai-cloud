@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>研究记录 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+    .app{min-height:100vh;display:grid;grid-template-columns:240px 1fr}
+    .side{background:#101827;color:#cbd5e1;padding:18px 14px}
+    .brand{font-size:18px;font-weight:700;color:#fff;padding:12px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
+    .menu{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+    .menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px}
+    .menu a.active,.menu a:hover{background:#1f2937;color:#fff}
+    .top{min-height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}
+    .content{padding:24px}
+    .hero{background:linear-gradient(135deg,#0f172a,#1d4ed8);color:#fff;border-radius:10px;padding:22px;margin-bottom:16px}
+    .hero h1{margin:0;font-size:28px}
+    .hero p{margin:8px 0 0;color:#dbeafe;line-height:1.7}
+    .grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:16px}
+    .card,.panel{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px}
+    .card .label{color:var(--muted);font-size:13px}.card .value{font-size:22px;font-weight:700;margin-top:8px}
+    .two{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:16px}
+    .table{overflow:auto;border:1px solid var(--line);border-radius:8px;background:#fff}
+    table{width:100%;border-collapse:collapse;min-width:1100px}
+    th,td{padding:12px;border-bottom:1px solid var(--line);text-align:left;font-size:14px;vertical-align:top}
+    th{background:#f8fafc;color:#475569}
+    button,input,select,textarea{font:inherit;border-radius:8px;border:1px solid #cbd5e1;background:#fff}
+    button{background:var(--dark);color:#fff;padding:10px 12px;border:0;cursor:pointer}
+    button.secondary{background:#fff;color:var(--ink);border:1px solid var(--line)}
+    .detail{display:grid;gap:10px}
+    .row{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px 10px}
+    .row div:nth-child(odd){color:var(--muted)}
+    .muted{color:var(--muted);line-height:1.6}
+    .mono{font-family:Consolas,monospace}
+    pre{white-space:pre-wrap;word-break:break-word;background:#0f172a;color:#e2e8f0;border-radius:8px;padding:14px;max-height:420px;overflow:auto}
+    @media(max-width:1180px){.app{grid-template-columns:1fr}.grid,.two,.row{grid-template-columns:1fr}.content{padding:18px}.top{flex-direction:column;align-items:flex-start}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu">
+      <a href="/agent-runtime.html">Agent Runtime</a>
+      <a href="/capability-center.html">能力中心</a>
+      <a href="/execution-records.html">执行记录</a>
+      <a href="/research-records.html" class="active">研究记录</a>
+      <a href="/browser-readonly-test.html">公开网页采集</a>
+      <a href="/task-center.html">任务中心</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="top">
+      <strong>研究记录</strong>
+      <div class="muted">多来源公开信息研究与证据链闭环</div>
+    </header>
+    <section class="content">
+      <section class="hero">
+        <h1>研究记录</h1>
+        <p>展示研究主题、查询数量、来源数量、可信度、冲突信息与研究报告。内容均来自受控、只读、可审计的研究执行记录。</p>
+      </section>
+      <section class="grid">
+        <div class="card"><div class="label">记录数</div><div id="total" class="value">0</div></div>
+        <div class="card"><div class="label">成功</div><div id="successCount" class="value">0</div></div>
+        <div class="card"><div class="label">冲突</div><div id="conflictCount" class="value">0</div></div>
+        <div class="card"><div class="label">有效来源</div><div id="sourceCount" class="value">0</div></div>
+        <div class="card"><div class="label">查询数</div><div id="queryCount" class="value">0</div></div>
+        <div class="card"><div class="label">状态</div><div id="state" class="value">加载中</div></div>
+      </section>
+      <section class="two">
+        <div class="panel">
+          <h2>研究列表</h2>
+          <div class="table"><table>
+            <thead><tr><th>主题</th><th>员工</th><th>状态</th><th>查询</th><th>来源</th><th>有效来源</th><th>冲突</th><th>可信度</th><th>创建时间</th><th>操作</th></tr></thead>
+            <tbody id="rows"><tr><td colspan="10" class="muted">加载中...</td></tr></tbody>
+          </table></div>
+        </div>
+        <div class="panel">
+          <h2>研究详情</h2>
+          <div id="detail" class="detail"><div class="muted">请选择一条研究记录查看。</div></div>
+        </div>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function badge(text, cls=''){return `<span style="display:inline-flex;padding:4px 8px;border-radius:999px;background:${cls==='ok'?'#dcfce7':cls==='warn'?'#fef3c7':'#fee2e2'};color:${cls==='ok'?'#166534':cls==='warn'?'#92400e':'#991b1b'};font-size:12px">${esc(text)}</span>`}
+async function api(url){const res=await fetch(url,{credentials:'include'});if(!res.ok){const d=await res.json().catch(()=>({}));throw new Error(d.detail||`${res.status}`)}return res.json()}
+let records=[];
+async function init(){await load()}
+async function load(){
+  $('state').innerText='加载中';
+  try{
+    const data=await api('/api/v2/research/executions');
+    records=data.items||[];
+    $('total').innerText=String(records.length);
+    $('successCount').innerText=String(records.filter(r=>r.status==='success').length);
+    $('conflictCount').innerText=String(records.reduce((sum,r)=>sum+(r.conflict_count||0),0));
+    $('sourceCount').innerText=String(records.reduce((sum,r)=>sum+(r.valid_source_count||0),0));
+    $('queryCount').innerText=String(records.reduce((sum,r)=>sum+(r.query_count||0),0));
+    $('state').innerText='已刷新';
+    $('rows').innerHTML=records.length?records.map((r,i)=>`<tr>
+      <td><strong>${esc(r.research_topic)}</strong><div class="muted">${esc(r.research_goal)}</div></td>
+      <td>${esc(r.employee_name||r.employee_id||'—')}</td>
+      <td>${badge(r.status_label||r.status,r.status==='success'?'ok':r.status==='failed'?'bad':'warn')}</td>
+      <td>${esc(r.query_count||0)}</td>
+      <td>${esc(r.source_count||0)}</td>
+      <td>${esc(r.valid_source_count||0)}</td>
+      <td>${esc(r.conflict_count||0)}</td>
+      <td>${esc((r.report_hash||'').slice(0,8)||'—')}</td>
+      <td>${esc(r.created_at||'')}</td>
+      <td><button class="secondary" onclick="showDetail(${i})">查看详情</button></td>
+    </tr>`).join(''):'<tr><td colspan="10" class="muted">暂无研究记录</td></tr>';
+    if(records[0]) showDetail(0);
+  }catch(e){
+    $('state').innerText='加载失败';
+    $('rows').innerHTML=`<tr><td colspan="10" class="muted">${esc(e.message||'请稍后重试')}</td></tr>`;
+  }
+}
+async function showDetail(index){
+  const r=records[index];
+  if(!r) return;
+  const detail=await api(`/api/v2/research/executions/${encodeURIComponent(r.execution_id)}`);
+  const ex=detail.execution;
+  const out=ex.output_payload||{};
+  const sources=await api(`/api/v2/research/executions/${encodeURIComponent(r.execution_id)}/sources`).catch(()=>({items:[]}));
+  const claims=await api(`/api/v2/research/executions/${encodeURIComponent(r.execution_id)}/claims`).catch(()=>({items:[]}));
+  const evidence=await api(`/api/v2/research/executions/${encodeURIComponent(r.execution_id)}/evidence`).catch(()=>({items:[]}));
+  $('detail').innerHTML=`<div class="row">
+    <div>研究主题</div><div><strong>${esc(ex.research_topic)}</strong></div>
+    <div>研究目标</div><div>${esc(ex.research_goal)}</div>
+    <div>执行状态</div><div>${esc(ex.status_label||ex.status)}</div>
+    <div>查询数量</div><div>${esc(ex.query_count)}</div>
+    <div>来源数量</div><div>${esc(ex.source_count)}</div>
+    <div>有效来源</div><div>${esc(ex.valid_source_count)}</div>
+    <div>去重数量</div><div>${esc(ex.duplicate_count)}</div>
+    <div>冲突数量</div><div>${esc(ex.conflict_count)}</div>
+    <div>不确定事项</div><div>${esc(ex.uncertainty_count)}</div>
+    <div>报告 Hash</div><div class="mono">${esc(out.report_hash||'')}</div>
+    <div>Trace ID</div><div class="mono">${esc(ex.trace_id)}</div>
+    <div>外部指令注入</div><div>${out.external_content_instruction_detected?'已检测':'未检测'}</div>
+  </div>
+  <div class="muted" style="margin-top:8px">研究计划</div>
+  <pre>${esc(out.report_content||'暂无报告')}</pre>
+  <div class="muted">安全事件（${(out.security_events||[]).length}）</div>
+  <pre>${esc(JSON.stringify(out.security_events||[], null, 2))}</pre>
+  <div class="muted">浏览器读取（${(out.browser_reads||[]).length}）</div>
+  <pre>${esc(JSON.stringify(out.browser_reads||[], null, 2))}</pre>
+  <div class="muted">来源清单（${sources.items.length}）</div>
+  <pre>${esc(JSON.stringify(sources.items, null, 2))}</pre>
+  <div class="muted">证据链（${evidence.items.length}）</div>
+  <pre>${esc(JSON.stringify(evidence.items, null, 2))}</pre>
+  <div class="muted">交叉验证（${claims.items.length}）</div>
+  <pre>${esc(JSON.stringify(claims.items, null, 2))}</pre>`;
+}
+init();
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@ from typing import Any, Protocol
 from .audit import payload_summary
 from .executor_types import ExecutorContext, ExecutorProtocol, ExecutorResult
 from .executors.browser.executor import ReadonlyHttpBrowserExecutor
+from ..research_runtime.executor import ResearchExecutor
 
 
 class MockExecutor:
@@ -100,6 +101,7 @@ class MockExecutor:
 EXECUTORS: dict[str, ExecutorProtocol] = {
     "mock": MockExecutor(),
     "browser": ReadonlyHttpBrowserExecutor(),
+    "research": ResearchExecutor(),
 }
 
 
