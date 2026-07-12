@@ -3,10 +3,47 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Skill Center V1 - 天统AI云中台</title>
+  <title>技能中心 - 天统AI云中台</title>
   <style>
     :root{--bg:#f5f7fb;--panel:#fff;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--nav:#101827;--blue:#2563eb;--green:#15803d;--yellow:#b45309;--red:#b91c1c}
-    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.side{background:var(--nav);color:#cbd5e1;padding:18px 14px}.brand{height:58px;color:white;font-size:18px;font-weight:800;padding:14px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}.top h1{font-size:19px;margin:0}.meta,.filters,.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pill{display:inline-flex;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:13px}.pill.readonly{border-color:#bfdbfe;background:#eff6ff;color:#1d4ed8}.content{padding:24px}.hero,.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:16px}.hero h2{margin:0;font-size:24px}.hero p{color:var(--muted);line-height:1.65;margin:8px 0 0}.stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.stat{border:1px solid var(--line);border-radius:8px;background:#fff;padding:14px}.stat .label{font-size:13px;color:var(--muted)}.stat .value{font-size:24px;font-weight:800;margin-top:8px}.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.section-head h3{margin:0;font-size:18px}.filters input,.filters select{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-family:inherit;padding:0 10px;min-width:160px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.skill-card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:14px;min-height:190px}.skill-card h4{font-size:16px;margin:0 0 6px}.muted{color:var(--muted);line-height:1.65}.code{font-family:Consolas,monospace;color:#1d4ed8}.kv{display:grid;grid-template-columns:108px 1fr;gap:7px 10px;font-size:14px;margin-top:10px}.kv div:nth-child(odd){color:var(--muted)}.tag{border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;background:#f1f5f9;color:#475569;display:inline-flex;margin:2px}.tag.low,.tag.approved,.tag.readonly{background:#dcfce7;color:#166534}.tag.medium,.tag.review,.tag.pending{background:#fef3c7;color:#92400e}.tag.high,.tag.critical,.tag.deprecated{background:#fee2e2;color:#991b1b}.empty-state{text-align:center;border:1px dashed var(--line);border-radius:8px;padding:28px;color:var(--muted);background:#fbfdff}.notice{border:1px solid #bfdbfe;background:#eff6ff;color:#1e40af;border-radius:8px;padding:14px;line-height:1.65}.state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:16px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:8px 11px;background:#111827;color:#fff;font-size:14px}.btn.secondary{background:#fff;color:var(--ink)}@media(max-width:1180px){.stats{grid-template-columns:repeat(3,1fr)}.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.app{grid-template-columns:1fr}.side{display:none}.top{align-items:flex-start;flex-direction:column}.content{padding:16px}.stats,.grid{grid-template-columns:1fr}.filters input,.filters select{width:100%;min-width:0}.kv{grid-template-columns:1fr}}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+    .app{min-height:100vh;display:grid;grid-template-columns:240px minmax(0,1fr)}
+    .side{background:var(--nav);color:#cbd5e1;padding:18px 14px}
+    .brand{height:58px;color:#fff;font-size:18px;font-weight:800;padding:14px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
+    .menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}
+    .menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}
+    .menu a.active,.menu a:hover{background:#1f2937;color:#fff}
+    .top{min-height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}
+    .top h1{font-size:19px;margin:0}
+    .pill{display:inline-flex;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:13px}
+    .content{padding:24px}
+    .hero,.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:16px}
+    .hero h2{margin:0;font-size:24px}
+    .hero p{color:var(--muted);line-height:1.65;margin:8px 0 0}
+    .stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+    .stat{border:1px solid var(--line);border-radius:8px;background:#fff;padding:14px}
+    .stat .label{font-size:13px;color:var(--muted)}
+    .stat .value{font-size:24px;font-weight:800;margin-top:8px}
+    .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+    .section-head h3{margin:0;font-size:18px}
+    .filters{display:flex;gap:8px;flex-wrap:wrap}
+    .filters input,.filters select{height:38px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-family:inherit;padding:0 10px;min-width:170px}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .card{border:1px solid var(--line);border-radius:8px;background:#fff;padding:14px;min-height:190px}
+    .card h4{font-size:16px;margin:0 0 8px}
+    .muted{color:var(--muted);line-height:1.65}
+    .kv{display:grid;grid-template-columns:112px 1fr;gap:7px 10px;font-size:14px;margin-top:10px}
+    .kv div:nth-child(odd){color:var(--muted)}
+    .tag{border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;background:#f1f5f9;color:#475569;display:inline-flex;margin:2px}
+    .tag.ok{background:#dcfce7;color:#166534}.tag.warn{background:#fef3c7;color:#92400e}.tag.bad{background:#fee2e2;color:#991b1b}
+    .state{border:1px solid var(--line);background:#fff;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:16px}
+    .state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}
+    .empty-state{text-align:center;border:1px dashed var(--line);border-radius:8px;padding:28px;color:var(--muted);background:#fbfdff}
+    .btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:8px 11px;background:#111827;color:#fff;font-size:14px}
+    .btn.secondary{background:#fff;color:var(--ink)}
+    @media(max-width:1100px){.stats{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:760px){.app{grid-template-columns:1fr}.side{display:none}.top{align-items:flex-start;flex-direction:column}.content{padding:16px}.stats,.grid{grid-template-columns:1fr}.filters input,.filters select{width:100%;min-width:0}.kv{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -15,39 +52,34 @@
     <div class="brand">天统AI云中台</div>
     <nav class="menu" aria-label="主导航">
       <a href="/enterprise-brain-console.html">企业大脑总控台</a>
-      <a href="/ai-workforce.html">AI Workforce Center</a>
+      <a href="/ai-workforce.html">AI员工工作台</a>
       <a href="/ai-employee-capability.html">AI员工能力中心</a>
-      <a class="active" href="/skill-center.html">Skill Center</a>
-      <a href="/sop-skill-center.html">SOP / Skill 绑定中心</a>
-      <a href="/tiancang.html">天藏</a>
+      <a class="active" href="/skill-center.html">技能中心</a>
+      <a href="/skill-detail.html">技能详情</a>
+      <a href="/tiancang.html">天藏知识资产中心</a>
     </nav>
   </aside>
   <main>
-    <header class="top" aria-label="顶部状态栏">
-      <h1>Skill Center V1</h1>
-      <div class="meta">
-        <span class="pill">当前组织：天统AI</span>
-        <span id="skillTotalTop" class="pill">技能数量：--</span>
-        <span class="pill readonly">readonly安全模式</span>
-      </div>
+    <header class="top">
+      <h1>技能中心</h1>
+      <div class="pill">默认只读展示</div>
     </header>
     <section class="content">
       <div class="hero">
-        <h2>AI员工技能资产管理中心</h2>
-        <p>集中查看技能名称、所属AI员工、技能版本、使用次数、成功率、风险等级和更新时间。V1 只展示技能资产，不提供技能变更或运行入口。</p>
+        <h2>统一 Skills Engine</h2>
+        <p>这里管理 AI 员工可安装、可授权、可审计的技能。默认关闭真实执行能力，只展示经过审核的技能资产和调用记录。</p>
+        <div class="empty-state" style="margin-top:12px">暂无数据</div>
       </div>
-      <div id="pageState" class="state">正在加载 Skill Center...</div>
+      <div id="pageState" class="state">正在加载技能中心...</div>
 
       <section class="section">
-        <div class="section-head"><h3>技能总览</h3><span class="pill readonly">只读展示</span></div>
-        <span hidden>技能分类 技能状态 使用员工数量 高风险技能数量</span>
+        <div class="section-head"><h3>技能总览</h3><span class="pill">只读视图</span></div>
         <div class="stats">
-          <article class="stat"><div class="label">技能总数量</div><div id="statTotal" class="value">--</div></article>
-          <article class="stat"><div class="label">员工技能数量</div><div id="statEmployees" class="value">--</div></article>
-          <article class="stat"><div class="label">高风险技能数量</div><div id="statRisk" class="value">--</div></article>
-          <article class="stat"><div class="label">平均成功率</div><div id="statSuccess" class="value">--</div></article>
-          <article class="stat"><div class="label">最近更新时间</div><div id="statUpdated" class="value">--</div></article>
-          <article class="stat"><div class="label">审核状态</div><div id="statReview" class="value">只读</div></article>
+          <article class="stat"><div class="label">技能总数</div><div id="statTotal" class="value">--</div></article>
+          <article class="stat"><div class="label">已安装数量</div><div id="statInstalled" class="value">--</div></article>
+          <article class="stat"><div class="label">已启用数量</div><div id="statEnabled" class="value">--</div></article>
+          <article class="stat"><div class="label">待审核数量</div><div id="statReview" class="value">--</div></article>
+          <article class="stat"><div class="label">高风险数量</div><div id="statRisk" class="value">--</div></article>
         </div>
       </section>
 
@@ -55,151 +87,92 @@
         <div class="section-head">
           <h3>技能列表</h3>
           <div class="filters">
-            <input id="searchInput" placeholder="搜索技能 / 员工" oninput="renderSkills()">
-            <select id="employeeFilter" onchange="renderSkills()"><option value="">全部员工</option></select>
-            <select id="riskFilter" onchange="renderSkills()"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
-            <select id="versionFilter" onchange="renderSkills()"><option value="">全部版本</option></select>
+            <input id="searchInput" placeholder="搜索技能名称 / 编码" oninput="renderSkills()">
+            <select id="statusFilter" onchange="renderSkills()"><option value="">全部状态</option></select>
+            <select id="riskFilter" onchange="renderSkills()"><option value="">全部风险</option><option value="低风险">低风险</option><option value="中风险">中风险</option><option value="高风险">高风险</option><option value="极高风险">极高风险</option></select>
           </div>
         </div>
         <div id="skillGrid" class="grid"></div>
       </section>
 
       <section class="section">
-        <div class="section-head"><h3>技能详情</h3><span class="pill readonly">GET /api/ai-employee-skills/skills/{skill_id}</span></div>
-        <div id="detailBox" class="empty-state">请选择技能查看详情</div>
-      </section>
-
-      <section class="section">
-        <div class="section-head"><h3>安全边界</h3></div>
-        <div class="notice">技能只是能力资产。技能不等于权限。页面仅支持查看和进入详情，高风险能力必须 boss_confirm=true 且 security_audited=true。</div>
+        <div class="section-head"><h3>执行记录</h3><a class="btn secondary" href="/skill-detail.html">查看技能详情</a></div>
+        <div id="invocationBox" class="empty-state">暂无执行记录</div>
       </section>
     </section>
   </main>
 </div>
 <script>
-const emptyText='暂无数据';
-let state={skills:[],employees:[],overview:{},pluginSkills:[]};
+const empty='暂无';
+let state={skills:[],summary:{},invocations:[]};
 function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function arr(value){return Array.isArray(value)?value:[]}
-function num(value){return Number.isFinite(Number(value))?Number(value):0}
-function text(value){return value===0?'0':(value?String(value):emptyText)}
-function setText(id,value){const el=document.getElementById(id);if(el)el.innerText=String(value)}
-function tag(value){const safe=String(value||emptyText);return `<span class="tag ${esc(safe.toLowerCase())}">${esc(safe)}</span>`}
-async function api(url){const res=await fetch(url,{credentials:'include'});if(res.status===401){location.href='/login.html';throw new Error('请重新登录')}if(res.status===403)throw new Error('无权限查看 Skill Center');if(!res.ok)throw new Error('数据暂不可用');return res.json()}
-async function optionalApi(url){try{return await api(url)}catch(e){return null}}
-function normalizeSkill(row,source){
-  const employees=arr(row.suitable_employees||row.employees);
-  return {
-    skill_code:row.skill_id||row.skill_code||row.code||'',
-    skill_name:row.skill_name||row.name||emptyText,
-    skill_category:row.skill_category||row.category||emptyText,
-    skill_version:row.skill_version||row.version||emptyText,
-    skill_status:row.skill_status||row.current_status||row.status||'readonly',
-    risk_level:row.risk_level||row.safety_level||'low',
-    review_status:row.review_status||(row.requires_security_audit?'pending':'approved'),
-    suitable_employees:employees.length?employees:[row.employee_name].filter(Boolean),
-    employee_name:row.employee_name||employees.join('、')||emptyText,
-    employee_id:row.employee_id||emptyText,
-    usage_count:num(row.usage_count),
-    success_rate:row.success_rate,
-    updated_time:row.updated_time||row.last_used_at||null,
-    description:row.description||row.summary||emptyText,
-    source
-  };
-}
-function unique(values){return [...new Set(values.filter(Boolean))]}
+function text(value){return value===0?'0':(value?String(value):empty)}
+function fmt(value){return value?String(value).slice(0,19).replace('T',' '):empty}
+function tag(value){const v=String(value||empty);const k=v.includes('高')?'bad':(v.includes('待')?'warn':'ok');return `<span class="tag ${k}">${esc(v)}</span>`}
+async function api(url){const res=await fetch(url,{credentials:'include'});const data=await res.json().catch(()=>({}));if(res.status===401){location.href='/login.html';throw new Error('请先登录');}if(res.status===403)throw new Error(data.detail||'当前账号无权访问技能中心');if(!res.ok)throw new Error(data.detail||'技能中心暂不可用');return data}
 function renderOverview(){
-  const skills=state.skills;
-  const versions=unique(skills.map(row=>row.skill_version));
-  const employeeCount=unique(skills.map(row=>row.employee_id||row.employee_name)).length;
-  const highRisk=skills.filter(row=>['high','critical'].includes(row.risk_level)).length;
-  const reviews=unique(skills.map(row=>row.review_status));
-  setText('skillTotalTop','技能数量：'+skills.length);
-  setText('statTotal',skills.length);
-  setText('statRisk',highRisk);
-  setText('statEmployees',employeeCount);
-  setText('statSuccess',successRateText(state.overview.average_success_rate));
-  setText('statUpdated',state.overview.last_updated?formatTime(state.overview.last_updated):emptyText);
-  setText('statReview',reviews.length||'只读');
-  employeeFilter.innerHTML='<option value="">全部员工</option>'+unique(skills.map(row=>row.employee_name)).map(item=>`<option value="${esc(item)}">${esc(item)}</option>`).join('');
-  versionFilter.innerHTML='<option value="">全部版本</option>'+versions.map(item=>`<option value="${esc(item)}">${esc(item)}</option>`).join('');
+  statTotal.innerText=text(state.summary.total ?? state.skills.length);
+  statInstalled.innerText=text(state.summary.installed ?? state.skills.filter(row=>['已安装','已启用'].includes(row.status)).length);
+  statEnabled.innerText=text(state.summary.enabled ?? state.skills.filter(row=>row.enabled).length);
+  statReview.innerText=text(state.summary.awaiting_review ?? state.skills.filter(row=>['草稿','待审核'].includes(row.status)).length);
+  statRisk.innerText=text(state.summary.high_risk ?? state.skills.filter(row=>['高风险','极高风险'].includes(row.risk_level)).length);
+  statusFilter.innerHTML='<option value="">全部状态</option>'+[...new Set(state.skills.map(row=>row.status).filter(Boolean))].map(item=>`<option value="${esc(item)}">${esc(item)}</option>`).join('');
 }
 function filteredSkills(){
-  const q=searchInput.value.trim().toLowerCase(),employee=employeeFilter.value,risk=riskFilter.value,version=versionFilter.value;
+  const q=searchInput.value.trim().toLowerCase(),status=statusFilter.value,risk=riskFilter.value;
   return state.skills.filter(row=>{
-    const hay=[row.skill_name,row.skill_code,row.employee_name,row.description].join(' ').toLowerCase();
-    return (!q||hay.includes(q))&&(!employee||row.employee_name===employee)&&(!risk||row.risk_level===risk)&&(!version||row.skill_version===version);
+    const hay=[row.skill_code,row.chinese_name,row.category,row.skill_type].join(' ').toLowerCase();
+    return (!q||hay.includes(q))&&(!status||row.status===status)&&(!risk||row.risk_level===risk);
   });
 }
-function successRateText(value){return value===null||value===undefined?emptyText:`${Math.round(Number(value)*100)}%`}
-function formatTime(value){return value?String(value).slice(0,19).replace('T',' '):emptyText}
 function renderSkills(){
   const rows=filteredSkills();
-  skillGrid.innerHTML=rows.length?rows.map(row=>`<article class="skill-card">
-    <h4>${esc(text(row.skill_name))}</h4>
-    <div class="code">${esc(text(row.skill_code))}</div>
-    <p class="muted">${esc(text(row.description))}</p>
+  skillGrid.innerHTML=rows.length?rows.map(row=>`<article class="card">
+    <h4>${esc(text(row.chinese_name))}</h4>
+    <div class="muted">${esc(text(row.skill_code))}</div>
+    <p class="muted">${esc(text(row.chinese_description))}</p>
     <div class="kv">
-      <div>所属AI员工</div><div>${esc(text(row.employee_name))}</div>
-      <div>技能版本</div><div>${esc(text(row.skill_version))}</div>
-      <div>使用次数</div><div>${row.usage_count}</div>
-      <div>成功率</div><div>${successRateText(row.success_rate)}</div>
+      <div>技能类型</div><div>${esc(text(row.skill_type))}</div>
+      <div>分类</div><div>${esc(text(row.category))}</div>
+      <div>状态</div><div>${tag(row.status)}</div>
       <div>风险等级</div><div>${tag(row.risk_level)}</div>
-      <div>更新时间</div><div>${formatTime(row.updated_time)}</div>
-      <div>审核状态</div><div>${tag(row.review_status)}</div>
+      <div>当前版本</div><div>${esc(text(row.current_version?.version || row.current_version_id))}</div>
+      <div>已安装</div><div>${text(row.installed_count)}</div>
+      <div>已启用</div><div>${text(row.enabled_count)}</div>
     </div>
-    <div class="actions" style="margin-top:12px"><button class="btn secondary" type="button" onclick="loadSkillDetail('${esc(row.skill_code)}')">查看详情</button></div>
-  </article>`).join(''):'<div class="empty-state">暂无数据</div>';
+    <div style="margin-top:12px"><a class="btn secondary" href="/skill-detail.html?code=${encodeURIComponent(row.skill_code)}">查看详情</a></div>
+  </article>`).join(''):'<div class="empty-state">暂无技能数据</div>';
 }
-async function loadSkillDetail(skillId){
-  try{
-    detailBox.className='state';
-    detailBox.innerText='正在加载技能详情...';
-    const data=await api('/api/ai-employee-skills/skills/'+encodeURIComponent(skillId));
-    const skill=data.skill||{};
-    detailBox.className='skill-card';
-    detailBox.innerHTML=`<h4>${esc(text(skill.skill_name))}</h4>
-      <div class="kv">
-        <div>技能名称</div><div>${esc(text(skill.skill_name))}</div>
-        <div>技能版本</div><div>${esc(text(skill.skill_version))}</div>
-        <div>所属AI员工</div><div>${arr(data.employees).map(row=>esc(row.employee_name)).join('、')||emptyText}</div>
-        <div>使用次数</div><div>${num(skill.usage_count)}</div>
-        <div>成功率</div><div>${successRateText(skill.success_rate)}</div>
-        <div>风险等级</div><div>${tag(skill.risk_level)}</div>
-        <div>更新时间</div><div>${formatTime(skill.updated_time)}</div>
-      </div>`;
-  }catch(e){
-    detailBox.className='state error';
-    detailBox.innerText='技能详情当前数据暂不可用';
-  }
-}
-function renderEmpty(){
-  state={skills:[],employees:[],overview:{},pluginSkills:[]};
-  renderOverview();
-  renderSkills();
+function renderInvocations(){
+  const rows=arr(state.invocations);
+  invocationBox.innerHTML=rows.length?rows.slice(0,8).map(row=>`<div class="state">
+    <strong>${esc(text(row.status))}</strong> · ${esc(text(row.input_summary || row.output_summary || row.error_message))}
+    <div class="muted">员工ID：${esc(text(row.employee_id))} · 开始：${esc(fmt(row.started_at))} · 时长：${esc(text(row.duration_ms))}ms</div>
+  </div>`).join(''):'<div class="empty-state">暂无执行记录</div>';
 }
 async function init(){
   try{
-    const [employeeSkills,sopSkills,pluginSkills,overview,employees]=await Promise.all([
-      api('/api/ai-employee-skills/skills'),
-      optionalApi('/api/sop-skill-center/skills'),
-      optionalApi('/api/skill-plugin-center/skills'),
-      optionalApi('/api/sop-skill-center/overview'),
-      optionalApi('/api/sop-skill-center/employees')
+    const [skills, invocations] = await Promise.all([
+      api('/api/v2/skills'),
+      api('/api/v2/skills/invocations')
     ]);
-    const rows=arr(employeeSkills&&employeeSkills.skills).map(row=>normalizeSkill(row,'ai_employee_skills'));
-    state={skills:rows,employees:arr(employees&&employees.employees),overview:(employeeSkills&&employeeSkills.summary)||overview||{},pluginSkills:arr(pluginSkills&&pluginSkills.skills)};
+    state.skills=arr(skills.skills);
+    state.summary=skills.summary||{};
+    state.invocations=arr(invocations.invocations);
     renderOverview();
     renderSkills();
+    renderInvocations();
     pageState.className='state ok';
-    pageState.innerText='Skill Center 已加载。当前为只读展示。';
-  }catch(e){
-    renderEmpty();
-    pageState.className='state error';
-    pageState.innerText='当前数据暂不可用';
+    pageState.innerText='技能中心已加载，当前为只读管理视图。';
+  }catch(error){
+    pageState.className='state warn';
+    pageState.innerText=error.message || '技能中心暂不可用。';
+    renderOverview();
+    renderSkills();
+    renderInvocations();
   }
 }
-renderEmpty();
 init();
 </script>
 </body>

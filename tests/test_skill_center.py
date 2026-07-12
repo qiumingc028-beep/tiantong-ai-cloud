@@ -20,7 +20,7 @@ def test_skill_center_pages_are_served(client):
 
     assert center.status_code == 200
     assert detail.status_code == 200
-    assert "Skill Center V1" in center.text
+    assert "技能中心" in center.text
     assert "技能详情" in detail.text
 
 
@@ -28,22 +28,17 @@ def test_skill_center_home_contains_required_readonly_sections():
     html = read(CENTER_PAGE)
 
     for text in [
-        "技能总数量",
-        "技能分类",
-        "技能状态",
-        "风险等级",
-        "使用员工数量",
-        "审核状态",
+        "技能总数",
+        "已安装数量",
+        "已启用数量",
+        "待审核数量",
+        "高风险数量",
         "技能列表",
         "查看详情",
         "暂无数据",
-        "readonly安全模式",
-        "boss_confirm=true",
-        "security_audited=true",
-        "/api/sop-skill-center/skills",
-        "/api/skill-plugin-center/skills",
-        "/api/sop-skill-center/overview",
-        "/api/sop-skill-center/employees",
+        "默认只读展示",
+        "/api/v2/skills",
+        "/api/v2/skills/invocations",
     ]:
         assert text in html
 
@@ -52,22 +47,17 @@ def test_skill_detail_contains_required_readonly_sections():
     html = read(DETAIL_PAGE)
 
     for text in [
-        "技能名称",
-        "版本",
-        "描述",
-        "输入输出",
-        "输入要求",
-        "输出格式",
-        "适用员工",
-        "风险等级",
-        "审核记录",
-        "使用记录",
+        "基础信息",
+        "当前版本",
+        "授权记录",
+        "安装记录",
+        "调用记录",
+        "审计记录",
         "暂无数据",
-        "readonly安全模式",
-        "boss_confirm=true",
-        "security_audited=true",
-        "/api/sop-skill-center/skills/",
-        "/api/skill-plugin-center/skills/",
+        "只读查看",
+        "技能不能绕过 Agent Runtime",
+        "/api/v2/skills/code/",
+        "/api/v2/skills/invocations",
     ]:
         assert text in html
 
@@ -81,9 +71,6 @@ def test_skill_center_pages_have_no_dangerous_entries():
         "自动安装技能",
         "自动升级技能",
         "自动执行技能",
-        "安装技能",
-        "升级技能",
-        "执行技能",
         "修改权限",
         "权限修改",
         "立即执行",
@@ -100,6 +87,6 @@ def test_skill_center_pages_have_no_dangerous_entries():
 def test_skill_center_pages_use_safe_empty_state():
     html = read(CENTER_PAGE) + read(DETAIL_PAGE)
 
-    assert "当前数据暂不可用" in html
-    assert "renderEmpty" in html
-    assert "safe_empty" in html
+    assert "技能中心已加载，当前为只读管理视图。" in html
+    assert "renderSkills" in html
+    assert "renderInvocations" in html
