@@ -268,6 +268,7 @@ def invocation_to_dict(invocation: SkillInvocation) -> dict:
     return {
         "invocation_id": invocation.id,
         "skill_id": invocation.skill_id,
+        "skill_code": invocation.skill.skill_code if invocation.skill else None,
         "skill_version_id": invocation.skill_version_id,
         "installation_id": invocation.installation_id,
         "employee_id": invocation.employee_id,

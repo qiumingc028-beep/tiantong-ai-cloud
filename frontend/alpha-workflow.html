@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Alpha Workflow - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f7fb;--panel:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--dark:#111827;--blue:#2563eb;--green:#15803d;--red:#b91c1c;--yellow:#b45309}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}.app{min-height:100vh;display:grid;grid-template-columns:260px minmax(0,1fr)}.side{background:#101827;color:#cbd5e1;padding:18px 14px}.brand{height:56px;color:#fff;font-size:18px;font-weight:800;padding:14px 10px;border-bottom:1px solid rgba(255,255,255,.08)}.menu{display:flex;flex-direction:column;gap:4px;margin-top:14px}.menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px;font-size:14px}.menu a.active,.menu a:hover{background:#1f2937;color:white}.top{min-height:64px;background:white;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}.top .meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pill{display:inline-flex;border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:13px}.content{padding:24px}.hero{background:linear-gradient(135deg,#111827,#0f766e 58%,#2563eb);color:white;border-radius:8px;padding:24px;margin-bottom:16px;display:flex;justify-content:space-between;gap:18px;align-items:flex-end}.hero h1{margin:0;font-size:28px}.hero p{margin:8px 0 0;color:#d1fae5;line-height:1.6}.note{max-width:520px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:12px;line-height:1.6}.state{border:1px solid var(--line);background:white;border-radius:8px;padding:12px;color:var(--muted);margin-bottom:12px}.state.ok{border-color:#bbf7d0;background:#f0fdf4;color:#166534}.state.warn{border-color:#fde68a;background:#fffbeb;color:#92400e}.state.error{border-color:#fecaca;background:#fef2f2;color:#991b1b}.grid{display:grid;gap:12px}.summary{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:16px}.card{background:white;border:1px solid var(--line);border-radius:8px;padding:16px}.card h2{margin:0 0 10px;font-size:18px}.label{font-size:12px;color:var(--muted)}.value{font-size:28px;font-weight:800;margin-top:6px}.mono{font-family:Consolas,monospace}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:8px;background:var(--dark);color:white;padding:9px 13px;cursor:pointer;text-decoration:none;display:inline-flex}.btn.secondary{background:white;color:var(--ink);border:1px solid var(--line)}.input{width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-family:inherit}.textarea{width:100%;min-height:104px;resize:vertical;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-family:inherit}.list{display:flex;flex-direction:column;gap:10px}.item{border:1px solid var(--line);border-radius:8px;padding:12px;background:#f8fafc}.badge{display:inline-flex;border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;background:#e2e8f0;color:#475569}.badge.good{background:#dcfce7;color:#166534}.badge.bad{background:#fee2e2;color:#991b1b}.badge.warn{background:#fef3c7;color:#92400e}.kv{display:grid;grid-template-columns:170px minmax(0,1fr);gap:8px 10px}.muted{color:var(--muted);line-height:1.6}.section{margin-bottom:16px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{font-size:12px;color:var(--muted);background:#f8fafc}@media(max-width:1000px){.app{grid-template-columns:1fr}.side{display:none}.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.kv{grid-template-columns:1fr}}@media(max-width:760px){.content{padding:16px}.top{align-items:flex-start;flex-direction:column}.summary{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu">
+      <a href="/enterprise-brain-console.html">企业大脑总控台</a>
+      <a href="/task-center.html">Task Center</a>
+      <a href="/research-records.html">Research 记录</a>
+      <a href="/knowledge-center.html">天藏知识中心</a>
+      <a href="/skill-center.html">技能中心</a>
+      <a class="active" href="/alpha-workflow.html">Alpha Workflow</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="top">
+      <strong>Alpha Workflow</strong>
+      <div class="meta">
+        <span id="time" class="pill"></span>
+        <span id="me" class="pill">加载中</span>
+      </div>
+    </header>
+    <section class="content">
+      <div class="hero">
+        <div>
+          <h1>第一次端到端 Alpha 验证</h1>
+          <p>把 Task Center、Orchestrator、Research、Knowledge Center、Skills Engine、Agent Runtime、Workflow 和 Dashboard 串成一个可审计的闭环。</p>
+          <p>Task → Research → Knowledge → Skills → Workflow → Dashboard</p>
+        </div>
+        <div class="note">
+          仅在受控测试环境使用。默认所有底层 Feature Flag 保持关闭；本页面只是 Alpha 链路的入口与只读观测面板。
+          <br>支持全链路状态追踪、全链路审计、全链路失败恢复、全链路质量评分，并将结果展示到老板驾驶舱。
+          <br>接口：/api/v2/alpha-workflows/health、/api/v2/alpha-workflows/scenarios、/api/v2/alpha-workflows/demo、/api/v2/alpha-workflows/runs/{id}
+        </div>
+      </div>
+
+      <div id="pageState" class="state">正在加载 Alpha Workflow...</div>
+
+      <section class="grid summary">
+        <div class="card"><div class="label">场景数</div><div id="metricScenarios" class="value">-</div></div>
+        <div class="card"><div class="label">运行数</div><div id="metricRuns" class="value">-</div></div>
+        <div class="card"><div class="label">已完成</div><div id="metricCompleted" class="value">-</div></div>
+        <div class="card"><div class="label">失败数</div><div id="metricFailed" class="value">-</div></div>
+      </section>
+
+      <section class="grid" style="grid-template-columns: 1.2fr .8fr; margin-bottom:16px">
+        <div class="card">
+          <h2>启动示例流程</h2>
+          <div class="muted">老板输入示例：研究 Apple 最新 AI 战略。点击后将创建 Task Center 任务并串联全链路只读闭环。</div>
+          <div style="margin-top:12px" class="section">
+            <textarea id="inputText" class="textarea" placeholder="研究 Apple 最新 AI 战略">研究 Apple 最新 AI 战略</textarea>
+          </div>
+          <div class="actions">
+            <button onclick="startDemo()">启动 Alpha 闭环</button>
+            <button class="btn secondary" onclick="loadDashboard()">刷新面板</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>当前状态</h2>
+          <div id="currentState" class="kv"></div>
+        </div>
+      </section>
+
+      <section class="card section">
+        <div class="actions" style="justify-content:space-between;align-items:center">
+          <h2>最近运行</h2>
+          <span class="pill">只读展示</span>
+        </div>
+        <div id="runList" class="list"></div>
+      </section>
+
+      <section class="grid" style="grid-template-columns: 1fr 1fr; margin-bottom:16px">
+        <div class="card">
+          <div class="actions" style="justify-content:space-between;align-items:center">
+            <h2>场景列表</h2>
+            <span class="pill">Alpha Scenario</span>
+          </div>
+          <div id="scenarioList" class="list"></div>
+        </div>
+        <div class="card">
+          <div class="actions" style="justify-content:space-between;align-items:center">
+            <h2>运行详情</h2>
+            <span class="pill">Trace / Audit · 老板驾驶舱展示结果</span>
+          </div>
+          <pre id="runDetail" class="muted" style="white-space:pre-wrap;word-break:break-word">选择一条运行记录查看详情。</pre>
+        </div>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function fmt(value){return value?String(value).slice(0,19).replace('T',' '):'暂无'}
+function tick(){time.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function api(url,opt={}){const res=await fetch(url,{credentials:'include',...opt});if(res.status===401){location.href='/login.html';throw new Error('登录已失效，请重新登录');}const data=res.ok?null:await res.json().catch(()=>({}));if(res.status===403)throw new Error(data&&data.detail||'无 Alpha Workflow 权限');if(res.status>=400&&!res.ok)throw new Error(data&&data.detail||'请求失败');return res.json()}
+async function init(){tick();setInterval(tick,1000);try{const meData=await api('/api/me');me.innerText=`${meData.display_name||meData.username||'当前用户'} · ${meData.role_label||meData.role||''}`;await loadDashboard();}catch(err){pageState.className='state error';pageState.innerText=err.message||'页面加载失败';}}
+async function loadDashboard(){pageState.className='state';pageState.innerText='正在加载 Alpha Workflow...';try{const [data,scenarios]=await Promise.all([api('/api/v2/alpha-workflows/dashboard'),api('/api/v2/alpha-workflows/scenarios')]);pageState.className='state ok';pageState.innerText='Alpha Workflow 面板已刷新。';metricScenarios.innerText=data.scenario_count??0;metricRuns.innerText=data.run_count??0;metricCompleted.innerText=data.completed_count??0;metricFailed.innerText=data.failed_count??0;renderScenarios(scenarios.items||[]);renderRuns(data.runs||[]);renderCurrentState(data.latest_run||{});}catch(err){pageState.className='state error';pageState.innerText=err.message||'加载失败';}}
+function renderScenarios(items){if(!items.length){scenarioList.innerHTML='<div class="muted">暂无场景</div>';return}scenarioList.innerHTML=items.map(item=>`<div class="item"><div><span class="badge ${item.enabled?'good':'warn'}">${esc(item.enabled?'启用':'停用')}</span> <strong>${esc(item.title)}</strong></div><div class="muted">${esc(item.scenario_code)} · ${esc(item.description||'')}</div><div class="muted">默认输入：${esc(item.default_input_text||'暂无')}</div></div>`).join('')}
+async function refreshDetail(runId){if(!runId)return;const data=await api(`/api/v2/alpha-workflows/runs/${runId}`);runDetail.textContent=JSON.stringify(data.run,null,2)}
+function renderRuns(runs){if(!runs.length){runList.innerHTML='<div class="muted">暂无运行记录。</div>';return}runList.innerHTML=runs.map(run=>`<div class="item"><div class="actions" style="justify-content:space-between;align-items:flex-start"><div><div><span class="badge ${run.status==='已完成'?'good':run.status==='已失败'?'bad':'warn'}">${esc(run.status)}</span> <strong>${esc(run.scenario_title||'Alpha 场景')}</strong></div><div class="muted">任务 #${esc(run.task_id??'-')} · 质量 ${esc(run.quality_score??'-')} · 风险 ${esc(run.risk_score??'-')} · ${esc(fmt(run.created_at))}</div><div class="muted mono">trace_id: ${esc(run.trace_id||'')}</div></div><button class="btn secondary" onclick="refreshDetail('${esc(run.run_id)}')">查看详情</button></div></div>`).join('')}
+function renderCurrentState(run){currentState.innerHTML=`<div>任务 ID</div><div>${esc(run.task_id??'暂无')}</div><div>Research</div><div>${esc(run.research_execution_id||'暂无')}</div><div>Knowledge</div><div>${esc(run.knowledge_id||'暂无')}</div><div>Skill Invocation</div><div>${esc(run.skill_invocation_id??'暂无')}</div><div>质量 / 风险</div><div>${esc(run.quality_score??'-')} / ${esc(run.risk_score??'-')}</div><div>恢复状态</div><div>${esc(run.recovery_status||'暂无')}</div>`}
+async function startDemo(){const input=inputText.value.trim();if(!input){pageState.className='state warn';pageState.innerText='请输入研究主题。';return}pageState.className='state';pageState.innerText='正在启动 Alpha 闭环...';try{const data=await api('/api/v2/alpha-workflows/demo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input_text:input})});pageState.className='state ok';pageState.innerText='Alpha 闭环已完成，可查看运行详情。';await loadDashboard();await refreshDetail(data.run.run_id||data.run?.run_id||data.run_id);}catch(err){pageState.className='state error';pageState.innerText=err.message||'启动失败';}}
+init();
+</script>
+</body>
+</html>
