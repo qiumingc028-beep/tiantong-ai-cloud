@@ -1,0 +1,82 @@
+=== PATH B ===
+execution_time=2026-07-13T02:56:53+08:00
+current_git_commit=cc8c77914dbc79a6821d8781f626b77a003b4f7f
+database_code=alpha_evidence_b
+postgresql_version=160014
+start_git_commit=cc8c77914dbc79a6821d8781f626b77a003b4f7f
+start_alembic_revision=0037_v2_execution_observability_security_ops
+heads:
+0041_v2_alpha_migration_history_repair (head)
+current_before:
+history:
+Rev: 0041_v2_alpha_migration_history_repair (head)
+Parent: 0040_v2_alpha_workflow_integrity_constraints
+Path: /private/tmp/tiantong-v2-sprint10-observability/alembic/versions/0041_v2_alpha_migration_history_repair.py
+
+    V2 alpha migration history repair
+    
+    Revision ID: 0041_v2_alpha_migration_history_repair
+    Revises: 0040_v2_alpha_workflow_integrity_constraints
+    Create Date: 2026-07-13 00:30:00.000000
+
+Rev: 0040_v2_alpha_workflow_integrity_constraints
+Parent: 0039_v2_alpha_workflow_unified_contract
+Path: /private/tmp/tiantong-v2-sprint10-observability/alembic/versions/0040_v2_alpha_workflow_integrity_constraints.py
+
+    V2 alpha workflow integrity constraints
+    
+    Revision ID: 0040_v2_alpha_workflow_integrity_constraints
+    Revises: 0039_v2_alpha_workflow_unified_contract
+    Create Date: 2026-07-12 23:45:00.000000
+
+Rev: 0039_v2_alpha_workflow_unified_contract
+Parent: 0038_v2_alpha_workflow_engine
+Path: /private/tmp/tiantong-v2-sprint10-observability/alembic/versions/0039_v2_alpha_workflow_unified_contract.py
+
+    V2 alpha workflow unified contract
+    
+    Revision ID: 0039_v2_alpha_workflow_unified_contract
+    Revises: 0038_v2_alpha_workflow_engine
+    Create Date: 2026-07-12 23:15:00.000000
+
+Rev: 0038_v2_alpha_workflow_engine
+Parent: 0037_v2_execution_observability_security_ops
+Path: /private/tmp/tiantong-v2-sprint10-observability/alembic/versions/0038_v2_alpha_workflow_engine.py
+
+    V2 alpha workflow engine
+    
+    Revision ID: 0038_v2_alpha_workflow_engine
+    Revises: 0037_v2_execution_observability_security_ops
+    Create Date: 2026-07-12 22:00:00.000000
+
+upgrade_to_0037:
+current_after_0037:
+0037_v2_execution_observability_security_ops
+upgrade_head:
+current_after_alpha_upgrade:
+0041_v2_alpha_migration_history_repair (head)
+check:
+No new upgrade operations detected.
+upgrade_head_again:
+current_after_second_upgrade:
+0041_v2_alpha_migration_history_repair (head)
+downgrade_0040:
+current_after_downgrade:
+0040_v2_alpha_workflow_integrity_constraints
+re_upgrade_head:
+current_final:
+0041_v2_alpha_migration_history_repair (head)
+constraints_and_triggers:
+postgres_version=160014
+-- constraints --
+('alpha_workflow_events_run_id_fkey', 'f', 'FOREIGN KEY (run_id) REFERENCES alpha_workflow_runs(run_id) ON DELETE RESTRICT')
+('alpha_workflow_runs_created_by_id_fkey', 'f', 'FOREIGN KEY (created_by_id) REFERENCES users(id) ON DELETE SET NULL')
+('alpha_workflow_runs_pkey', 'p', 'PRIMARY KEY (run_id)')
+('alpha_workflow_runs_scenario_id_fkey', 'f', 'FOREIGN KEY (scenario_id) REFERENCES alpha_workflow_scenarios(scenario_id) ON DELETE CASCADE')
+('alpha_workflow_runs_task_id_fkey', 'f', 'FOREIGN KEY (task_id) REFERENCES task_center_tasks(id) ON DELETE SET NULL')
+('alpha_workflow_runs_user_id_fkey', 'f', 'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL')
+('uq_alpha_workflow_events_id', 'p', 'PRIMARY KEY (event_id)')
+('uq_alpha_workflow_runs_trace_id', 'u', 'UNIQUE (trace_id)')
+-- triggers --
+('alpha_workflow_events_no_delete', 'CREATE TRIGGER alpha_workflow_events_no_delete BEFORE DELETE ON public.alpha_workflow_events FOR EACH ROW EXECUTE FUNCTION alpha_workflow_events_append_only()')
+('alpha_workflow_events_no_update', 'CREATE TRIGGER alpha_workflow_events_no_update BEFORE UPDATE ON public.alpha_workflow_events FOR EACH ROW EXECUTE FUNCTION alpha_workflow_events_append_only()')
