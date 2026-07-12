@@ -59,7 +59,9 @@
 - PR 编号：`#3`
 - PR 地址：<https://github.com/qiumingc028-beep/tiantong-ai-cloud/pull/3>
 - PR 目标分支：`develop-v2`
-- PR 状态：已创建，等待审查
+- PR 状态：已合并
+- 合并 Commit：`c3a1c748976fe1d6f52e29539987ef7375af824e`
+- `develop-v2` 最新 Commit：`c3a1c748976fe1d6f52e29539987ef7375af824e`
 
 ## 6. 安全与发布边界
 
@@ -69,6 +71,7 @@
 - 真实执行器仍保持关闭
 - `BROWSER_READONLY_ENABLED` 默认关闭
 - `BROWSER_CONTROL_ENABLED` 默认关闭
+- 功能分支已安全合并进入 `develop-v2`
 
 ## 7. 非阻塞观察
 
