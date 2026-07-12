@@ -13,6 +13,24 @@
 3. `test_installer_reviewer_and_approver_are_separate_roles`：实际仅 2 个不同身份，安装、审核、批准未形成三方分离，也无启用人追踪。最小建议：模型和服务记录独立 actor，并拒绝角色复用。
 4. `test_high_risk_skill_creator_cannot_self_approve`：高风险 Skill 创建者调用 `approve_skill` 未被拒绝。最小建议：批准前比较 `skill.created_by` 与审批人，命中时返回 403。
 
+## 最终修复回归
+
+最终 Commit `eef1ed66638011503c7377d52104258b72ee80d0` 同步后：
+
+- Alpha/Trace/Audit/Approval/Recovery 专项：`31 passed`。
+- Backend 全量：`863 passed, 0 failed, 82 warnings in 158.92s`。
+- 上述全部代码失败均已关闭，没有 skip、xfail、删除或降低断言。
+
+## 尚未关闭的非测试阻塞
+
+Migration 正式证据未通过真实性/完整性验收：
+
+1. `docs/V2_ALPHA_MIGRATION_EVIDENCE.md` 声明“未修改更早历史 Migration”，但 `git diff 3fe8df6..eef1ed6 -- alembic/versions` 明确显示 `M alembic/versions/0005_knowledge_center_tables.py`。
+2. Drift 证据使用 `ALEMBIC_SKIP_SQLITE_DRIFT=1 alembic check`，不能证明未绕过 Drift。
+3. 证据只描述临时 SQLite 从0039升级，没有分别给出V1.0.1基线和develop-v2前一Head的可核验命令、日志、数据库结构快照与校验和。
+
+因此代码测试为零失败，但发布建议仍为 BLOCK，等待①补交自洽且可复核的Migration正式证据。
+
 ## 阻塞失败
 
 1. `test_duplicate_start_is_idempotent_or_explicitly_rejected`

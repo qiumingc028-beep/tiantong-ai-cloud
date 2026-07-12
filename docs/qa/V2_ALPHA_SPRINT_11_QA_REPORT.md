@@ -2,12 +2,12 @@
 
 ## 结论
 
-**BLOCK。** 已同步最终集成 Commit `b04e872135d6c4fe47824a2b88be78943a9e0531`。17 项失败已关闭 13 项；最终全量仍有 4 项失败，因此未达到零失败门槛，PR #19 必须保持 Draft，不得合并。
+**BLOCK（代码零失败，Migration证据未通过）。** 已同步最终 Commit `eef1ed66638011503c7377d52104258b72ee80d0`。全量 `863 passed, 0 failed`，所有代码质量门禁均关闭；但①提供的Migration证据存在历史文件变更声明矛盾和Drift绕过开关，PR #19必须保持Draft。
 
 ## 范围与合规
 
 - 开发分支：`test/v2-alpha-e2e-quality`
-- 最终基线：`origin/feature/v2-alpha-workflow-engine` / `b04e872135d6c4fe47824a2b88be78943a9e0531`
+- 最终基线：`origin/feature/v2-alpha-workflow-engine` / `eef1ed66638011503c7377d52104258b72ee80d0`
 - Contract：`docs/contracts/V2_ALPHA_WORKFLOW_CONTEXT.md`、`docs/contracts/V2_ALPHA_WORKFLOW_API.md`
 - 修改范围仅为 `tests/`、本文和 `artifacts/qa/alpha-sprint11/`。
 - 未修改或执行 `backend/`、`frontend/`、`alembic/`、生产配置及生产环境。
@@ -44,8 +44,9 @@
 - 初始全量结果：**846 passed, 6 failed, 82 warnings in 150.74s**。
 - 补强后全量结果：**846 passed, 17 failed, 82 warnings in 156.24s**。
 - 最终集成全量结果：**859 passed, 4 failed, 82 warnings in 154.13s**。
-- 总数：863，高于 852 与 835 基准；因 4 项失败，不满足“全部通过”。
-- 最终 Alpha 专项：28 项中 24 通过、4 失败。
+- 最终修复全量结果：**863 passed, 0 failed, 82 warnings in 158.92s**。
+- 总数：863，满足数量和零失败标准。
+- 最终 Alpha/质量专项：31 passed。
 - 原有 Alpha/前端专项基线：8 passed。
 
 ## E2E 覆盖阶段
@@ -59,7 +60,7 @@
 | 唯一入口/绕过拒绝 | PASS | 仅 `/demo` 为 Alpha 启动入口；伪造模块启动路径返回 404/405 |
 | WorkflowContext | PASS | 契约字段、核心 ID、终态和敏感键检查通过 |
 | 跨模块 E2E | PASS | 真实 DB 和真实模块服务贯通 |
-| Trace 完整性 | FAIL | Event 字段已齐；Root Event 的 parent 错误自指 |
+| Trace 完整性 | PASS | Root parent为NULL，audit/feedback原生Span存在且无循环 |
 | 审计顺序 | PASS | 时间线有序 |
 | 审计不可覆盖 | PASS | ORM 层拒绝 UPDATE；0040 提供数据库触发器 |
 | Knowledge 唯一来源 | PASS（正常路径） | 正常闭环只产生一个 Knowledge Asset |
@@ -73,9 +74,9 @@
 | 权限不扩张 | PASS | Alpha 源码未引入 Shell/Computer/写 Browser 权限 |
 | Migration 静态图 | PASS | 单 Head 为 0040；重复核心表检查通过 |
 | Service 绕过 | PASS | 缺少 Orchestrator 证明的直接调用被拒绝 |
-| 模块原生 Span | FAIL | 模块事件与 Context Span ID 不关联，audit/feedback 缺失 |
+| 模块原生 Span | PASS | audit/feedback及各模块Span完成关联 |
 | 审计级联删除 | PASS | Event 保留；模型 RESTRICT 且0040禁止删除 |
-| 审批职责分离 | FAIL | 安装、审核、批准身份未分离；高风险 Skill 可自批 |
+| 审批职责分离 | PASS | 安装/审核/批准分离，高风险创建者自批被拒绝 |
 | 逐类恢复幂等 | PASS | Knowledge、Invocation、Audit 第二次恢复均不增长 |
 | 恢复 Root Trace | PASS | 复用 Run、Trace、Root 并创建 recovery child span |
 | 错误码精确一致 | PASS | 400/403/404 与最终 Contract 一致 |
@@ -83,7 +84,7 @@
 
 ## Migration 验收设计与结果
 
-静态验收通过：`0039 → 0040` 链成立，0040 为唯一 Head，核心 Knowledge/Skill/Trace 表无重复创建，Root/Workflow/Orchestrator/Knowledge/Skill 唯一约束与审计 append-only 触发器存在。
+0040静态结构验收通过：`0039 → 0040` 链成立，0040为唯一Head，唯一约束与append-only触发器存在。正式证据验收失败：历史Migration未修改的声明与Git差异矛盾；Drift检查使用跳过开关；缺少V1.0.1与develop-v2前一Head两条独立、可复核升级证据。
 
 以下官方执行证据尚缺，按职责只能由①提供：
 
@@ -101,8 +102,8 @@
 
 ## 阻塞项与最小修复建议
 
-详细证据见 `artifacts/qa/alpha-sprint11/failure-evidence.md`。剩余阻塞：Root Event parent 自指；audit/feedback 原生 Span 缺失；安装/审核/批准/启用职责未完整分离；高风险 Skill 允许创建者自批；①正式 Migration 证据尚未提供。③未修改业务代码。
+详细证据见 `artifacts/qa/alpha-sprint11/failure-evidence.md`。代码阻塞全部关闭。唯一剩余阻塞为Migration正式证据不自洽/不完整。③未修改业务代码或执行Migration。
 
 ## Merge 建议
 
-**BLOCK**。修复剩余 4 项并补交 Migration 官方证据后，重新执行全部 863+ 项测试；只有零失败才可将 Draft PR #19 改为 Ready for Review。
+**BLOCK**。代码测试已满足APPROVE条件，但必须先补交无绕过且与Git历史一致的Migration正式证据；证据通过后方可将PR #19转为Ready for Review。

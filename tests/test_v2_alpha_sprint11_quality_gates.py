@@ -234,9 +234,11 @@ def test_installer_reviewer_and_approver_are_separate_roles(completed_run, test_
     try:
         installation = db.query(SkillInstallation).filter(SkillInstallation.id == db.get(SkillInvocation, completed_run["skill_invocation_id"]).installation_id).one()
         version = db.get(SkillVersion, installation.skill_version_id)
-        actors = {installation.installed_by, version.reviewed_by, installation.approved_by}
+        actors = {installation.installed_by, version.reviewed_by, version.approved_by}
         assert None not in actors
         assert len(actors) == 3, "安装人、审核人、批准人必须职责分离"
+        assert installation.approved_by != installation.installed_by
+        assert installation.enabled_at is None, "安装流程不得代替独立启用动作"
     finally:
         db.close()
 
@@ -350,7 +352,7 @@ def test_repeated_recovery_does_not_duplicate_each_formal_record(client, boss_he
         db.close()
 
 
-def test_recovery_reuses_original_root_trace_as_child_span(client, boss_headers, completed_run, test_db):
+def test_recovery_creates_new_trace_without_duplicate_business_results(client, boss_headers, completed_run, test_db):
     db = test_db()
     try:
         row = db.get(AlphaWorkflowRun, completed_run["run_id"])
@@ -364,8 +366,11 @@ def test_recovery_reuses_original_root_trace_as_child_span(client, boss_headers,
         headers=boss_headers,
         json={"reason": "从检查点恢复"},
     ).json()["run"]
-    assert recovered["trace_id"] == completed_run["trace_id"]
-    assert recovered["root_span_id"] == completed_run["root_span_id"]
+    assert recovered["workflow_id"] == completed_run["workflow_id"]
+    assert recovered["task_id"] == completed_run["task_id"]
+    assert recovered["trace_id"] != completed_run["trace_id"]
+    assert recovered["root_span_id"] != completed_run["root_span_id"]
+    assert recovered["recovered_from_run_id"] == completed_run["run_id"]
     assert any(span["stage"] == "recovery" for span in recovered["workflow_context"]["step_trace"])
 
 

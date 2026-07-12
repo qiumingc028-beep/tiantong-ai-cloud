@@ -1,19 +1,20 @@
 {
-  "contract_commit": "b04e872135d6c4fe47824a2b88be78943a9e0531",
+  "contract_commit": "eef1ed66638011503c7377d52104258b72ee80d0",
   "branch": "test/v2-alpha-e2e-quality",
   "command": "PYTHONDONTWRITEBYTECODE=1 /private/tmp/tiantong-alpha-qa-venv/bin/python -m pytest -q",
   "total": 863,
-  "passed": 859,
-  "failed": 4,
+  "passed": 863,
+  "failed": 0,
   "warnings": 82,
-  "duration_seconds": 154.13,
+  "duration_seconds": 158.92,
   "baseline": 835,
   "baseline_count_met": true,
-  "all_passed": false,
-  "failed_gates": [
-    "root span parent relationship",
-    "module-native span provenance",
-    "installer/reviewer/approver separation",
-    "high-risk skill self-approval prevention"
+  "all_passed": true,
+  "migration_evidence_accepted": false,
+  "failed_gates": [],
+  "external_blockers": [
+    "migration evidence claims historical migrations are unchanged, but 0005_knowledge_center_tables.py differs",
+    "alembic check evidence bypasses SQLite drift with ALEMBIC_SKIP_SQLITE_DRIFT=1",
+    "separate V1.0.1 and develop-v2 predecessor upgrade evidence is absent"
   ]
 }
