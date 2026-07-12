@@ -1,5 +1,23 @@
 # V2 Alpha Sprint 11.1 失败证据
 
+## PR #17 fa9067 新证据审计
+
+只读审计 PR #17 Head：`fa9067fac27ac44264bf4c4df706ccb23366f987`。
+
+当前新增阻塞证据：
+
+1. PR描述与旧证据矛盾：描述称最终Head为 `0041_v2_alpha_migration_history_repair`，但远程 `artifacts/alpha-migration-evidence/alembic-evidence.txt` 内容仍以0040为Head。
+2. PR #17远程Changed Files中不存在 `path_a_current.log`。
+3. PR #17远程Changed Files中不存在 `path_b_current.log`。
+4. PR #17远程Changed Files中不存在 `checksums.sha256`，无法复算证据Hash。
+5. PR #17远程Changed Files中不存在独立Migration Freeze Policy文件。
+6. `alembic/versions/0037_v2_execution_observability_security_ops.py` 被直接修改：3处Boolean server default从 `1` 改为 `true`；必须由冻结政策确认0037尚未冻结，并如实披露。
+7. 0001—0027尚无逐文件Hash清单；0005是否与V1.0.1完全一致未获远程证据证明。
+8. PR描述声称两套独立PostgreSQL升级路径通过，但缺少两套数据库的原始 `current/heads/check/upgrade/downgrade/re-upgrade/schema` 日志。
+9. `fa9067` GitHub combined status的 `statuses` 为空，没有CI Run/Status证据。
+
+结论：等待 `MIGRATION_EVIDENCE_FINAL_COMMIT`。在证据文件真实存在、Checksums可复算、历史Hash一致、双PostgreSQL路径可核验且fa9067后完整回归零失败前，PR #19保持Draft/BLOCK。
+
 契约 Commit：`3fe8df6065e3ee028cbde14803a9a0020e6a0ba6`
 
 初始全量结果：`846 passed, 6 failed, 82 warnings in 150.74s`，共 852 项。

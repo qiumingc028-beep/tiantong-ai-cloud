@@ -1,5 +1,24 @@
 # V2 Alpha Sprint 11.1 QA 报告
 
+## PR #17 fa9067 新证据阻塞矩阵（等待最终证据 Commit）
+
+只读审计时间：2026-07-13。审计对象：PR #17，Head `fa9067fac27ac44264bf4c4df706ccb23366f987`。该 Head 已修改 Migration、Alembic Env 与 Backend Models，因此此前 `eef1ed6` 上的 `863 passed, 0 failed` 不能作为 `fa9067` 的完整回归证明。
+
+| 检查项 | 当前结果 | 远程事实/缺失项 |
+|---|---|---|
+| Head/文档一致性 | BLOCK | PR描述声明最终Head为0041，但旧 `artifacts/alpha-migration-evidence/alembic-evidence.txt` 仍记录0040 |
+| 路径A日志 | BLOCK | PR #17远程变更文件中未找到 `path_a_current.log` |
+| 路径B日志 | BLOCK | PR #17远程变更文件中未找到 `path_b_current.log` |
+| Checksums | BLOCK | 未找到 `checksums.sha256`，无法复算证据完整性 |
+| Migration冻结政策 | BLOCK | 未找到独立的Migration Freeze Policy文件 |
+| 0037历史修改 | BLOCK | `0037_v2_execution_observability_security_ops.py` 被直接修改，需冻结政策明确其预发布边界并如实披露 |
+| V1 0001—0027 | BLOCK | 需逐文件Hash证明；尤其0005必须与V1.0.1完全一致 |
+| PostgreSQL双路径 | BLOCK | PR描述有结论，但缺少两套独立PostgreSQL数据库的完整原始日志 |
+| Drift/重复升级/回退 | BLOCK | 缺少可复核的0041原始命令输出和校验和 |
+| GitHub CI | BLOCK | `fa9067` combined status返回空列表，无CI Run/Status证据 |
+
+在①提供 `MIGRATION_EVIDENCE_FINAL_COMMIT` 前，PR #19保持 Draft/BLOCK。最终Commit必须使文档、日志、Checksums、PR描述、Git历史和真实PostgreSQL Schema完全一致；若修改Backend或Migration，必须重新执行不少于863项的全量零失败回归。
+
 ## 结论
 
 **BLOCK（代码零失败，Migration证据未通过）。** 已同步最终 Commit `eef1ed66638011503c7377d52104258b72ee80d0`。全量 `863 passed, 0 failed`，所有代码质量门禁均关闭；但①提供的Migration证据存在历史文件变更声明矛盾和Drift绕过开关，PR #19必须保持Draft。
