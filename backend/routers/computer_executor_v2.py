@@ -9,8 +9,21 @@ from ..auth import current_user
 from ..database import get_db
 from ..skills_engine.permissions import require_feature_enabled, require_skills_manage_user, require_skills_user
 from ..agent_runtime.executors.computer.models import ComputerAction, ComputerEvidence, ComputerSession, ComputerTakeover
+from ..agent_runtime.executors.computer.actions.models import ComputerActionApproval, ComputerActionPlan, ComputerActionTarget
 from ..agent_runtime.executors.computer.runtime import ComputerRuntime
 from ..agent_runtime.executors.computer.schemas import ComputerActionPayload, ComputerSessionCreatePayload
+from ..agent_runtime.executors.computer.actions.schemas import ComputerActionPlanCreatePayload
+from ..agent_runtime.executors.computer.actions.service import (
+    approve_action,
+    cancel_action,
+    create_action_plan,
+    get_action_plan,
+    get_action_verification,
+    preview_action_plan,
+    reject_action,
+    execute_action as execute_planned_action,
+    health_check as safe_action_health_check,
+)
 from ..config import get_settings
 
 
@@ -187,6 +200,90 @@ def capture_screen(session_id: str, request: Request, db: Session = Depends(get_
     return {"ok": True, "evidence": _evidence_to_dict(evidence)}
 
 
+@router.post("/action-plans")
+def create_plan(payload: ComputerActionPlanCreatePayload, request: Request, db: Session = Depends(get_db)):
+    require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
+    require_feature_enabled("MAC_SAFE_ACTION_ENABLED")
+    require_skills_manage_user(request, db)
+    result = create_action_plan(db, payload)
+    return {"ok": True, **result}
+
+
+@router.get("/action-plans/{plan_id}")
+def get_plan(plan_id: str, request: Request, db: Session = Depends(get_db)):
+    require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
+    require_skills_user(request, db)
+    return {"readonly": True, **get_action_plan(db, plan_id)}
+
+
+@router.post("/action-plans/{plan_id}/preview")
+def preview_plan(plan_id: str, request: Request, db: Session = Depends(get_db)):
+    require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
+    require_skills_manage_user(request, db)
+    current_hash = request.query_params.get("current_screenshot_hash")
+    return {"readonly": True, **preview_action_plan(db, plan_id, current_screenshot_hash=current_hash)}
+
+
+@router.post("/actions/{action_id}/approve")
+def approve_plan_action(action_id: str, request: Request, db: Session = Depends(get_db)):
+    require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
+    require_feature_enabled("PER_ACTION_APPROVAL_ENABLED")
+    user = require_skills_manage_user(request, db)
+    target = db.query(ComputerActionTarget).filter(ComputerActionTarget.action_id == action_id).one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="动作不存在")
+    return {"ok": True, **approve_action(db, plan_id=target.plan_id, approved_by=user.id, approval_scope=request.query_params.get("scope"), trace_id=request.query_params.get("trace_id"), current_screenshot_hash=request.query_params.get("current_screenshot_hash"))}
+
+
+@router.post("/actions/{action_id}/reject")
+def reject_plan_action(action_id: str, request: Request, db: Session = Depends(get_db)):
+    require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
+    user = require_skills_manage_user(request, db)
+    target = db.query(ComputerActionTarget).filter(ComputerActionTarget.action_id == action_id).one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="动作不存在")
+    return {"ok": True, **reject_action(db, plan_id=target.plan_id, approved_by=user.id, reason=request.query_params.get("reason"), trace_id=request.query_params.get("trace_id"))}
+
+
+@router.post("/actions/{action_id}/execute")
+def execute_plan_action(action_id: str, request: Request, db: Session = Depends(get_db)):
+    require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
+    require_feature_enabled("MAC_SAFE_ACTION_ENABLED")
+    user = require_skills_manage_user(request, db)
+    target = db.query(ComputerActionTarget).filter(ComputerActionTarget.action_id == action_id).one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="动作不存在")
+    return {"ok": True, **execute_planned_action(
+        db,
+        plan_id=target.plan_id,
+        current_application=request.query_params.get("current_application"),
+        current_window=request.query_params.get("current_window"),
+        current_screenshot_hash=request.query_params.get("current_screenshot_hash"),
+        trace_id=request.query_params.get("trace_id"),
+    )}
+
+
+@router.post("/actions/{action_id}/cancel")
+def cancel_plan_action(action_id: str, request: Request, db: Session = Depends(get_db)):
+    require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
+    user = require_skills_manage_user(request, db)
+    target = db.query(ComputerActionTarget).filter(ComputerActionTarget.action_id == action_id).one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="动作不存在")
+    return {"ok": True, **cancel_action(db, plan_id=target.plan_id, reason=request.query_params.get("reason"), trace_id=request.query_params.get("trace_id"))}
+
+
+@router.get("/actions/{action_id}/verification")
+def get_plan_action_verification(action_id: str, request: Request, db: Session = Depends(get_db)):
+    require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
+    require_skills_user(request, db)
+    target = db.query(ComputerActionTarget).filter(ComputerActionTarget.action_id == action_id).one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="动作不存在")
+    return {"readonly": True, **get_action_verification(db, target.plan_id)}
+
+
+
 @router.get("/sessions/{session_id}/evidence")
 def list_evidence(session_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
@@ -200,7 +297,7 @@ def list_evidence(session_id: str, request: Request, db: Session = Depends(get_d
 def health(request: Request, db: Session = Depends(get_db)):
     require_skills_user(request, db)
     settings = get_settings()
-    return {
+    payload = {
         "status": "healthy",
         "feature_flags": {
             "OPENCLAW_ADAPTER_ENABLED": settings.OPENCLAW_ADAPTER_ENABLED,
@@ -212,6 +309,16 @@ def health(request: Request, db: Session = Depends(get_db)):
             "COMPUTER_MOUSE_INPUT_ENABLED": settings.COMPUTER_MOUSE_INPUT_ENABLED,
             "COMPUTER_CONTROL_ENABLED": settings.COMPUTER_CONTROL_ENABLED,
             "SHELL_EXECUTION_ENABLED": settings.SHELL_EXECUTION_ENABLED,
+            "MAC_SAFE_ACTION_ENABLED": settings.MAC_SAFE_ACTION_ENABLED,
+            "MAC_SAFE_MOUSE_MOVE_ENABLED": settings.MAC_SAFE_MOUSE_MOVE_ENABLED,
+            "MAC_SAFE_CLICK_ENABLED": settings.MAC_SAFE_CLICK_ENABLED,
+            "MAC_SAFE_TEXT_INPUT_ENABLED": settings.MAC_SAFE_TEXT_INPUT_ENABLED,
+            "PER_ACTION_APPROVAL_ENABLED": settings.PER_ACTION_APPROVAL_ENABLED,
+            "POST_ACTION_VERIFICATION_ENABLED": settings.POST_ACTION_VERIFICATION_ENABLED,
+            "CLIPBOARD_READ_ENABLED": settings.CLIPBOARD_READ_ENABLED,
+            "CLIPBOARD_WRITE_ENABLED": settings.CLIPBOARD_WRITE_ENABLED,
+            "FILE_UPLOAD_ENABLED": settings.FILE_UPLOAD_ENABLED,
+            "FILE_DOWNLOAD_ENABLED": settings.FILE_DOWNLOAD_ENABLED,
         },
         "summary": {
             "sessions": db.query(ComputerSession).count(),
@@ -219,3 +326,11 @@ def health(request: Request, db: Session = Depends(get_db)):
             "evidence": db.query(ComputerEvidence).count(),
         },
     }
+    payload["safe_action"] = safe_action_health_check(db)
+    return payload
+
+
+@router.get("/action-policy/health")
+def action_policy_health(request: Request, db: Session = Depends(get_db)):
+    require_skills_user(request, db)
+    return safe_action_health_check(db)

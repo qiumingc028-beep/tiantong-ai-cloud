@@ -114,7 +114,7 @@ def ensure_action_allowed(action_type: str, target_application: str | None = Non
         ensure_text_safe(text_input)
         return
     if action_type == "按允许的快捷键":
-        allowed_hotkeys = {"Enter", "Esc", "Ctrl+C", "Ctrl+V", "Ctrl+Tab", "Alt+Tab"}
+        allowed_hotkeys = {"Enter", "Esc", "Tab", "Shift+Tab", "Escape", "方向上", "方向下", "方向左", "方向右"}
         if (text_input or "").strip() not in allowed_hotkeys:
             raise HTTPException(status_code=403, detail="快捷键不在允许范围内")
         return

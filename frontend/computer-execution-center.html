@@ -33,6 +33,8 @@
       <a href="/skill-center.html">技能中心</a>
       <a class="active" href="/computer-execution-center.html">电脑执行中心</a>
       <a href="/computer-execution-detail.html">执行详情</a>
+      <a href="/computer-action-approval.html">操作审批</a>
+      <a href="/computer-action-test.html">单步测试</a>
       <a href="/knowledge-asset-center.html">天藏知识资产中心</a>
       <a href="/settings.html">系统设置</a>
     </nav>
@@ -63,10 +65,10 @@
         <ul>
           <li>只读查看隔离桌面状态。</li>
           <li>OpenClaw 必须经过 Adapter。</li>
-          <li>高风险动作默认禁止。</li>
-          <li>生产默认关闭。</li>
-        </ul>
-        <div>接口：<code>/api/v2/computer/sessions</code>、<code>/api/v2/computer-executor/health</code></div>
+        <li>高风险动作默认禁止，单步动作必须逐步审批。</li>
+        <li>生产默认关闭。</li>
+      </ul>
+        <div>接口：<code>/api/v2/computer/sessions</code>、<code>/api/v2/computer/action-plans</code>、<code>/api/v2/computer/action-policy/health</code></div>
       </div>
     </section>
   </main>
