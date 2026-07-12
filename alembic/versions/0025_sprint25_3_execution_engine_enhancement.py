@@ -46,6 +46,9 @@ def _create_index_if_missing(index_name: str, table_name: str, columns: list[str
 
 def _ensure_alembic_version_length() -> None:
     if _has_table("alembic_version"):
+        bind = op.get_bind()
+        if bind.dialect.name == "sqlite":
+            return
         op.alter_column(
             "alembic_version",
             "version_num",

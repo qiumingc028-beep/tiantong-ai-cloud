@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>测试设备中心</title>
+</head>
+<body>
+  <main>
+    <h1>测试设备中心</h1>
+    <p>测试设备中心已加载，当前为只读管理视图。</p>
+    <section>
+      <h2>设备概览</h2>
+      <ul>
+        <li>设备总数</li>
+        <li>已批准数量</li>
+        <li>在线数量</li>
+        <li>已撤销数量</li>
+        <li>最近在线时间</li>
+      </ul>
+    </section>
+    <section>
+      <h2>设备列表</h2>
+      <button type="button">查看设备</button>
+      <button type="button">生成注册令牌</button>
+      <button type="button">批准设备</button>
+      <button type="button">禁用设备</button>
+      <button type="button">撤销设备</button>
+      <button type="button">查看详情</button>
+      <div id="device-list">暂无数据</div>
+    </section>
+    <section>
+      <h2>桌面观察</h2>
+      <p>只读观察、窗口枚举、指定窗口截图、状态摘要和下一步建议。</p>
+      <a href="/desktop-observer.html">进入桌面观察</a>
+    </section>
+    <script>
+      async function renderDevices() {
+        const target = document.getElementById('device-list');
+        target.textContent = '正在加载设备...';
+        try {
+          const response = await fetch('/api/v2/devices');
+          const data = await response.json();
+          target.textContent = (data.items || []).length ? '设备已加载' : '暂无数据';
+        } catch (error) {
+          target.textContent = '设备加载失败';
+        }
+      }
+      renderDevices();
+    </script>
+  </main>
+</body>
+</html>

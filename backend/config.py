@@ -87,6 +87,13 @@ class Settings:
         self.HUMAN_TAKEOVER_ENABLED = _boolean("HUMAN_TAKEOVER_ENABLED", False)
         self.COMPUTER_TEXT_INPUT_ENABLED = _boolean("COMPUTER_TEXT_INPUT_ENABLED", False)
         self.COMPUTER_MOUSE_INPUT_ENABLED = _boolean("COMPUTER_MOUSE_INPUT_ENABLED", False)
+        self.DEVICE_CENTER_ENABLED = _boolean("DEVICE_CENTER_ENABLED", False)
+        self.MAC_DEVICE_AGENT_ENABLED = _boolean("MAC_DEVICE_AGENT_ENABLED", False)
+        self.MAC_READONLY_OBSERVER_ENABLED = _boolean("MAC_READONLY_OBSERVER_ENABLED", False)
+        self.MAC_WINDOW_ENUMERATION_ENABLED = _boolean("MAC_WINDOW_ENUMERATION_ENABLED", False)
+        self.MAC_SCREEN_CAPTURE_ENABLED = _boolean("MAC_SCREEN_CAPTURE_ENABLED", False)
+        self.LOCAL_VISION_PROVIDER_ENABLED = _boolean("LOCAL_VISION_PROVIDER_ENABLED", False)
+        self.EXTERNAL_VISION_PROVIDER_ENABLED = _boolean("EXTERNAL_VISION_PROVIDER_ENABLED", False)
         self.COMPUTER_ALLOWED_APPLICATIONS = [item.strip() for item in os.getenv("COMPUTER_ALLOWED_APPLICATIONS", "").split(",") if item.strip()]
         self.COMPUTER_BLOCKED_APPLICATIONS = [item.strip() for item in os.getenv("COMPUTER_BLOCKED_APPLICATIONS", "").split(",") if item.strip()]
         self.COMPUTER_ALLOWED_WINDOW_PATTERNS = [item.strip() for item in os.getenv("COMPUTER_ALLOWED_WINDOW_PATTERNS", "").split(",") if item.strip()]
@@ -146,6 +153,8 @@ class Settings:
             raise ConfigurationError("authenticated REDIS_URL is required in production")
         if self.DEBUG:
             raise ConfigurationError("DEBUG must be disabled in production")
+        if self.EXTERNAL_VISION_PROVIDER_ENABLED:
+            raise ConfigurationError("EXTERNAL_VISION_PROVIDER_ENABLED must remain disabled in production")
 
 
 @lru_cache

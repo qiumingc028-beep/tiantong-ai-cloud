@@ -47,3 +47,4 @@ def normalize_role(role: str) -> str:
 
 MENU_ITEMS.insert(-1, {"key": "account_center", "label": "账号资料中心", "href": "/account-center.html", "permission": "menu.account_center"})
 MENU_ITEMS.insert(-1, {"key": "knowledge_center", "label": "\u5929\u85cf\uff1a\u77e5\u8bc6\u8d44\u4ea7\u4e2d\u5fc3", "href": "/knowledge-center.html", "permission": "menu.knowledge_center"})
+MENU_ITEMS.insert(-1, {"key": "device_center", "label": "测试设备中心", "href": "/device-center.html", "permission": "menu.device_center"})
