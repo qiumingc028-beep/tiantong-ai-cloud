@@ -47,6 +47,17 @@
 - Static Security：通过
 - V1 Regression：通过
 
+## 远程集成
+
+- 功能分支：`feature/v2-openclaw-safe-adapter`
+- PR：`#10`
+- PR URL：`https://github.com/qiumingc028-beep/tiantong-ai-cloud/pull/10`
+- 合并方式：Squash Merge
+- 合并 Commit：`431dc4c02867e958a0f4a65e2b5834b2b870d222`
+- develop-v2 最新 Commit：`431dc4c02867e958a0f4a65e2b5834b2b870d222`
+- main：未修改
+- 生产环境：未部署
+
 ## 备注
 
 本 Sprint 只完成安全适配和隔离执行基础，不接入真实 OpenClaw，不控制真实电脑，不开启生产能力。
