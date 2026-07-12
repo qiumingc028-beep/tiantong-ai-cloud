@@ -7,7 +7,7 @@
   ];
   const TERMINAL=new Set(['已完成','已失败','已取消','已终止']);
   const $=id=>document.getElementById(id);
-  const text=value=>value===null||value===undefined||value===''?'暂无':String(value);
+  const text=value=>value===null||value===undefined||value===''?'暂无数据':String(value);
   const escapeHtml=value=>text(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const formatTime=value=>value?new Intl.DateTimeFormat('zh-CN',{dateStyle:'medium',timeStyle:'short',hour12:false}).format(new Date(value)):'时间未记录';
   const statusTone=status=>status==='已完成'||status==='成功'?'success':status==='已失败'||status==='已终止'?'danger':status==='运行中'?'running':status==='已暂停'||status==='等待恢复'?'warning':'';
@@ -115,8 +115,9 @@
     $('run-status').textContent=text(run.status);$('current-stage').textContent=`当前阶段：${stageLabel(run.current_stage||context.current_stage)}`;
     $('risk-score').textContent=run.risk_score??'—';$('risk-level').textContent=run.risk_level?`${run.risk_level}风险`:'尚未评分';
     $('quality-score').textContent=run.quality_score??'—';$('quality-grade').textContent=text(run.quality_grade||'尚未评分');
-    $('approval-status').textContent=(run.approval_ids||[]).length?'已留痕':'暂无记录';$('approval-count').textContent=`${(run.approval_ids||[]).length} 条审批引用`;
-    renderActions(run);renderStages();renderExecution(run,context);renderKnowledge(run,context);renderRecovery(run);renderSummary();renderAudit();renderTrace(run);
+    const approvals=run.approval_details;const approvalCount=Array.isArray(approvals)?approvals.length:hasValue(approvals)?1:0;
+    $('approval-status').textContent=approvalCount?'已有审批记录':'暂无数据';$('approval-count').textContent=approvalCount?`${approvalCount} 条审批详情`:'暂无数据';
+    renderActions(run);renderStages();renderExecution(run);renderKnowledge(run);renderAssurance(run);renderRecovery(run);renderSummary();renderAudit();renderTrace(run);
   }
 
   function stageEvidence(code){
@@ -134,32 +135,36 @@
     }).join('');$('progress-text').textContent=`已记录完成 ${completed} / ${STAGES.length} 个阶段`;
   }
 
-  function renderExecution(run,context){
+  function renderExecution(run){
     const exec=stageEvidence('execution');const skill=stageEvidence('skills');
     $('execution-facts').innerHTML=facts([
-      ['AI 员工','接口暂未提供姓名'],['员工执行状态',exec?.status||text(run.agent_execution_id?'已有执行记录':'未记录')],
-      ['Agent Execution',run.agent_execution_id||context.agent_execution_id],['Skill',run.skill_id||context.skill_id],
-      ['Skill 版本',run.skill_version_id||context.skill_version_id],['Skill 调用状态',skill?.status||text(run.skill_invocation_id?'已有调用记录':'未记录')]
+      ['AI 员工',run.employee_name],['员工执行状态',exec?.status],['Research 来源数量',run.research_source_count],
+      ['Agent Execution',run.agent_execution_id],['Skill',run.skill_id],['Skill 版本',run.skill_version],['Skill 调用状态',skill?.status]
     ]);
   }
-  function renderKnowledge(run,context){
+  function renderKnowledge(run){
     const knowledge=stageEvidence('knowledge');const feedback=stageEvidence('feedback');
+    const citations=run.knowledge_citations;
     $('knowledge-facts').innerHTML=[
-      box('候选与正式知识状态',knowledge?.message||knowledge?.status||'接口暂无知识状态说明'),
-      box('知识引用',run.knowledge_asset_id||context.knowledge_asset_id||'暂无知识引用'),
-      box('知识版本',run.knowledge_version_id||context.knowledge_version_id||'暂无版本'),
-      box('Knowledge 回流',feedback?.message||feedback?.status||'接口暂无回流记录')
+      box('候选与正式知识状态',knowledge?.message||knowledge?.status),box('知识资产',run.knowledge_asset_id),
+      box('知识版本',run.knowledge_version_id),box('知识引用',hasValue(citations)?formatValue(citations):null),
+      box('Knowledge 回流',feedback?.message||feedback?.status)
     ].join('');
+  }
+  function renderAssurance(run){
+    const approvals=run.approval_details;
+    $('assurance-facts').innerHTML=[box('审批详情',hasValue(approvals)?formatValue(approvals):null),box('Verification',run.verification_status),box('Audit',run.audit_status)].join('');
   }
   function renderRecovery(run){
     const events=(detail.audit?.timeline||[]).filter(item=>/recover|恢复/i.test(`${item.event_code||''}${item.message||''}`));
-    $('recovery-facts').innerHTML=[box('失败原因',run.failure_reason||'未发生失败'),box('当前恢复状态',run.recovery_status||'无需恢复'),box('恢复来源',run.recovered_from_run_id||'无'),box('恢复记录',events.length?events.map(item=>item.message||item.event_code).join('；'):'暂无恢复记录')].join('');
+    $('recovery-facts').innerHTML=[box('失败原因',run.failure_reason),box('恢复检查点',run.recovery_checkpoint),box('当前恢复状态',run.recovery_status),box('恢复来源',run.recovered_from_run_id),box('恢复记录',events.length?events.map(item=>item.message||item.event_code).join('；'):null)].join('');
   }
   function renderSummary(){
     const report=detail.report||{};const summary=report.dashboard_summary||detail.run.dashboard_summary||{};
     $('report-summary').innerHTML=Object.keys(summary).length?Object.entries(summary).map(([key,value])=>`<div><strong>${escapeHtml(key)}：</strong>${escapeHtml(value)}</div>`).join(''):'最终交付摘要尚未生成。';
-    const available=Boolean(report.report_content);$('report-button').disabled=!available;$('report-button').textContent=available?'查看最终报告':'最终报告尚未生成';
-    $('report-title').textContent=report.report_title||'最终研究报告';$('report-content').textContent=report.report_content||'暂无报告内容。';
+    const finalReport=report.final_report??detail.run.final_report;const available=finalReport!==null&&finalReport!==undefined&&finalReport!=='';
+    $('report-button').disabled=!available;$('report-button').textContent=available?'查看最终报告':'最终报告暂无数据';
+    $('report-title').textContent='最终研究报告';$('report-content').textContent=available?(typeof finalReport==='string'?finalReport:JSON.stringify(finalReport,null,2)):'暂无数据';
   }
   function toggleReport(){$('report-panel').hidden=!$('report-panel').hidden;if(!$('report-panel').hidden)$('report-panel').scrollIntoView({behavior:'smooth'});}
   function renderAudit(){
@@ -167,11 +172,10 @@
     $('audit-timeline').innerHTML=items.length?items.map(item=>`<article class="timeline-item"><h3>${escapeHtml(item.message||stageLabel(item.stage))} <span class="badge badge-${statusTone(item.status)}">${escapeHtml(item.status)}</span></h3><p>${escapeHtml(stageLabel(item.stage))} · ${escapeHtml(item.event_code)}</p><time>${escapeHtml(formatTime(item.created_at))}</time></article>`).join(''):'<div class="empty">暂无审计记录。</div>';
   }
   function renderTrace(run){
-    $('trace-facts').innerHTML=facts([['Trace ID',run.trace_id],['Root Span ID',run.root_span_id],['Workflow ID',run.workflow_id],['Task ID',run.task_id],['Orchestrator Run',run.orchestrator_run_id],['Verification ID',run.verification_id],['Research 来源数量',sourceCount()]]);
-    const spans=detail.trace?.spans||[];$('span-list').innerHTML=spans.length?spans.map(span=>`<div class="span"><strong>${escapeHtml(span.span_name||stageLabel(span.stage))}</strong> · ${escapeHtml(span.status)}<div class="mono">${escapeHtml(span.span_id)}</div></div>`).join(''):'<div class="empty">暂无子 Span。</div>';
-  }
-  function sourceCount(){
-    const events=detail.trace?.events||[];for(const event of events){const value=event.payload?.source_count??event.payload?.['来源数量'];if(value!==undefined)return value;}return '接口暂未提供';
+    $('trace-facts').innerHTML=facts([['Trace ID',run.trace_id],['Root Trace ID',run.root_trace_id],['Workflow ID',run.workflow_id],['Task ID',run.task_id],['Orchestrator Run',run.orchestrator_run_id]]);
+    const spans=detail.trace?.spans||[];const events=detail.trace?.events||[];
+    const rows=spans.length?spans:events;
+    $('span-list').innerHTML=rows.length?rows.map(span=>`<div class="span"><strong>${escapeHtml(span.span_name||span.message||stageLabel(span.stage))}</strong> · ${escapeHtml(span.status)}<div class="mono">span_id：${escapeHtml(span.span_id)}</div><div class="mono">parent_span_id：${escapeHtml(span.parent_span_id)}</div></div>`).join(''):'<div class="empty">暂无数据</div>';
   }
   function renderActions(run){
     const actions=[];
@@ -189,6 +193,8 @@
   }
   function facts(rows){return rows.map(([key,value])=>`<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`).join('');}
   function box(label,value){return `<div class="fact-box"><strong>${escapeHtml(label)}</strong><br>${escapeHtml(value)}</div>`;}
+  function hasValue(value){return value!==null&&value!==undefined&&value!==''&&(!Array.isArray(value)||value.length>0);}
+  function formatValue(value){return Array.isArray(value)?value.map(item=>typeof item==='string'?item:JSON.stringify(item)).join('；'):typeof value==='object'?JSON.stringify(value):String(value);}
 
   const page=document.body.dataset.page;if(page==='list')initList();if(page==='detail')initDetail();
 })();
