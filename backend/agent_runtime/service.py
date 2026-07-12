@@ -20,7 +20,8 @@ from .exceptions import (
     InputValidationError,
     PermissionDeniedError,
 )
-from .executor import ExecutorContext, get_executor
+from .executor import get_executor
+from .executor_types import ExecutorContext
 from .models import AgentCapability, AgentExecution, AgentExecutionAudit
 from .permission import ensure_agent_runtime_enabled, evaluate_permission
 from .registry import capability_to_dict, list_capabilities as registry_list_capabilities, resolve_capability

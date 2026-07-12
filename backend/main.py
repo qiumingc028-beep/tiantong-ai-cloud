@@ -35,6 +35,7 @@ HTML_PAGES = {
     "knowledge-center.html", "tiancang.html", "task-center.html", "orchestrator.html", "auto-dispatch-center.html", "deploy-center.html",
     "ai-execution.html", "ai-employee-detail.html", "ai-employee-capability.html", "ai-employee-dashboard.html", "ai-employee-growth-system.html", "ai-employee-health.html", "ai-workforce.html", "ai-workforce-center.html", "enterprise-brain-console.html", "skill-center.html", "skill-detail.html", "release-center.html", "tool-center.html", "tool-router.html", "brain-center.html", "brain-orchestrator.html",
     "capability-center.html", "execution-records.html", "agent-runtime.html",
+    "browser-readonly-test.html",
 }
 DASHBOARD_HTML_PAGES = {
     "overview.html",

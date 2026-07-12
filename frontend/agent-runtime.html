@@ -51,6 +51,7 @@
       <a href="/agent-runtime.html" class="active">Agent Runtime</a>
       <a href="/capability-center.html">能力中心</a>
       <a href="/execution-records.html">执行记录</a>
+      <a href="/browser-readonly-test.html">公开网页采集</a>
       <a href="/task-center.html">任务中心</a>
       <a href="/index.html">老板驾驶舱</a>
     </nav>
@@ -102,12 +103,13 @@ async function init(){
     $('capCount').innerText=String(data.capabilities||0);
     $('exeCount').innerText='—';
     $('realExecutor').innerText=data.real_executor_enabled?'开启':'关闭';
-    $('flags').innerText=`Agent ${data.feature_flags.AGENT_RUNTIME_ENABLED?'开':'关'} / 真实执行 ${data.feature_flags.REAL_EXECUTOR_ENABLED?'开':'关'}`;
+    $('flags').innerText=`Agent ${data.feature_flags.AGENT_RUNTIME_ENABLED?'开':'关'} / 浏览器只读 ${data.feature_flags.BROWSER_READONLY_ENABLED?'开':'关'} / 真实执行 ${data.feature_flags.REAL_EXECUTOR_ENABLED?'开':'关'}`;
     $('safetyBox').innerHTML=[
       ['真实执行器默认关闭',data.real_executor_enabled===false],
       ['电脑控制关闭',true],
       ['手机控制关闭',true],
-      ['浏览器控制关闭',true],
+      ['浏览器只读默认关闭',data.feature_flags.BROWSER_READONLY_ENABLED===false],
+      ['浏览器完整控制关闭',data.feature_flags.BROWSER_CONTROL_ENABLED===false],
       ['Shell 执行关闭',true],
       ['所有执行留痕',true],
     ].map(([label,ok])=>`<div class="item"><strong>${esc(label)}</strong><div class="muted">${ok?'通过':'异常'}</div></div>`).join('');
@@ -121,4 +123,3 @@ init();
 </script>
 </body>
 </html>
-

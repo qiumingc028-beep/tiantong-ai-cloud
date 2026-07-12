@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>公开网页采集 - 天统AI云中台</title>
+  <style>
+    :root{--bg:#f4f6f8;--ink:#111827;--muted:#64748b;--line:#e5e7eb;--dark:#101827}
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+    .app{min-height:100vh;display:grid;grid-template-columns:240px 1fr}
+    .side{background:#101827;color:#cbd5e1;padding:18px 14px}
+    .brand{font-size:18px;font-weight:700;color:#fff;padding:12px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
+    .menu{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+    .menu a{color:#cbd5e1;text-decoration:none;padding:10px 12px;border-radius:8px}
+    .menu a.active,.menu a:hover{background:#1f2937;color:#fff}
+    .top{min-height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:12px 24px;gap:12px}
+    .content{padding:24px}
+    .panel{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+    .hero{background:linear-gradient(135deg,#0f172a,#0f766e);color:#fff;border-radius:10px;padding:22px;margin-bottom:16px}
+    .hero h1{margin:0;font-size:28px}
+    .hero p{margin:8px 0 0;color:#d1fae5;line-height:1.7}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    input,textarea,button,select{font:inherit;border-radius:8px;border:1px solid #cbd5e1;background:#fff}
+    input,select{height:38px;padding:0 10px;width:100%}
+    textarea{min-height:110px;width:100%;padding:10px;resize:vertical}
+    button{background:var(--dark);color:#fff;padding:10px 12px;border:0;cursor:pointer}
+    .muted{color:var(--muted);line-height:1.65}
+    .tags{display:flex;gap:6px;flex-wrap:wrap}
+    .tag{border-radius:999px;padding:4px 9px;background:#e2e8f0;font-size:12px}
+    .ok{background:#dcfce7;color:#166534}.warn{background:#fef3c7;color:#92400e}.bad{background:#fee2e2;color:#991b1b}
+    pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:260px;overflow:auto}
+    @media(max-width:1100px){.app{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.content{padding:18px}.top{flex-direction:column;align-items:flex-start}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">天统AI云中台</div>
+    <nav class="menu">
+      <a href="/agent-runtime.html">Agent Runtime</a>
+      <a href="/capability-center.html">能力中心</a>
+      <a href="/execution-records.html">执行记录</a>
+      <a href="/browser-readonly-test.html" class="active">公开网页采集</a>
+      <a href="/task-center.html">任务中心</a>
+      <a href="/index.html">老板驾驶舱</a>
+    </nav>
+  </aside>
+  <main>
+    <header class="top">
+      <strong>公开网页采集</strong>
+      <div class="tags"><span id="state" class="tag warn">加载中</span><span id="time" class="tag">--</span></div>
+    </header>
+    <section class="content">
+      <section class="hero">
+        <h1>公开网页只读采集</h1>
+        <p>仅用于开发和隔离测试。默认不保存 Cookie，不提交表单，不访问内网，不允许真实浏览器控制。</p>
+      </section>
+      <section class="panel">
+        <div class="grid">
+          <div>
+            <div class="muted">AI 员工 ID</div>
+            <input id="employeeId" placeholder="例如 12">
+          </div>
+          <div>
+            <div class="muted">任务 ID（可选）</div>
+            <input id="taskId" placeholder="例如 1001">
+          </div>
+          <div>
+            <div class="muted">能力标识</div>
+            <input id="capabilityId" value="browser.public.read">
+          </div>
+          <div>
+            <div class="muted">公开网址</div>
+            <input id="url" placeholder="https://example.com">
+          </div>
+          <div>
+            <div class="muted">提取字段 JSON</div>
+            <input id="fields" placeholder='[{"name":"title","kind":"title"}]'>
+          </div>
+          <div>
+            <div class="muted">方法</div>
+            <select id="method"><option value="GET">GET</option><option value="HEAD">HEAD</option></select>
+          </div>
+          <div>
+            <div class="muted">允许重定向</div>
+            <select id="allowRedirects"><option value="true">是</option><option value="false">否</option></select>
+          </div>
+          <div>
+            <div class="muted">超时（秒）</div>
+            <input id="timeoutSeconds" value="20">
+          </div>
+          <div>
+            <div class="muted">最大响应字节</div>
+            <input id="maxBytes" value="2000000">
+          </div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+          <button onclick="createExecution()">开始只读采集</button>
+          <button class="secondary" onclick="loadHealth()">刷新状态</button>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>执行结果</h2>
+        <pre id="result">暂无</pre>
+      </section>
+    </section>
+  </main>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+function tick(){$('time').innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
+async function api(url,options={}){const res=await fetch(url,{credentials:'include',...options});if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.detail||`${res.status} ${res.statusText}`)}return res.json()}
+async function loadHealth(){
+  try{
+    const data=await api('/api/v2/agent-runtime/health');
+    $('state').className='tag ok';
+    $('state').innerText=data.feature_flags.BROWSER_READONLY_ENABLED?'浏览器只读已启用':'浏览器只读关闭';
+  }catch(e){
+    $('state').className='tag bad';
+    $('state').innerText=e.message||'加载失败';
+  }
+}
+async function createExecution(){
+  try{
+    const payload={
+      employee_id:Number($('employeeId').value.trim()),
+      task_id:$('taskId').value.trim()?Number($('taskId').value.trim()):null,
+      capability_id:$('capabilityId').value.trim(),
+      input_payload:{
+        url:$('url').value.trim(),
+        extract_fields:JSON.parse($('fields').value||'[]'),
+        method:$('method').value,
+        allow_redirects:$('allowRedirects').value==='true',
+        timeout_seconds:Number($('timeoutSeconds').value||20),
+        max_response_bytes:Number($('maxBytes').value||2000000),
+        link_task_result:true
+      }
+    };
+    const data=await api('/api/v2/executions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    $('result').innerText=JSON.stringify(data.execution,null,2);
+    $('state').className='tag ok';
+    $('state').innerText='采集完成';
+  }catch(e){
+    $('result').innerText=e.stack||e.message||'执行失败';
+    $('state').className='tag bad';
+    $('state').innerText='执行失败';
+  }
+}
+tick();setInterval(tick,1000);loadHealth();
+</script>
+</body>
+</html>

@@ -50,6 +50,7 @@
       <a href="/agent-runtime.html">Agent Runtime</a>
       <a href="/capability-center.html">能力中心</a>
       <a href="/execution-records.html" class="active">执行记录</a>
+      <a href="/browser-readonly-test.html">公开网页采集</a>
       <a href="/task-center.html">任务中心</a>
       <a href="/index.html">老板驾驶舱</a>
     </nav>
@@ -152,6 +153,13 @@ async function showDetail(index){
     <div>耗时</div><div>${esc(ex.duration_ms==null?'—':ex.duration_ms+' ms')}</div>
     <div>错误码</div><div>${esc(ex.error_code||'—')}</div>
     <div>错误信息</div><div class="muted">${esc(ex.error_message||'—')}</div>
+    <div>请求网址</div><div class="muted">${esc(ex.input_payload&&ex.input_payload.url?ex.input_payload.url:'—')}</div>
+    <div>最终网址</div><div class="muted">${esc(ex.output_payload&&ex.output_payload.final_url?ex.output_payload.final_url:'—')}</div>
+    <div>页面标题</div><div>${esc(ex.output_payload&&ex.output_payload.page_title?ex.output_payload.page_title:'—')}</div>
+    <div>来源域名</div><div>${esc(ex.output_payload&&ex.output_payload.domain?ex.output_payload.domain:'—')}</div>
+    <div>状态码</div><div>${esc(ex.output_payload&&ex.output_payload.status_code!=null?ex.output_payload.status_code:'—')}</div>
+    <div>采集时间</div><div>${esc(ex.output_payload&&ex.output_payload.collected_at?ex.output_payload.collected_at:'—')}</div>
+    <div>内容 Hash</div><div class="muted mono">${esc(ex.output_payload&&ex.output_payload.content_hash?ex.output_payload.content_hash:'—')}</div>
     <div>输入</div><div><pre>${esc(JSON.stringify(ex.input_payload||{},null,2))}</pre></div>
     <div>输出</div><div><pre>${esc(JSON.stringify(ex.output_payload||{},null,2))}</pre></div>
   </div>`;
@@ -187,4 +195,3 @@ init();
 </script>
 </body>
 </html>
-
