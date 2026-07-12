@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>测试工作流详情</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; background: #fff; color: #0f172a; }
+    .wrap { max-width: 960px; }
+    .box { border: 1px solid #e2e8f0; border-radius: 16px; padding: 20px; margin-bottom: 16px; background: #f8fafc; }
+    .steps { margin: 0; padding-left: 20px; }
+    .steps li { margin: 8px 0; }
+    .tag { display: inline-block; padding: 4px 10px; border-radius: 999px; background: #e0f2fe; color: #075985; margin-right: 8px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>测试工作流详情</h1>
+    <div class="box">
+      <span class="tag">范围审批</span>
+      <span class="tag">关键节点审批</span>
+      <span class="tag">执行后验证</span>
+      <p>当前计划为固定 2 至 5 步的安全测试流程；计划变化后原批准失效。</p>
+    </div>
+    <div class="box">
+      <h2>步骤示例</h2>
+      <ol class="steps">
+        <li>观察测试页面。</li>
+        <li>移动鼠标到安全控件。</li>
+        <li>输入非敏感测试文本。</li>
+        <li>单击测试按钮并验证结果。</li>
+      </ol>
+    </div>
+    <div class="box">
+      <h2>审批说明</h2>
+      <p>每一步执行前后都要验证；出现页面变化、敏感内容或异常弹窗时立即暂停。</p>
+    </div>
+  </div>
+</body>
+</html>

@@ -21,7 +21,7 @@ def upgrade():
     op.create_table(
         "skills",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("skill_code", sa.String(length=120), nullable=False),
+        sa.Column("skill_code", sa.String(length=120), nullable=False, unique=True),
         sa.Column("chinese_name", sa.String(length=200), nullable=False),
         sa.Column("chinese_description", sa.Text(), nullable=True),
         sa.Column("skill_type", sa.String(length=80), nullable=False),
@@ -51,7 +51,6 @@ def upgrade():
     op.create_index("ix_skills_enabled", "skills", ["enabled"])
     op.create_index("ix_skills_deprecated", "skills", ["deprecated"])
     op.create_index("ix_skills_created_at", "skills", ["created_at"])
-    op.create_unique_constraint("uq_skills_skill_code", "skills", ["skill_code"])
 
     op.create_table(
         "skill_versions",
