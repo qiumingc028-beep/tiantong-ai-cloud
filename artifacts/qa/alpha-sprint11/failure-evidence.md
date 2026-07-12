@@ -2,7 +2,9 @@
 
 契约 Commit：`3fe8df6065e3ee028cbde14803a9a0020e6a0ba6`
 
-全量结果：`846 passed, 6 failed, 82 warnings in 150.74s`，共 852 项。
+初始全量结果：`846 passed, 6 failed, 82 warnings in 150.74s`，共 852 项。
+
+补强后全量结果：`846 passed, 17 failed, 82 warnings in 156.24s`，共 863 项。原有 6 项失败全部保留；新增门禁将同一问题拆为独立证据，并增加 0040、入口与审批隔离检查。
 
 ## 阻塞失败
 
@@ -24,6 +26,18 @@
 6. `test_migration_graph_is_single_head_and_core_tables_are_not_duplicated`
    - 证据：`knowledge_files`、`knowledge_articles` 同时在 `0005_knowledge_center_tables.py` 与 `0005_tiancang_knowledge_tables.py` 中创建。
    - 最小建议：由①核对历史 merge migration 与实际 V1.0.1 升级路径，提供官方执行结果；③不修改 Migration。
+
+## 补强失败
+
+7. Alpha Service 可被直接调用并完成流程，缺少 Orchestrator 来源证明。
+8. 模块事件 Span 与 WorkflowContext Span ID 不相交，`audit`、`feedback` 阶段也无模块原生 Span，表明 Span 在终态统一合成。
+9. 删除 Run 时未拒绝操作，审计事件缺少明确的防级联删除保障。
+10. Alpha 安装记录中安装人、审核人、批准人未实现三方职责分离。
+11. 高风险 Skill 创建者可以批准自己创建的 Skill。
+12. 重复恢复分别重复创建 Knowledge Asset、Skill Invocation 和 Alpha 审计事件。
+13. 恢复创建第二个 Root Trace，而非在原 Root Trace 下创建 recovery child span。
+14. 无效输入返回 422（Contract 为 400），匿名读取 Runs 返回 200（Contract 权限错误为 403）。
+15. 当前不存在 `0040`，无法验证 `0039 → 0040` 单 Head 与约束链。
 
 ## 未执行项
 

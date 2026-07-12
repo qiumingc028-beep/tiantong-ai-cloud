@@ -12,11 +12,18 @@ import re
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 
 from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
+from backend.alpha_workflow.exceptions import AlphaWorkflowValidationError
+from backend.alpha_workflow.service import start_alpha_workflow
 from backend.config import get_settings
 from backend.knowledge_center.models import KnowledgeAsset
-from backend.skills_engine.models import SkillInvocation
+from backend.models import User
+from backend.skills_engine.models import Skill, SkillInstallation, SkillInvocation, SkillVersion
+from backend.skills_engine.registry import ensure_default_skills
+from backend.skills_engine.service import approve_skill
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +106,16 @@ def test_orchestrator_is_only_public_alpha_start_entry_and_bypass_is_rejected(cl
         assert client.post(bypass, headers=boss_headers, json={}).status_code in {404, 405}
 
 
+def test_alpha_service_direct_start_without_orchestrator_context_is_rejected(test_db, alpha_enabled):
+    db = test_db()
+    try:
+        user = db.query(User).filter(User.username == "boss").one()
+        with pytest.raises(AlphaWorkflowValidationError, match="Orchestrator|入口"):
+            start_alpha_workflow(db, user=user, input_text="绕过 Orchestrator 直接启动")
+    finally:
+        db.close()
+
+
 def test_duplicate_start_is_idempotent_or_explicitly_rejected(client, boss_headers, alpha_enabled):
     payload = {"input_text": "研究 Apple 最新 AI 战略", "trace_id": "sprint11-idempotency-key"}
     first = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
@@ -142,6 +159,22 @@ def test_trace_has_one_root_and_all_children_attach_to_it(client, boss_headers, 
     assert all(event["trace_id"] == trace["trace_id"] for event in trace["events"])
 
 
+def test_module_spans_are_native_and_not_synthesized_by_one_terminal_loop(client, boss_headers, completed_run):
+    trace = client.get(
+        f"/api/v2/alpha-workflows/runs/{completed_run['run_id']}/trace",
+        headers=boss_headers,
+    ).json()
+    module_stages = {"research", "knowledge", "skills", "verification", "audit", "feedback", "dashboard"}
+    event_spans = {(event["stage"], event["span_id"]) for event in trace["events"]}
+    context_spans = {(span["stage"], span["span_id"]) for span in trace["spans"]}
+    observed = {stage for stage, _ in event_spans | context_spans}
+    assert module_stages <= observed
+    for stage in module_stages:
+        native_ids = {span_id for span_stage, span_id in event_spans if span_stage == stage}
+        context_ids = {span_id for span_stage, span_id in context_spans if span_stage == stage}
+        assert native_ids & context_ids, f"{stage} Span 未由模块事件产生，而是在终态统一合成"
+
+
 def test_audit_timeline_is_ordered_and_append_only(client, boss_headers, completed_run, test_db):
     response = client.get(
         f"/api/v2/alpha-workflows/runs/{completed_run['run_id']}/audit",
@@ -165,6 +198,21 @@ def test_audit_timeline_is_ordered_and_append_only(client, boss_headers, complet
     assert refreshed[0]["message"] == original, "审计事件当前可被原地 UPDATE，未实现不可覆盖约束"
 
 
+def test_audit_events_cannot_be_cascade_deleted_with_run(completed_run, test_db):
+    db = test_db()
+    try:
+        event_ids = [row.event_id for row in db.query(AlphaWorkflowEvent).filter(AlphaWorkflowEvent.run_id == completed_run["run_id"]).all()]
+        assert event_ids
+        run = db.get(AlphaWorkflowRun, completed_run["run_id"])
+        db.delete(run)
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+        assert db.query(AlphaWorkflowEvent).filter(AlphaWorkflowEvent.event_id.in_(event_ids)).count() == len(event_ids)
+    finally:
+        db.close()
+
+
 def test_knowledge_is_single_source_and_skill_version_is_traceable(completed_run, test_db):
     db = test_db()
     try:
@@ -174,6 +222,34 @@ def test_knowledge_is_single_source_and_skill_version_is_traceable(completed_run
         assert str(invocation.skill_version_id) == completed_run["skill_version_id"]
         assert invocation.trace_id == completed_run["trace_id"]
         assert completed_run["knowledge_asset_id"] in json.dumps(completed_run["workflow_context"], ensure_ascii=False)
+    finally:
+        db.close()
+
+
+def test_installer_reviewer_and_approver_are_separate_roles(completed_run, test_db):
+    db = test_db()
+    try:
+        installation = db.query(SkillInstallation).filter(SkillInstallation.id == db.get(SkillInvocation, completed_run["skill_invocation_id"]).installation_id).one()
+        version = db.get(SkillVersion, installation.skill_version_id)
+        actors = {installation.installed_by, version.reviewed_by, installation.approved_by}
+        assert None not in actors
+        assert len(actors) == 3, "安装人、审核人、批准人必须职责分离"
+    finally:
+        db.close()
+
+
+def test_high_risk_skill_creator_cannot_self_approve(test_db, alpha_enabled):
+    db = test_db()
+    try:
+        owner = db.query(User).filter(User.username == "owner").one()
+        ensure_default_skills(db, created_by=owner.id)
+        skill = db.query(Skill).first()
+        skill.risk_level = "高风险"
+        skill.created_by = owner.id
+        db.commit()
+        with pytest.raises(HTTPException) as exc:
+            approve_skill(db, skill, owner)
+        assert exc.value.status_code == 403
     finally:
         db.close()
 
@@ -235,6 +311,49 @@ def test_recovery_is_idempotent_and_does_not_duplicate_formal_results(client, bo
     assert after == before
 
 
+@pytest.mark.parametrize("model", [KnowledgeAsset, SkillInvocation, AlphaWorkflowEvent])
+def test_repeated_recovery_does_not_duplicate_each_formal_record(client, boss_headers, completed_run, test_db, model):
+    db = test_db()
+    try:
+        row = db.get(AlphaWorkflowRun, completed_run["run_id"])
+        row.status = "已失败"
+        row.recovery_status = "待恢复"
+        db.commit()
+        before = db.query(model).count()
+    finally:
+        db.close()
+    for reason in ("首次安全恢复", "重复请求恢复"):
+        client.post(
+            f"/api/v2/alpha-workflows/runs/{completed_run['run_id']}/recover",
+            headers=boss_headers,
+            json={"reason": reason},
+        )
+    db = test_db()
+    try:
+        assert db.query(model).count() == before
+    finally:
+        db.close()
+
+
+def test_recovery_reuses_original_root_trace_as_child_span(client, boss_headers, completed_run, test_db):
+    db = test_db()
+    try:
+        row = db.get(AlphaWorkflowRun, completed_run["run_id"])
+        row.status = "已失败"
+        row.recovery_status = "待恢复"
+        db.commit()
+    finally:
+        db.close()
+    recovered = client.post(
+        f"/api/v2/alpha-workflows/runs/{completed_run['run_id']}/recover",
+        headers=boss_headers,
+        json={"reason": "从检查点恢复"},
+    ).json()["run"]
+    assert recovered["trace_id"] == completed_run["trace_id"]
+    assert recovered["root_span_id"] == completed_run["root_span_id"]
+    assert any(span["stage"] == "recovery" for span in recovered["workflow_context"]["step_trace"])
+
+
 def test_feature_flag_defaults_off_and_v1_remains_available(client, boss_headers, monkeypatch):
     for key in FLAGS:
         monkeypatch.delenv(key, raising=False)
@@ -271,6 +390,19 @@ def test_api_contract_paths_fields_statuses_and_errors(client, boss_headers, com
     assert missing.status_code == 404
 
 
+def test_api_contract_error_codes_are_exact(client, boss_headers, alpha_enabled):
+    invalid = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": ""},
+    )
+    missing = client.get("/api/v2/alpha-workflows/runs/does-not-exist", headers=boss_headers)
+    forbidden = client.get("/api/v2/alpha-workflows/runs", headers={})
+    assert invalid.status_code == 400
+    assert missing.status_code == 404
+    assert forbidden.status_code == 403
+
+
 def test_migration_graph_is_single_head_and_core_tables_are_not_duplicated():
     versions = ROOT / "alembic/versions"
     revisions = {}
@@ -291,7 +423,21 @@ def test_migration_graph_is_single_head_and_core_tables_are_not_duplicated():
     core = {name: files for name, files in table_creators.items() if any(key in name for key in ("knowledge", "skill", "trace"))}
     duplicates = {name: files for name, files in core.items() if len(files) > 1}
     assert not duplicates, f"核心表被重复创建：{duplicates}"
-    assert revisions[heads.pop()] == "0039_v2_alpha_workflow_unified_contract.py"
+    head_file = revisions[heads.pop()]
+    expected_head = next((path.name for path in versions.glob("0040*.py")), "0039_v2_alpha_workflow_unified_contract.py")
+    assert head_file == expected_head
+
+
+def test_migrations_0039_and_0040_form_one_constrained_head():
+    versions = ROOT / "alembic/versions"
+    migration_0039 = versions / "0039_v2_alpha_workflow_unified_contract.py"
+    candidates_0040 = list(versions.glob("0040*.py"))
+    assert migration_0039.exists()
+    assert len(candidates_0040) == 1, "必须存在且只能存在一个 0040 Migration"
+    text_0040 = candidates_0040[0].read_text(encoding="utf-8")
+    assert re.search(r'^down_revision\s*=\s*["\']0039_v2_alpha_workflow_unified_contract["\']', text_0040, re.MULTILINE)
+    required_constraints = ("trace_id", "root_span_id", "parent_span_id", "knowledge_asset_id", "skill_invocation_id")
+    assert all(field in text_0040 for field in required_constraints)
 
 
 def test_alpha_does_not_expand_browser_computer_or_shell_permissions():
