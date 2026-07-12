@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>安全运营中心</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; color: #1f2937; background: #f8fafc; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .metric { font-size: 30px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>安全运营中心</h1>
+  <p>用于查看设备、执行、质量、风险和安全事件的统一监控面板。</p>
+  <div class="grid">
+    <div class="card"><div>在线测试设备</div><div class="metric" id="online-devices">0</div></div>
+    <div class="card"><div>运行中工作流</div><div class="metric" id="running-workflows">0</div></div>
+    <div class="card"><div>今日执行次数</div><div class="metric" id="today-executions">0</div></div>
+    <div class="card"><div>今日成功率</div><div class="metric" id="today-success-rate">0%</div></div>
+  </div>
+</body>
+</html>
