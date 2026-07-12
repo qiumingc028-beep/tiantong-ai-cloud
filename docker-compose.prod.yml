@@ -44,6 +44,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
+      args:
+        REQUIREMENTS_LOCK: ${REQUIREMENTS_LOCK:-artifacts/wheelhouse/linux-amd64-cp312/requirements-linux-amd64-cp312.lock}
     restart: unless-stopped
     env_file:
       - ${PRODUCTION_ENV_FILE:-.env.production}
@@ -70,6 +72,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
+      args:
+        REQUIREMENTS_LOCK: ${REQUIREMENTS_LOCK:-artifacts/wheelhouse/linux-amd64-cp312/requirements-linux-amd64-cp312.lock}
     restart: unless-stopped
     env_file:
       - ${PRODUCTION_ENV_FILE:-.env.production}

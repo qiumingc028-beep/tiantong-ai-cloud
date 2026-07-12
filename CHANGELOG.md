@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.0.1] - 2026-07-12
+
+### Added
+
+- linux/amd64 生产兼容补丁发布链路。
+- amd64 / arm64 分离 wheelhouse、SHA-256 lock 与构建脚本。
+
+### Changed
+
+- Backend / Worker Dockerfile 改为通过显式 lock 路径选择构建平台。
+- 版本号统一提升为 1.0.1。
+
+### Security
+
+- 继续要求生产 Secret fail-fast，保留显式 CORS origins 约束。
+- 发布中心静态闸门修复为可识别 Git worktree。
+
+### Infrastructure
+
+- amd64 镜像可在 linux/amd64 宿主机原生构建并运行。
+- arm64 构建路径仍可通过显式参数保留。
+
+### Tests
+
+- 完整回归：769 passed, 14 warnings。
+- amd64 候选栈、离线安装、迁移预演与健康检查通过。
+
+### Known Limitations
+
+- FastAPI / Alembic 与部分 Node 版本警告仍保留，未在本次补丁中消除。
+- 生产部署仍需使用显式平台选择，避免宿主机默认架构误选。
+
 ## [1.0.0] - 2026-07-11
 
 ### Added
