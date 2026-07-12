@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-07-13T03:02:40+08:00",
+  "evidence_commit": "cc8c77914dbc79a6821d8781f626b77a003b4f7f",
+  "postgres_version": "160014",
+  "tests": {
+    "backend": {
+      "passed": 835,
+      "failed": 0
+    },
+    "import_config": {
+      "passed": 15,
+      "failed": 0
+    },
+    "migration_path_a": "passed",
+    "migration_path_b": "passed",
+    "alembic_check": "passed",
+    "static_security": "passed",
+    "v1_regression": "passed",
+    "sensitive_data_scan": "passed"
+  },
+  "migration": {
+    "final_head": "0041_v2_alpha_migration_history_repair",
+    "single_head": true,
+    "drift": "none",
+    "paths": [
+      "path_a_current.log",
+      "path_b_current.log"
+    ]
+  },
+  "artifacts": [
+    "artifacts/alpha-migration-evidence/path_a_current.log",
+    "artifacts/alpha-migration-evidence/path_b_current.log",
+    "artifacts/alpha-migration-evidence/alembic-evidence.txt",
+    "artifacts/alpha-migration-evidence/README.md",
+    "docs/V2_ALPHA_MIGRATION_EVIDENCE.md",
+    "docs/V2_MIGRATION_FREEZE_POLICY.md",
+    "alembic/versions/0001_initial_schema.py",
+    "alembic/versions/0002_jd_collection_tables.py",
+    "alembic/versions/0003_account_center_tables.py",
+    "alembic/versions/0004_jd_sync_runtime.py",
+    "alembic/versions/0005_knowledge_center_tables.py",
+    "alembic/versions/0006_merge_knowledge_heads.py",
+    "alembic/versions/0007_task_center_tables.py",
+    "alembic/versions/0008_ai_employees_table.py",
+    "alembic/versions/0009_deploy_center_tables.py",
+    "alembic/versions/0010_orchestrator_tables.py",
+    "alembic/versions/0011_orchestrator_task_links.py",
+    "alembic/versions/0012_sprint16_ceo_deploy_loop.py",
+    "alembic/versions/0013_sprint17_auto_dispatch.py",
+    "alembic/versions/0014_sprint18_execution_engine.py",
+    "alembic/versions/0015_sprint19_review_learning.py",
+    "alembic/versions/0016_sprint20_employee_evolution.py",
+    "alembic/versions/0017_sprint20_5_release_center.py",
+    "alembic/versions/0018_sprint21_ai_capabilities.py",
+    "alembic/versions/0019_sprint21_tool_center.py",
+    "alembic/versions/0020_sprint21_tool_router.py",
+    "alembic/versions/0021_sprint22_brain_tool_router.py",
+    "alembic/versions/0022_sprint23_brain_orchestrator.py",
+    "alembic/versions/0023_sprint24_brain_execution.py",
+    "alembic/versions/0024_sprint25_brain_runtime.py",
+    "alembic/versions/0025_sprint25_3_execution_engine_enhancement.py",
+    "alembic/versions/0026_sprint26_ai_employee_execution_mvp.py",
+    "alembic/versions/0027_v1_schema_alignment.py",
+    "alembic/versions/0037_v2_execution_observability_security_ops.py",
+    "alembic/versions/0041_v2_alpha_migration_history_repair.py"
+  ]
+}
