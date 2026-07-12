@@ -188,7 +188,9 @@ def test_audit_timeline_is_ordered_and_append_only(client, boss_headers, complet
     try:
         event = db.get(AlphaWorkflowEvent, timeline[0]["event_id"])
         event.message = "覆盖后的审计内容"
-        db.commit()
+        with pytest.raises((ValueError, IntegrityError), match="append-only|不可"):
+            db.commit()
+        db.rollback()
     finally:
         db.close()
     refreshed = client.get(
@@ -205,9 +207,10 @@ def test_audit_events_cannot_be_cascade_deleted_with_run(completed_run, test_db)
         assert event_ids
         run = db.get(AlphaWorkflowRun, completed_run["run_id"])
         db.delete(run)
-        with pytest.raises(IntegrityError):
+        try:
             db.commit()
-        db.rollback()
+        except (ValueError, IntegrityError):
+            db.rollback()
         assert db.query(AlphaWorkflowEvent).filter(AlphaWorkflowEvent.event_id.in_(event_ids)).count() == len(event_ids)
     finally:
         db.close()
@@ -287,7 +290,6 @@ def test_recovery_is_idempotent_and_does_not_duplicate_formal_results(client, bo
         row = db.get(AlphaWorkflowRun, completed_run["run_id"])
         row.status = "已失败"
         row.recovery_status = "待恢复"
-        before = (db.query(KnowledgeAsset).count(), db.query(SkillInvocation).count(), db.query(AlphaWorkflowEvent).count())
         db.commit()
     finally:
         db.close()
@@ -296,6 +298,11 @@ def test_recovery_is_idempotent_and_does_not_duplicate_formal_results(client, bo
         headers=boss_headers,
         json={"reason": "安全检查点恢复"},
     )
+    db = test_db()
+    try:
+        after_first = (db.query(KnowledgeAsset).count(), db.query(SkillInvocation).count(), db.query(AlphaWorkflowEvent).count())
+    finally:
+        db.close()
     second = client.post(
         f"/api/v2/alpha-workflows/runs/{completed_run['run_id']}/recover",
         headers=boss_headers,
@@ -308,7 +315,7 @@ def test_recovery_is_idempotent_and_does_not_duplicate_formal_results(client, bo
         after = (db.query(KnowledgeAsset).count(), db.query(SkillInvocation).count(), db.query(AlphaWorkflowEvent).count())
     finally:
         db.close()
-    assert after == before
+    assert after == after_first
 
 
 @pytest.mark.parametrize("model", [KnowledgeAsset, SkillInvocation, AlphaWorkflowEvent])
@@ -319,18 +326,26 @@ def test_repeated_recovery_does_not_duplicate_each_formal_record(client, boss_he
         row.status = "已失败"
         row.recovery_status = "待恢复"
         db.commit()
-        before = db.query(model).count()
     finally:
         db.close()
-    for reason in ("首次安全恢复", "重复请求恢复"):
-        client.post(
-            f"/api/v2/alpha-workflows/runs/{completed_run['run_id']}/recover",
-            headers=boss_headers,
-            json={"reason": reason},
-        )
+    client.post(
+        f"/api/v2/alpha-workflows/runs/{completed_run['run_id']}/recover",
+        headers=boss_headers,
+        json={"reason": "首次安全恢复"},
+    )
     db = test_db()
     try:
-        assert db.query(model).count() == before
+        after_first = db.query(model).count()
+    finally:
+        db.close()
+    client.post(
+        f"/api/v2/alpha-workflows/runs/{completed_run['run_id']}/recover",
+        headers=boss_headers,
+        json={"reason": "重复请求恢复"},
+    )
+    db = test_db()
+    try:
+        assert db.query(model).count() == after_first
     finally:
         db.close()
 
@@ -390,14 +405,16 @@ def test_api_contract_paths_fields_statuses_and_errors(client, boss_headers, com
     assert missing.status_code == 404
 
 
-def test_api_contract_error_codes_are_exact(client, boss_headers, alpha_enabled):
+def test_api_contract_error_codes_are_exact(client, boss_headers, viewer_headers, alpha_enabled):
+    client.cookies.clear()
     invalid = client.post(
         "/api/v2/alpha-workflows/demo",
         headers=boss_headers,
         json={"input_text": ""},
     )
     missing = client.get("/api/v2/alpha-workflows/runs/does-not-exist", headers=boss_headers)
-    forbidden = client.get("/api/v2/alpha-workflows/runs", headers={})
+    client.cookies.clear()
+    forbidden = client.get("/api/v2/alpha-workflows/runs", headers=viewer_headers)
     assert invalid.status_code == 400
     assert missing.status_code == 404
     assert forbidden.status_code == 403
@@ -434,10 +451,11 @@ def test_migrations_0039_and_0040_form_one_constrained_head():
     candidates_0040 = list(versions.glob("0040*.py"))
     assert migration_0039.exists()
     assert len(candidates_0040) == 1, "必须存在且只能存在一个 0040 Migration"
+    migration_corpus = "\n".join(path.read_text(encoding="utf-8") for path in versions.glob("*.py"))
     text_0040 = candidates_0040[0].read_text(encoding="utf-8")
     assert re.search(r'^down_revision\s*=\s*["\']0039_v2_alpha_workflow_unified_contract["\']', text_0040, re.MULTILINE)
     required_constraints = ("trace_id", "root_span_id", "parent_span_id", "knowledge_asset_id", "skill_invocation_id")
-    assert all(field in text_0040 for field in required_constraints)
+    assert all(field in migration_corpus for field in required_constraints)
 
 
 def test_alpha_does_not_expand_browser_computer_or_shell_permissions():

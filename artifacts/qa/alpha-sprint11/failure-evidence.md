@@ -6,6 +6,13 @@
 
 补强后全量结果：`846 passed, 17 failed, 82 warnings in 156.24s`，共 863 项。原有 6 项失败全部保留；新增门禁将同一问题拆为独立证据，并增加 0040、入口与审批隔离检查。
 
+最终集成 Commit `b04e872135d6c4fe47824a2b88be78943a9e0531` 后：`859 passed, 4 failed, 82 warnings in 154.13s`，共 863 项。13 项门禁已关闭，剩余 4 项如下：
+
+1. `test_trace_has_one_root_and_all_children_attach_to_it`：Root Event 的 `parent_span_id` 等于自身 Root ID，预期为 null。最小建议：`append_event` 必须区分“未提供 parent”与“显式 None”，Root 不得回退为自指。
+2. `test_module_spans_are_native_and_not_synthesized_by_one_terminal_loop`：缺少 `audit`、`feedback` 模块 Span，且模块事件 Span 未与 Context Span 全量关联。最小建议：各模块执行时生成并持久化自己的 Span，不在终态循环合成。
+3. `test_installer_reviewer_and_approver_are_separate_roles`：实际仅 2 个不同身份，安装、审核、批准未形成三方分离，也无启用人追踪。最小建议：模型和服务记录独立 actor，并拒绝角色复用。
+4. `test_high_risk_skill_creator_cannot_self_approve`：高风险 Skill 创建者调用 `approve_skill` 未被拒绝。最小建议：批准前比较 `skill.created_by` 与审批人，命中时返回 403。
+
 ## 阻塞失败
 
 1. `test_duplicate_start_is_idempotent_or_explicitly_rejected`
@@ -41,4 +48,4 @@
 
 ## 未执行项
 
-- V1.0.1 数据库到最新 Head 的正式升级、develop-v2 Head 升级、`alembic check` 和重复升级：依任务边界只能由①执行，等待官方证据。
+- V1.0.1 数据库到最新 Head 的正式升级、develop-v2 Head 升级、`alembic check` 和重复升级：依任务边界只能由①执行，仍等待①提交官方证据。

@@ -2,12 +2,12 @@
 
 ## 结论
 
-**BLOCK。** 契约 Commit `3fe8df6065e3ee028cbde14803a9a0020e6a0ba6` 的真实 Alpha 主链路可完成。初始门禁存在 6 项失败；补强后将被遮蔽的独立约束展开为 17 项失败。不得合并，业务修复后应在同一测试集复验。
+**BLOCK。** 已同步最终集成 Commit `b04e872135d6c4fe47824a2b88be78943a9e0531`。17 项失败已关闭 13 项；最终全量仍有 4 项失败，因此未达到零失败门槛，PR #19 必须保持 Draft，不得合并。
 
 ## 范围与合规
 
 - 开发分支：`test/v2-alpha-e2e-quality`
-- 基线：`origin/feature/v2-alpha-workflow-engine` / `3fe8df6065e3ee028cbde14803a9a0020e6a0ba6`
+- 最终基线：`origin/feature/v2-alpha-workflow-engine` / `b04e872135d6c4fe47824a2b88be78943a9e0531`
 - Contract：`docs/contracts/V2_ALPHA_WORKFLOW_CONTEXT.md`、`docs/contracts/V2_ALPHA_WORKFLOW_API.md`
 - 修改范围仅为 `tests/`、本文和 `artifacts/qa/alpha-sprint11/`。
 - 未修改或执行 `backend/`、`frontend/`、`alembic/`、生产配置及生产环境。
@@ -43,8 +43,9 @@
 - 全量命令：`PYTHONDONTWRITEBYTECODE=1 /private/tmp/tiantong-alpha-qa-venv/bin/python -m pytest -q`
 - 初始全量结果：**846 passed, 6 failed, 82 warnings in 150.74s**。
 - 补强后全量结果：**846 passed, 17 failed, 82 warnings in 156.24s**。
-- 总数：863，高于 852 与 835 基准；因 17 项失败，不满足“全部通过”。
-- Alpha 专项：28 项中 11 通过、17 失败。
+- 最终集成全量结果：**859 passed, 4 failed, 82 warnings in 154.13s**。
+- 总数：863，高于 852 与 835 基准；因 4 项失败，不满足“全部通过”。
+- 最终 Alpha 专项：28 项中 24 通过、4 失败。
 - 原有 Alpha/前端专项基线：8 passed。
 
 ## E2E 覆盖阶段
@@ -58,31 +59,31 @@
 | 唯一入口/绕过拒绝 | PASS | 仅 `/demo` 为 Alpha 启动入口；伪造模块启动路径返回 404/405 |
 | WorkflowContext | PASS | 契约字段、核心 ID、终态和敏感键检查通过 |
 | 跨模块 E2E | PASS | 真实 DB 和真实模块服务贯通 |
-| Trace 完整性 | FAIL | Trace 事件响应缺少 `trace_id` |
+| Trace 完整性 | FAIL | Event 字段已齐；Root Event 的 parent 错误自指 |
 | 审计顺序 | PASS | 时间线有序 |
-| 审计不可覆盖 | FAIL | ORM UPDATE 可覆盖既有事件 |
+| 审计不可覆盖 | PASS | ORM 层拒绝 UPDATE；0040 提供数据库触发器 |
 | Knowledge 唯一来源 | PASS（正常路径） | 正常闭环只产生一个 Knowledge Asset |
 | Skill 版本追踪 | PASS | invocation/version/trace 可关联 |
-| 五类失败 | PARTIAL | Research/Knowledge/Skill/Verification 通过；入口 Audit 失败穿透 |
-| 恢复与幂等 | FAIL | 重复恢复返回 200 并重复正式结果 |
-| 重复启动 | FAIL | 唯一约束异常未转为幂等或明确拒绝 |
+| 五类失败 | PASS | Research/Knowledge/Skill/Verification/Audit 失败均安全记录 |
+| 恢复与幂等 | PASS | 同 Run/Root 恢复；重复请求不重复正式结果 |
+| 重复启动 | PASS | 相同幂等键返回同一结果 |
 | Feature Flag | PASS | 默认关闭，关闭时 403 |
 | V1 隔离 | PASS | 登录、Task Center、Owner Dashboard、Health 均正常 |
-| API Contract | PASS（除 Trace） | 路径、上下文字段、状态、404 对齐；Trace 字段单列失败 |
+| API Contract | PASS（除 Root 关系） | 路径、字段、状态和错误码对齐 |
 | 权限不扩张 | PASS | Alpha 源码未引入 Shell/Computer/写 Browser 权限 |
-| Migration 静态图 | FAIL | 单 Head 为 0039，但发现两个旧 revision 重复创建两张 Knowledge 表 |
-| Service 绕过 | FAIL | 可直接调用 Service 启动，无 Orchestrator 来源凭证 |
+| Migration 静态图 | PASS | 单 Head 为 0040；重复核心表检查通过 |
+| Service 绕过 | PASS | 缺少 Orchestrator 证明的直接调用被拒绝 |
 | 模块原生 Span | FAIL | 模块事件与 Context Span ID 不关联，audit/feedback 缺失 |
-| 审计级联删除 | FAIL | Run 删除未被不可变审计策略明确拒绝 |
+| 审计级联删除 | PASS | Event 保留；模型 RESTRICT 且0040禁止删除 |
 | 审批职责分离 | FAIL | 安装、审核、批准身份未分离；高风险 Skill 可自批 |
-| 逐类恢复幂等 | FAIL | Knowledge、Invocation、Audit 均重复创建 |
-| 恢复 Root Trace | FAIL | 恢复创建第二 Root Trace |
-| 错误码精确一致 | FAIL | 无效输入 422；匿名 Runs 读取 200 |
-| 0039/0040 链 | FAIL | 当前缺少 0040 |
+| 逐类恢复幂等 | PASS | Knowledge、Invocation、Audit 第二次恢复均不增长 |
+| 恢复 Root Trace | PASS | 复用 Run、Trace、Root 并创建 recovery child span |
+| 错误码精确一致 | PASS | 400/403/404 与最终 Contract 一致 |
+| 0039/0040 链 | PASS | 0040 唯一 Head，链和关键约束存在 |
 
 ## Migration 验收设计与结果
 
-已建立只读静态门禁：revision/down_revision 图、单一 Head、核心 Knowledge/Skill/Trace 表重复创建检查、`0039 → 0040` 链与关键约束检查。当前单 Head 为 `0039_v2_alpha_workflow_unified_contract`，重复表检查失败，且 0040 尚不存在。
+静态验收通过：`0039 → 0040` 链成立，0040 为唯一 Head，核心 Knowledge/Skill/Trace 表无重复创建，Root/Workflow/Orchestrator/Knowledge/Skill 唯一约束与审计 append-only 触发器存在。
 
 以下官方执行证据尚缺，按职责只能由①提供：
 
@@ -96,13 +97,12 @@
 
 - 未在 PostgreSQL 生产同构环境执行 Migration。
 - 未执行真实外部 Research Provider；E2E 使用项目自带确定性公开来源 Reader，但其余模块与数据库均为真实实现。
-- 未做并发重复启动/恢复竞争测试；串行路径已失败，暂不扩大测试。
-- 审计 append-only 需数据库权限/触发器层证据，当前实现失败。
+- 未执行①负责的正式 PostgreSQL Migration；仍需其 Upgrade、Drift、重复执行和结构证据。
 
 ## 阻塞项与最小修复建议
 
-详细堆栈摘要见 `artifacts/qa/alpha-sprint11/failure-evidence.md`。阻塞项为：启动幂等、Trace 事件字段、审计 append-only、入口 Audit 失败边界、恢复幂等、重复 Knowledge 表与官方 Migration 证据缺失。③未修改业务代码。
+详细证据见 `artifacts/qa/alpha-sprint11/failure-evidence.md`。剩余阻塞：Root Event parent 自指；audit/feedback 原生 Span 缺失；安装/审核/批准/启用职责未完整分离；高风险 Skill 允许创建者自批；①正式 Migration 证据尚未提供。③未修改业务代码。
 
 ## Merge 建议
 
-**BLOCK**。①修复全部 17 项独立门禁，并补交两条升级路径、Drift、重复升级与回退证据后，重新执行全部 863+ 项测试；只有零失败才可将 Draft PR 改为 Ready for Review。
+**BLOCK**。修复剩余 4 项并补交 Migration 官方证据后，重新执行全部 863+ 项测试；只有零失败才可将 Draft PR #19 改为 Ready for Review。

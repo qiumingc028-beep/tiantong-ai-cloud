@@ -1,30 +1,19 @@
 {
-  "contract_commit": "3fe8df6065e3ee028cbde14803a9a0020e6a0ba6",
+  "contract_commit": "b04e872135d6c4fe47824a2b88be78943a9e0531",
   "branch": "test/v2-alpha-e2e-quality",
   "command": "PYTHONDONTWRITEBYTECODE=1 /private/tmp/tiantong-alpha-qa-venv/bin/python -m pytest -q",
   "total": 863,
-  "passed": 846,
-  "failed": 17,
+  "passed": 859,
+  "failed": 4,
   "warnings": 82,
-  "duration_seconds": 156.24,
+  "duration_seconds": 154.13,
   "baseline": 835,
   "baseline_count_met": true,
   "all_passed": false,
   "failed_gates": [
-    "duplicate start idempotency",
-    "trace event trace_id completeness",
-    "audit append-only enforcement",
-    "audit failure recoverability",
-    "recovery idempotency",
-    "duplicate core migration tables",
-    "direct Alpha Service bypass",
+    "root span parent relationship",
     "module-native span provenance",
-    "audit cascade-delete prevention",
     "installer/reviewer/approver separation",
-    "high-risk skill self-approval prevention",
-    "per-record recovery idempotency",
-    "recovery root-trace reuse",
-    "exact API contract error codes",
-    "0040 constrained single-head migration"
+    "high-risk skill self-approval prevention"
   ]
 }
