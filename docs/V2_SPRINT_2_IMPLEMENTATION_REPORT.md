@@ -52,19 +52,37 @@
 - Alembic check：通过
 - V1 回归：通过
 
-## 5. 非阻塞观察
+## 5. 远程协作结果
+
+- 本地功能分支：`feature/v2-readonly-browser-executor`
+- 远程功能分支：`origin/feature/v2-readonly-browser-executor`
+- PR 编号：`#3`
+- PR 地址：<https://github.com/qiumingc028-beep/tiantong-ai-cloud/pull/3>
+- PR 目标分支：`develop-v2`
+- PR 状态：已创建，等待审查
+
+## 6. 安全与发布边界
+
+- `main` 未修改
+- `v1.0.1` Tag 未修改
+- 生产环境未部署
+- 真实执行器仍保持关闭
+- `BROWSER_READONLY_ENABLED` 默认关闭
+- `BROWSER_CONTROL_ENABLED` 默认关闭
+
+## 7. 非阻塞观察
 
 - Alembic 和 FastAPI 仍有若干弃用警告
 - 这是已有基础警告，不阻断本 Sprint
 
-## 6. 已知限制
+## 8. 已知限制
 
 - 当前浏览器执行器只实现“只读 HTTP 采集”
 - 不接入 Playwright / OpenClaw / 真正浏览器控制
 - 不支持登录态采集
 - 不支持表单提交
 
-## 7. 后续建议
+## 9. 后续建议
 
 下一 Sprint 如需扩展浏览器能力，应优先补：
 
