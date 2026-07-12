@@ -25,6 +25,7 @@ from .executor_types import ExecutorContext
 from .models import AgentCapability, AgentExecution, AgentExecutionAudit
 from .permission import ensure_agent_runtime_enabled, evaluate_permission
 from .registry import capability_to_dict, list_capabilities as registry_list_capabilities, resolve_capability
+from ..research_runtime.service import persist_research_result
 
 
 def now_utc() -> datetime:
@@ -449,6 +450,8 @@ def run_execution_flow(
         if task and execution.task_id and payload_should_write_back(context.input_payload):
             note = f"[V2 Agent Runtime] {capability.capability_name}: {json.dumps(result.output, ensure_ascii=False)}"
             task.summary = ((task.summary or "") + ("\n" if task.summary else "") + note).strip()
+        if capability.capability_id == "research.public.multi_source":
+            persist_research_result(db, execution, context.input_payload, result.output)
     elif result.error_code == "MOCK_TIMEOUT":
         execution.status = "timeout"
         write_audit_event(

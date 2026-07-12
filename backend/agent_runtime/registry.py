@@ -96,6 +96,8 @@ def resolve_executor_type(capability: AgentCapability, executor_type: str | None
 
 
 def capability_to_dict(capability: AgentCapability) -> dict[str, object]:
+    settings = get_settings()
+    research_capability = capability.capability_id == "research.public.multi_source"
     return {
         "capability_id": capability.capability_id,
         "capability_name": capability.capability_name,
@@ -114,10 +116,43 @@ def capability_to_dict(capability: AgentCapability) -> dict[str, object]:
         "allowed_employee_codes": capability_allowed_employee_codes(capability),
         "allowed_employee_count": len(capability_allowed_employee_codes(capability)),
         "executor_status": executor_status_for_capability(capability),
+        "browser_executor_status": browser_executor_status_for_capability(capability, settings),
+        "search_provider_status": search_provider_status_for_capability(capability, settings),
+        "max_queries": settings.PUBLIC_SEARCH_MAX_QUERIES if research_capability else None,
+        "max_sources": settings.PUBLIC_RESEARCH_MAX_SOURCES if research_capability else None,
+        "min_sources": settings.PUBLIC_RESEARCH_DEFAULT_MIN_SOURCES if research_capability else None,
+        "recent_health_status": research_health_status_for_capability(capability, settings),
         "version": capability.version,
         "created_at": capability.created_at.isoformat() if capability.created_at else None,
         "updated_at": capability.updated_at.isoformat() if capability.updated_at else None,
     }
+
+
+def browser_executor_status_for_capability(capability: AgentCapability, settings) -> str | None:
+    executor_type = (capability.executor_type or "mock").strip().lower()
+    if executor_type in {"browser", "research"}:
+        if capability.readonly and settings.BROWSER_READONLY_ENABLED:
+            return "就绪"
+        if settings.BROWSER_CONTROL_ENABLED:
+            return "就绪"
+        return "已关闭"
+    return None
+
+
+def search_provider_status_for_capability(capability: AgentCapability, settings) -> str | None:
+    if capability.capability_id != "research.public.multi_source":
+        return None
+    if settings.PUBLIC_SEARCH_PROVIDER or settings.PUBLIC_SEARCH_ENABLED:
+        return "就绪"
+    return "已关闭"
+
+
+def research_health_status_for_capability(capability: AgentCapability, settings) -> str | None:
+    if capability.capability_id != "research.public.multi_source":
+        return None
+    if settings.PUBLIC_RESEARCH_ENABLED and (settings.PUBLIC_SEARCH_ENABLED or settings.PUBLIC_SEARCH_PROVIDER == "mock"):
+        return "就绪"
+    return "已关闭"
 
 
 def executor_status_for_capability(capability: AgentCapability) -> str:
@@ -133,6 +168,8 @@ def executor_status_for_capability(capability: AgentCapability) -> str:
         if settings.BROWSER_CONTROL_ENABLED:
             return "就绪"
         return "已关闭"
+    if executor_type == "research":
+        return "就绪" if settings.PUBLIC_RESEARCH_ENABLED else "已关闭"
     if executor_type in {"desktop"}:
         return "就绪" if settings.COMPUTER_CONTROL_ENABLED else "已关闭"
     if executor_type in {"mobile"}:

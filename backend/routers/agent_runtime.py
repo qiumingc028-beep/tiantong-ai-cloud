@@ -177,6 +177,8 @@ def api_agent_runtime_health(request: Request, db: Session = Depends(get_db)):
             "BROWSER_CONTROL_ENABLED": settings.BROWSER_CONTROL_ENABLED,
             "BROWSER_READONLY_ENABLED": settings.BROWSER_READONLY_ENABLED,
             "BROWSER_ALLOW_HTTP": settings.BROWSER_ALLOW_HTTP,
+            "PUBLIC_RESEARCH_ENABLED": settings.PUBLIC_RESEARCH_ENABLED,
+            "PUBLIC_SEARCH_ENABLED": settings.PUBLIC_SEARCH_ENABLED,
             "SHELL_EXECUTION_ENABLED": settings.SHELL_EXECUTION_ENABLED,
         },
     }
