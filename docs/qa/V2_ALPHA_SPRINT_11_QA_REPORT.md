@@ -183,3 +183,8 @@ Freeze Policy缺少0037完整路径及八项结构化披露。Checksums虽已使
 ## PR #18 网络错误防回退同步
 
 前端固定审查Head已更新为 `2306c5ef7e0444fa41b7b58ce86595065547f3c4`。门禁新增验证：fetch异常被捕获并转换为“网络连接失败，请检查网络后重试。”；前端源码不直接暴露 `Failed to fetch`；HTTP非2xx继续优先使用后端 `detail`；401登录跳转、`available_actions`及`report_content`所有权保持不变。PR #18范围以其与主功能分支的Git merge-base计算，仍必须严格等于四个Alpha前端文件。
+## PostgreSQL历史升级与唯一约束回归准备
+
+新增真实PostgreSQL专项 `tests/test_v2_alpha_postgresql_migration_regression.py`。测试要求隔离数据库管理员连接及 `MIGRATION_CODE_FIX_COMMIT`，从真实Git merge-base归档执行到0037以复现Boolean默认值数据库错误，再使用已合并修复代码升级至Head；全程禁止SQLite与Drift跳过。
+
+最终Head验收从 `pg_constraint` 读取约束名称和有序列集合，逐约束执行真实重复INSERT并要求 `UniqueViolation`，再用 `ON CONFLICT ON CONSTRAINT ... DO NOTHING` 验证业务幂等重试，最后执行0039 downgrade/head re-upgrade并重新读取约束。当前等待①提供修复Commit，PR #19保持Draft/BLOCK。
