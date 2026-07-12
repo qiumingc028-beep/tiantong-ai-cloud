@@ -13,12 +13,14 @@ OWNER_ROLES = {"owner", "admin"}
 
 
 def require_alpha_workflow_enabled() -> None:
-    if not get_settings().ALPHA_WORKFLOW_ENABLED:
+    settings = get_settings()
+    if not (settings.ALPHA_WORKFLOW_ENABLED or settings.ALPHA_SCENARIO_ENABLED):
         raise HTTPException(status_code=403, detail="Alpha 工作流未启用")
 
 
 def require_alpha_workflow_dashboard_enabled() -> None:
-    if not get_settings().ALPHA_WORKFLOW_DASHBOARD_ENABLED:
+    settings = get_settings()
+    if not (settings.ALPHA_WORKFLOW_DASHBOARD_ENABLED or settings.ALPHA_DASHBOARD_ENABLED):
         raise HTTPException(status_code=403, detail="Alpha 工作流页面未启用")
 
 

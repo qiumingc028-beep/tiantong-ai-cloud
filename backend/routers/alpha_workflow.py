@@ -9,7 +9,12 @@ from ..alpha_workflow.permissions import require_alpha_workflow_dashboard_enable
 from ..alpha_workflow.schemas import AlphaWorkflowRecoverRequest, AlphaWorkflowScenarioCreate, AlphaWorkflowStartRequest
 from ..alpha_workflow.service import (
     build_dashboard,
+    cancel_alpha_workflow,
     create_scenario,
+    get_audit_timeline,
+    get_final_report,
+    get_stage_detail,
+    get_trace,
     get_run,
     get_scenario,
     health_view,
@@ -71,6 +76,46 @@ def api_get_run(run_id: str, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/runs/{run_id}/trace")
+def api_get_run_trace(run_id: str, request: Request, db: Session = Depends(get_db)):
+    require_alpha_workflow_enabled()
+    require_alpha_workflow_user(request, db)
+    try:
+        return get_trace(db, run_id)
+    except AlphaWorkflowNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/audit")
+def api_get_run_audit(run_id: str, request: Request, db: Session = Depends(get_db)):
+    require_alpha_workflow_enabled()
+    require_alpha_workflow_user(request, db)
+    try:
+        return get_audit_timeline(db, run_id)
+    except AlphaWorkflowNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/report")
+def api_get_run_report(run_id: str, request: Request, db: Session = Depends(get_db)):
+    require_alpha_workflow_enabled()
+    require_alpha_workflow_user(request, db)
+    try:
+        return get_final_report(db, run_id)
+    except AlphaWorkflowNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/runs/{run_id}/stages")
+def api_get_run_stages(run_id: str, request: Request, db: Session = Depends(get_db)):
+    require_alpha_workflow_enabled()
+    require_alpha_workflow_user(request, db)
+    try:
+        return get_stage_detail(db, run_id)
+    except AlphaWorkflowNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/demo")
 def api_run_demo(payload: AlphaWorkflowStartRequest, request: Request, db: Session = Depends(get_db)):
     require_alpha_workflow_enabled()
@@ -90,6 +135,16 @@ def api_recover_run(run_id: str, payload: AlphaWorkflowRecoverRequest, request: 
         return {"ok": True, "run": recover_alpha_workflow(db, user=user, run_id=run_id, reason=payload.reason)}
     except (AlphaWorkflowDependencyError, AlphaWorkflowValidationError, AlphaWorkflowNotFoundError) as exc:
         raise HTTPException(status_code=400 if not isinstance(exc, AlphaWorkflowNotFoundError) else 404, detail=str(exc)) from exc
+
+
+@router.post("/runs/{run_id}/cancel")
+def api_cancel_run(run_id: str, payload: AlphaWorkflowRecoverRequest, request: Request, db: Session = Depends(get_db)):
+    require_alpha_workflow_enabled()
+    user = require_alpha_workflow_user(request, db)
+    try:
+        return {"ok": True, "run": cancel_alpha_workflow(db, user=user, run_id=run_id, reason=payload.reason)}
+    except AlphaWorkflowNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/dashboard")

@@ -8,6 +8,8 @@ ALPHA_WORKFLOW_STATUSES: Final[tuple[str, ...]] = (
     "运行中",
     "已暂停",
     "等待恢复",
+    "已取消",
+    "已终止",
     "已完成",
     "已失败",
 )
@@ -29,7 +31,9 @@ ALPHA_WORKFLOW_EVENT_CODES: Final[tuple[str, ...]] = (
 
 ALPHA_WORKFLOW_FEATURE_FLAGS: Final[tuple[str, ...]] = (
     "ALPHA_WORKFLOW_ENABLED",
+    "ALPHA_SCENARIO_ENABLED",
     "ALPHA_WORKFLOW_DASHBOARD_ENABLED",
+    "ALPHA_DASHBOARD_ENABLED",
 )
 
 DEFAULT_ALPHA_SCENARIO_CODE = "apple_latest_ai_strategy"

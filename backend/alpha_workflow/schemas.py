@@ -35,6 +35,9 @@ class AlphaWorkflowEventView(BaseModel):
     status: str
     message: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    span_id: str | None = None
+    parent_span_id: str | None = None
+    span_kind: str = "child"
     trace_id: str
     created_at: datetime | None = None
 
@@ -44,10 +47,21 @@ class AlphaWorkflowRunView(BaseModel):
 
     run_id: str
     scenario_id: str
+    workflow_id: str | None = None
+    tenant_id: str | None = None
+    user_id: int | None = None
     task_id: int | None = None
+    orchestrator_run_id: str | None = None
     research_execution_id: str | None = None
+    research_report_id: str | None = None
     knowledge_id: str | None = None
+    knowledge_asset_id: str | None = None
+    knowledge_version_id: str | None = None
+    skill_id: str | None = None
+    skill_version_id: str | None = None
     skill_invocation_id: int | None = None
+    agent_execution_id: str | None = None
+    verification_id: str | None = None
     status: str
     quality_score: int | None = None
     quality_grade: str | None = None
@@ -60,6 +74,9 @@ class AlphaWorkflowRunView(BaseModel):
     report_summary: dict[str, Any] = Field(default_factory=dict)
     dashboard_summary: dict[str, Any] = Field(default_factory=dict)
     trace_id: str
+    root_span_id: str | None = None
+    current_stage: str | None = None
+    approval_ids: list[str] = Field(default_factory=list)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     recovered_from_run_id: str | None = None

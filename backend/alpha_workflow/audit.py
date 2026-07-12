@@ -23,6 +23,9 @@ def append_event(
     status: str,
     message: str | None = None,
     payload: dict | None = None,
+    span_id: str | None = None,
+    parent_span_id: str | None = None,
+    span_kind: str = "child",
 ) -> AlphaWorkflowEvent:
     event = AlphaWorkflowEvent(
         event_id=str(uuid4()),
@@ -32,6 +35,9 @@ def append_event(
         status=status,
         message=message,
         payload_json=json.dumps(payload or {}, ensure_ascii=False),
+        span_id=span_id or f"{run.trace_id}:{stage}:{uuid4().hex[:8]}",
+        parent_span_id=parent_span_id or run.root_span_id or run.trace_id,
+        span_kind=span_kind,
         trace_id=run.trace_id,
     )
     db.add(event)

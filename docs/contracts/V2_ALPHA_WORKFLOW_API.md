@@ -21,6 +21,10 @@
 - `POST /api/v2/alpha-workflows/demo`：启动 Alpha Workflow
 - `GET /api/v2/alpha-workflows/runs`
 - `GET /api/v2/alpha-workflows/runs/{run_id}`
+- `GET /api/v2/alpha-workflows/runs/{run_id}/trace`
+- `GET /api/v2/alpha-workflows/runs/{run_id}/audit`
+- `GET /api/v2/alpha-workflows/runs/{run_id}/report`
+- `GET /api/v2/alpha-workflows/runs/{run_id}/stages`
 - `POST /api/v2/alpha-workflows/runs/{run_id}/recover`
 - `POST /api/v2/alpha-workflows/runs/{run_id}/cancel`（若实现）
 
@@ -31,8 +35,10 @@
   - `plan`
   - `report_summary`
   - `dashboard_summary`
-  - `events`
+- `events`
+- `spans`
 - 每条 `event` 必须包含 `event_code`、`stage`、`status`、`trace_id`、`created_at`
+- `spans` 必须包含 `span_id`、`parent_span_id`、`span_name`、`stage`、`status`、`started_at`、`finished_at`
 
 ### Dashboard
 

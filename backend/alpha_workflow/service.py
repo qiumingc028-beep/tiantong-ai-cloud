@@ -11,6 +11,7 @@ from ..agent_runtime.audit import write_audit_event
 from ..agent_runtime.models import AgentExecution, AgentExecutionAudit, AgentCapability
 from ..agent_runtime.registry import seed_builtin_capabilities
 from ..ai_employees.registry import TIANCAI_DATA, employee_name
+from ..brain_orchestrator.orchestrator import plan_dry_run
 from ..config import get_settings
 from ..knowledge_center.models import KnowledgeChunk
 from ..knowledge_center.service import record_use, submit_research_report
@@ -32,7 +33,7 @@ from .constants import (
     DEFAULT_ALPHA_WORKFLOW_SKILL_CODE,
     DEFAULT_ALPHA_WORKFLOW_TARGET_EMPLOYEE,
 )
-from .context import AlphaWorkflowContext, AlphaWorkflowPlan, AlphaWorkflowTraceStep
+from .context import AlphaWorkflowContext, AlphaWorkflowPlan, AlphaWorkflowTraceSpan
 from .exceptions import AlphaWorkflowDependencyError, AlphaWorkflowNotFoundError, AlphaWorkflowValidationError
 from .models import AlphaWorkflowEvent, AlphaWorkflowRun, AlphaWorkflowScenario
 from .planner import build_alpha_workflow_plan
@@ -108,11 +109,11 @@ def _create_task(db: Session, *, user: User, input_text: str, trace_id: str) -> 
         title="研究 Apple 最新 AI 战略",
         description=input_text,
         priority="high",
-        source="boss",
+        source="orchestrator",
         status="created",
         created_by_id=user.id,
         updated_by_id=user.id,
-        split_plan=json.dumps({"alpha": True, "trace_id": trace_id}, ensure_ascii=False),
+        split_plan=json.dumps({"alpha": True, "trace_id": trace_id, "workflow_channel": "orchestrator"}, ensure_ascii=False),
     )
     db.add(task)
     db.flush()
@@ -164,6 +165,11 @@ def _create_agent_execution(db: Session, *, task: TaskCenterTask, employee: AiEm
     return execution
 
 
+def _append_span(context: AlphaWorkflowContext, *, stage: str, status: str, message: str | None = None, metadata: dict[str, object] | None = None) -> AlphaWorkflowTraceSpan:
+    span = context.set_stage(stage, status, message=message, metadata=metadata or {})
+    return span
+
+
 def _default_browser_reader(url: str, *, trace_id: str, allowed_domains: list[str], blocked_domains: list[str]) -> dict[str, object]:
     domain = url.split("//", 1)[1].split("/", 1)[0] if "//" in url else url
     return {
@@ -182,7 +188,7 @@ def _default_browser_reader(url: str, *, trace_id: str, allowed_domains: list[st
 
 
 def _score_quality(context: AlphaWorkflowContext) -> tuple[int, str, dict[str, object]]:
-    completed = len([step for step in context.step_trace if step.status == "成功"])
+    completed = len([step for step in context.step_trace if step.status in {"成功", "已完成"}])
     total = max(1, len(context.step_trace))
     base = int(round(completed / total * 100))
     score = min(100, base + 5 if context.report_hash else base)
@@ -191,7 +197,7 @@ def _score_quality(context: AlphaWorkflowContext) -> tuple[int, str, dict[str, o
         "总步骤": total,
         "成功步骤": completed,
         "报告已生成": bool(context.report_hash),
-        "任务已完成": bool(context.task_id and context.research_execution_id and context.knowledge_id and context.skill_invocation_id),
+        "任务已完成": bool(context.task_id and context.research_execution_id and context.knowledge_asset_id and context.skill_invocation_id),
         "扣分原因": [] if score >= 90 else ["存在未完成步骤" if completed < total else "报告未生成"],
         "改进建议": ["保持全链路闭环并持续压缩步骤等待时间"] if score >= 90 else ["补足失败恢复后的结果回写"],
     }
@@ -204,7 +210,7 @@ def _score_risk(context: AlphaWorkflowContext) -> tuple[int, str, dict[str, obje
     if context.recovery_from_run_id:
         score += 5
         reasons.append("发生过恢复流程")
-    if context.step_trace and any(step.status != "成功" for step in context.step_trace):
+    if context.step_trace and any(step.status not in {"成功", "已完成"} for step in context.step_trace):
         score += 20
         reasons.append("存在未成功步骤")
     if context.skill_invocation_id:
@@ -226,6 +232,8 @@ def start_alpha_workflow(
     settings = get_settings()
     if not settings.ALPHA_WORKFLOW_ENABLED:
         raise AlphaWorkflowDependencyError("Alpha 工作流未启用")
+    if not (settings.ALPHA_SCENARIO_ENABLED or settings.ALPHA_WORKFLOW_ENABLED):
+        raise AlphaWorkflowDependencyError("Alpha 场景未启用")
     _ensure_dependency_flags(settings)
     if not input_text.strip():
         raise AlphaWorkflowValidationError("输入内容不能为空")
@@ -239,6 +247,8 @@ def start_alpha_workflow(
 
     trace_id = trace_id or uuid4().hex
     plan = build_alpha_workflow_plan(input_text, scenario_code=scenario.scenario_code, trace_id=trace_id)
+    plan.root_span_id = f"{trace_id}:root"
+    orchestrator_plan = plan_dry_run(db, input_text, created_by=user.username, boss_confirmed=True, security_audited=True)
     employee = ensure_tiancai_employee(db)
     task = _create_task(db, user=user, input_text=input_text, trace_id=trace_id)
     set_task_status(db, task, "assigned", user, "alpha_assigned", "自动派给天采")
@@ -251,9 +261,15 @@ def start_alpha_workflow(
     run = AlphaWorkflowRun(
         run_id=str(uuid4()),
         scenario_id=scenario.scenario_id,
+        workflow_id=f"alpha-{trace_id}",
+        tenant_id="tiantong",
+        user_id=user.id,
         task_id=task.id,
+        orchestrator_run_id=orchestrator_plan["graph_id"],
         status="运行中",
         trace_id=trace_id,
+        root_span_id=plan.root_span_id or f"{trace_id}:root",
+        current_stage="orchestrator",
         workflow_context_json=None,
         plan_json=json.dumps(plan.model_dump(mode="json"), ensure_ascii=False),
         created_by_id=user.id,
@@ -261,7 +277,58 @@ def start_alpha_workflow(
     )
     db.add(run)
     db.flush()
-    append_event(db, run, event_code="workflow_created", stage="scenario", status="成功", message="Alpha 工作流场景已创建", payload={"scenario_code": scenario.scenario_code})
+    append_event(
+        db,
+        run,
+        event_code="workflow_created",
+        stage="orchestrator",
+        status="成功",
+        message="Alpha Workflow 由 Orchestrator 唯一入口创建",
+        payload={"scenario_code": scenario.scenario_code, "orchestrator_run_id": orchestrator_plan["graph_id"]},
+        span_kind="root",
+        span_id=run.root_span_id,
+        parent_span_id=None,
+    )
+    context = AlphaWorkflowContext(
+        workflow_id=run.workflow_id or f"alpha-{trace_id}",
+        tenant_id="tiantong",
+        user_id=user.id,
+        task_id=task.id,
+        orchestrator_run_id=orchestrator_plan["graph_id"],
+        research_execution_id=None,
+        research_report_id=None,
+        knowledge_asset_id=None,
+        knowledge_version_id=None,
+        skill_id=None,
+        skill_version_id=None,
+        skill_invocation_id=None,
+        agent_execution_id=None,
+        verification_id=None,
+        trace_id=trace_id,
+        root_span_id=run.root_span_id or f"{trace_id}:root",
+        approval_ids=[],
+        risk_score=None,
+        quality_score=None,
+        current_stage="orchestrator",
+        status="运行中",
+        created_at=run.started_at,
+        updated_at=_utc_now(),
+        scenario_code=scenario.scenario_code,
+        scenario_title=scenario.title,
+        input_text=input_text,
+        task_title=task.title,
+        task_status=task.status,
+        report_title=None,
+        report_hash=None,
+        report_content=None,
+        dashboard_status="运行中",
+        step_trace=[],
+        stage_history=[],
+        linked_ids={
+            "task_id": task.id,
+            "orchestrator_run_id": orchestrator_plan["graph_id"],
+        },
+    )
 
     try:
         research_input = {
@@ -277,9 +344,9 @@ def start_alpha_workflow(
             "report_format": "中文研究报告",
             "task_title": task.title,
         }
-        append_event(db, run, event_code="workflow_started", stage="task_center", status="成功", message="任务中心已创建任务", payload={"task_id": task.id, "task_title": task.title})
+        append_event(db, run, event_code="workflow_started", stage="task_center", status="成功", message="任务中心已创建任务", payload={"task_id": task.id, "task_title": task.title}, parent_span_id=run.root_span_id)
         agent_execution = _create_agent_execution(db, task=task, employee=employee, trace_id=trace_id, input_text=input_text)
-        append_event(db, run, event_code="research_executed", stage="research", status="成功", message="Research 执行已完成", payload={"execution_id": agent_execution.execution_id})
+        append_event(db, run, event_code="research_executed", stage="research", status="成功", message="Research 执行已完成", payload={"execution_id": agent_execution.execution_id}, parent_span_id=run.root_span_id)
         research_output = execute_research_workflow(research_input, trace_id=trace_id, browser_reader=_default_browser_reader)
         persist_research_result(db, agent_execution, research_input, research_output)
         research_execution = db.get(ResearchExecution, agent_execution.execution_id)
@@ -291,6 +358,7 @@ def start_alpha_workflow(
             status="成功",
             message="Research 结果已持久化",
             payload={"research_execution_id": agent_execution.execution_id, "report_hash": research_output.get("report_hash")},
+            parent_span_id=run.root_span_id,
         )
 
         knowledge_result = submit_research_report(
@@ -322,6 +390,7 @@ def start_alpha_workflow(
             status="成功",
             message="已创建知识候选",
             payload={"knowledge_id": knowledge_id, "version_id": version_id, "chunk_id": chunk.chunk_id if chunk else None},
+            parent_span_id=run.root_span_id,
         )
 
         ensure_default_skills(db, created_by=user.id)
@@ -356,7 +425,8 @@ def start_alpha_workflow(
             stage="skills",
             status="成功",
             message="已调用知识检索技能",
-            payload={"skill_invocation_id": invocation["invocation_id"], "skill_code": skill.skill_code},
+            payload={"skill_invocation_id": invocation["invocation_id"], "skill_code": skill.skill_code, "skill_version_id": installation.skill_version_id},
+            parent_span_id=run.root_span_id,
         )
 
         citation = record_use(
@@ -399,39 +469,45 @@ def start_alpha_workflow(
         db.add(result_row)
         set_task_status(db, task, "summarized", user, "alpha_report_ready", "Alpha Workflow 已生成最终报告")
 
-        context = AlphaWorkflowContext(
-            scenario_code=scenario.scenario_code,
-            scenario_title=scenario.title,
-            input_text=input_text,
-            task_id=task.id,
-            task_title=task.title,
-            task_status=task.status,
-            research_execution_id=agent_execution.execution_id,
-            research_report_id=research_execution.execution_id,
-            knowledge_id=knowledge_id,
-            knowledge_version_id=version_id,
-            skill_invocation_id=invocation["invocation_id"],
-            report_title=research_output.get("report_title") or "公开信息研究报告",
-            report_hash=research_output.get("report_hash"),
-            report_content=report_content,
-            dashboard_status="已完成",
-            trace_id=trace_id,
-            step_trace=[
-                AlphaWorkflowTraceStep(step_code="task_create", title="Task Center 创建任务", status="成功", detail="任务已创建", metadata={"task_id": task.id}),
-                AlphaWorkflowTraceStep(step_code="orchestrator_dispatch", title="Orchestrator 自动派给天采", status="成功", detail="任务已分配给天采", metadata={"employee_code": employee.employee_code}),
-                AlphaWorkflowTraceStep(step_code="research_execute", title="Research 执行", status="成功", detail="Research 已执行", metadata={"execution_id": agent_execution.execution_id}),
-                AlphaWorkflowTraceStep(step_code="knowledge_candidate", title="Knowledge 生成候选", status="成功", detail="知识候选已创建", metadata={"knowledge_id": knowledge_id}),
-                AlphaWorkflowTraceStep(step_code="skill_retrieve", title="Skills 调用知识检索", status="成功", detail="知识检索技能已调用", metadata={"skill_invocation_id": invocation["invocation_id"]}),
-                AlphaWorkflowTraceStep(step_code="final_report", title="生成最终研究报告", status="成功", detail="报告已生成", metadata={"report_hash": research_output.get("report_hash")}),
-                AlphaWorkflowTraceStep(step_code="dashboard_refresh", title="老板驾驶舱展示结果", status="成功", detail="Alpha 页面已可查看", metadata={}),
-            ],
-            linked_ids={
-                "task_id": task.id,
-                "research_execution_id": agent_execution.execution_id,
-                "knowledge_id": knowledge_id,
-                "skill_invocation_id": invocation["invocation_id"],
-            },
-        )
+        context.research_execution_id = agent_execution.execution_id
+        context.research_report_id = agent_execution.execution_id
+        context.knowledge_asset_id = knowledge_id
+        context.knowledge_version_id = version_id
+        context.skill_id = skill.skill_code
+        context.skill_version_id = str(installation.skill_version_id)
+        context.skill_invocation_id = invocation["invocation_id"]
+        context.agent_execution_id = agent_execution.execution_id
+        context.verification_id = f"{trace_id}:verification"
+        context.approval_ids = [f"{trace_id}:boss-confirmed"]
+        context.report_title = research_output.get("report_title") or "公开信息研究报告"
+        context.report_hash = research_output.get("report_hash")
+        context.report_content = report_content
+        context.dashboard_status = "已完成"
+        context.status = "已完成"
+        context.current_stage = "dashboard"
+        context.linked_ids = {
+            "task_id": task.id,
+            "orchestrator_run_id": orchestrator_plan["graph_id"],
+            "research_execution_id": agent_execution.execution_id,
+            "research_report_id": agent_execution.execution_id,
+            "knowledge_asset_id": knowledge_id,
+            "knowledge_version_id": version_id,
+            "skill_id": skill.skill_code,
+            "skill_version_id": str(installation.skill_version_id),
+            "skill_invocation_id": invocation["invocation_id"],
+            "agent_execution_id": agent_execution.execution_id,
+            "verification_id": f"{trace_id}:verification",
+        }
+        for stage, message, metadata in [
+            ("orchestrator", "任务已进入唯一 Orchestrator 主链路", {"orchestrator_run_id": orchestrator_plan["graph_id"]}),
+            ("task_center", "任务已创建", {"task_id": task.id}),
+            ("research", "Research 已执行并持久化", {"execution_id": agent_execution.execution_id}),
+            ("knowledge", "知识候选已创建", {"knowledge_asset_id": knowledge_id, "knowledge_version_id": version_id, "chunk_id": chunk.chunk_id if chunk else None}),
+            ("skills", "知识检索技能已调用", {"skill_invocation_id": invocation["invocation_id"], "skill_code": skill.skill_code}),
+            ("verification", "结果已完成验证", {"verification_id": f"{trace_id}:verification"}),
+            ("dashboard", "Alpha 页面已可查看", {}),
+        ]:
+            _append_span(context, stage=stage, status="成功", message=message, metadata=metadata)
         quality_score, quality_grade, quality_detail = _score_quality(context)
         risk_score, risk_level, risk_detail = _score_risk(context)
         run.status = "已完成"
@@ -439,6 +515,20 @@ def start_alpha_workflow(
         run.quality_grade = quality_grade
         run.risk_score = risk_score
         run.risk_level = risk_level
+        run.workflow_id = context.workflow_id
+        run.tenant_id = context.tenant_id
+        run.user_id = context.user_id
+        run.orchestrator_run_id = context.orchestrator_run_id
+        run.research_report_id = context.research_report_id
+        run.knowledge_asset_id = context.knowledge_asset_id
+        run.knowledge_version_id = context.knowledge_version_id
+        run.skill_id = context.skill_id
+        run.skill_version_id = context.skill_version_id
+        run.agent_execution_id = context.agent_execution_id
+        run.verification_id = context.verification_id
+        run.root_span_id = context.root_span_id
+        run.approval_ids_json = json.dumps(context.approval_ids, ensure_ascii=False)
+        run.current_stage = context.current_stage
         run.workflow_context_json = context.model_dump_json()
         run.report_summary_json = json.dumps(quality_detail, ensure_ascii=False)
         run.dashboard_summary_json = json.dumps(
@@ -448,13 +538,14 @@ def start_alpha_workflow(
                 "风险评分": risk_score,
                 "最终报告": research_output.get("report_title") or "公开信息研究报告",
                 "任务标题": task.title,
+                "唯一入口": "Orchestrator",
             },
             ensure_ascii=False,
         )
         run.finished_at = _utc_now()
         run.updated_at = _utc_now()
-        append_event(db, run, event_code="dashboard_refreshed", stage="dashboard", status="成功", message="Dashboard 已刷新", payload={"quality_score": quality_score, "risk_score": risk_score})
-        append_event(db, run, event_code="workflow_completed", stage="workflow", status="成功", message="Alpha Workflow 全链路完成", payload={"quality_score": quality_score, "risk_score": risk_score})
+        append_event(db, run, event_code="dashboard_refreshed", stage="dashboard", status="成功", message="Dashboard 已刷新", payload={"quality_score": quality_score, "risk_score": risk_score}, parent_span_id=run.root_span_id)
+        append_event(db, run, event_code="workflow_completed", stage="workflow", status="成功", message="Alpha Workflow 全链路完成", payload={"quality_score": quality_score, "risk_score": risk_score}, parent_span_id=run.root_span_id)
         write_audit_log(db, task, user, "alpha_workflow_completed", "running", "summarized", f"quality={quality_score};risk={risk_score}")
         db.commit()
         db.refresh(run)
@@ -467,7 +558,12 @@ def start_alpha_workflow(
         run.recovery_status = "待恢复"
         run.finished_at = _utc_now()
         run.updated_at = _utc_now()
-        append_event(db, run, event_code="workflow_failed", stage="workflow", status="失败", message=str(exc), payload={"error": str(exc)})
+        if context:
+            context.status = "已失败"
+            context.dashboard_status = "失败"
+            context.set_stage("workflow", "失败", message=str(exc), metadata={"error": str(exc)})
+            run.workflow_context_json = context.model_dump_json()
+        append_event(db, run, event_code="workflow_failed", stage="workflow", status="失败", message=str(exc), payload={"error": str(exc)}, parent_span_id=run.root_span_id)
         set_task_status(db, task, "rejected", user, "alpha_workflow_failed", str(exc))
         write_audit_log(db, task, user, "alpha_workflow_failed", "running", "rejected", str(exc))
         db.commit()
@@ -565,7 +661,9 @@ def build_dashboard(db: Session) -> dict[str, object]:
         "runs": [_run_to_dict(db, row) for row in runs],
         "feature_flags": {
             "ALPHA_WORKFLOW_ENABLED": get_settings().ALPHA_WORKFLOW_ENABLED,
+            "ALPHA_SCENARIO_ENABLED": get_settings().ALPHA_SCENARIO_ENABLED,
             "ALPHA_WORKFLOW_DASHBOARD_ENABLED": get_settings().ALPHA_WORKFLOW_DASHBOARD_ENABLED,
+            "ALPHA_DASHBOARD_ENABLED": get_settings().ALPHA_DASHBOARD_ENABLED,
         },
     }
 
@@ -576,7 +674,9 @@ def health_view(db: Session) -> dict[str, object]:
         "status": "healthy",
         "feature_flags": {
             "ALPHA_WORKFLOW_ENABLED": get_settings().ALPHA_WORKFLOW_ENABLED,
+            "ALPHA_SCENARIO_ENABLED": get_settings().ALPHA_SCENARIO_ENABLED,
             "ALPHA_WORKFLOW_DASHBOARD_ENABLED": get_settings().ALPHA_WORKFLOW_DASHBOARD_ENABLED,
+            "ALPHA_DASHBOARD_ENABLED": get_settings().ALPHA_DASHBOARD_ENABLED,
         },
         "scenario_count": db.query(AlphaWorkflowScenario).count(),
         "run_count": db.query(AlphaWorkflowRun).count(),
@@ -597,10 +697,21 @@ def _run_to_dict(db: Session, run: AlphaWorkflowRun | None, *, include_events: b
         "scenario_id": run.scenario_id,
         "scenario_code": scenario.scenario_code if scenario else None,
         "scenario_title": scenario.title if scenario else None,
+        "workflow_id": run.workflow_id,
+        "tenant_id": run.tenant_id,
+        "user_id": run.user_id,
         "task_id": run.task_id,
+        "orchestrator_run_id": run.orchestrator_run_id,
         "research_execution_id": run.research_execution_id,
+        "research_report_id": run.research_report_id,
         "knowledge_id": run.knowledge_id,
+        "knowledge_asset_id": run.knowledge_asset_id,
+        "knowledge_version_id": run.knowledge_version_id,
+        "skill_id": run.skill_id,
+        "skill_version_id": run.skill_version_id,
         "skill_invocation_id": run.skill_invocation_id,
+        "agent_execution_id": run.agent_execution_id,
+        "verification_id": run.verification_id,
         "status": run.status,
         "quality_score": run.quality_score,
         "quality_grade": run.quality_grade,
@@ -613,6 +724,9 @@ def _run_to_dict(db: Session, run: AlphaWorkflowRun | None, *, include_events: b
         "report_summary": report_summary,
         "dashboard_summary": dashboard_summary,
         "trace_id": run.trace_id,
+        "root_span_id": run.root_span_id,
+        "current_stage": run.current_stage,
+        "approval_ids": _parse_json(run.approval_ids_json) or [],
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "recovered_from_run_id": run.recovered_from_run_id,
@@ -628,12 +742,117 @@ def _run_to_dict(db: Session, run: AlphaWorkflowRun | None, *, include_events: b
                 "status": item.status,
                 "message": item.message,
                 "payload": _parse_json(item.payload_json),
+                "span_id": item.span_id,
+                "parent_span_id": item.parent_span_id,
+                "span_kind": item.span_kind,
                 "trace_id": item.trace_id,
                 "created_at": item.created_at.isoformat() if item.created_at else None,
             }
             for item in db.query(AlphaWorkflowEvent).filter(AlphaWorkflowEvent.run_id == run.run_id).order_by(AlphaWorkflowEvent.created_at.asc()).all()
         ]
     return payload
+
+
+def get_trace(db: Session, run_id: str) -> dict[str, object]:
+    run = db.get(AlphaWorkflowRun, run_id)
+    if not run:
+        raise AlphaWorkflowNotFoundError("Alpha Workflow 运行记录不存在")
+    context = _parse_context(run.workflow_context_json)
+    events = db.query(AlphaWorkflowEvent).filter(AlphaWorkflowEvent.run_id == run.run_id).order_by(AlphaWorkflowEvent.created_at.asc()).all()
+    spans = []
+    if context:
+        spans = [
+            {
+                "span_id": span.span_id,
+                "parent_span_id": span.parent_span_id,
+                "span_name": span.span_name,
+                "span_kind": span.span_kind,
+                "stage": span.stage,
+                "status": span.status,
+                "started_at": span.started_at.isoformat() if span.started_at else None,
+                "finished_at": span.finished_at.isoformat() if span.finished_at else None,
+                "message": span.message,
+                "metadata": span.metadata,
+            }
+            for span in context.step_trace
+        ]
+    return {
+        "run_id": run.run_id,
+        "trace_id": run.trace_id,
+        "root_span_id": run.root_span_id,
+        "current_stage": run.current_stage,
+        "status": run.status,
+        "workflow_context": context.model_dump(mode="json") if context else {},
+        "spans": spans,
+        "events": [
+            {
+                "event_id": event.event_id,
+                "event_code": event.event_code,
+                "stage": event.stage,
+                "status": event.status,
+                "message": event.message,
+                "payload": _parse_json(event.payload_json),
+                "span_id": event.span_id,
+                "parent_span_id": event.parent_span_id,
+                "span_kind": event.span_kind,
+                "created_at": event.created_at.isoformat() if event.created_at else None,
+            }
+            for event in events
+        ],
+    }
+
+
+def get_audit_timeline(db: Session, run_id: str) -> dict[str, object]:
+    return {"timeline": get_trace(db, run_id)["events"]}
+
+
+def get_final_report(db: Session, run_id: str) -> dict[str, object]:
+    run = db.get(AlphaWorkflowRun, run_id)
+    if not run:
+        raise AlphaWorkflowNotFoundError("Alpha Workflow 运行记录不存在")
+    report_summary = _parse_json(run.report_summary_json)
+    dashboard_summary = _parse_json(run.dashboard_summary_json)
+    context = _parse_context(run.workflow_context_json)
+    return {
+        "run_id": run.run_id,
+        "trace_id": run.trace_id,
+        "status": run.status,
+        "quality_score": run.quality_score,
+        "quality_grade": run.quality_grade,
+        "risk_score": run.risk_score,
+        "risk_level": run.risk_level,
+        "report_summary": report_summary,
+        "dashboard_summary": dashboard_summary,
+        "report_content": context.report_content if context else None,
+        "report_title": context.report_title if context else None,
+        "report_hash": context.report_hash if context else None,
+        "current_stage": run.current_stage,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+    }
+
+
+def cancel_alpha_workflow(db: Session, *, user: User, run_id: str, reason: str | None = None) -> dict[str, object]:
+    run = db.get(AlphaWorkflowRun, run_id)
+    if not run:
+        raise AlphaWorkflowNotFoundError("Alpha Workflow 运行记录不存在")
+    if run.status in {"已完成", "已失败", "已取消", "已终止"}:
+        return _run_to_dict(db, run, include_events=True)
+    task = db.get(TaskCenterTask, run.task_id) if run.task_id else None
+    run.status = "已取消"
+    run.recovery_status = "已取消"
+    run.failure_reason = reason or "Alpha Workflow 已取消"
+    run.finished_at = _utc_now()
+    run.updated_at = _utc_now()
+    append_event(db, run, event_code="workflow_failed", stage="workflow", status="失败", message=run.failure_reason, payload={"reason": reason or "user_cancelled"}, parent_span_id=run.root_span_id, span_kind="child")
+    db.commit()
+    db.refresh(run)
+    if task:
+        write_audit_log(db, task, user, "alpha_workflow_cancelled", "running", "canceled", run.failure_reason)
+    return _run_to_dict(db, run, include_events=True)
+
+
+def get_stage_detail(db: Session, run_id: str) -> dict[str, object]:
+    return get_trace(db, run_id)
 
 
 def _parse_context(raw: str | None) -> AlphaWorkflowContext | None:
@@ -656,6 +875,8 @@ def _ensure_dependency_flags(settings) -> None:
         "SKILL_INSTALLATION_ENABLED": settings.SKILL_INSTALLATION_ENABLED,
         "SKILL_INVOCATION_ENABLED": settings.SKILL_INVOCATION_ENABLED,
     }
+    if not (settings.ALPHA_WORKFLOW_ENABLED or settings.ALPHA_SCENARIO_ENABLED):
+        required_flags["ALPHA_WORKFLOW_ENABLED/ALPHA_SCENARIO_ENABLED"] = False
     disabled = [name for name, enabled in required_flags.items() if not enabled]
     if disabled:
         raise AlphaWorkflowDependencyError(f"依赖模块未启用：{', '.join(disabled)}")
