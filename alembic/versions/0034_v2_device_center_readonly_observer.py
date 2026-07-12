@@ -67,8 +67,8 @@ def upgrade():
         sa.Column("approved_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.UniqueConstraint("device_code", name="uq_devices_device_code"),
     )
-    op.create_unique_constraint("uq_devices_device_code", "devices", ["device_code"])
     for name, cols in [
         ("ix_devices_device_code", ["device_code"]),
         ("ix_devices_chinese_name", ["chinese_name"]),
@@ -106,8 +106,8 @@ def upgrade():
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.UniqueConstraint("device_id", "credential_fingerprint", name="uq_device_credentials_device_fingerprint"),
     )
-    op.create_unique_constraint("uq_device_credentials_device_fingerprint", "device_credentials", ["device_id", "credential_fingerprint"])
     for name, cols in [
         ("ix_device_credentials_device_id", ["device_id"]),
         ("ix_device_credentials_credential_type", ["credential_type"]),
@@ -176,8 +176,8 @@ def upgrade():
         sa.Column("captured_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("duration_ms", sa.Integer(), nullable=True),
         sa.Column("trace_id", sa.String(length=120), nullable=True),
+        sa.UniqueConstraint("observation_id", "sequence_number", name="uq_device_observation_events_sequence"),
     )
-    op.create_unique_constraint("uq_device_observation_events_sequence", "device_observation_events", ["observation_id", "sequence_number"])
     for name, cols in [
         ("ix_device_observation_events_observation_id", ["observation_id"]),
         ("ix_device_observation_events_sequence_number", ["sequence_number"]),

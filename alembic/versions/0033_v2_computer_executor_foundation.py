@@ -81,8 +81,8 @@ def upgrade():
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("duration_ms", sa.Integer(), nullable=True),
         sa.Column("trace_id", sa.String(length=120), nullable=True),
+        sa.UniqueConstraint("session_id", "sequence_number", name="uq_computer_actions_sequence"),
     )
-    op.create_unique_constraint("uq_computer_actions_sequence", "computer_actions", ["session_id", "sequence_number"])
     for name, cols in [
         ("ix_computer_actions_session_id", ["session_id"]),
         ("ix_computer_actions_sequence_number", ["sequence_number"]),

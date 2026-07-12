@@ -80,9 +80,9 @@ def upgrade():
         sa.Column("status", sa.String(length=40), nullable=False, server_default=sa.text("'待校验'")),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.UniqueConstraint("plan_id", "action_id", name="uq_computer_action_targets_plan_action"),
+        sa.UniqueConstraint("action_id", name="uq_computer_action_targets_action_id"),
     )
-    op.create_unique_constraint("uq_computer_action_targets_plan_action", "computer_action_targets", ["plan_id", "action_id"])
-    op.create_unique_constraint("uq_computer_action_targets_action_id", "computer_action_targets", ["action_id"])
     for name, cols in [
         ("ix_computer_action_targets_plan_id", ["plan_id"]),
         ("ix_computer_action_targets_action_id", ["action_id"]),
@@ -144,8 +144,8 @@ def upgrade():
         sa.Column("result_summary", sa.Text(), nullable=True),
         sa.Column("trace_id", sa.String(length=120), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.UniqueConstraint("plan_id", "action_id", name="uq_computer_action_verifications_plan_action"),
     )
-    op.create_unique_constraint("uq_computer_action_verifications_plan_action", "computer_action_verifications", ["plan_id", "action_id"])
     for name, cols in [
         ("ix_computer_action_verifications_plan_id", ["plan_id"]),
         ("ix_computer_action_verifications_action_id", ["action_id"]),
