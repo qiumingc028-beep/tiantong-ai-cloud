@@ -211,12 +211,19 @@ def unique_indexes(connection) -> dict[str, tuple[bool, tuple[str, ...]]]:
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            SELECT indexname, indexdef ILIKE 'CREATE UNIQUE INDEX%',
-                   regexp_split_to_array(regexp_replace(indexdef, '^.*\\((.*)\\).*$','\\1'), '\\s*,\\s*')
-            FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'alpha_workflow_runs'
+            SELECT idx.relname, i.indisunique,
+                   array_agg(att.attname ORDER BY key_cols.ordinality)
+            FROM pg_index i
+            JOIN pg_class rel ON rel.oid = i.indrelid
+            JOIN pg_class idx ON idx.oid = i.indexrelid
+            JOIN pg_namespace ns ON ns.oid = rel.relnamespace
+            JOIN unnest(i.indkey) WITH ORDINALITY AS key_cols(attnum, ordinality) ON key_cols.attnum > 0
+            JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = key_cols.attnum
+            WHERE ns.nspname = 'public' AND rel.relname = 'alpha_workflow_runs'
+            GROUP BY idx.relname, i.indisunique
             """
         )
-        return {name: (is_unique, tuple(column.strip('"') for column in columns)) for name, is_unique, columns in cursor.fetchall()}
+        return {name: (is_unique, tuple(columns)) for name, is_unique, columns in cursor.fetchall()}
 
 
 def assert_expected_constraints(connection) -> None:
@@ -286,6 +293,15 @@ def test_final_head_unique_constraints_reject_duplicates_and_keep_idempotency_af
             assert insert_run(connection, scenario_id, str(uuid.uuid4()), retry, constraint) == 0
             connection.commit()
 
+        for _constraint, columns in EXPECTED_UNIQUES.items():
+            nullable_column = columns[0]
+            first, second = run_values(uuid.uuid4().hex), run_values(uuid.uuid4().hex)
+            first[nullable_column] = None
+            second[nullable_column] = None
+            assert insert_run(connection, scenario_id, str(uuid.uuid4()), first) == 1
+            assert insert_run(connection, scenario_id, str(uuid.uuid4()), second) == 1
+            connection.commit()
+
     alembic(ROOT, database_url, "downgrade", "0039_v2_alpha_workflow_unified_contract")
     alembic(ROOT, database_url, "upgrade", "head")
     with psycopg2.connect(dsn) as connection:
@@ -315,13 +331,23 @@ def test_model_allows_knowledge_asset_reuse_across_runs():
     assert ("knowledge_asset_id",) not in unique_columns
 
 
-def test_same_idempotency_key_returns_existing_run(client, boss_headers, alpha_enabled):
+def test_same_idempotency_key_returns_existing_run_without_new_rows(
+    client, boss_headers, alpha_enabled, test_db
+):
+    from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
+
     payload = {"input_text": "验证409幂等语义", "trace_id": f"pg-contract-{uuid.uuid4()}"}
     first = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
+    with test_db() as db:
+        run_count = db.query(AlphaWorkflowRun).count()
+        event_count = db.query(AlphaWorkflowEvent).count()
     second = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json()["run"]["run_id"] == first.json()["run"]["run_id"]
+    with test_db() as db:
+        assert db.query(AlphaWorkflowRun).count() == run_count
+        assert db.query(AlphaWorkflowEvent).count() == event_count
 
 
 @pytest.mark.parametrize("constraint_name", sorted(EXPECTED_UNIQUES))
@@ -329,6 +355,13 @@ def test_other_run_unique_conflicts_map_to_chinese_409(
     client, boss_headers, alpha_enabled, monkeypatch, constraint_name
 ):
     from backend.routers import alpha_workflow as router
+
+    occupied = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "先创建占用身份的Run", "trace_id": f"occupied-{uuid.uuid4()}"},
+    )
+    assert occupied.status_code == 200
 
     def conflict(*_args, **_kwargs):
         raise IntegrityError(
@@ -389,8 +422,18 @@ def test_0042_downgrade_has_no_knowledge_unique_or_name_collisions(
     del migration_fix_commit
     database_url = postgres_database_factory("downgrade_0042")
     alembic(ROOT, database_url, "upgrade", "head")
-    alembic(ROOT, database_url, "downgrade", "0041_v2_alpha_migration_history_repair")
     dsn = make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)
+    with psycopg2.connect(dsn) as connection:
+        scenario_id = seed_scenario(connection)
+        shared = str(uuid.uuid4())
+        first, second = run_values(uuid.uuid4().hex), run_values(uuid.uuid4().hex)
+        first["knowledge_asset_id"] = shared
+        second["knowledge_asset_id"] = shared
+        assert insert_run(connection, scenario_id, str(uuid.uuid4()), first) == 1
+        assert insert_run(connection, scenario_id, str(uuid.uuid4()), second) == 1
+        connection.commit()
+
+    alembic(ROOT, database_url, "downgrade", "0041_v2_alpha_migration_history_repair")
     with psycopg2.connect(dsn) as connection:
         constraints = constraint_columns(connection)
         indexes = unique_indexes(connection)
@@ -399,7 +442,16 @@ def test_0042_downgrade_has_no_knowledge_unique_or_name_collisions(
         assert not (set(constraints) & set(indexes)), "downgrade后存在同名索引/约束冲突"
         for name, columns in EXPECTED_UNIQUES.items():
             assert constraints.get(name) == columns or indexes.get(name) == (True, columns)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM alpha_workflow_runs WHERE knowledge_asset_id = %s", (shared,))
+            assert cursor.fetchone()[0] == 2
     alembic(ROOT, database_url, "upgrade", "head")
+    with psycopg2.connect(dsn) as connection:
+        assert_expected_constraints(connection)
+        assert "uq_alpha_workflow_runs_knowledge_asset_id" not in constraint_columns(connection)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM alpha_workflow_runs WHERE knowledge_asset_id = %s", (shared,))
+            assert cursor.fetchone()[0] == 2
 
 
 def test_0005_revision_dag_is_guarded_historical_naming_debt():
@@ -408,3 +460,10 @@ def test_0005_revision_dag_is_guarded_historical_naming_debt():
     assert successor.down_revision == first.revision
     assert callable(first._has_table) and callable(successor._has_table)
     assert FINAL_REVISION == "0042_v2_alpha_workflow_unique_constraints"
+
+
+def test_0005_complete_postgresql_chain_reaches_head(postgres_database_factory, migration_fix_commit):
+    del migration_fix_commit
+    database_url = postgres_database_factory("full_0005_chain")
+    alembic(ROOT, database_url, "upgrade", "head")
+    assert FINAL_REVISION in alembic(ROOT, database_url, "current").stdout
