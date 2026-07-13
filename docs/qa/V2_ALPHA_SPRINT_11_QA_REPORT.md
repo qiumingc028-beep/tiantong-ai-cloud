@@ -261,3 +261,13 @@ Migration Evidence Bundle Gate复跑仍为 **5 passed, 8 failed**，继续独立
 5. Evidence已flush后的deferred FK在最终commit触发23503，仍存在相同的Task重复审计和Agent审计缺失。
 
 门禁未达到0 failed，按执行顺序未运行Backend 863+、Alpha E2E、Frontend Gate、Static Security、V1 Regression、Sensitive Data Scan，也未执行Migration Evidence Gate。PR #19继续Draft/BLOCK；历史f50结果仅作历史记录，不代表当前Head。
+
+## 273e6587 PostgreSQL 最终验收
+
+测试分支普通Merge同步 `273e658700439e34911dcb6c1e4a7fb2e80101b9`，Merge Commit为 `6c334405ad3fc60ebe5ecc9dc3fd83fea0b128a4`。23项隔离PostgreSQL 16.14门禁结果：**19 passed, 4 failed**。
+
+相对d315已关闭：恶意超长 `duplicate_of_source_id` 已映射为内部Source UUID；Evidence/flush/final-commit三路的AgentExecution `execution_failed`审计均恰好1条，`workflow_failed` Event恰好1条；正式Research、Knowledge Asset/Version、Skill Invocation、Task Result均无残留，同trace重放不增加这些正式数据或Event。
+
+剩余四项：Claim DataError仍以 `PendingRollbackError` 穿透API，Run/Task/AgentExecution未补偿且失败Event/Audit为0；Evidence FK、flush唯一冲突和deferred final-commit FK三路的Task `alpha_workflow_failed`审计仍各写入2条（其余补偿断言通过）。五项真实Service/DB冲突中文409和 `0042 → 0041 → 0042`继续通过；`0042 → 0039`仅标记 `UNSUPPORTED_SEMANTIC_DOWNGRADE`，不计失败。
+
+因第一阶段非零失败，Backend 863+、Alpha E2E、Frontend Gate、Static Security、V1 Regression、Sensitive Data Scan未执行。Migration Evidence Gate独立结果为 **5 passed, 8 failed**，仍缺Path A/B RAW结构、Manifest字段、可复算Checksum及0037双文档披露。PR #19保持Draft/BLOCK。

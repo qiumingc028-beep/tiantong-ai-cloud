@@ -191,3 +191,16 @@ FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗
    - 最小建议：Task失败状态更新与显式审计只保留一个append入口；补偿事务按execution_id幂等写入唯一的AgentExecutionAudit。
 
 已关闭项：Source.query_id、Evidence外键、Task Summary重复、跨Execution改绑、四路并发正式数据唯一性、五项中文409。完整863+回归未执行，原因是第一阶段代码门禁非零失败。
+
+## 273e6587 PostgreSQL最终验收失败矩阵
+
+评估Commit：`273e658700439e34911dcb6c1e4a7fb2e80101b9`；同步Merge：`6c334405ad3fc60ebe5ecc9dc3fd83fea0b128a4`。结果：`19 passed, 4 failed`。
+
+1. `...[claim_failure]`：真实Claim DataError后 `PendingRollbackError`仍穿透API；Run=`运行中`、Task=`running`、AgentExecution=`completed`，workflow_failed、Task失败审计、AgentExecution失败审计均为0。最小建议仍是异常边界先rollback并使用缓存标量ID，在独立补偿事务中写失败状态与幂等审计。
+2. `...[evidence_fk]`
+3. `...[flush_failure]`
+4. `...[commit_failure]`
+   - 三路均已正确回滚Research，并且Knowledge Asset/Version、Skill Invocation、Task Result无残留；Run/Task/AgentExecution状态、workflow_failed=1、AgentExecution execution_failed=1及同trace重放幂等均通过。
+   - 唯一剩余失败为Task `alpha_workflow_failed`审计各有2条，预期恰好1条。最小建议：状态更新隐式审计和显式`write_audit_log`只保留一个append入口，或以task/run/action幂等键抑制重复写入。
+
+已关闭：恶意duplicate_of_source_id内部UUID映射、Agent失败审计缺失、后三路失败Event与正式数据原子性。Evidence Gate单独为`5 passed, 8 failed`；完整回归因代码门禁非零失败未执行。

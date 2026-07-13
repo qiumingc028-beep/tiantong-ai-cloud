@@ -852,8 +852,10 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
 ):
     from backend.agent_runtime.models import AgentExecution, AgentExecutionAudit
     from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
-    from backend.models import TaskCenterAuditLog, TaskCenterTask
+    from backend.knowledge_center.models import KnowledgeAsset, KnowledgeVersion
+    from backend.models import TaskCenterAuditLog, TaskCenterResult, TaskCenterTask
     from backend.research_runtime.models import ResearchClaim, ResearchEvidence, ResearchExecution, ResearchQuery, ResearchSource
+    from backend.skills_engine.models import SkillInvocation
 
     client, boss_headers, test_db = postgres_alpha_runtime
     fired = False
@@ -891,6 +893,10 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
         baseline_event_count = db.query(AlphaWorkflowEvent).count()
         baseline_task_count = db.query(TaskCenterTask).count()
         baseline_agent_count = db.query(AgentExecution).count()
+        baseline_knowledge_asset_count = db.query(KnowledgeAsset).count()
+        baseline_knowledge_version_count = db.query(KnowledgeVersion).count()
+        baseline_skill_invocation_count = db.query(SkillInvocation).count()
+        baseline_task_result_count = db.query(TaskCenterResult).count()
 
     trace_id = f"research-failure-{failure_point}-{uuid.uuid4()}"
     captured_errors = []
@@ -962,6 +968,14 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
             )
         if db.query(ResearchExecution).count() != baseline_report_count:
             violations.append("故障后产生虚假Research报告记录")
+        if db.query(KnowledgeAsset).count() != baseline_knowledge_asset_count:
+            violations.append("故障后产生虚假Knowledge Asset")
+        if db.query(KnowledgeVersion).count() != baseline_knowledge_version_count:
+            violations.append("故障后产生虚假Knowledge Version")
+        if db.query(SkillInvocation).count() != baseline_skill_invocation_count:
+            violations.append("故障后产生虚假Skill Invocation")
+        if db.query(TaskCenterResult).count() != baseline_task_result_count:
+            violations.append("故障后产生虚假Task Result")
         task = db.get(TaskCenterTask, run_row.task_id) if run_row.task_id else None
         if task is None or task.status not in {"rejected", "failed"}:
             violations.append(f"Task未补偿为失败状态：{None if task is None else task.status}")
@@ -1026,6 +1040,14 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
             violations.append("故障与重放后Task总数不是基线加一")
         if db.query(AgentExecution).count() != baseline_agent_count + 1:
             violations.append("故障与重放后AgentExecution总数不是基线加一")
+        if db.query(KnowledgeAsset).count() != baseline_knowledge_asset_count:
+            violations.append("同trace重放增加了Knowledge Asset")
+        if db.query(KnowledgeVersion).count() != baseline_knowledge_version_count:
+            violations.append("同trace重放增加了Knowledge Version")
+        if db.query(SkillInvocation).count() != baseline_skill_invocation_count:
+            violations.append("同trace重放增加了Skill Invocation")
+        if db.query(TaskCenterResult).count() != baseline_task_result_count:
+            violations.append("同trace重放增加了Task Result")
         if db.query(AlphaWorkflowEvent).count() < baseline_event_count:
             violations.append("故障处理异常删除了既有Event")
 
