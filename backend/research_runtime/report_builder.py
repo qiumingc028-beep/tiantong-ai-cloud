@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from .source_ranker import RankedSource
 from .verifier import VerifiedClaim
 from .identity import stable_research_id
+from .deduplicator import canonicalize_url
 
 
 def build_report(
@@ -45,8 +46,9 @@ def build_report(
         id_maps["claim_id_map"][f"{claim_index}:{claim.claim_text}"] = claim_id
         claim_rows.append({"claim_id": claim_id, "claim_text": claim.claim_text, "validation_status": claim.validation_status})
     for ranked in sources:
-        source_id = stable_research_id(trace_id, "source", ranked.result.url, ranked.result.title, ranked.result.search_rank)
-        id_maps["source_id_map"][ranked.result.url] = source_id
+        canonical_url = canonicalize_url(ranked.result.url)
+        source_id = stable_research_id(trace_id, "source", canonical_url)
+        id_maps["source_id_map"][canonical_url] = source_id
         source_row = {
             "source_id": source_id,
             "title": ranked.result.title,
@@ -62,14 +64,14 @@ def build_report(
             "duplicate_of_source_id": None,
         }
         source_rows.append(source_row)
-        reliability[ranked.result.url] = {
+        reliability[canonical_url] = {
             "confidence_level": ranked.confidence_level,
             "confidence_score": ranked.confidence_score,
             "reason": ranked.confidence_reason,
         }
         claim_id = claim_rows[0]["claim_id"] if claim_rows else None
-        evidence_id = stable_research_id(trace_id, "evidence", source_id, ranked.result.url, ranked.result.title)
-        id_maps["evidence_id_map"][ranked.result.url] = evidence_id
+        evidence_id = stable_research_id(trace_id, "evidence", source_id, canonical_url)
+        id_maps["evidence_id_map"][canonical_url] = evidence_id
         evidence_rows.append(
             {
                 "evidence_id": evidence_id,

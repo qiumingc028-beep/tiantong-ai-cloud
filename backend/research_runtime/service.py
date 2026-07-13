@@ -15,6 +15,7 @@ from .planner import build_research_plan
 from .schemas import ResearchTaskInput
 from .search_executor import execute_research_workflow
 from .source_ranker import classify_source, score_source
+from .exceptions import ResearchPersistenceError
 
 
 def run_research_execution(payload: dict[str, object], *, trace_id: str, browser_reader) -> dict[str, object]:
@@ -28,9 +29,21 @@ def _upsert_row(db: Session, model, identity: str, defaults: dict[str, object]):
         row = model(**{pk_name: identity, **defaults})
         db.add(row)
         return row
+    execution_id = defaults.get("execution_id")
+    row_execution_id = getattr(row, "execution_id", None)
+    if execution_id is not None and row_execution_id not in {None, execution_id}:
+        raise ResearchPersistenceError("研究结果保存失败，发现资源归属冲突，任务已进入可恢复状态。")
     for key, value in defaults.items():
         setattr(row, key, value)
     return row
+
+
+def _query_key(index: int, query_text: str) -> str:
+    return f"{index}:{query_text}"
+
+
+def _canonical_source_key(url: str) -> str:
+    return canonicalize_url(url)
 
 
 def _build_identity_maps(execution_id: str, plan, output_payload: dict[str, object]) -> dict[str, dict[str, str]]:
@@ -38,25 +51,38 @@ def _build_identity_maps(execution_id: str, plan, output_payload: dict[str, obje
     source_rows = list(output_payload.get("sources") or [])
     evidence_rows = list(output_payload.get("evidence") or [])
     claims = list(output_payload.get("core_conclusions") or [])
-    query_id_map = {f"{index}:{query_text}": stable_research_id(execution_id, "query", index, query_text) for index, query_text in enumerate(queries, start=1)}
+    query_id_map = {_query_key(index, query_text): stable_research_id(execution_id, "query", index, query_text) for index, query_text in enumerate(queries, start=1)}
     source_id_map: dict[str, str] = {}
+    upstream_source_id_map: dict[str, str] = {}
     claim_id_map: dict[str, str] = {}
     evidence_id_map: dict[str, str] = {}
     for index, row in enumerate(source_rows, start=1):
         url = str(row.get("url") or row.get("source_url") or "")
+        canonical_url = _canonical_source_key(url)
         title = str(row.get("title") or "")
-        source_id_map[url] = stable_research_id(execution_id, "source", url, title, index)
+        source_id = stable_research_id(execution_id, "source", canonical_url)
+        source_id_map.setdefault(canonical_url, source_id)
+        upstream_source_id = str(row.get("source_id") or "").strip()
+        if upstream_source_id:
+            upstream_source_id_map.setdefault(upstream_source_id, source_id)
     for index, claim_text in enumerate(claims, start=1):
-        claim_id_map[f"{index}:{claim_text}"] = stable_research_id(execution_id, "claim", index, claim_text)
+        claim_id_map[_query_key(index, claim_text)] = stable_research_id(execution_id, "claim", index, claim_text)
     for index, row in enumerate(evidence_rows, start=1):
         raw_url = str(row.get("raw_url") or row.get("redacted_url") or "")
-        source_id = source_id_map.get(raw_url) or stable_research_id(execution_id, "source", raw_url, raw_url, index)
-        evidence_id_map[raw_url] = stable_research_id(execution_id, "evidence", source_id, raw_url, index)
+        canonical_url = _canonical_source_key(raw_url)
+        source_id = source_id_map.get(canonical_url)
+        if source_id is None:
+            source_id = stable_research_id(execution_id, "source", canonical_url, index)
+            source_id_map[canonical_url] = source_id
+        evidence_id_map.setdefault(canonical_url, stable_research_id(execution_id, "evidence", source_id, canonical_url))
     return {
         "query_id_map": query_id_map,
         "source_id_map": source_id_map,
+        "upstream_source_id_map": upstream_source_id_map,
         "claim_id_map": claim_id_map,
         "evidence_id_map": evidence_id_map,
+        "persisted_query_ids": {},
+        "persisted_source_ids": {},
     }
 
 
@@ -123,7 +149,7 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
 
     queries = list(plan.queries[: plan.max_queries])
     for index, query_text in enumerate(queries, start=1):
-        query_key = f"{index}:{query_text}"
+        query_key = _query_key(index, query_text)
         query_id = identity_maps["query_id_map"].get(query_key) or stable_research_id(execution.execution_id, "query", index, query_text)
         query_row = _upsert_row(
             db,
@@ -142,6 +168,7 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
             },
         )
         query_row.execution_id = execution.execution_id
+        identity_maps.setdefault("persisted_query_ids", {})[query_key] = query_row.query_id
 
     source_rows = output_payload.get("sources") or []
     sources_by_url: dict[str, dict[str, object]] = {}
@@ -149,9 +176,10 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
         url = str(row.get("url") or row.get("source_url") or "")
         if not url:
             continue
-        sources_by_url[url] = row
+        sources_by_url.setdefault(_canonical_source_key(url), row)
     for idx, row in enumerate(sources_by_url.values(), start=1):
         url = str(row.get("url"))
+        canonical_url = _canonical_source_key(url)
         source_domain = _extract_domain(url)
         tmp_source = _SearchSourceLike(
             source_domain=source_domain,
@@ -166,14 +194,14 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
         )
         classified = classify_source(tmp_source)
         ranked = score_source(tmp_source, classified)
-        source_id = identity_maps["source_id_map"].get(url) or stable_research_id(execution.execution_id, "source", url, row.get("title") or "", idx)
+        source_id = identity_maps["source_id_map"].get(canonical_url) or stable_research_id(execution.execution_id, "source", canonical_url)
         source_row = _upsert_row(
             db,
             ResearchSource,
             source_id,
             {
                 "execution_id": execution.execution_id,
-                "query_id": identity_maps["query_id_map"].get(queries[0]) if queries else None,
+                "query_id": identity_maps.get("persisted_query_ids", {}).get(_query_key(1, queries[0])) if queries else None,
                 "source_url": url,
                 "normalized_url": canonicalize_url(url),
                 "redacted_url": str(row.get("redacted_url") or url),
@@ -195,6 +223,7 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
             },
         )
         source_row.execution_id = execution.execution_id
+        identity_maps.setdefault("persisted_source_ids", {})[canonical_url] = source_row.source_id
     db.flush()
 
     claims = output_payload.get("core_conclusions") or []
@@ -238,13 +267,21 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
     db.flush()
 
     evidence_rows = output_payload.get("evidence") or []
-    for idx, row in enumerate(evidence_rows, start=1):
+    evidence_rows_by_url: dict[str, dict[str, object]] = {}
+    for row in evidence_rows:
         raw_url = str(row.get("raw_url") or row.get("redacted_url") or "")
-        source_key = f"{idx}:{raw_url}"
-        source_id = identity_maps["source_id_map"].get(source_key) or stable_research_id(execution.execution_id, "source", raw_url, row.get("page_title") or "", idx)
-        evidence_id = identity_maps["evidence_id_map"].get(raw_url) or stable_research_id(execution.execution_id, "evidence", source_id, raw_url, idx)
+        if not raw_url:
+            continue
+        evidence_rows_by_url.setdefault(_canonical_source_key(raw_url), row)
+    for idx, row in enumerate(evidence_rows_by_url.values(), start=1):
+        raw_url = str(row.get("raw_url") or row.get("redacted_url") or "")
+        canonical_url = _canonical_source_key(raw_url)
+        source_id = identity_maps.get("persisted_source_ids", {}).get(canonical_url) or identity_maps["source_id_map"].get(canonical_url)
+        if not source_id:
+            raise ResearchPersistenceError("研究结果保存失败，来源标识缺失，任务已进入可恢复状态。")
+        evidence_id = identity_maps["evidence_id_map"].get(canonical_url) or stable_research_id(execution.execution_id, "evidence", source_id, canonical_url)
         claim_text = str(claims[0]) if claims else ""
-        claim_id = identity_maps["claim_id_map"].get(f"1:{claim_text}") if claim_text else None
+        claim_id = identity_maps["claim_id_map"].get(_query_key(1, claim_text)) if claim_text else None
         evidence_row = _upsert_row(
             db,
             ResearchEvidence,
@@ -274,7 +311,8 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
     task = db.get(TaskCenterTask, execution.task_id) if execution.task_id else None
     if task and output_payload.get("report_content"):
         note = f"[V2 Research] {record.report_title or '公开信息研究报告'}: {output_payload['report_hash']}"
-        task.summary = ((task.summary or "") + ("\n" if task.summary else "") + note).strip()
+        if note not in (task.summary or ""):
+            task.summary = ((task.summary or "") + ("\n" if task.summary else "") + note).strip()
         task.split_plan = task.split_plan or json.dumps(plan.model_dump(), ensure_ascii=False)
     db.flush()
 
