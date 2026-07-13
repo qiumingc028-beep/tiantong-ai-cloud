@@ -31,7 +31,7 @@
   "path_a": {
     "complete": true,
     "structured_format": true,
-    "database_id": "alpha_evidence_a",
+    "database_id": "alpha_authentic_v2_a",
     "database_engine": "PostgreSQL",
     "postgresql_version": "16.14 (Debian 16.14-1.pgdg13+1)",
     "start_commit": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
@@ -43,7 +43,7 @@
   "path_b": {
     "complete": true,
     "structured_format": true,
-    "database_id": "alpha_evidence_b",
+    "database_id": "alpha_authentic_v2_b",
     "database_engine": "PostgreSQL",
     "postgresql_version": "16.14 (Debian 16.14-1.pgdg13+1)",
     "start_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
