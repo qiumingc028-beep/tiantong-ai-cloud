@@ -1,149 +1,81 @@
-# V2 Alpha Migration Evidence
+# V2 Alpha Sprint 11.1 Migration 正式证据
 
-## 目标
+## 证据结论
 
-本文件记录 V2 Alpha Sprint 11.1 的正式 migration 证据收口，覆盖：
+本证据验证冻结代码 `8d9b5f2890545f1f08d05b9b1618f71ff82d6621`。所有正式迁移操作均在两套相互独立、全新创建的 PostgreSQL 16 数据库中执行；未使用 SQLite，未使用 Drift 跳过开关，未连接生产数据库。
 
-- 两条彼此独立的 PostgreSQL 升级路径
-- `alembic heads`
-- `alembic current`
-- `alembic history`
-- `alembic check`
-- 重复执行 `alembic upgrade head`
-- 受限 downgrade / re-upgrade
-- PostgreSQL 实库约束验证
-- 历史 migration 完整性检查
+最终 Revision 为 `0042_v2_alpha_workflow_unique_constraints`，两条路径均满足：单一 Head、`alembic current` 正确、`alembic check` 无 Drift、重复 `upgrade head` 为安全 no-op、`0042→0041→0042` 成功。
 
-## 证据环境
+## Path A：V1.0.1 到冻结代码
 
-- 数据库引擎：PostgreSQL 16
-- 运行方式：独立 PostgreSQL 数据库，不使用 SQLite
-- 证据数据库：
-  - `alpha_evidence_a`
-  - `alpha_evidence_b`
-- 证据日志：
-  - `artifacts/alpha-migration-evidence/path_a_current.log`
-  - `artifacts/alpha-migration-evidence/path_b_current.log`
+- 数据库代号：`alpha_evidence_a`
+- 起始 Commit：`483ebf560e1a4cfadecee4912a3ff6bca99516f6`
+- 起始 Revision：`0027_v1_schema_alignment`
+- 目标 Commit：`8d9b5f2890545f1f08d05b9b1618f71ff82d6621`
+- 最终 Revision：`0042_v2_alpha_workflow_unique_constraints`
+- 结果：通过
 
-## Git 与历史完整性结论
+V1.0.1 代码先在空数据库完成 `upgrade head`，真实 `current` 输出为 `0027_v1_schema_alignment (head)`；随后使用冻结代码在同一数据库继续升级至 0042。完整命令与原始输出见 `artifacts/alpha-migration-evidence/path_a_current.log`。
 
-本次核验中重点审计了：
+## Path B：冻结可运行 0041 基线到冻结代码
 
-- `alembic/versions/0005_knowledge_center_tables.py`
-- `alembic/versions/0039_v2_alpha_workflow_unified_contract.py`
-- `alembic/versions/0040_v2_alpha_workflow_integrity_constraints.py`
-- `alembic/versions/0037_v2_execution_observability_security_ops.py`
+- 数据库代号：`alpha_evidence_b`
+- 起始 Commit：`85586868bad3dd5d0fecba5f840383feccdc1c78`
+- 起始 Revision：`0041_v2_alpha_migration_history_repair`
+- 目标 Commit：`8d9b5f2890545f1f08d05b9b1618f71ff82d6621`
+- 最终 Revision：`0042_v2_alpha_workflow_unique_constraints`
+- 结果：通过
 
-最终处理结果：
+冻结可运行代码先在另一空数据库完成 `upgrade head`，真实 `current` 输出为 `0041_v2_alpha_migration_history_repair (head)`；随后使用冻结代码升级至 0042。完整命令与原始输出见 `artifacts/alpha-migration-evidence/path_b_current.log`。
 
-- `0005_knowledge_center_tables.py` 已恢复为 `v1.0.1` 原始内容，不再保留分支内的降级版改写。
-- `0039`、`0040` 均保持为新增增量 migration。
-- `0037_v2_execution_observability_security_ops.py` 包含一次已明确披露的 PostgreSQL 兼容性调整：将布尔默认值从整数 `1` 统一修正为 PostgreSQL `true` 表达，以保证实库可执行性与 `alembic check` 一致性。
-- `0041_v2_alpha_migration_history_repair.py` 为新增修复 migration，用于修复 Alpha 运行时的 PostgreSQL 约束一致性。
-- `0042_v2_alpha_workflow_unique_constraints.py` 已承载知识资产身份清理：移除 `knowledge_asset_id` 的全局唯一性，仅保留普通索引，并保留五个 Required 唯一约束。
-- V1 正式链 `0001`—`0027` 经过逐文件比对，已确认与 `v1.0.1` 完全一致。
-- V2 预发布链 `0028`—`0042` 仍可继续在隔离环境中用于证据验证，但在 Sprint 11.1 收口后按冻结策略停止进一步修改旧文件。
+KNOWN_BROKEN_HISTORICAL_BASELINE=2ca1a2579569324ce3ca82f68332fb7f96be004d
 
-## 路径 A：V1.0.1 正式 Tag -> 最新 Head
+该 Commit 只记录为已知不可运行的历史基线，不作为 Path B 或任何通过路径。
 
-### 起点
+## PostgreSQL Catalog 实库结果
 
-- 起始基线：`V1.0.1` 正式 Tag
-- 起始 revision：`0027_v1_schema_alignment`
+两条路径的最终数据库均直接查询 PostgreSQL Catalog，结果一致：
 
-### 过程
-
-1. 在独立 PostgreSQL 数据库 `alpha_evidence_a` 上执行 v1.0.1 基线升级。
-2. 切换到当前 Alpha 分支代码。
-3. 继续执行 `alembic upgrade head`。
-4. 再次执行 `alembic upgrade head` 验证幂等。
-5. 执行 `alembic downgrade 0040_v2_alpha_workflow_integrity_constraints`。
-6. 再次升级回 head。
-
-### 结果
-
-- `alembic heads`：单一 head，`0042_v2_alpha_workflow_unique_constraints`
-- `alembic current`：最终 revision 为 `0042_v2_alpha_workflow_unique_constraints`
-- `alembic history`：链路完整
-- `alembic upgrade head`：成功
-- 第二次 `alembic upgrade head`：安全 no-op
-- `alembic check`：`No new upgrade operations detected.`
-- `downgrade 0040 -> upgrade head`：成功，数据未丢失
-
-## 路径 B：PR #17 merge-base -> 最新 Head
-
-### 起点
-
-- 起始基线：PR #17 与 `develop-v2` 的 merge-base 对应的旧基线
-- 起始 revision：`0037_v2_execution_observability_security_ops`
-
-### 过程
-
-1. 在另一套独立 PostgreSQL 数据库 `alpha_evidence_b` 上执行旧基线升级。
-2. 切换到当前 Alpha 分支代码。
-3. 继续执行 `alembic upgrade head`。
-4. 再次执行 `alembic upgrade head` 验证幂等。
-5. 执行 `alembic downgrade 0040_v2_alpha_workflow_integrity_constraints`。
-6. 再次升级回 head。
-
-### 结果
-
-- `alembic heads`：单一 head，`0042_v2_alpha_workflow_unique_constraints`
-- `alembic current`：最终 revision 为 `0042_v2_alpha_workflow_unique_constraints`
-- `alembic history`：链路完整
-- `alembic upgrade head`：成功
-- 第二次 `alembic upgrade head`：安全 no-op
-- `alembic check`：`No new upgrade operations detected.`
-- `downgrade 0040 -> upgrade head`：成功，数据未丢失
-
-## 实库约束验证
-
-以下约束与保护已在升级后的 PostgreSQL Schema 中直接读取验证：
-
-- 幂等键唯一约束：`uq_alpha_workflow_runs_workflow_id`
-- Root Trace 唯一约束：`uq_alpha_workflow_runs_root_span_id`
-- 其它 Alpha 唯一约束：
+- `uq_alpha_workflow_runs_trace_id` 存在。
+- 五项 Required 唯一约束存在：
+  - `uq_alpha_workflow_runs_workflow_id`
+  - `uq_alpha_workflow_runs_root_span_id`
   - `uq_alpha_workflow_runs_orchestrator_run_id`
   - `uq_alpha_workflow_runs_research_report_id`
   - `uq_alpha_workflow_runs_skill_invocation_id`
-- `knowledge_asset_id` 保留普通索引，可跨 Run 复用，不作为全局唯一身份
-- `trace_id` 保持独立唯一约束：`uq_alpha_workflow_runs_trace_id`
-- Append-only 保护：
-  - `alpha_workflow_events_no_update`
-  - `alpha_workflow_events_no_delete`
-- 关键外键一致性：
-  - `alpha_workflow_events_run_id_fkey` = `ON DELETE RESTRICT`
-  - `alpha_workflow_runs_user_id_fkey` = `ON DELETE SET NULL`
+- `knowledge_asset_id` 只有普通非唯一索引 `ix_alpha_workflow_runs_knowledge_asset_id`，不存在同名全局唯一约束或唯一索引。
+- 两个 Run 写入相同 `knowledge_asset_id` 成功，回退重升后仍保留两行。
+- 五项 nullable 唯一字段同时为 NULL 的两行写入成功。
+- Append-only 触发器 `alpha_workflow_events_no_update` 与 `alpha_workflow_events_no_delete` 存在。
+- `0042→0041→0042` 成功，回退与重升没有恢复已废弃的 Knowledge Asset 全局唯一性。
 
-## 数据完整性结果
+## 0037 预发布兼容调整披露
 
-验证结果：
+文件：`alembic/versions/0037_v2_execution_observability_security_ops.py`
 
-- 单一 head
-- 当前 revision 正确
-- 无 drift
-- 重复 upgrade 安全
-- downgrade / re-upgrade 安全
-- 关键约束在 PostgreSQL 实库中真实存在
-- 不删除 V1 数据
-- 不破坏现有外键和索引
+0037_baseline_commit_or_hash=9e2086a6c82b5559e17b3f2ecec52740d84d6e1a
+0037_modified_hash=3a4359197ec3e632adcfb73b1078b1104fdab248b16b537a6ec6f7f034f6eb97
+0037_change=Boolean server_default 从整数 1 调整为 PostgreSQL true 表达
+0037_reason=PostgreSQL 不接受布尔列 DEFAULT 1，预发布链需使用原生 true 表达保证新库可执行并与模型一致
+0037_production_deployed=否
+0037_exception_decision=V2预发布例外，仅接受已审查的 PostgreSQL 兼容版本并自 Sprint 11.1 收口后冻结
+0037_approved_role=①实施、③验收、④审查
+0037_post_sprint_freeze_rule=Sprint 11.1关闭后冻结旧Migration，后续变化只能新增 forward-only Migration
 
-## 证据日志索引
+`0037_baseline_commit_or_hash` 是冻结可运行版本在 Git 中现场计算得到的 Blob Hash；`0037_modified_hash` 是同一文件在冻结代码上的现场 SHA256。当前文件与冻结可运行 Commit `85586868bad3dd5d0fecba5f840383feccdc1c78` 字节一致。
+
+## 完整性与隐私
+
+- V1 Migration `0001—0027` 由 Gate 与 `v1.0.1` 逐文件字节比对。
+- 正式日志不包含数据库密码、Token、完整连接串或生产数据。
+- `checksums.sha256` 仅覆盖规定的六个文件，使用仓库相对路径且不校验自身。
+- 证据文件只记录只读结果；不能触发业务执行。
+
+## 证据索引
 
 - `artifacts/alpha-migration-evidence/path_a_current.log`
 - `artifacts/alpha-migration-evidence/path_b_current.log`
-
-## 结论
-
-V2 Alpha 的 migration 链路已通过两条独立 PostgreSQL 路径验证，最终 head 为：
-
-- `0042_v2_alpha_workflow_unique_constraints`
-
-证据表明：
-
-- 迁移链可从 `V1.0.1` 正式 Tag 正常升级
-- 迁移链可从 PR #17 merge-base 正常升级
-- `alembic check` 在 PostgreSQL 下通过
-- 重复 upgrade 安全
-- 受限 downgrade / re-upgrade 安全
-- 历史 migration 完整性已恢复到可接受状态
+- `artifacts/alpha-migration-evidence/alembic-evidence.txt`
+- `artifacts/alpha-migration-evidence/validation-manifest.json`
+- `artifacts/alpha-migration-evidence/checksums.sha256`
+- `docs/V2_MIGRATION_FREEZE_POLICY.md`

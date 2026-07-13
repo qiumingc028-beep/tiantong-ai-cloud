@@ -1,82 +1,333 @@
-=== PATH B ===
-execution_time=2026-07-13T02:56:53+08:00
-current_git_commit=cc8c77914dbc79a6821d8781f626b77a003b4f7f
-database_code=alpha_evidence_b
-postgresql_version=160014
-start_git_commit=cc8c77914dbc79a6821d8781f626b77a003b4f7f
-start_alembic_revision=0037_v2_execution_observability_security_ops
-heads:
+evidence_format_version=1
+path_id=B
+database_id=alpha_evidence_b
+database_engine=PostgreSQL
+postgresql_version=16.14 (Debian 16.14-1.pgdg13+1)
+validated_code_commit=8d9b5f2890545f1f08d05b9b1618f71ff82d6621
+start_commit=85586868bad3dd5d0fecba5f840383feccdc1c78
+start_revision=0041_v2_alpha_migration_history_repair
+final_revision=0042_v2_alpha_workflow_unique_constraints
+alembic_heads_result=PASS
+alembic_current_result=PASS
+alembic_check_result=PASS
+repeat_upgrade_result=NO_OP
+downgrade_reupgrade_result=PASS
+constraint_query_result=PASS
+secret_scan_result=PASS
+
+--- RAW OUTPUT ---
+execution_time_utc=2026-07-13T11:59:24Z
+start_git_commit=85586868bad3dd5d0fecba5f840383feccdc1c78
+$ alembic upgrade head (start baseline)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001_initial_schema, initial production schema
+INFO  [alembic.runtime.migration] Running upgrade 0001_initial_schema -> 0002_jd_collection_tables, jd collection tables
+INFO  [alembic.runtime.migration] Running upgrade 0002_jd_collection_tables -> 0003_account_center_tables, account center tables
+INFO  [alembic.runtime.migration] Running upgrade 0003_account_center_tables -> 0004_jd_sync_runtime, jd sync runtime fields
+INFO  [alembic.runtime.migration] Running upgrade 0004_jd_sync_runtime -> 0005_tiancang_knowledge_tables, tiancang knowledge asset tables
+INFO  [alembic.runtime.migration] Running upgrade 0005_tiancang_knowledge_tables -> 0005_knowledge_center_tables, knowledge center tables
+INFO  [alembic.runtime.migration] Running upgrade 0005_knowledge_center_tables -> 0006_merge_knowledge_heads, merge knowledge heads
+INFO  [alembic.runtime.migration] Running upgrade 0006_merge_knowledge_heads -> 0007_task_center_tables, task center mvp tables
+INFO  [alembic.runtime.migration] Running upgrade 0007_task_center_tables -> 0008_ai_employees_table, ai employees registry table
+INFO  [alembic.runtime.migration] Running upgrade 0008_ai_employees_table -> 0009_deploy_center_tables, deploy center mvp tables
+INFO  [alembic.runtime.migration] Running upgrade 0009_deploy_center_tables -> 0010_orchestrator_tables, orchestrator mvp tables
+INFO  [alembic.runtime.migration] Running upgrade 0010_orchestrator_tables -> 0011_orchestrator_task_links, orchestrator task links
+INFO  [alembic.runtime.migration] Running upgrade 0011_orchestrator_task_links -> 0012_sprint16_ceo_deploy_loop, sprint16 ceo deploy loop
+INFO  [alembic.runtime.migration] Running upgrade 0012_sprint16_ceo_deploy_loop -> 0013_sprint17_auto_dispatch, sprint17 auto dispatch
+INFO  [alembic.runtime.migration] Running upgrade 0013_sprint17_auto_dispatch -> 0014_sprint18_execution_engine, sprint18 execution engine
+INFO  [alembic.runtime.migration] Running upgrade 0014_sprint18_execution_engine -> 0015_sprint19_review_learning, sprint19 review learning center
+INFO  [alembic.runtime.migration] Running upgrade 0015_sprint19_review_learning -> 0016_sprint20_employee_evolution, sprint20 employee evolution
+INFO  [alembic.runtime.migration] Running upgrade 0016_sprint20_employee_evolution -> 0017_sprint20_5_release_center, sprint20.5 release center
+INFO  [alembic.runtime.migration] Running upgrade 0017_sprint20_5_release_center -> 0018_sprint21_ai_capabilities, sprint21 ai capabilities and tool permissions
+INFO  [alembic.runtime.migration] Running upgrade 0018_sprint21_ai_capabilities -> 0019_sprint21_tool_center, sprint21 tool center
+INFO  [alembic.runtime.migration] Running upgrade 0019_sprint21_tool_center -> 0020_sprint21_tool_router, sprint21 tool router
+INFO  [alembic.runtime.migration] Running upgrade 0020_sprint21_tool_router -> 0021_sprint22_brain_tool_router, sprint22 brain tool router
+INFO  [alembic.runtime.migration] Running upgrade 0021_sprint22_brain_tool_router -> 0022_sprint23_brain_orchestrator, sprint23 brain orchestrator
+INFO  [alembic.runtime.migration] Running upgrade 0022_sprint23_brain_orchestrator -> 0023_sprint24_brain_execution, sprint24 brain execution center
+INFO  [alembic.runtime.migration] Running upgrade 0023_sprint24_brain_execution -> 0024_sprint25_brain_runtime, sprint25 brain runtime state machine
+INFO  [alembic.runtime.migration] Running upgrade 0024_sprint25_brain_runtime -> 0025_sprint25_3_execution_engine_enhancement, sprint25.3 execution engine enhancement
+INFO  [alembic.runtime.migration] Running upgrade 0025_sprint25_3_execution_engine_enhancement -> 0026_sprint26_ai_employee_execution_mvp, sprint26 ai employee execution mvp
+INFO  [alembic.runtime.migration] Running upgrade 0026_sprint26_ai_employee_execution_mvp -> 0027_v1_schema_alignment, align v1 schema metadata
+INFO  [alembic.runtime.migration] Running upgrade 0027_v1_schema_alignment -> 0028_v2_agent_runtime_foundation, v2 agent runtime foundation
+INFO  [alembic.runtime.migration] Running upgrade 0028_v2_agent_runtime_foundation -> 0029_v2_public_research_workflow, v2 public research workflow
+INFO  [alembic.runtime.migration] Running upgrade 0029_v2_public_research_workflow -> 0030_v2_knowledge_asset_center, v2 knowledge asset center foundation
+INFO  [alembic.runtime.migration] Running upgrade 0030_v2_knowledge_asset_center -> 0031_v2_research_topic_index, v2 research topic index alignment
+INFO  [alembic.runtime.migration] Running upgrade 0031_v2_research_topic_index -> 0032_v2_skills_engine_foundation, V2 skills engine foundation
+INFO  [alembic.runtime.migration] Running upgrade 0032_v2_skills_engine_foundation -> 0033_v2_computer_executor_foundation, V2 computer executor foundation
+INFO  [alembic.runtime.migration] Running upgrade 0033_v2_computer_executor_foundation -> 0034_v2_device_center_readonly_observer, V2 device center readonly observer
+INFO  [alembic.runtime.migration] Running upgrade 0034_v2_device_center_readonly_observer -> 0035_v2_mac_safe_single_action, V2 Mac safe single action
+INFO  [alembic.runtime.migration] Running upgrade 0035_v2_mac_safe_single_action -> 0036_v2_safe_multi_step_workflow, V2 safe multi-step computer workflow
+INFO  [alembic.runtime.migration] Running upgrade 0036_v2_safe_multi_step_workflow -> 0037_v2_execution_observability_security_ops, V2 execution observability and security operations center
+INFO  [alembic.runtime.migration] Running upgrade 0037_v2_execution_observability_security_ops -> 0038_v2_alpha_workflow_engine, V2 alpha workflow engine
+INFO  [alembic.runtime.migration] Running upgrade 0038_v2_alpha_workflow_engine -> 0039_v2_alpha_workflow_unified_contract, V2 alpha workflow unified contract
+INFO  [alembic.runtime.migration] Running upgrade 0039_v2_alpha_workflow_unified_contract -> 0040_v2_alpha_workflow_integrity_constraints, V2 alpha workflow integrity constraints
+INFO  [alembic.runtime.migration] Running upgrade 0040_v2_alpha_workflow_integrity_constraints -> 0041_v2_alpha_migration_history_repair, V2 alpha migration history repair
+$ alembic current (start baseline)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
 0041_v2_alpha_migration_history_repair (head)
-current_before:
-history:
-Rev: 0041_v2_alpha_migration_history_repair (head)
-Parent: 0040_v2_alpha_workflow_integrity_constraints
-Path: /private/tmp/tiantong-v2-sprint10-observability/alembic/versions/0041_v2_alpha_migration_history_repair.py
-
-    V2 alpha migration history repair
-    
-    Revision ID: 0041_v2_alpha_migration_history_repair
-    Revises: 0040_v2_alpha_workflow_integrity_constraints
-    Create Date: 2026-07-13 00:30:00.000000
-
-Rev: 0040_v2_alpha_workflow_integrity_constraints
-Parent: 0039_v2_alpha_workflow_unified_contract
-Path: /private/tmp/tiantong-v2-sprint10-observability/alembic/versions/0040_v2_alpha_workflow_integrity_constraints.py
-
-    V2 alpha workflow integrity constraints
-    
-    Revision ID: 0040_v2_alpha_workflow_integrity_constraints
-    Revises: 0039_v2_alpha_workflow_unified_contract
-    Create Date: 2026-07-12 23:45:00.000000
-
-Rev: 0039_v2_alpha_workflow_unified_contract
-Parent: 0038_v2_alpha_workflow_engine
-Path: /private/tmp/tiantong-v2-sprint10-observability/alembic/versions/0039_v2_alpha_workflow_unified_contract.py
-
-    V2 alpha workflow unified contract
-    
-    Revision ID: 0039_v2_alpha_workflow_unified_contract
-    Revises: 0038_v2_alpha_workflow_engine
-    Create Date: 2026-07-12 23:15:00.000000
-
-Rev: 0038_v2_alpha_workflow_engine
-Parent: 0037_v2_execution_observability_security_ops
-Path: /private/tmp/tiantong-v2-sprint10-observability/alembic/versions/0038_v2_alpha_workflow_engine.py
-
-    V2 alpha workflow engine
-    
-    Revision ID: 0038_v2_alpha_workflow_engine
-    Revises: 0037_v2_execution_observability_security_ops
-    Create Date: 2026-07-12 22:00:00.000000
-
-upgrade_to_0037:
-current_after_0037:
-0037_v2_execution_observability_security_ops
-upgrade_head:
-current_after_alpha_upgrade:
-0041_v2_alpha_migration_history_repair (head)
-check:
+validated_git_commit=8d9b5f2890545f1f08d05b9b1618f71ff82d6621
+$ alembic history
+0041_v2_alpha_migration_history_repair -> 0042_v2_alpha_workflow_unique_constraints (head), V2 alpha workflow unique constraint repair
+0040_v2_alpha_workflow_integrity_constraints -> 0041_v2_alpha_migration_history_repair, V2 alpha migration history repair
+0039_v2_alpha_workflow_unified_contract -> 0040_v2_alpha_workflow_integrity_constraints, V2 alpha workflow integrity constraints
+0038_v2_alpha_workflow_engine -> 0039_v2_alpha_workflow_unified_contract, V2 alpha workflow unified contract
+0037_v2_execution_observability_security_ops -> 0038_v2_alpha_workflow_engine, V2 alpha workflow engine
+0036_v2_safe_multi_step_workflow -> 0037_v2_execution_observability_security_ops, V2 execution observability and security operations center
+0035_v2_mac_safe_single_action -> 0036_v2_safe_multi_step_workflow, V2 safe multi-step computer workflow
+0034_v2_device_center_readonly_observer -> 0035_v2_mac_safe_single_action, V2 Mac safe single action
+0033_v2_computer_executor_foundation -> 0034_v2_device_center_readonly_observer, V2 device center readonly observer
+0032_v2_skills_engine_foundation -> 0033_v2_computer_executor_foundation, V2 computer executor foundation
+0031_v2_research_topic_index -> 0032_v2_skills_engine_foundation, V2 skills engine foundation
+0030_v2_knowledge_asset_center -> 0031_v2_research_topic_index, v2 research topic index alignment
+0029_v2_public_research_workflow -> 0030_v2_knowledge_asset_center, v2 knowledge asset center foundation
+0028_v2_agent_runtime_foundation -> 0029_v2_public_research_workflow, v2 public research workflow
+0027_v1_schema_alignment -> 0028_v2_agent_runtime_foundation, v2 agent runtime foundation
+0026_sprint26_ai_employee_execution_mvp -> 0027_v1_schema_alignment, align v1 schema metadata
+0025_sprint25_3_execution_engine_enhancement -> 0026_sprint26_ai_employee_execution_mvp, sprint26 ai employee execution mvp
+0024_sprint25_brain_runtime -> 0025_sprint25_3_execution_engine_enhancement, sprint25.3 execution engine enhancement
+0023_sprint24_brain_execution -> 0024_sprint25_brain_runtime, sprint25 brain runtime state machine
+0022_sprint23_brain_orchestrator -> 0023_sprint24_brain_execution, sprint24 brain execution center
+0021_sprint22_brain_tool_router -> 0022_sprint23_brain_orchestrator, sprint23 brain orchestrator
+0020_sprint21_tool_router -> 0021_sprint22_brain_tool_router, sprint22 brain tool router
+0019_sprint21_tool_center -> 0020_sprint21_tool_router, sprint21 tool router
+0018_sprint21_ai_capabilities -> 0019_sprint21_tool_center, sprint21 tool center
+0017_sprint20_5_release_center -> 0018_sprint21_ai_capabilities, sprint21 ai capabilities and tool permissions
+0016_sprint20_employee_evolution -> 0017_sprint20_5_release_center, sprint20.5 release center
+0015_sprint19_review_learning -> 0016_sprint20_employee_evolution, sprint20 employee evolution
+0014_sprint18_execution_engine -> 0015_sprint19_review_learning, sprint19 review learning center
+0013_sprint17_auto_dispatch -> 0014_sprint18_execution_engine, sprint18 execution engine
+0012_sprint16_ceo_deploy_loop -> 0013_sprint17_auto_dispatch, sprint17 auto dispatch
+0011_orchestrator_task_links -> 0012_sprint16_ceo_deploy_loop, sprint16 ceo deploy loop
+0010_orchestrator_tables -> 0011_orchestrator_task_links, orchestrator task links
+0009_deploy_center_tables -> 0010_orchestrator_tables, orchestrator mvp tables
+0008_ai_employees_table -> 0009_deploy_center_tables, deploy center mvp tables
+0007_task_center_tables -> 0008_ai_employees_table, ai employees registry table
+0006_merge_knowledge_heads -> 0007_task_center_tables, task center mvp tables
+0005_knowledge_center_tables -> 0006_merge_knowledge_heads, merge knowledge heads
+0005_tiancang_knowledge_tables -> 0005_knowledge_center_tables, knowledge center tables
+0004_jd_sync_runtime -> 0005_tiancang_knowledge_tables, tiancang knowledge asset tables
+0003_account_center_tables -> 0004_jd_sync_runtime, jd sync runtime fields
+0002_jd_collection_tables -> 0003_account_center_tables, account center tables
+0001_initial_schema -> 0002_jd_collection_tables, jd collection tables
+<base> -> 0001_initial_schema, initial production schema
+$ alembic upgrade head
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0041_v2_alpha_migration_history_repair -> 0042_v2_alpha_workflow_unique_constraints, V2 alpha workflow unique constraint repair
+$ alembic heads
+0042_v2_alpha_workflow_unique_constraints (head)
+$ alembic current
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+0042_v2_alpha_workflow_unique_constraints (head)
+$ alembic check
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_daily_metrics_id_seq' as owned by integer column 'jd_daily_metrics(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_products_id_seq' as owned by integer column 'jd_products(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_routes_id_seq' as owned by integer column 'tool_routes(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'risk_events_id_seq' as owned by integer column 'risk_events(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'knowledge_feedback_id_seq' as owned by integer column 'knowledge_feedback(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brands_id_seq' as owned by integer column 'brands(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_routing_rules_id_seq' as owned by integer column 'task_routing_rules(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'skill_reviews_id_seq' as owned by integer column 'skill_reviews(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_execution_logs_id_seq' as owned by integer column 'brain_execution_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_logs_id_seq' as owned by integer column 'employee_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ai_capabilities_id_seq' as owned by integer column 'ai_capabilities(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_reviews_id_seq' as owned by integer column 'task_reviews(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_route_logs_id_seq' as owned by integer column 'tool_route_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_center_reviews_id_seq' as owned by integer column 'task_center_reviews(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_capabilities_id_seq' as owned by integer column 'employee_capabilities(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_sync_logs_id_seq' as owned by integer column 'jd_sync_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_execution_logs_id_seq' as owned by integer column 'tool_execution_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_execution_events_id_seq' as owned by integer column 'brain_execution_events(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'roles_id_seq' as owned by integer column 'roles(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'orchestrator_task_links_id_seq' as owned by integer column 'orchestrator_task_links(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'review_analysis_id_seq' as owned by integer column 'review_analysis(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'store_account_notes_id_seq' as owned by integer column 'store_account_notes(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_task_edges_id_seq' as owned by integer column 'brain_task_edges(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'dispatch_records_id_seq' as owned by integer column 'dispatch_records(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'deploy_health_checks_id_seq' as owned by integer column 'deploy_health_checks(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_orders_id_seq' as owned by integer column 'jd_orders(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_tool_calls_id_seq' as owned by integer column 'brain_tool_calls(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_execution_logs_id_seq' as owned by integer column 'employee_execution_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_center_results_id_seq' as owned by integer column 'task_center_results(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_worker_status_id_seq' as owned by integer column 'brain_worker_status(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'release_versions_id_seq' as owned by integer column 'release_versions(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_execution_runs_id_seq' as owned by integer column 'brain_execution_runs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_store_assignments_id_seq' as owned by integer column 'employee_store_assignments(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_approval_records_id_seq' as owned by integer column 'brain_approval_records(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_task_nodes_id_seq' as owned by integer column 'brain_task_nodes(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'deploy_records_id_seq' as owned by integer column 'deploy_records(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'execution_context_id_seq' as owned by integer column 'execution_context(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'knowledge_articles_id_seq' as owned by integer column 'knowledge_articles(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'bug_cases_id_seq' as owned by integer column 'bug_cases(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'agent_execution_audits_id_seq' as owned by integer column 'agent_execution_audits(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_permissions_id_seq' as owned by integer column 'tool_permissions(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_registry_id_seq' as owned by integer column 'tool_registry(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ai_tasks_id_seq' as owned by integer column 'ai_tasks(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'orchestrator_prompt_confirmations_id_seq' as owned by integer column 'orchestrator_prompt_confirmations(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'health_check_records_id_seq' as owned by integer column 'health_check_records(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_orchestrator_logs_id_seq' as owned by integer column 'brain_orchestrator_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'sop_library_id_seq' as owned by integer column 'sop_library(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'skill_suggestions_id_seq' as owned by integer column 'skill_suggestions(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'skill_employee_permissions_id_seq' as owned by integer column 'skill_employee_permissions(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'skill_capability_relations_id_seq' as owned by integer column 'skill_capability_relations(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_tool_binding_id_seq' as owned by integer column 'employee_tool_binding(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_execution_recovery_id_seq' as owned by integer column 'brain_execution_recovery(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_center_audit_logs_id_seq' as owned by integer column 'task_center_audit_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_task_graphs_id_seq' as owned by integer column 'brain_task_graphs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'course_lessons_id_seq' as owned by integer column 'course_lessons(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'prompt_library_id_seq' as owned by integer column 'prompt_library(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_scores_id_seq' as owned by integer column 'employee_scores(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'account_templates_id_seq' as owned by integer column 'account_templates(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_integrations_id_seq' as owned by integer column 'jd_integrations(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_ads_id_seq' as owned by integer column 'jd_ads(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'metrics_daily_id_seq' as owned by integer column 'metrics_daily(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_execution_contracts_id_seq' as owned by integer column 'employee_execution_contracts(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_growth_id_seq' as owned by integer column 'employee_growth(id)', assuming SERIAL and omitting
 No new upgrade operations detected.
-upgrade_head_again:
-current_after_second_upgrade:
-0041_v2_alpha_migration_history_repair (head)
-downgrade_0040:
-current_after_downgrade:
-0040_v2_alpha_workflow_integrity_constraints
-re_upgrade_head:
-current_final:
-0041_v2_alpha_migration_history_repair (head)
-constraints_and_triggers:
-postgres_version=160014
--- constraints --
-('alpha_workflow_events_run_id_fkey', 'f', 'FOREIGN KEY (run_id) REFERENCES alpha_workflow_runs(run_id) ON DELETE RESTRICT')
-('alpha_workflow_runs_created_by_id_fkey', 'f', 'FOREIGN KEY (created_by_id) REFERENCES users(id) ON DELETE SET NULL')
-('alpha_workflow_runs_pkey', 'p', 'PRIMARY KEY (run_id)')
-('alpha_workflow_runs_scenario_id_fkey', 'f', 'FOREIGN KEY (scenario_id) REFERENCES alpha_workflow_scenarios(scenario_id) ON DELETE CASCADE')
-('alpha_workflow_runs_task_id_fkey', 'f', 'FOREIGN KEY (task_id) REFERENCES task_center_tasks(id) ON DELETE SET NULL')
-('alpha_workflow_runs_user_id_fkey', 'f', 'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL')
-('uq_alpha_workflow_events_id', 'p', 'PRIMARY KEY (event_id)')
-('uq_alpha_workflow_runs_trace_id', 'u', 'UNIQUE (trace_id)')
--- triggers --
-('alpha_workflow_events_no_delete', 'CREATE TRIGGER alpha_workflow_events_no_delete BEFORE DELETE ON public.alpha_workflow_events FOR EACH ROW EXECUTE FUNCTION alpha_workflow_events_append_only()')
-('alpha_workflow_events_no_update', 'CREATE TRIGGER alpha_workflow_events_no_update BEFORE UPDATE ON public.alpha_workflow_events FOR EACH ROW EXECUTE FUNCTION alpha_workflow_events_append_only()')
+$ repeat upgrade head
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+$ catalog data setup
+INSERT 0 1
+INSERT 0 2
+$ knowledge asset reuse query
+          knowledge_asset_id          | run_count
+--------------------------------------+-----------
+ baaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa |         2
+(1 row)
+
+$ nullable unique fields query
+ rows_with_nullable_identities
+-------------------------------
+                             2
+(1 row)
+
+$ downgrade 0041
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running downgrade 0042_v2_alpha_workflow_unique_constraints -> 0041_v2_alpha_migration_history_repair, V2 alpha workflow unique constraint repair
+$ alembic current (after downgrade 0041)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+0041_v2_alpha_migration_history_repair
+$ upgrade 0042
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0041_v2_alpha_migration_history_repair -> 0042_v2_alpha_workflow_unique_constraints, V2 alpha workflow unique constraint repair
+$ alembic current (after re-upgrade 0042)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+0042_v2_alpha_workflow_unique_constraints (head)
+$ constraint query
+                  conname                   |          definition
+--------------------------------------------+------------------------------
+ uq_alpha_workflow_runs_orchestrator_run_id | UNIQUE (orchestrator_run_id)
+ uq_alpha_workflow_runs_research_report_id  | UNIQUE (research_report_id)
+ uq_alpha_workflow_runs_root_span_id        | UNIQUE (root_span_id)
+ uq_alpha_workflow_runs_skill_invocation_id | UNIQUE (skill_invocation_id)
+ uq_alpha_workflow_runs_trace_id            | UNIQUE (trace_id)
+ uq_alpha_workflow_runs_workflow_id         | UNIQUE (workflow_id)
+(6 rows)
+
+$ index query
+                 indexname                 |                                                       indexdef
+-------------------------------------------+-----------------------------------------------------------------------------------------------------------------------
+ ix_alpha_workflow_runs_knowledge_asset_id | CREATE INDEX ix_alpha_workflow_runs_knowledge_asset_id ON public.alpha_workflow_runs USING btree (knowledge_asset_id)
+(1 row)
+
+$ trigger query
+             tgname              |                                                                           definition
+---------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ alpha_workflow_events_no_delete | CREATE TRIGGER alpha_workflow_events_no_delete BEFORE DELETE ON public.alpha_workflow_events FOR EACH ROW EXECUTE FUNCTION alpha_workflow_events_append_only()
+ alpha_workflow_events_no_update | CREATE TRIGGER alpha_workflow_events_no_update BEFORE UPDATE ON public.alpha_workflow_events FOR EACH ROW EXECUTE FUNCTION alpha_workflow_events_append_only()
+(2 rows)
+
+$ post re-upgrade data integrity query
+ shared_asset_runs | nullable_identity_runs
+-------------------+------------------------
+                 2 |                      2
+(1 row)
+
+$ alembic heads (final)
+0042_v2_alpha_workflow_unique_constraints (head)
+$ alembic current (final)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+0042_v2_alpha_workflow_unique_constraints (head)
+$ alembic check (final)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ai_employees_id_seq' as owned by integer column 'ai_employees(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'skills_id_seq' as owned by integer column 'skills(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'metrics_daily_id_seq' as owned by integer column 'metrics_daily(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_capabilities_id_seq' as owned by integer column 'employee_capabilities(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_task_edges_id_seq' as owned by integer column 'brain_task_edges(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'store_account_notes_id_seq' as owned by integer column 'store_account_notes(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'course_lessons_id_seq' as owned by integer column 'course_lessons(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_worker_status_id_seq' as owned by integer column 'brain_worker_status(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'roles_id_seq' as owned by integer column 'roles(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'orchestrator_analysis_records_id_seq' as owned by integer column 'orchestrator_analysis_records(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_ads_id_seq' as owned by integer column 'jd_ads(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_store_assignments_id_seq' as owned by integer column 'employee_store_assignments(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'agent_execution_audits_id_seq' as owned by integer column 'agent_execution_audits(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'orchestrator_prompt_confirmations_id_seq' as owned by integer column 'orchestrator_prompt_confirmations(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'review_analysis_id_seq' as owned by integer column 'review_analysis(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_routing_rules_id_seq' as owned by integer column 'task_routing_rules(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_execution_runs_id_seq' as owned by integer column 'brain_execution_runs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_execution_logs_id_seq' as owned by integer column 'tool_execution_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_task_graphs_id_seq' as owned by integer column 'brain_task_graphs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_permissions_id_seq' as owned by integer column 'tool_permissions(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_sync_logs_id_seq' as owned by integer column 'jd_sync_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_tool_binding_id_seq' as owned by integer column 'employee_tool_binding(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'knowledge_feedback_id_seq' as owned by integer column 'knowledge_feedback(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ai_capabilities_id_seq' as owned by integer column 'ai_capabilities(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_execution_events_id_seq' as owned by integer column 'brain_execution_events(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_execution_logs_id_seq' as owned by integer column 'brain_execution_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_orchestrator_logs_id_seq' as owned by integer column 'brain_orchestrator_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_registry_id_seq' as owned by integer column 'tool_registry(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'account_templates_id_seq' as owned by integer column 'account_templates(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'deploy_records_id_seq' as owned by integer column 'deploy_records(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'prompt_library_id_seq' as owned by integer column 'prompt_library(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_orders_id_seq' as owned by integer column 'jd_orders(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_integrations_id_seq' as owned by integer column 'jd_integrations(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_route_logs_id_seq' as owned by integer column 'tool_route_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_execution_logs_id_seq' as owned by integer column 'employee_execution_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'tool_routes_id_seq' as owned by integer column 'tool_routes(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'orchestrator_task_links_id_seq' as owned by integer column 'orchestrator_task_links(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'ai_tasks_id_seq' as owned by integer column 'ai_tasks(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_execution_contracts_id_seq' as owned by integer column 'employee_execution_contracts(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_scores_id_seq' as owned by integer column 'employee_scores(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'release_versions_id_seq' as owned by integer column 'release_versions(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_center_audit_logs_id_seq' as owned by integer column 'task_center_audit_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'risk_events_id_seq' as owned by integer column 'risk_events(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'execution_context_id_seq' as owned by integer column 'execution_context(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'skill_capability_relations_id_seq' as owned by integer column 'skill_capability_relations(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_task_nodes_id_seq' as owned by integer column 'brain_task_nodes(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_daily_metrics_id_seq' as owned by integer column 'jd_daily_metrics(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_execution_recovery_id_seq' as owned by integer column 'brain_execution_recovery(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_reviews_id_seq' as owned by integer column 'task_reviews(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'dispatch_records_id_seq' as owned by integer column 'dispatch_records(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'skill_employee_permissions_id_seq' as owned by integer column 'skill_employee_permissions(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'sop_library_id_seq' as owned by integer column 'sop_library(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_center_results_id_seq' as owned by integer column 'task_center_results(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'skill_reviews_id_seq' as owned by integer column 'skill_reviews(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'jd_products_id_seq' as owned by integer column 'jd_products(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_logs_id_seq' as owned by integer column 'employee_logs(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_approval_records_id_seq' as owned by integer column 'brain_approval_records(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'employee_growth_id_seq' as owned by integer column 'employee_growth(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'health_check_records_id_seq' as owned by integer column 'health_check_records(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'bug_cases_id_seq' as owned by integer column 'bug_cases(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'brain_tool_calls_id_seq' as owned by integer column 'brain_tool_calls(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'deploy_health_checks_id_seq' as owned by integer column 'deploy_health_checks(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'skill_suggestions_id_seq' as owned by integer column 'skill_suggestions(id)', assuming SERIAL and omitting
+INFO  [alembic.ddl.postgresql] Detected sequence named 'task_center_reviews_id_seq' as owned by integer column 'task_center_reviews(id)', assuming SERIAL and omitting
+No new upgrade operations detected.
+alembic_heads_result=PASS
+alembic_current_result=PASS
+alembic_check_result=PASS
+constraint_query_result=PASS
