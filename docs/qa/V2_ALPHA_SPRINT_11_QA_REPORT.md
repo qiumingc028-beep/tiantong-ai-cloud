@@ -271,3 +271,15 @@ Migration Evidence Bundle Gate复跑仍为 **5 passed, 8 failed**，继续独立
 剩余四项：Claim DataError仍以 `PendingRollbackError` 穿透API，Run/Task/AgentExecution未补偿且失败Event/Audit为0；Evidence FK、flush唯一冲突和deferred final-commit FK三路的Task `alpha_workflow_failed`审计仍各写入2条（其余补偿断言通过）。五项真实Service/DB冲突中文409和 `0042 → 0041 → 0042`继续通过；`0042 → 0039`仅标记 `UNSUPPORTED_SEMANTIC_DOWNGRADE`，不计失败。
 
 因第一阶段非零失败，Backend 863+、Alpha E2E、Frontend Gate、Static Security、V1 Regression、Sensitive Data Scan未执行。Migration Evidence Gate独立结果为 **5 passed, 8 failed**，仍缺Path A/B RAW结构、Manifest字段、可复算Checksum及0037双文档披露。PR #19保持Draft/BLOCK。
+
+## 8d9b5f28 最终代码闸
+
+测试分支普通Merge同步冻结代码 `8d9b5f2890545f1f08d05b9b1618f71ff82d6621`。四个历史PostgreSQL故障节点首先独立执行并得到 **4 passed, 0 failed**；随后完整PostgreSQL定向门禁得到 **23 passed, 0 failed**，因此 `CODE_GATE=PASS`。
+
+四路真实数据库故障均满足：PendingRollback不穿透；Run=`已失败`、Task=`rejected`、AgentExecution=`failed`、recovery_status=`待恢复`；Task失败Audit、AgentExecution `execution_failed` Audit及`workflow_failed` Event均恰好1条；Research/Knowledge/Skill/TaskResult无残留；同trace重放不增加Audit、Event或正式数据。
+
+代码完整回归（独立排除Migration Evidence Bundle）为 **892 passed, 0 failed, 82 warnings in 330.38s**。独立专项：Alpha完整质量/E2E **28 passed**；Frontend Contract Gate **6 passed**；V1 Regression **2 passed**；Static Security **1 passed**且`git diff --check`通过；Sensitive Data Scan **2 passed**。
+
+完整回归首次运行出现6个过时测试断言：五个断言要求将内部异常原文写入用户可见`failure_reason`，与最终Contract“用户可见错误为中文”和统一脱敏策略冲突；一个按文件名/create_table文本数量误报0005。测试已在允许目录中校正为统一中文脱敏断言，以及单Head、线性Revision DAG和逐表`_has_table`保护断言；6个节点复验通过，随后892项完整重跑零失败。未修改业务代码。
+
+Migration Evidence Gate继续独立为 **5 passed, 8 failed**，因此代码冻结成立，但PR #19状态为Draft/BLOCK_EVIDENCE_ONLY，等待最终证据Bundle。
