@@ -24,15 +24,27 @@ ROOT = Path(__file__).resolve().parents[1]
 FIX_COMMIT_ENV = "MIGRATION_CODE_FIX_COMMIT"
 ADMIN_URL_ENV = "V2_ALPHA_POSTGRES_ADMIN_URL"
 DEVELOP_REF = "origin/develop-v2"
-FINAL_REVISION = "0041_v2_alpha_migration_history_repair"
+FINAL_REVISION = "0042_v2_alpha_workflow_unique_constraints"
+FROZEN_0037_COMMIT = "85586868bad3dd5d0fecba5f840383feccdc1c78"
 EXPECTED_UNIQUES = {
-    "uq_alpha_workflow_runs_trace_id": ("trace_id",),
     "uq_alpha_workflow_runs_root_span_id": ("root_span_id",),
     "uq_alpha_workflow_runs_workflow_id": ("workflow_id",),
     "uq_alpha_workflow_runs_orchestrator_run_id": ("orchestrator_run_id",),
     "uq_alpha_workflow_runs_research_report_id": ("research_report_id",),
-    "uq_alpha_workflow_runs_knowledge_asset_id": ("knowledge_asset_id",),
     "uq_alpha_workflow_runs_skill_invocation_id": ("skill_invocation_id",),
+}
+ALPHA_FLAGS = {
+    "ALPHA_WORKFLOW_ENABLED": "true",
+    "ALPHA_WORKFLOW_DASHBOARD_ENABLED": "true",
+    "PUBLIC_RESEARCH_ENABLED": "true",
+    "PUBLIC_SEARCH_ENABLED": "true",
+    "PUBLIC_SEARCH_PROVIDER": "mock",
+    "KNOWLEDGE_CENTER_ENABLED": "true",
+    "KNOWLEDGE_SUBMISSION_ENABLED": "true",
+    "KNOWLEDGE_LOCAL_SEARCH_ENABLED": "true",
+    "SKILLS_ENGINE_ENABLED": "true",
+    "SKILL_INSTALLATION_ENABLED": "true",
+    "SKILL_INVOCATION_ENABLED": "true",
 }
 
 
@@ -69,17 +81,21 @@ def postgres_database_factory():
 
     def create_database(label: str) -> str:
         name = f"alpha_s11_{label}_{uuid.uuid4().hex[:12]}"
-        with psycopg2.connect(admin_dsn) as connection:
-            connection.autocommit = True
+        connection = psycopg2.connect(admin_dsn)
+        connection.autocommit = True
+        try:
             with connection.cursor() as cursor:
                 cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        finally:
+            connection.close()
         created.append(name)
         return admin_url.set(database=name).render_as_string(hide_password=False)
 
     yield create_database
 
-    with psycopg2.connect(admin_dsn) as connection:
-        connection.autocommit = True
+    connection = psycopg2.connect(admin_dsn)
+    connection.autocommit = True
+    try:
         with connection.cursor() as cursor:
             for name in created:
                 cursor.execute(
@@ -87,6 +103,8 @@ def postgres_database_factory():
                     (name,),
                 )
                 cursor.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
+    finally:
+        connection.close()
 
 
 @pytest.fixture(scope="module")
@@ -100,12 +118,29 @@ def migration_fix_commit():
     return commit
 
 
+@pytest.fixture()
+def alpha_enabled(monkeypatch):
+    from backend.config import get_settings
+
+    for key, value in ALPHA_FLAGS.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def extract_git_tree(commit: str, destination: Path) -> None:
     archive = subprocess.run(
         ["git", "archive", "--format=tar", commit], cwd=ROOT, check=True, capture_output=True
     ).stdout
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
         bundle.extractall(destination, filter="data")
+
+
+def test_0037_blob_matches_frozen_baseline():
+    relative = "alembic/versions/0037_v2_execution_observability_security_ops.py"
+    frozen = subprocess.run(["git", "show", f"{FROZEN_0037_COMMIT}:{relative}"], cwd=ROOT, check=True, capture_output=True).stdout
+    assert (ROOT / relative).read_bytes() == frozen, "0037在冻结基线后被再次改写"
 
 
 def test_real_merge_base_0037_boolean_failure_is_reproduced_and_fixed(
@@ -217,3 +252,32 @@ def test_final_head_unique_constraints_reject_duplicates_and_keep_idempotency_af
     alembic(ROOT, database_url, "upgrade", "head")
     with psycopg2.connect(dsn) as connection:
         assert_expected_constraints(connection)
+        assert "uq_alpha_workflow_runs_knowledge_asset_id" not in constraint_columns(connection), "knowledge_asset_id必须允许跨Run复用"
+        shared_knowledge = str(uuid.uuid4())
+        first = run_values(uuid.uuid4().hex)
+        second = run_values(uuid.uuid4().hex)
+        first["knowledge_asset_id"] = shared_knowledge
+        second["knowledge_asset_id"] = shared_knowledge
+        assert insert_run(connection, scenario_id, str(uuid.uuid4()), first) == 1
+        assert insert_run(connection, scenario_id, str(uuid.uuid4()), second) == 1
+        connection.commit()
+
+
+def test_model_allows_knowledge_asset_reuse_across_runs():
+    from sqlalchemy import UniqueConstraint
+    from backend.alpha_workflow.models import AlphaWorkflowRun
+
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in AlphaWorkflowRun.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert ("knowledge_asset_id",) not in unique_columns
+
+
+def test_duplicate_start_uses_contract_409_semantics(client, boss_headers, alpha_enabled):
+    payload = {"input_text": "验证409幂等语义", "trace_id": f"pg-contract-{uuid.uuid4()}"}
+    first = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
+    second = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 409, second.text

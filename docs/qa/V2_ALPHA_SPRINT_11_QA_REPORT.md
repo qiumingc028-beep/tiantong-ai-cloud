@@ -188,3 +188,12 @@ Freeze Policy缺少0037完整路径及八项结构化披露。Checksums虽已使
 新增真实PostgreSQL专项 `tests/test_v2_alpha_postgresql_migration_regression.py`。测试要求隔离数据库管理员连接及 `MIGRATION_CODE_FIX_COMMIT`，从真实Git merge-base归档执行到0037以复现Boolean默认值数据库错误，再使用已合并修复代码升级至Head；全程禁止SQLite与Drift跳过。
 
 最终Head验收从 `pg_constraint` 读取约束名称和有序列集合，逐约束执行真实重复INSERT并要求 `UniqueViolation`，再用 `ON CONFLICT ON CONSTRAINT ... DO NOTHING` 验证业务幂等重试，最后执行0039 downgrade/head re-upgrade并重新读取约束。当前等待①提供修复Commit，PR #19保持Draft/BLOCK。
+## 3406 / 0042 PostgreSQL实库预验收
+
+在隔离 PostgreSQL 16.14 临时数据库执行。专项结果：`1 passed, 4 failed`。真实merge-base的0037 Boolean缺陷成功复现，3406 fresh upgrade可到0042；但0037 Blob相对85586868冻结基线再次变化。
+
+0042中五项Required约束名称和列均从 `pg_constraint` 验证通过；逐项重复INSERT真实触发 `UniqueViolation`，`ON CONFLICT ON CONSTRAINT`返回幂等no-op；0039 downgrade后重新upgrade至0042仍通过。阻塞为0042及ORM Model错误保留 `knowledge_asset_id`唯一约束，导致跨Run复用不成立；重复启动仍返回200而非Contract要求的409。
+
+0005专项结论：`0005_tiancang_knowledge_tables` 与 `0005_knowledge_center_tables` 是同一线性链上的两个执行节点，均含相同表的条件创建逻辑，但两者都先检查表是否存在；后者还补充缺失索引。真实PostgreSQL fresh upgrade已成功到0042，没有重复建表失败，故旧静态扫描属于文件级误报，不是执行缺陷。
+
+当前不运行Backend全量，等待①的 `MIGRATION_CODE_FIX_COMMIT` 修复上述四项阻塞。

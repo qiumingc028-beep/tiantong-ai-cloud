@@ -1,0 +1,30 @@
+{
+  "evaluated_commit": "3406c633c414d9c6408217ddc4925c260c147faf",
+  "postgresql_version": "16.14",
+  "final_head": "0042_v2_alpha_workflow_unique_constraints",
+  "historical_0037_boolean_reproduced": true,
+  "fresh_upgrade_to_head": true,
+  "migration_0037_frozen": false,
+  "required_unique_constraints": {
+    "uq_alpha_workflow_runs_root_span_id": "PASS",
+    "uq_alpha_workflow_runs_workflow_id": "PASS",
+    "uq_alpha_workflow_runs_orchestrator_run_id": "PASS",
+    "uq_alpha_workflow_runs_research_report_id": "PASS",
+    "uq_alpha_workflow_runs_skill_invocation_id": "PASS"
+  },
+  "required_duplicate_insert_rejected": true,
+  "idempotent_on_conflict": true,
+  "downgrade_reupgrade": true,
+  "knowledge_asset_reusable_across_runs": false,
+  "knowledge_asset_unique_in_0042": true,
+  "knowledge_asset_unique_in_model": true,
+  "duplicate_start_returns_409": false,
+  "migration_0005": {
+    "two_nodes_in_same_chain": true,
+    "both_nodes_contain_guarded_create_calls": true,
+    "fresh_postgresql_upgrade_failed": false,
+    "result": "STATIC_FALSE_POSITIVE_CLOSED"
+  },
+  "pytest": {"passed": 1, "failed": 4},
+  "result": "BLOCK"
+}

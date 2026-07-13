@@ -123,3 +123,15 @@ Gate实现整改完成，但当前证据包仍为BLOCK：
 - Checksums：Freeze Policy Hash复算失败；未覆盖 `validation-manifest.json`；并包含精确Required Files集合外条目。
 - Manifest缺少：`evidence_format_version`、`validated_code_commit`、`final_revision`、`checksum_algorithm`、`required_files`、`path_a`、`path_b`。
 - 未执行Backend全量回归。等待 `MIGRATION_EVIDENCE_FINAL_COMMIT`。
+## 3406 / 0042 PostgreSQL回归失败矩阵
+
+- PASS：merge-base 0037 Boolean错误在真实PostgreSQL复现；3406 fresh upgrade到0042成功。
+- FAIL：0037相对85586868冻结Blob再次被修改（`sa.text("true")`改为`sa.true()`及尾部变化）。
+- PASS：五项Required约束名称、列、重复INSERT阻断和幂等重试均通过。
+- PASS：0039 downgrade / 0042 re-upgrade后五项约束仍正确。
+- FAIL：0042包含 `uq_alpha_workflow_runs_knowledge_asset_id`，Knowledge Asset不能跨Run复用。
+- FAIL：ORM Model同样声明Knowledge Asset唯一约束。
+- FAIL：重复启动实际返回200，Contract要求409。
+- CLOSED：0005两个节点位于同一路径且都有条件创建，但真实PostgreSQL fresh upgrade未发生重复表失败；静态重复扫描为误报。
+
+专项总计：`1 passed, 4 failed`。Backend全量未执行，PR #19保持Draft/BLOCK。
