@@ -38,7 +38,7 @@ def build_report(
         "source_count": len(sources),
     }
     for query_index, query_text in enumerate(queries, start=1):
-        id_maps["query_id_map"][query_text] = stable_research_id(trace_id, "query", query_index, query_text)
+        id_maps["query_id_map"][f"{query_index}:{query_text}"] = stable_research_id(trace_id, "query", query_index, query_text)
     claim_rows = []
     for claim_index, claim in enumerate(claims, start=1):
         claim_id = stable_research_id(trace_id, "claim", claim_index, claim.claim_text)
