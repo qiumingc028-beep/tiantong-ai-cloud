@@ -160,3 +160,13 @@ FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗
 - Evidence插入失败：正式行残留 `(3, 4, 1, 0)`，ResearchExecution虚假报告残留，AgentExecution仍为`completed`，英文DB错误泄漏。
 - Research commit失败：Run=`运行中`、recovery_status=null、Task=`running`、AgentExecution=`completed`；补偿事务未完成。
 - 已关闭：同trace顺序及4路并发重放均返回200和同一run_id；五项真实跨Run约束冲突均映射中文409且未泄漏IntegrityError；0005真实执行链成功。
+
+## f50a031 Research正式门禁失败矩阵
+
+- Source→Query：显式commit、关闭Session并重开后，持久化Source的`query_id`为NULL；Evidence→内部Source/Claim外键已通过。
+- 重复persist：正式Query/Source/Claim/Evidence数量与内部UUID不增长，跨Execution ID隔离通过；但同一Task的`[V2 Research]` summary被追加2次。
+- DataError：真实PostgreSQL `varchar(36)`超长错误已产生，但补偿路径在rollback前读取过期`run.run_id`，最终向TestClient穿透`PendingRollbackError`。
+- 23503 FK：Run=`已失败`、Task=`rejected`、AgentExecution=`failed`、正式Research数据回滚、同trace重放幂等均通过；失败审计异常为Task写入2条、AgentExecution写入0条。
+- 23505唯一冲突：补偿和回滚通过；同样存在Task失败审计重复及AgentExecution失败审计缺失。
+- 五项409测试已改为Service真实创建Run并在Session flush触发PostgreSQL约束，不再在Router层抛裸IntegrityError；五项全部返回中文409。
+- Migration边界：0042→0041→0042通过；0039路径按裁决标记`UNSUPPORTED_SEMANTIC_DOWNGRADE`，不再列为代码失败。

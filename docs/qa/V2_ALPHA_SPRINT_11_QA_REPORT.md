@@ -227,3 +227,21 @@ Claim插入、Evidence插入、Research commit三类故障注入结果为 `0 pas
 4. Research commit失败后Run仍为`运行中`、Task仍为`running`、AgentExecution仍为`completed`，未进入失败/待恢复补偿状态。
 
 Migration Evidence Gate单独执行结果为 **5 passed, 8 failed**：旧Path A/B缺结构化RAW区、Manifest字段缺失、Checksum不匹配、0037双文档披露不足。该证据Bundle失败不计作代码专项失败。因代码专项未全绿，本轮未执行Backend 863+、Alpha E2E、Frontend、Static Security及V1完整回归，PR #19保持Draft/BLOCK。
+
+## f50a031 Research 正式门禁
+
+测试分支普通合并 `f50a03148654605d103d6118d8ff57ea1bfba701`，Merge Commit为 `236a92cdc08f7fe76315b542c86e58ced962131a`。定向门禁扩展为21项，全部使用隔离PostgreSQL 16.14；聚合结果为 **16 passed, 5 failed**。
+
+已通过：0037字节冻结、最终Head 0042、五项Required Constraint、多NULL、Knowledge Asset非唯一、0042→0041→0042、0005真实DAG/fresh upgrade、恶意超长上游Source/Evidence ID内部UUID化、Evidence→Source/Claim外键、跨Execution不改绑、正式行数量与ID重放幂等、顺序/四路并发同trace、五项真实Service/DB冲突中文409。
+
+按架构裁决，`0042 → 0039 → 0042`已从阻塞断言删除并记录为 `UNSUPPORTED_SEMANTIC_DOWNGRADE`；原因是0040包含旧Knowledge Asset全局唯一语义，已有合法复用数据无法无损穿越。正式支持边界 `0042 → 0041 → 0042`实库通过。
+
+剩余五项代码失败：
+
+1. commit并关闭Session后，ResearchSource的`query_id`仍为NULL，未引用同Execution真实ResearchQuery。
+2. 重复`persist_research_result`不增加正式行且内部ID稳定，但Task summary重复追加两次。
+3. 真实PostgreSQL DataError后补偿读取过期Run属性，触发PendingRollbackError穿透API。
+4. 真实23503 FK故障虽完成Run/Task/AgentExecution补偿与正式数据回滚，但Task失败审计写入2次，AgentExecution失败审计为0。
+5. 真实23505 IntegrityError同样产生2条Task失败审计且缺少AgentExecution失败审计。
+
+Migration Evidence Bundle Gate复跑仍为 **5 passed, 8 failed**，继续独立归类。代码专项未全绿，因此未运行Backend 863+及其后的Alpha E2E、Frontend、Static Security、V1与敏感数据完整回归。

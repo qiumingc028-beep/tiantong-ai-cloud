@@ -1,5 +1,5 @@
 {
-  "evaluated_commit": "95465582df8fa52ccb9703b98c71ecefa9a3d4ce",
+  "evaluated_commit": "f50a03148654605d103d6118d8ff57ea1bfba701",
   "postgresql_version": "16.14",
   "final_head": "0042_v2_alpha_workflow_unique_constraints",
   "historical_0037_boolean_reproduced": true,
@@ -27,9 +27,9 @@
   },
   "required_duplicate_insert_rejected": true,
   "idempotent_on_conflict": true,
-  "downgrade_reupgrade": false,
+  "downgrade_reupgrade": true,
   "downgrade_0042_to_0041_reupgrade": true,
-  "downgrade_to_0039": false,
+  "downgrade_to_0039": "UNSUPPORTED_SEMANTIC_DOWNGRADE",
   "knowledge_asset_reusable_across_runs": true,
   "knowledge_asset_unique_in_0042": false,
   "knowledge_asset_unique_in_model": false,
@@ -41,23 +41,32 @@
     "result": "STATIC_FALSE_POSITIVE_CLOSED"
   },
   "research_persistence_gate": {
-    "postgresql_id_and_fk_test": "FAIL_FOREIGN_KEY",
-    "observed_database_error": "ResearchEvidence.source_id does not reference the generated ResearchSource row",
+    "postgresql_id_and_fk_test": "FAIL_SOURCE_QUERY_FOREIGN_KEY",
+    "observed_database_error": "ResearchSource.query_id is NULL after committed persistence",
     "stable_uuid_generation": true,
-    "stable_id_replay": "BLOCKED_BY_FOREIGN_KEY_FAILURE",
+    "malicious_upstream_ids_replaced_by_internal_uuid": true,
+    "evidence_source_and_claim_foreign_keys": true,
+    "source_query_foreign_key": false,
+    "stable_id_replay": true,
+    "formal_row_counts_idempotent": true,
+    "task_summary_idempotent": false,
+    "cross_execution_rebinding_blocked": true,
     "failure_injection": {
-      "claim_insert": "FAIL_FORMAL_ROWS_REMAIN_AND_ENGLISH_ERROR_LEAKS",
-      "evidence_insert": "FAIL_FORMAL_ROWS_REMAIN_AND_ENGLISH_ERROR_LEAKS",
-      "research_commit": "FAIL_FORMAL_ROWS_REMAIN_AND_ENGLISH_ERROR_LEAKS"
+      "data_error": "FAIL_PENDING_ROLLBACK_ESCAPES_API",
+      "foreign_key_23503": "FAIL_DUPLICATE_TASK_AUDIT_AND_MISSING_AGENT_AUDIT",
+      "integrity_error_23505": "FAIL_DUPLICATE_TASK_AUDIT_AND_MISSING_AGENT_AUDIT"
     },
     "task_compensated": true,
-    "agent_execution_compensated": false,
-    "formal_research_rows_rolled_back": false,
+    "agent_execution_compensated": true,
+    "formal_research_rows_rolled_back": true,
+    "task_failure_audit_exactly_once": false,
+    "agent_execution_failure_audit": false,
+    "pending_rollback_contained": false,
     "same_trace_reuses_run": true,
     "concurrent_same_trace_reuses_run": true,
     "replay_run_and_event_counts_unchanged": true,
-    "pytest": {"passed": 0, "failed": 4}
+    "pytest": {"passed": 0, "failed": 5}
   },
-  "pytest": {"passed": 15, "failed": 5},
+  "pytest": {"passed": 16, "failed": 5},
   "result": "BLOCK"
 }
