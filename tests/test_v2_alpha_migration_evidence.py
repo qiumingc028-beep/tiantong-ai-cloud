@@ -18,6 +18,8 @@ FINAL_REVISION = "0042_v2_alpha_workflow_unique_constraints"
 FEATURE_REF = "origin/feature/v2-alpha-workflow-engine"
 V1_TAG = "v1.0.1"
 CODE_FREEZE_COMMIT = "8d9b5f2890545f1f08d05b9b1618f71ff82d6621"
+PATH_A_START_COMMIT = "483ebf560e1a4cfadecee4912a3ff6bca99516f6"
+PATH_A_START_REVISION = "0027_v1_schema_alignment"
 PATH_B_START_COMMIT = "85586868bad3dd5d0fecba5f840383feccdc1c78"
 PATH_B_START_REVISION = "0041_v2_alpha_migration_history_repair"
 KNOWN_BROKEN_HISTORICAL_BASELINE = "2ca1a2579569324ce3ca82f68332fb7f96be004d"
@@ -164,18 +166,18 @@ def test_path_a_and_b_are_independent_and_validate_same_code():
 def test_path_a_and_b_start_points_are_real_git_baselines():
     path_a = parse_path_evidence(REQUIRED_FILES["path_a"], "A").fields
     path_b = parse_path_evidence(REQUIRED_FILES["path_b"], "B").fields
-    v1_commit = git("rev-parse", f"{V1_TAG}^{{commit}}")
-    assert path_a["start_commit"] == v1_commit, "Path A起点必须是v1.0.1 Tag指向的Commit"
-    assert path_a["start_revision"] == "0027_v1_schema_alignment"
+    assert path_a["start_commit"] == PATH_A_START_COMMIT, "Path A必须使用冻结的V1.0.1可运行基线Commit"
+    assert path_a["start_revision"] == PATH_A_START_REVISION
     assert path_b["start_commit"] == PATH_B_START_COMMIT, "Path B必须使用冻结可运行基线Commit"
     assert path_b["start_revision"] == PATH_B_START_REVISION, "Path B必须从冻结可运行的0041 Revision开始"
     assert path_b["start_commit"] != KNOWN_BROKEN_HISTORICAL_BASELINE, (
         "Path B不得使用真实旧merge-base；该Commit只能标记为KNOWN_BROKEN_HISTORICAL_BASELINE"
     )
-    commit_check = subprocess.run(
-        ["git", "cat-file", "-e", f"{path_b['start_commit']}^{{commit}}"], cwd=ROOT, capture_output=True
-    )
-    assert commit_check.returncode == 0
+    for start_commit in (path_a["start_commit"], path_b["start_commit"]):
+        commit_check = subprocess.run(
+            ["git", "cat-file", "-e", f"{start_commit}^{{commit}}"], cwd=ROOT, capture_output=True
+        )
+        assert commit_check.returncode == 0
 
 
 def test_old_merge_base_is_only_documented_as_known_broken_historical_baseline():
@@ -203,8 +205,8 @@ def test_validation_manifest_has_hardened_commit_and_path_model():
     assert manifest["path_a"]["validated_code_commit"] == manifest["validated_code_commit"]
     assert manifest["path_b"]["validated_code_commit"] == manifest["validated_code_commit"]
     assert manifest["validated_code_commit"] == CODE_FREEZE_COMMIT
-    assert manifest["path_a"]["start_commit"] == git("rev-parse", f"{V1_TAG}^{{commit}}")
-    assert manifest["path_a"]["start_revision"] == "0027_v1_schema_alignment"
+    assert manifest["path_a"]["start_commit"] == PATH_A_START_COMMIT
+    assert manifest["path_a"]["start_revision"] == PATH_A_START_REVISION
     assert manifest["path_b"]["start_commit"] == PATH_B_START_COMMIT
     assert manifest["path_b"]["start_revision"] == PATH_B_START_REVISION
 
