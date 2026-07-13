@@ -135,3 +135,10 @@ Gate实现整改完成，但当前证据包仍为BLOCK：
 - CLOSED：0005两个节点位于同一路径且都有条件创建，但真实PostgreSQL fresh upgrade未发生重复表失败；静态重复扫描为误报。
 
 专项总计：`1 passed, 4 failed`。Backend全量未执行，PR #19保持Draft/BLOCK。
+## 0042架构门禁强化执行
+
+隔离PostgreSQL结果：`3 passed, 11 failed`。
+
+PASS：merge-base Boolean缺陷复现与fresh upgrade；相同幂等键返回既有Run；0005 Revision DAG、has_table保护及fresh upgrade共同证明其为冻结历史命名债务。
+
+FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗留唯一性清理与跨Run复用；0042 downgrade不恢复Knowledge唯一性/不冲突；五种Required冲突的中文409及IntegrityError脱敏。

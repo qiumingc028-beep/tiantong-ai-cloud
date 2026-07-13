@@ -197,3 +197,10 @@ Freeze Policy缺少0037完整路径及八项结构化披露。Checksums虽已使
 0005专项结论：`0005_tiancang_knowledge_tables` 与 `0005_knowledge_center_tables` 是同一线性链上的两个执行节点，均含相同表的条件创建逻辑，但两者都先检查表是否存在；后者还补充缺失索引。真实PostgreSQL fresh upgrade已成功到0042，没有重复建表失败，故旧静态扫描属于文件级误报，不是执行缺陷。
 
 当前不运行Backend全量，等待①的 `MIGRATION_CODE_FIX_COMMIT` 修复上述四项阻塞。
+## 0042架构决策防回退门禁
+
+专项扩展至14项并在隔离PostgreSQL 16.14执行：`3 passed, 11 failed`。0037使用 `git show 85586868:<path>` 与工作树逐字节比较；0042 `_UNIQUE_COLUMNS` 必须精确等于五项Required列并排除Knowledge Asset；Model UniqueConstraint集合必须等于五项加既有trace_id。
+
+实库新增0041遗留迁移场景，要求0042安全移除Knowledge同名唯一索引/约束、保留普通索引和数据并允许跨Run复用。downgrade场景要求不恢复Knowledge唯一性、不产生同名索引/约束冲突、五项Required保持文档语义且可再次upgrade。当前3406均未满足。
+
+API门禁确认相同幂等键返回同一Run通过；对五项Required分别注入另一Run冲突，要求统一映射中文409且不泄漏IntegrityError。当前五项均未捕获数据库IntegrityError，门禁失败。

@@ -5,6 +5,18 @@
   "historical_0037_boolean_reproduced": true,
   "fresh_upgrade_to_head": true,
   "migration_0037_frozen": false,
+  "architecture_gate": {
+    "required_0042_columns_exact": false,
+    "trace_id_existing_unique_preserved": true,
+    "model_matches_schema_decision": false,
+    "legacy_0041_knowledge_unique_removed": false,
+    "ordinary_knowledge_index_preserved": "BLOCKED_BY_UNIQUE_CONSTRAINT",
+    "downgrade_without_knowledge_unique": false,
+    "downgrade_name_collision_free": false,
+    "same_idempotency_key_returns_existing_run": true,
+    "five_other_run_conflicts_return_chinese_409": false,
+    "integrity_error_redacted": false
+  },
   "required_unique_constraints": {
     "uq_alpha_workflow_runs_root_span_id": "PASS",
     "uq_alpha_workflow_runs_workflow_id": "PASS",
@@ -25,6 +37,6 @@
     "fresh_postgresql_upgrade_failed": false,
     "result": "STATIC_FALSE_POSITIVE_CLOSED"
   },
-  "pytest": {"passed": 1, "failed": 4},
+  "pytest": {"passed": 3, "failed": 11},
   "result": "BLOCK"
 }

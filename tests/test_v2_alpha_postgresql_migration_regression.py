@@ -7,7 +7,9 @@ SQLite and never permit a drift-skip environment variable.
 from __future__ import annotations
 
 import io
+import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -18,6 +20,7 @@ import psycopg2
 import pytest
 from psycopg2 import sql
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +35,13 @@ EXPECTED_UNIQUES = {
     "uq_alpha_workflow_runs_orchestrator_run_id": ("orchestrator_run_id",),
     "uq_alpha_workflow_runs_research_report_id": ("research_report_id",),
     "uq_alpha_workflow_runs_skill_invocation_id": ("skill_invocation_id",),
+}
+EXPECTED_0042_COLUMNS = {
+    "workflow_id",
+    "root_span_id",
+    "orchestrator_run_id",
+    "research_report_id",
+    "skill_invocation_id",
 }
 ALPHA_FLAGS = {
     "ALPHA_WORKFLOW_ENABLED": "true",
@@ -52,6 +62,15 @@ def git(*args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=ROOT, check=True, text=True, capture_output=True
     ).stdout.strip()
+
+
+def load_migration(filename: str):
+    path = ROOT / "alembic/versions" / filename
+    spec = importlib.util.spec_from_file_location(f"qa_{path.stem}", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def alembic(cwd: Path, database_url: str, *args: str, check: bool = True):
@@ -143,6 +162,13 @@ def test_0037_blob_matches_frozen_baseline():
     assert (ROOT / relative).read_bytes() == frozen, "0037在冻结基线后被再次改写"
 
 
+def test_0042_declares_exact_architecture_constraint_set():
+    migration = load_migration("0042_v2_alpha_workflow_unique_constraints.py")
+    declared = {column for _name, column in migration._UNIQUE_COLUMNS}
+    assert declared == EXPECTED_0042_COLUMNS
+    assert "knowledge_asset_id" not in declared
+
+
 def test_real_merge_base_0037_boolean_failure_is_reproduced_and_fixed(
     tmp_path, postgres_database_factory, migration_fix_commit
 ):
@@ -179,6 +205,18 @@ def constraint_columns(connection) -> dict[str, tuple[str, ...]]:
             """
         )
         return {name: tuple(columns) for name, columns in cursor.fetchall()}
+
+
+def unique_indexes(connection) -> dict[str, tuple[bool, tuple[str, ...]]]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT indexname, indexdef ILIKE 'CREATE UNIQUE INDEX%',
+                   regexp_split_to_array(regexp_replace(indexdef, '^.*\\((.*)\\).*$','\\1'), '\\s*,\\s*')
+            FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'alpha_workflow_runs'
+            """
+        )
+        return {name: (is_unique, tuple(column.strip('"') for column in columns)) for name, is_unique, columns in cursor.fetchall()}
 
 
 def assert_expected_constraints(connection) -> None:
@@ -272,12 +310,101 @@ def test_model_allows_knowledge_asset_reuse_across_runs():
         for constraint in AlphaWorkflowRun.__table__.constraints
         if isinstance(constraint, UniqueConstraint)
     }
+    expected = {(column,) for column in EXPECTED_0042_COLUMNS | {"trace_id"}}
+    assert unique_columns == expected
     assert ("knowledge_asset_id",) not in unique_columns
 
 
-def test_duplicate_start_uses_contract_409_semantics(client, boss_headers, alpha_enabled):
+def test_same_idempotency_key_returns_existing_run(client, boss_headers, alpha_enabled):
     payload = {"input_text": "验证409幂等语义", "trace_id": f"pg-contract-{uuid.uuid4()}"}
     first = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
     second = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
     assert first.status_code == 200
-    assert second.status_code == 409, second.text
+    assert second.status_code == 200
+    assert second.json()["run"]["run_id"] == first.json()["run"]["run_id"]
+
+
+@pytest.mark.parametrize("constraint_name", sorted(EXPECTED_UNIQUES))
+def test_other_run_unique_conflicts_map_to_chinese_409(
+    client, boss_headers, alpha_enabled, monkeypatch, constraint_name
+):
+    from backend.routers import alpha_workflow as router
+
+    def conflict(*_args, **_kwargs):
+        raise IntegrityError(
+            "INSERT alpha_workflow_runs",
+            {},
+            Exception(f'duplicate key violates unique constraint "{constraint_name}"'),
+        )
+
+    monkeypatch.setattr(router, "start_alpha_workflow", conflict)
+    response = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "唯一字段已被另一Run占用", "trace_id": f"conflict-{uuid.uuid4()}"},
+    )
+    assert response.status_code == 409
+    detail = response.json().get("detail")
+    assert isinstance(detail, str) and re.search(r"[\u4e00-\u9fff]", detail)
+    assert "IntegrityError" not in detail and "duplicate key" not in detail.casefold()
+
+
+def test_0041_legacy_knowledge_unique_is_removed_safely_by_0042(
+    postgres_database_factory, migration_fix_commit
+):
+    del migration_fix_commit
+    database_url = postgres_database_factory("legacy_0041")
+    alembic(ROOT, database_url, "upgrade", "0041_v2_alpha_migration_history_repair")
+    dsn = make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)
+    with psycopg2.connect(dsn) as connection:
+        before_constraints = constraint_columns(connection)
+        before_indexes = unique_indexes(connection)
+        assert "uq_alpha_workflow_runs_knowledge_asset_id" in before_constraints or before_indexes.get("uq_alpha_workflow_runs_knowledge_asset_id", (False, ()))[0]
+        scenario_id = seed_scenario(connection)
+        assert insert_run(connection, scenario_id, str(uuid.uuid4()), run_values(uuid.uuid4().hex)) == 1
+        connection.commit()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM alpha_workflow_runs")
+            before_count = cursor.fetchone()[0]
+
+    alembic(ROOT, database_url, "upgrade", "head")
+    with psycopg2.connect(dsn) as connection:
+        assert "uq_alpha_workflow_runs_knowledge_asset_id" not in constraint_columns(connection)
+        indexes = unique_indexes(connection)
+        assert indexes.get("ix_alpha_workflow_runs_knowledge_asset_id") == (False, ("knowledge_asset_id",))
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM alpha_workflow_runs")
+            assert cursor.fetchone()[0] == before_count
+        shared = str(uuid.uuid4())
+        first, second = run_values(uuid.uuid4().hex), run_values(uuid.uuid4().hex)
+        first["knowledge_asset_id"] = shared
+        second["knowledge_asset_id"] = shared
+        assert insert_run(connection, scenario_id, str(uuid.uuid4()), first) == 1
+        assert insert_run(connection, scenario_id, str(uuid.uuid4()), second) == 1
+
+
+def test_0042_downgrade_has_no_knowledge_unique_or_name_collisions(
+    postgres_database_factory, migration_fix_commit
+):
+    del migration_fix_commit
+    database_url = postgres_database_factory("downgrade_0042")
+    alembic(ROOT, database_url, "upgrade", "head")
+    alembic(ROOT, database_url, "downgrade", "0041_v2_alpha_migration_history_repair")
+    dsn = make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)
+    with psycopg2.connect(dsn) as connection:
+        constraints = constraint_columns(connection)
+        indexes = unique_indexes(connection)
+        assert "uq_alpha_workflow_runs_knowledge_asset_id" not in constraints
+        assert not indexes.get("uq_alpha_workflow_runs_knowledge_asset_id", (False, ()))[0]
+        assert not (set(constraints) & set(indexes)), "downgrade后存在同名索引/约束冲突"
+        for name, columns in EXPECTED_UNIQUES.items():
+            assert constraints.get(name) == columns or indexes.get(name) == (True, columns)
+    alembic(ROOT, database_url, "upgrade", "head")
+
+
+def test_0005_revision_dag_is_guarded_historical_naming_debt():
+    first = load_migration("0005_tiancang_knowledge_tables.py")
+    successor = load_migration("0005_knowledge_center_tables.py")
+    assert successor.down_revision == first.revision
+    assert callable(first._has_table) and callable(successor._has_table)
+    assert FINAL_REVISION == "0042_v2_alpha_workflow_unique_constraints"
