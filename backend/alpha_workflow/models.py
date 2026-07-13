@@ -36,7 +36,6 @@ class AlphaWorkflowRun(Base):
         UniqueConstraint("workflow_id", name="uq_alpha_workflow_runs_workflow_id"),
         UniqueConstraint("orchestrator_run_id", name="uq_alpha_workflow_runs_orchestrator_run_id"),
         UniqueConstraint("research_report_id", name="uq_alpha_workflow_runs_research_report_id"),
-        UniqueConstraint("knowledge_asset_id", name="uq_alpha_workflow_runs_knowledge_asset_id"),
         UniqueConstraint("skill_invocation_id", name="uq_alpha_workflow_runs_skill_invocation_id"),
     )
 

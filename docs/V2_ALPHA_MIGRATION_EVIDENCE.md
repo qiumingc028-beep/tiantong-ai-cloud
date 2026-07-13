@@ -40,6 +40,7 @@
 - `0039`、`0040` 均保持为新增增量 migration。
 - `0037_v2_execution_observability_security_ops.py` 包含一次已明确披露的 PostgreSQL 兼容性调整：将布尔默认值从整数 `1` 统一修正为 PostgreSQL `true` 表达，以保证实库可执行性与 `alembic check` 一致性。
 - `0041_v2_alpha_migration_history_repair.py` 为新增修复 migration，用于修复 Alpha 运行时的 PostgreSQL 约束一致性。
+- `0043_v2_alpha_workflow_knowledge_asset_identity_repair.py` 为新增 forward-only repair migration，用于移除 `knowledge_asset_id` 的全局唯一性，仅保留普通索引。
 - V1 正式链 `0001`—`0027` 经过逐文件比对，已确认与 `v1.0.1` 完全一致。
 - V2 预发布链 `0028`—`0041` 仍可继续在隔离环境中用于证据验证，但在 Sprint 11.1 收口后按冻结策略停止进一步修改旧文件。
 
@@ -61,8 +62,8 @@
 
 ### 结果
 
-- `alembic heads`：单一 head，`0041_v2_alpha_migration_history_repair`
-- `alembic current`：最终 revision 为 `0041_v2_alpha_migration_history_repair`
+- `alembic heads`：单一 head，`0043_v2_alpha_workflow_knowledge_asset_identity_repair`
+- `alembic current`：最终 revision 为 `0043_v2_alpha_workflow_knowledge_asset_identity_repair`
 - `alembic history`：链路完整
 - `alembic upgrade head`：成功
 - 第二次 `alembic upgrade head`：安全 no-op
@@ -87,8 +88,8 @@
 
 ### 结果
 
-- `alembic heads`：单一 head，`0041_v2_alpha_migration_history_repair`
-- `alembic current`：最终 revision 为 `0041_v2_alpha_migration_history_repair`
+- `alembic heads`：单一 head，`0043_v2_alpha_workflow_knowledge_asset_identity_repair`
+- `alembic current`：最终 revision 为 `0043_v2_alpha_workflow_knowledge_asset_identity_repair`
 - `alembic history`：链路完整
 - `alembic upgrade head`：成功
 - 第二次 `alembic upgrade head`：安全 no-op
@@ -104,9 +105,9 @@
 - 其它 Alpha 唯一约束：
   - `uq_alpha_workflow_runs_orchestrator_run_id`
   - `uq_alpha_workflow_runs_research_report_id`
-  - `uq_alpha_workflow_runs_knowledge_asset_id`
   - `uq_alpha_workflow_runs_skill_invocation_id`
-  - `uq_alpha_workflow_runs_trace_id`
+- `knowledge_asset_id` 保留普通索引，可跨 Run 复用，不作为全局唯一身份
+- `trace_id` 保持独立唯一约束：`uq_alpha_workflow_runs_trace_id`
 - Append-only 保护：
   - `alpha_workflow_events_no_update`
   - `alpha_workflow_events_no_delete`
@@ -136,7 +137,7 @@
 
 V2 Alpha 的 migration 链路已通过两条独立 PostgreSQL 路径验证，最终 head 为：
 
-- `0041_v2_alpha_migration_history_repair`
+- `0043_v2_alpha_workflow_knowledge_asset_identity_repair`
 
 证据表明：
 

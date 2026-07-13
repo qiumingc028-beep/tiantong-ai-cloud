@@ -22,7 +22,6 @@ _UNIQUE_COLUMNS = [
     ("uq_alpha_workflow_runs_workflow_id", "workflow_id"),
     ("uq_alpha_workflow_runs_orchestrator_run_id", "orchestrator_run_id"),
     ("uq_alpha_workflow_runs_research_report_id", "research_report_id"),
-    ("uq_alpha_workflow_runs_knowledge_asset_id", "knowledge_asset_id"),
     ("uq_alpha_workflow_runs_skill_invocation_id", "skill_invocation_id"),
 ]
 

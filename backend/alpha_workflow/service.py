@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..agent_runtime.audit import write_audit_event
@@ -33,7 +34,7 @@ from .constants import (
     DEFAULT_ALPHA_WORKFLOW_TARGET_EMPLOYEE,
 )
 from .context import AlphaWorkflowContext, AlphaWorkflowPlan, AlphaWorkflowTraceSpan
-from .exceptions import AlphaWorkflowDependencyError, AlphaWorkflowNotFoundError, AlphaWorkflowValidationError
+from .exceptions import AlphaWorkflowConflictError, AlphaWorkflowDependencyError, AlphaWorkflowNotFoundError, AlphaWorkflowValidationError
 from .models import AlphaWorkflowEvent, AlphaWorkflowRun, AlphaWorkflowScenario
 from .planner import build_alpha_workflow_plan
 from .registry import ensure_default_scenarios, scenario_to_dict
@@ -41,6 +42,27 @@ from .registry import ensure_default_scenarios, scenario_to_dict
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_ALPHA_WORKFLOW_REQUIRED_UNIQUE_CONSTRAINTS = {
+    "uq_alpha_workflow_runs_root_span_id",
+    "uq_alpha_workflow_runs_workflow_id",
+    "uq_alpha_workflow_runs_orchestrator_run_id",
+    "uq_alpha_workflow_runs_research_report_id",
+    "uq_alpha_workflow_runs_skill_invocation_id",
+}
+
+
+def _alpha_workflow_conflict_message(exc: IntegrityError) -> str | None:
+    constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+    if constraint_name in _ALPHA_WORKFLOW_REQUIRED_UNIQUE_CONSTRAINTS:
+        return "Alpha Workflow 已存在相同的唯一标识记录"
+    message = str(exc.orig) if getattr(exc, "orig", None) is not None else str(exc)
+    if "alpha_workflow_runs" in message:
+        for name in _ALPHA_WORKFLOW_REQUIRED_UNIQUE_CONSTRAINTS:
+            if name in message:
+                return "Alpha Workflow 已存在相同的唯一标识记录"
+    return None
 
 
 def ensure_tiancai_employee(db: Session) -> AiEmployee:
@@ -317,7 +339,14 @@ def start_alpha_workflow(
         started_at=_utc_now(),
     )
     db.add(run)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        conflict_message = _alpha_workflow_conflict_message(exc)
+        if conflict_message:
+            raise AlphaWorkflowConflictError(conflict_message) from exc
+        raise
     db.refresh(run)
     context = AlphaWorkflowContext(
         workflow_id=run.workflow_id or f"alpha-{trace_id}",
@@ -643,6 +672,25 @@ def start_alpha_workflow(
         db.refresh(task)
         db.refresh(result_row)
         return _run_to_dict(db, run)
+    except IntegrityError as exc:
+        db.rollback()
+        conflict_message = _alpha_workflow_conflict_message(exc)
+        if conflict_message:
+            run = db.get(AlphaWorkflowRun, run.run_id) or run
+            run.status = "已失败"
+            run.failure_reason = conflict_message
+            run.recovery_status = "待恢复"
+            run.finished_at = _utc_now()
+            run.updated_at = _utc_now()
+            if context:
+                context.status = "已失败"
+                context.dashboard_status = "失败"
+                context.set_stage("workflow", "失败", message=conflict_message, metadata={"error": conflict_message})
+                run.workflow_context_json = context.model_dump_json()
+            db.commit()
+            db.refresh(run)
+            raise AlphaWorkflowConflictError(conflict_message) from exc
+        raise
     except Exception as exc:
         run = db.get(AlphaWorkflowRun, run.run_id) or run
         run.status = "已失败"
