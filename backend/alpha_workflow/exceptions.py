@@ -15,3 +15,7 @@ class AlphaWorkflowValidationError(AlphaWorkflowError):
 
 class AlphaWorkflowDependencyError(AlphaWorkflowError):
     pass
+
+
+class AlphaWorkflowConflictError(AlphaWorkflowError):
+    pass

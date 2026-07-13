@@ -273,7 +273,7 @@ def upgrade():
         sa.Column("duration_seconds", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("severity", sa.String(length=20), nullable=False),
         sa.Column("action", sa.String(length=80), nullable=False),
-        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("environment", sa.String(length=40), nullable=False, server_default=sa.text("'test'")),
         sa.Column("created_by", sa.Integer(), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
@@ -327,7 +327,7 @@ def upgrade():
         sa.Column("risk_score", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("triggered_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("reset_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("manual_reset_required", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("manual_reset_required", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("trace_id", sa.String(length=120), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
@@ -357,7 +357,7 @@ def upgrade():
         sa.Column("step_count", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("goal", sa.Text(), nullable=True),
         sa.Column("summary_json", sa.Text(), nullable=True),
-        sa.Column("available", sa.Boolean(), nullable=False, server_default=sa.true()),
+        sa.Column("available", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("trace_id", sa.String(length=120), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
@@ -458,3 +458,4 @@ def downgrade():
         "device_runtime_metrics",
     ]:
         op.drop_table(table)
+

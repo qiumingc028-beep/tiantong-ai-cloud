@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from uuid import uuid4
 
 from .source_ranker import RankedSource
 from .verifier import VerifiedClaim
+from .identity import stable_research_id
 
 
 def build_report(
@@ -25,14 +25,28 @@ def build_report(
     source_rows = []
     evidence_rows = []
     reliability = {}
+    id_maps: dict[str, dict[str, str]] = {
+        "query_id_map": {},
+        "source_id_map": {},
+        "claim_id_map": {},
+        "evidence_id_map": {},
+    }
     structured_data = {
         "research_topic": topic,
         "research_goal": goal,
         "queries": queries,
         "source_count": len(sources),
     }
+    for query_index, query_text in enumerate(queries, start=1):
+        id_maps["query_id_map"][query_text] = stable_research_id(trace_id, "query", query_index, query_text)
+    claim_rows = []
+    for claim_index, claim in enumerate(claims, start=1):
+        claim_id = stable_research_id(trace_id, "claim", claim_index, claim.claim_text)
+        id_maps["claim_id_map"][f"{claim_index}:{claim.claim_text}"] = claim_id
+        claim_rows.append({"claim_id": claim_id, "claim_text": claim.claim_text, "validation_status": claim.validation_status})
     for ranked in sources:
-        source_id = str(uuid4())
+        source_id = stable_research_id(trace_id, "source", ranked.result.url, ranked.result.title, ranked.result.search_rank)
+        id_maps["source_id_map"][ranked.result.url] = source_id
         source_row = {
             "source_id": source_id,
             "title": ranked.result.title,
@@ -53,11 +67,14 @@ def build_report(
             "confidence_score": ranked.confidence_score,
             "reason": ranked.confidence_reason,
         }
+        claim_id = claim_rows[0]["claim_id"] if claim_rows else None
+        evidence_id = stable_research_id(trace_id, "evidence", source_id, ranked.result.url, ranked.result.title)
+        id_maps["evidence_id_map"][ranked.result.url] = evidence_id
         evidence_rows.append(
             {
-                "evidence_id": str(uuid4()),
+                "evidence_id": evidence_id,
                 "source_id": source_id,
-                "claim_id": None,
+                "claim_id": claim_id,
                 "raw_url": ranked.result.url,
                 "redacted_url": ranked.result.url,
                 "page_title": ranked.result.title,
@@ -92,6 +109,7 @@ def build_report(
         "research_summary": f"已完成 {len(queries)} 个查询、{len(sources)} 个候选来源筛选与证据链生成。",
         "core_conclusions": conclusion_texts,
         "structured_data": structured_data,
+        "identity_maps": id_maps,
         "sources": source_rows,
         "evidence": evidence_rows,
         "source_reliability": reliability,

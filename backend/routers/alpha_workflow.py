@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..alpha_workflow.exceptions import AlphaWorkflowDependencyError, AlphaWorkflowNotFoundError, AlphaWorkflowValidationError
+from ..alpha_workflow.exceptions import AlphaWorkflowConflictError, AlphaWorkflowDependencyError, AlphaWorkflowNotFoundError, AlphaWorkflowValidationError
 from ..alpha_workflow.permissions import require_alpha_workflow_dashboard_enabled, require_alpha_workflow_enabled, require_alpha_workflow_user
 from ..alpha_workflow.schemas import AlphaWorkflowRecoverRequest, AlphaWorkflowScenarioCreate, AlphaWorkflowStartRequest
 from ..alpha_workflow.service import (
@@ -131,6 +131,8 @@ def api_run_demo(payload: AlphaWorkflowStartRequest, request: Request, db: Sessi
             scenario_code=payload.scenario_code,
             orchestrator_plan=orchestrator_plan,
         )
+    except AlphaWorkflowConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (AlphaWorkflowDependencyError, AlphaWorkflowValidationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "run": run}

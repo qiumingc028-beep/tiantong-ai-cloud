@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..agent_runtime.audit import write_audit_event
@@ -33,7 +34,7 @@ from .constants import (
     DEFAULT_ALPHA_WORKFLOW_TARGET_EMPLOYEE,
 )
 from .context import AlphaWorkflowContext, AlphaWorkflowPlan, AlphaWorkflowTraceSpan
-from .exceptions import AlphaWorkflowDependencyError, AlphaWorkflowNotFoundError, AlphaWorkflowValidationError
+from .exceptions import AlphaWorkflowConflictError, AlphaWorkflowDependencyError, AlphaWorkflowNotFoundError, AlphaWorkflowValidationError
 from .models import AlphaWorkflowEvent, AlphaWorkflowRun, AlphaWorkflowScenario
 from .planner import build_alpha_workflow_plan
 from .registry import ensure_default_scenarios, scenario_to_dict
@@ -41,6 +42,64 @@ from .registry import ensure_default_scenarios, scenario_to_dict
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_ALPHA_WORKFLOW_REQUIRED_UNIQUE_CONSTRAINTS = {
+    "uq_alpha_workflow_runs_root_span_id",
+    "uq_alpha_workflow_runs_workflow_id",
+    "uq_alpha_workflow_runs_orchestrator_run_id",
+    "uq_alpha_workflow_runs_research_report_id",
+    "uq_alpha_workflow_runs_skill_invocation_id",
+}
+
+
+def _alpha_workflow_conflict_message(exc: IntegrityError) -> str | None:
+    constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+    if constraint_name in _ALPHA_WORKFLOW_REQUIRED_UNIQUE_CONSTRAINTS:
+        return "Alpha Workflow 已存在相同的唯一标识记录"
+    message = str(exc.orig) if getattr(exc, "orig", None) is not None else str(exc)
+    if "alpha_workflow_runs" in message:
+        for name in _ALPHA_WORKFLOW_REQUIRED_UNIQUE_CONSTRAINTS:
+            if name in message:
+                return "Alpha Workflow 已存在相同的唯一标识记录"
+    return None
+
+
+def _resolve_alpha_workflow_run_by_identities(
+    db: Session,
+    *,
+    trace_id: str | None,
+    workflow_id: str | None,
+    root_span_id: str | None,
+    orchestrator_run_id: str | None,
+) -> tuple[AlphaWorkflowRun | None, bool]:
+    provided_identities = {
+        "trace_id": trace_id,
+        "workflow_id": workflow_id,
+        "root_span_id": root_span_id,
+        "orchestrator_run_id": orchestrator_run_id,
+    }
+    runs_by_id: dict[str, AlphaWorkflowRun] = {}
+    for field_name, value in {
+        field_name: value for field_name, value in provided_identities.items() if value
+    }.items():
+        if not value:
+            continue
+        run = db.query(AlphaWorkflowRun).filter(getattr(AlphaWorkflowRun, field_name) == value).one_or_none()
+        if run:
+            runs_by_id[run.run_id] = run
+    if not runs_by_id:
+        return None, False
+    if len(runs_by_id) == 1:
+        resolved_run = next(iter(runs_by_id.values()))
+        for field_name, value in provided_identities.items():
+            if not value:
+                continue
+            run = db.query(AlphaWorkflowRun).filter(getattr(AlphaWorkflowRun, field_name) == value).one_or_none()
+            if run is None or run.run_id != resolved_run.run_id:
+                return None, True
+        return resolved_run, False
+    return None, True
 
 
 def ensure_tiancai_employee(db: Session) -> AiEmployee:
@@ -293,16 +352,26 @@ def start_alpha_workflow(
         raise AlphaWorkflowValidationError("场景已停用")
 
     trace_id = trace_id or str(orchestrator_plan["graph_id"])
-    existing_run = db.query(AlphaWorkflowRun).filter(AlphaWorkflowRun.trace_id == trace_id).one_or_none()
-    if existing_run:
+    workflow_id = f"alpha-{trace_id}"
+    root_span_id = f"{trace_id}:root"
+    existing_run, existing_run_conflict = _resolve_alpha_workflow_run_by_identities(
+        db,
+        trace_id=trace_id,
+        workflow_id=workflow_id,
+        root_span_id=root_span_id,
+        orchestrator_run_id=orchestrator_plan["graph_id"],
+    )
+    if existing_run and not existing_run_conflict:
         return _run_to_dict(db, existing_run, include_events=True)
+    if existing_run_conflict:
+        raise AlphaWorkflowConflictError("Alpha Workflow 已存在相同的唯一标识记录")
     plan = build_alpha_workflow_plan(input_text, scenario_code=scenario.scenario_code, trace_id=trace_id)
-    plan.root_span_id = f"{trace_id}:root"
+    plan.root_span_id = root_span_id
     employee = ensure_tiancai_employee(db)
     run = AlphaWorkflowRun(
         run_id=str(uuid4()),
         scenario_id=scenario.scenario_id,
-        workflow_id=f"alpha-{trace_id}",
+        workflow_id=workflow_id,
         tenant_id="tiantong",
         user_id=user.id,
         task_id=None,
@@ -317,7 +386,25 @@ def start_alpha_workflow(
         started_at=_utc_now(),
     )
     db.add(run)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        existing_run, existing_run_conflict = _resolve_alpha_workflow_run_by_identities(
+            db,
+            trace_id=trace_id,
+            workflow_id=workflow_id,
+            root_span_id=root_span_id,
+            orchestrator_run_id=orchestrator_plan["graph_id"],
+        )
+        if existing_run and not existing_run_conflict:
+            return _run_to_dict(db, existing_run, include_events=True)
+        if existing_run_conflict:
+            raise AlphaWorkflowConflictError("Alpha Workflow 已存在相同的唯一标识记录") from exc
+        conflict_message = _alpha_workflow_conflict_message(exc)
+        if conflict_message:
+            raise AlphaWorkflowConflictError(conflict_message) from exc
+        raise
     db.refresh(run)
     context = AlphaWorkflowContext(
         workflow_id=run.workflow_id or f"alpha-{trace_id}",
@@ -643,6 +730,23 @@ def start_alpha_workflow(
         db.refresh(task)
         db.refresh(result_row)
         return _run_to_dict(db, run)
+    except IntegrityError as exc:
+        db.rollback()
+        existing_run, existing_run_conflict = _resolve_alpha_workflow_run_by_identities(
+            db,
+            trace_id=trace_id,
+            workflow_id=workflow_id,
+            root_span_id=root_span_id,
+            orchestrator_run_id=orchestrator_plan["graph_id"],
+        )
+        if existing_run and not existing_run_conflict:
+            return _run_to_dict(db, existing_run, include_events=True)
+        if existing_run_conflict:
+            raise AlphaWorkflowConflictError("Alpha Workflow 已存在相同的唯一标识记录") from exc
+        conflict_message = _alpha_workflow_conflict_message(exc)
+        if conflict_message:
+            raise AlphaWorkflowConflictError(conflict_message) from exc
+        raise
     except Exception as exc:
         run = db.get(AlphaWorkflowRun, run.run_id) or run
         run.status = "已失败"
