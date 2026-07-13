@@ -25,6 +25,7 @@ from .executor_types import ExecutorContext
 from .models import AgentCapability, AgentExecution, AgentExecutionAudit
 from .permission import ensure_agent_runtime_enabled, evaluate_permission
 from .registry import capability_to_dict, list_capabilities as registry_list_capabilities, resolve_capability
+from ..research_runtime.exceptions import ResearchPersistenceError
 from ..research_runtime.service import persist_research_result
 
 
@@ -451,7 +452,26 @@ def run_execution_flow(
             note = f"[V2 Agent Runtime] {capability.capability_name}: {json.dumps(result.output, ensure_ascii=False)}"
             task.summary = ((task.summary or "") + ("\n" if task.summary else "") + note).strip()
         if capability.capability_id == "research.public.multi_source":
-            persist_research_result(db, execution, context.input_payload, result.output)
+            try:
+                persist_research_result(db, execution, context.input_payload, result.output)
+            except Exception as exc:
+                execution.status = "failed"
+                execution.error_code = "RESEARCH_PERSISTENCE_FAILED"
+                execution.error_message = "研究结果保存失败，任务已进入可恢复状态。"
+                execution.finished_at = execution.finished_at or now_utc()
+                execution.duration_ms = execution.duration_ms or max(1, int((execution.finished_at - (execution.started_at or execution.finished_at)).total_seconds() * 1000))
+                write_audit_event(
+                    db,
+                    execution,
+                    event_type="execution_failed",
+                    actor_type="executor",
+                    actor_id=executor.get_metadata().get("name", "MockExecutor"),
+                    approval_status=execution.approval_status,
+                    risk_level=execution.risk_level,
+                    error_summary="研究结果保存失败，任务已进入可恢复状态。",
+                    executor_name=executor.get_metadata().get("name", "MockExecutor"),
+                )
+                raise ResearchPersistenceError("研究结果保存失败，任务已进入可恢复状态。") from exc
     elif result.error_code == "MOCK_TIMEOUT":
         execution.status = "timeout"
         write_audit_event(

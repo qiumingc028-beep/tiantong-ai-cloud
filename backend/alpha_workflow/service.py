@@ -17,6 +17,7 @@ from ..knowledge_center.models import KnowledgeChunk
 from ..knowledge_center.service import record_use, submit_research_report
 from ..models import AiEmployee, TaskCenterResult, TaskCenterTask, User
 from ..research_runtime.executor import execute_research_workflow
+from ..research_runtime.exceptions import ResearchPersistenceError
 from ..research_runtime.models import ResearchExecution
 from ..research_runtime.service import persist_research_result
 from ..skills_engine.models import Skill, SkillInstallation, SkillInvocation
@@ -51,6 +52,12 @@ _ALPHA_WORKFLOW_REQUIRED_UNIQUE_CONSTRAINTS = {
     "uq_alpha_workflow_runs_research_report_id",
     "uq_alpha_workflow_runs_skill_invocation_id",
 }
+_ALPHA_WORKFLOW_IDEMPOTENCY_CONSTRAINTS = {
+    "uq_alpha_workflow_runs_trace_id",
+    "uq_alpha_workflow_runs_workflow_id",
+    "uq_alpha_workflow_runs_root_span_id",
+    "uq_alpha_workflow_runs_orchestrator_run_id",
+}
 
 
 def _alpha_workflow_conflict_message(exc: IntegrityError) -> str | None:
@@ -63,6 +70,79 @@ def _alpha_workflow_conflict_message(exc: IntegrityError) -> str | None:
             if name in message:
                 return "Alpha Workflow 已存在相同的唯一标识记录"
     return None
+
+
+def _alpha_workflow_constraint_name(exc: IntegrityError) -> str | None:
+    constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+    if constraint_name:
+        return constraint_name
+    message = str(exc.orig) if getattr(exc, "orig", None) is not None else str(exc)
+    for name in _ALPHA_WORKFLOW_REQUIRED_UNIQUE_CONSTRAINTS | {"uq_alpha_workflow_runs_trace_id"}:
+        if name in message:
+            return name
+    return None
+
+
+def _alpha_workflow_failure_message(exc: Exception) -> str:
+    if isinstance(exc, ResearchPersistenceError):
+        return "研究结果保存失败，任务已进入可恢复状态。"
+    if isinstance(exc, IntegrityError):
+        return "Alpha Workflow 数据一致性校验失败，任务已进入可恢复状态。"
+    return "Alpha Workflow 执行失败，任务已进入可恢复状态。"
+
+
+def _compensate_alpha_workflow_failure(
+    db: Session,
+    *,
+    run_id: str,
+    task_id: int | None,
+    agent_execution_id: str | None,
+    user: User,
+    reason: str,
+    context: AlphaWorkflowContext | None = None,
+) -> AlphaWorkflowRun | None:
+    db.rollback()
+    run = db.get(AlphaWorkflowRun, run_id)
+    task = db.get(TaskCenterTask, task_id) if task_id else None
+    agent_execution = db.get(AgentExecution, agent_execution_id) if agent_execution_id else None
+    if agent_execution:
+        agent_execution.status = "failed"
+        agent_execution.error_code = agent_execution.error_code or "ALPHA_WORKFLOW_PERSISTENCE_FAILED"
+        agent_execution.error_message = reason
+        agent_execution.finished_at = agent_execution.finished_at or _utc_now()
+        agent_execution.updated_at = _utc_now()
+    if run:
+        run.status = "已失败"
+        run.failure_reason = reason
+        run.recovery_status = "待恢复"
+        run.finished_at = run.finished_at or _utc_now()
+        run.updated_at = _utc_now()
+        if context:
+            context.status = "已失败"
+            context.dashboard_status = "失败"
+            context.set_stage("workflow", "失败", message=reason, metadata={"error": reason})
+            run.workflow_context_json = context.model_dump_json()
+        append_event(
+            db,
+            run,
+            event_code="workflow_failed",
+            stage="workflow",
+            status="失败",
+            message=reason,
+            payload={"reason": reason},
+            parent_span_id=run.root_span_id,
+        )
+    if task:
+        set_task_status(db, task, "rejected", user, "alpha_workflow_failed", reason)
+        write_audit_log(db, task, user, "alpha_workflow_failed", "running", "rejected", reason)
+    db.commit()
+    if run:
+        db.refresh(run)
+    if task:
+        db.refresh(task)
+    if agent_execution:
+        db.refresh(agent_execution)
+    return run
 
 
 def _resolve_alpha_workflow_run_by_identities(
@@ -444,6 +524,7 @@ def start_alpha_workflow(
         linked_ids={"orchestrator_run_id": orchestrator_plan["graph_id"]},
     )
     task: TaskCenterTask | None = None
+    agent_execution: AgentExecution | None = None
     result_row: TaskCenterResult | None = None
     try:
         append_event(
@@ -732,6 +813,7 @@ def start_alpha_workflow(
         return _run_to_dict(db, run)
     except IntegrityError as exc:
         db.rollback()
+        constraint_name = _alpha_workflow_constraint_name(exc)
         existing_run, existing_run_conflict = _resolve_alpha_workflow_run_by_identities(
             db,
             trace_id=trace_id,
@@ -739,35 +821,42 @@ def start_alpha_workflow(
             root_span_id=root_span_id,
             orchestrator_run_id=orchestrator_plan["graph_id"],
         )
-        if existing_run and not existing_run_conflict:
+        if existing_run and not existing_run_conflict and constraint_name in _ALPHA_WORKFLOW_IDEMPOTENCY_CONSTRAINTS:
             return _run_to_dict(db, existing_run, include_events=True)
+        failure_reason = _alpha_workflow_failure_message(exc)
+        compensated_run = _compensate_alpha_workflow_failure(
+            db,
+            run_id=run.run_id,
+            task_id=task.id if task else None,
+            agent_execution_id=agent_execution.execution_id if agent_execution else None,
+            user=user,
+            reason=failure_reason,
+            context=context,
+        )
+        if constraint_name in {"uq_alpha_workflow_runs_research_report_id", "uq_alpha_workflow_runs_skill_invocation_id"}:
+            raise AlphaWorkflowConflictError("Alpha Workflow 已存在相同的唯一标识记录") from exc
         if existing_run_conflict:
             raise AlphaWorkflowConflictError("Alpha Workflow 已存在相同的唯一标识记录") from exc
         conflict_message = _alpha_workflow_conflict_message(exc)
         if conflict_message:
             raise AlphaWorkflowConflictError(conflict_message) from exc
-        raise
+        if compensated_run is None:
+            raise AlphaWorkflowValidationError(failure_reason) from exc
+        raise AlphaWorkflowValidationError(failure_reason) from exc
     except Exception as exc:
-        run = db.get(AlphaWorkflowRun, run.run_id) or run
-        run.status = "已失败"
-        run.failure_reason = str(exc)
-        run.recovery_status = "待恢复"
-        run.finished_at = _utc_now()
-        run.updated_at = _utc_now()
-        if context:
-            context.status = "已失败"
-            context.dashboard_status = "失败"
-            context.set_stage("workflow", "失败", message=str(exc), metadata={"error": str(exc)})
-            run.workflow_context_json = context.model_dump_json()
-        append_event(db, run, event_code="workflow_failed", stage="workflow", status="失败", message=str(exc), payload={"error": str(exc)}, parent_span_id=run.root_span_id)
-        if task is not None:
-            set_task_status(db, task, "rejected", user, "alpha_workflow_failed", str(exc))
-            write_audit_log(db, task, user, "alpha_workflow_failed", "running", "rejected", str(exc))
-        db.commit()
-        db.refresh(run)
-        if task is not None:
-            db.refresh(task)
-        return _run_to_dict(db, run)
+        failure_reason = _alpha_workflow_failure_message(exc)
+        compensated_run = _compensate_alpha_workflow_failure(
+            db,
+            run_id=run.run_id,
+            task_id=task.id if task else None,
+            agent_execution_id=agent_execution.execution_id if agent_execution else None,
+            user=user,
+            reason=failure_reason,
+            context=context,
+        )
+        if compensated_run is None:
+            return {"status": "已失败", "failure_reason": failure_reason}
+        return _run_to_dict(db, compensated_run)
 
 
 def recover_alpha_workflow(db: Session, *, user: User, run_id: str, reason: str | None = None) -> dict[str, object]:

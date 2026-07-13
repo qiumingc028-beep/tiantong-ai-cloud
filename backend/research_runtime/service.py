@@ -38,7 +38,7 @@ def _build_identity_maps(execution_id: str, plan, output_payload: dict[str, obje
     source_rows = list(output_payload.get("sources") or [])
     evidence_rows = list(output_payload.get("evidence") or [])
     claims = list(output_payload.get("core_conclusions") or [])
-    query_id_map = {query_text: stable_research_id(execution_id, "query", index, query_text) for index, query_text in enumerate(queries, start=1)}
+    query_id_map = {f"{index}:{query_text}": stable_research_id(execution_id, "query", index, query_text) for index, query_text in enumerate(queries, start=1)}
     source_id_map: dict[str, str] = {}
     claim_id_map: dict[str, str] = {}
     evidence_id_map: dict[str, str] = {}
@@ -47,11 +47,11 @@ def _build_identity_maps(execution_id: str, plan, output_payload: dict[str, obje
         title = str(row.get("title") or "")
         source_id_map[url] = stable_research_id(execution_id, "source", url, title, index)
     for index, claim_text in enumerate(claims, start=1):
-        claim_id_map[claim_text] = stable_research_id(execution_id, "claim", index, claim_text)
+        claim_id_map[f"{index}:{claim_text}"] = stable_research_id(execution_id, "claim", index, claim_text)
     for index, row in enumerate(evidence_rows, start=1):
         raw_url = str(row.get("raw_url") or row.get("redacted_url") or "")
-        source_id = str(row.get("source_id") or source_id_map.get(raw_url) or stable_research_id(execution_id, "source", raw_url, raw_url, index))
-        evidence_id_map[raw_url or f"evidence-{index}"] = stable_research_id(execution_id, "evidence", source_id, raw_url, index)
+        source_id = source_id_map.get(raw_url) or stable_research_id(execution_id, "source", raw_url, raw_url, index)
+        evidence_id_map[raw_url] = stable_research_id(execution_id, "evidence", source_id, raw_url, index)
     return {
         "query_id_map": query_id_map,
         "source_id_map": source_id_map,
@@ -123,7 +123,8 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
 
     queries = list(plan.queries[: plan.max_queries])
     for index, query_text in enumerate(queries, start=1):
-        query_id = identity_maps["query_id_map"][query_text]
+        query_key = f"{index}:{query_text}"
+        query_id = identity_maps["query_id_map"].get(query_key) or stable_research_id(execution.execution_id, "query", index, query_text)
         query_row = _upsert_row(
             db,
             ResearchQuery,
@@ -165,7 +166,7 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
         )
         classified = classify_source(tmp_source)
         ranked = score_source(tmp_source, classified)
-        source_id = identity_maps["source_id_map"].get(url) or str(row.get("source_id") or stable_research_id(execution.execution_id, "source", url, row.get("title") or "", idx))
+        source_id = identity_maps["source_id_map"].get(url) or stable_research_id(execution.execution_id, "source", url, row.get("title") or "", idx)
         source_row = _upsert_row(
             db,
             ResearchSource,
@@ -194,10 +195,12 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
             },
         )
         source_row.execution_id = execution.execution_id
+    db.flush()
 
     claims = output_payload.get("core_conclusions") or []
     for idx, claim_text in enumerate(claims, start=1):
-        claim_id = identity_maps["claim_id_map"].get(str(claim_text)) or stable_research_id(execution.execution_id, "claim", idx, claim_text)
+        claim_key = f"{idx}:{claim_text}"
+        claim_id = identity_maps["claim_id_map"].get(claim_key) or stable_research_id(execution.execution_id, "claim", idx, claim_text)
         claim_row = _upsert_row(
             db,
             ResearchClaim,
@@ -211,20 +214,37 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
                 "confidence_score": 80 if len(source_rows) >= plan.min_sources else 45,
                 "support_source_count": len(source_rows),
                 "conflict_source_count": len(output_payload.get("conflicts") or []),
-                "support_source_ids_json": json.dumps([identity_maps["source_id_map"].get(str(row.get("url") or row.get("source_url") or "")) or str(row.get("source_id") or row.get("url")) for row in source_rows], ensure_ascii=False),
+                "support_source_ids_json": json.dumps(
+                    [
+                        identity_maps["source_id_map"].get(
+                            str(row.get("url") or row.get("source_url") or "")
+                        )
+                        or stable_research_id(
+                            execution.execution_id,
+                            "source",
+                            str(row.get("url") or row.get("source_url") or ""),
+                            str(row.get("title") or ""),
+                            idx,
+                        )
+                        for idx, row in enumerate(source_rows, start=1)
+                    ],
+                    ensure_ascii=False,
+                ),
                 "conflict_source_ids_json": json.dumps([], ensure_ascii=False),
                 "evidence_count": len(source_rows),
             },
         )
         claim_row.execution_id = execution.execution_id
+    db.flush()
 
     evidence_rows = output_payload.get("evidence") or []
     for idx, row in enumerate(evidence_rows, start=1):
         raw_url = str(row.get("raw_url") or row.get("redacted_url") or "")
-        source_id = str(row.get("source_id") or identity_maps["source_id_map"].get(raw_url) or stable_research_id(execution.execution_id, "source", raw_url, row.get("page_title") or "", idx))
-        evidence_id = str(row.get("evidence_id") or identity_maps["evidence_id_map"].get(raw_url) or stable_research_id(execution.execution_id, "evidence", source_id, raw_url, idx))
+        source_key = f"{idx}:{raw_url}"
+        source_id = identity_maps["source_id_map"].get(source_key) or stable_research_id(execution.execution_id, "source", raw_url, row.get("page_title") or "", idx)
+        evidence_id = identity_maps["evidence_id_map"].get(raw_url) or stable_research_id(execution.execution_id, "evidence", source_id, raw_url, idx)
         claim_text = str(claims[0]) if claims else ""
-        claim_id = identity_maps["claim_id_map"].get(claim_text) if claim_text else None
+        claim_id = identity_maps["claim_id_map"].get(f"1:{claim_text}") if claim_text else None
         evidence_row = _upsert_row(
             db,
             ResearchEvidence,
@@ -249,6 +269,7 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
             },
         )
         evidence_row.execution_id = execution.execution_id
+    db.flush()
 
     task = db.get(TaskCenterTask, execution.task_id) if execution.task_id else None
     if task and output_payload.get("report_content"):

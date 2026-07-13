@@ -16,3 +16,7 @@ class SearchProviderUnavailable(ResearchError):
 
 class ResearchCancelled(ResearchError):
     pass
+
+
+class ResearchPersistenceError(ResearchError):
+    pass
