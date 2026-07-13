@@ -291,3 +291,13 @@ Evidence Gate最终Revision已从过期的0041校正为 `0042_v2_alpha_workflow_
 已删除“Path B必须等于validated code与develop-v2真实merge-base”的错误断言。旧merge-base `2ca1a2579569324ce3ca82f68332fb7f96be004d`不得作为Path B起点，仅允许以`KNOWN_BROKEN_HISTORICAL_BASELINE`分类出现。代码冻结Commit明确为 `8d9b5f2890545f1f08d05b9b1618f71ff82d6621`。
 
 合同校正后旧证据执行结果为 **5 passed, 9 failed**。失败仅来自证据内容缺失或过期：Path A/B缺结构化字段及RAW OUTPUT、证据仍未统一到0042、Manifest字段缺失、Checksum不匹配、0037双文档披露不完整。不存在“最终必须0041”或“Path B必须真实merge-base”的合同失败。保留仓库相对Checksum、精确Required Files、evidence-only diff、V1字节冻结、无SQLite/skip/xfail等严格门禁。
+
+## 8fa62ee9 Evidence Bundle 最终验收
+
+测试分支已普通Merge正式Evidence Bundle `8fa62ee9c8974d939828fc380b225f704cd070ad`；PR #19同步Merge Commit为 `a37af74f6a41d23401914e7a66b2be1c15f6abb1`。`8d9b5f2890545f1f08d05b9b1618f71ff82d6621..8fa62ee9c8974d939828fc380b225f704cd070ad` 的差异严格等于任务指定的七个Evidence文件，无Backend、Frontend、Alembic、Contract、脚本或生产配置变化。
+
+Migration Evidence Gate最终结果为 **14 passed, 0 failed**。Path A、Path B结构化字段与RAW OUTPUT完整；两套PostgreSQL数据库标识独立；共同验证代码冻结Commit `8d9b5f28`；最终Revision均为 `0042_v2_alpha_workflow_unique_constraints`。
+
+独立复核结果：`checksums.sha256` 六个仓库相对目标全部重算成功，覆盖集合与Required Files精确一致且不包含自身；0037双文档八字段逐行一致；Secret Scan通过；正式证据未发现SQLite替代、Drift跳过变量、skip或xfail；Evidence-only Diff通过。代码门既有结果 **23/23 PostgreSQL专项、892 passed/0 failed完整回归**继续有效，本轮未重复运行代码回归，也未修改业务代码。
+
+Migration Evidence阻塞已关闭，最终建议为 `RECOMMEND_APPROVE`。PR #19可由Draft转为Ready for Review；③不执行合并。

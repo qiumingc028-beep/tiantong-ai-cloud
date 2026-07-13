@@ -1,5 +1,7 @@
 {
   "evaluated_feature_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+  "evidence_bundle_commit": "8fa62ee9c8974d939828fc380b225f704cd070ad",
+  "sync_merge_commit": "a37af74f6a41d23401914e7a66b2be1c15f6abb1",
   "gate_contract": {
     "final_revision": "0042_v2_alpha_workflow_unique_constraints",
     "path_a_start_commit": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
@@ -10,7 +12,10 @@
     "old_merge_base_required": false,
     "result": "ALIGNED"
   },
-  "gate_tests": {"passed": 5, "failed": 9},
+  "gate_tests": {
+    "passed": 14,
+    "failed": 0
+  },
   "required_files": {
     "path_a_current.log": true,
     "path_b_current.log": true,
@@ -18,49 +23,59 @@
     "checksums.sha256": true,
     "docs/V2_ALPHA_MIGRATION_EVIDENCE.md": true,
     "docs/V2_MIGRATION_FREEZE_POLICY.md": true,
-    "validation-manifest.json": true
+    "validation-manifest.json": true,
+    "exact_set": true
   },
   "final_revision": "0042_v2_alpha_workflow_unique_constraints",
   "path_a": {
-    "complete": false,
-    "structured_format": false,
-    "start_commit_claim": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
-    "required_frozen_start_commit": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
-    "start_revision_claim": "0027_v1_schema_alignment",
-    "start_authentic": false,
-    "reason": "evidence content is outdated: missing required structured fields/RAW OUTPUT"
+    "complete": true,
+    "structured_format": true,
+    "database_id": "alpha_evidence_a",
+    "database_engine": "PostgreSQL",
+    "postgresql_version": "16.14 (Debian 16.14-1.pgdg13+1)",
+    "start_commit": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
+    "start_revision": "0027_v1_schema_alignment",
+    "validated_code_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+    "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+    "result": "PASS"
   },
   "path_b": {
-    "complete": false,
-    "structured_format": false,
-    "start_commit_claim": "cc8c77914dbc79a6821d8781f626b77a003b4f7f",
-    "required_frozen_start_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
-    "required_frozen_start_revision": "0041_v2_alpha_migration_history_repair",
-    "known_broken_historical_baseline": "2ca1a2579569324ce3ca82f68332fb7f96be004d",
-    "start_revision_claim": "0037_v2_execution_observability_security_ops",
-    "start_authentic": false,
-    "reason": "evidence content is outdated: missing required structured fields/RAW OUTPUT and start commit/revision do not match the frozen runnable baseline"
+    "complete": true,
+    "structured_format": true,
+    "database_id": "alpha_evidence_b",
+    "database_engine": "PostgreSQL",
+    "postgresql_version": "16.14 (Debian 16.14-1.pgdg13+1)",
+    "start_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
+    "start_revision": "0041_v2_alpha_migration_history_repair",
+    "validated_code_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+    "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+    "result": "PASS"
   },
   "checksums": {
     "relative_paths": true,
-    "hashes_valid": false,
-    "mismatches": ["docs/V2_MIGRATION_FREEZE_POLICY.md"],
-    "required_set_exact": false,
-    "missing_required": ["artifacts/alpha-migration-evidence/validation-manifest.json"],
-    "unexpected_entries": "README and migration files outside the exact Required Files set"
+    "hashes_valid": true,
+    "required_set_exact": true,
+    "covered_files": 6,
+    "self_checksum_excluded": true,
+    "result": "PASS"
   },
   "manifest": {
-    "valid": false,
-    "missing_fields": [
-      "evidence_format_version", "validated_code_commit", "final_revision",
-      "checksum_algorithm", "required_files", "path_a", "path_b"
-    ]
+    "valid": true,
+    "result": "PASS"
   },
-  "migration_0037_disclosed": false,
-  "migration_0037_reason": "Freeze Policy lacks the full path and both documents lack the required consistent structured disclosure fields",
+  "migration_0037_disclosed": true,
+  "migration_0037_documents_match": true,
+  "evidence_only_diff": {
+    "from": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+    "to": "8fa62ee9c8974d939828fc380b225f704cd070ad",
+    "changed_files": 7,
+    "unexpected_files": [],
+    "result": "PASS"
+  },
   "v1_migrations_immutable": true,
   "migration_0005_valid": true,
   "skip_flags_found": [],
-  "secret_scan": "PASS_FOR_PRESENT_FILES",
-  "result": "BLOCK"
+  "sqlite_formal_evidence_found": false,
+  "secret_scan": "PASS",
+  "result": "PASS"
 }
