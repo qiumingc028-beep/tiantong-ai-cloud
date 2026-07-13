@@ -204,3 +204,11 @@ Freeze Policy缺少0037完整路径及八项结构化披露。Checksums虽已使
 实库新增0041遗留迁移场景，要求0042安全移除Knowledge同名唯一索引/约束、保留普通索引和数据并允许跨Run复用。downgrade场景要求不恢复Knowledge唯一性、不产生同名索引/约束冲突、五项Required保持文档语义且可再次upgrade。当前3406均未满足。
 
 API门禁确认相同幂等键返回同一Run通过；对五项Required分别注入另一Run冲突，要求统一映射中文409且不泄漏IntegrityError。当前五项均未捕获数据库IntegrityError，门禁失败。
+
+## Research 持久化与恢复完整性门禁
+
+新增4个定向用例（1个真实PostgreSQL持久化用例、3个API故障注入参数用例）。真实PostgreSQL 16.14执行结果为 `0 passed, 1 failed`：首次 `persist_research_result` 在插入Claim时因 `claim_id=<execution UUID>-c1` 超过 `varchar(36)` 失败，证明当前实现未满足Query/Source/Claim/Evidence稳定标准UUID门禁；后续ID、外键和重复持久化断言因首次事务失败而被阻断。
+
+Claim插入、Evidence插入、Research commit三类故障注入结果为 `0 passed, 3 failed`。三类Run均进入失败/待恢复状态，同trace重放返回同一 `run_id`，Run/Event数量未增加；但失败事务分别残留Query/Source/Claim/Evidence正式行和ResearchExecution虚假报告记录，且 `failure_reason` 直接暴露英文 `database ... failure`。因此半成品Run、正式数据原子性和中文错误脱敏门禁均为BLOCK。
+
+这些测试没有使用skip、xfail、字符串截断容错或弱化断言；③未修改业务实现。等待 `ALPHA_RESEARCH_FIX_COMMIT` 后再普通合并主功能分支并执行19项PostgreSQL专项，专项全绿前不运行完整863+回归。

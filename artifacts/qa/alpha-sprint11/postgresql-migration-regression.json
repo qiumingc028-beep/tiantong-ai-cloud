@@ -37,6 +37,19 @@
     "fresh_postgresql_upgrade_failed": false,
     "result": "STATIC_FALSE_POSITIVE_CLOSED"
   },
+  "research_persistence_gate": {
+    "postgresql_id_and_fk_test": "FAIL",
+    "observed_database_error": "ResearchClaim.claim_id exceeds varchar(36)",
+    "stable_id_replay": "BLOCKED_BY_INITIAL_INSERT_FAILURE",
+    "failure_injection": {
+      "claim_insert": "FAIL_FORMAL_ROWS_REMAIN_AND_ENGLISH_ERROR_LEAKS",
+      "evidence_insert": "FAIL_FORMAL_ROWS_REMAIN_AND_ENGLISH_ERROR_LEAKS",
+      "research_commit": "FAIL_FORMAL_ROWS_REMAIN_AND_ENGLISH_ERROR_LEAKS"
+    },
+    "same_trace_reuses_run": true,
+    "replay_run_and_event_counts_unchanged": true,
+    "pytest": {"passed": 0, "failed": 4}
+  },
   "pytest": {"passed": 3, "failed": 11},
   "result": "BLOCK"
 }

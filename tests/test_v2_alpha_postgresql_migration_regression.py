@@ -21,6 +21,8 @@ import pytest
 from psycopg2 import sql
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import create_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -467,3 +469,219 @@ def test_0005_complete_postgresql_chain_reaches_head(postgres_database_factory, 
     database_url = postgres_database_factory("full_0005_chain")
     alembic(ROOT, database_url, "upgrade", "head")
     assert FINAL_REVISION in alembic(ROOT, database_url, "current").stdout
+
+
+def make_agent_execution(db: Session):
+    from backend.agent_runtime.models import AgentCapability, AgentExecution
+
+    capability = AgentCapability(
+        capability_id=f"research-{uuid.uuid4()}",
+        capability_name="Research persistence regression",
+        capability_type="research",
+        executor_type="research",
+        risk_level="low",
+        enabled=True,
+        readonly=True,
+    )
+    execution = AgentExecution(
+        execution_id=str(uuid.uuid4()),
+        capability_id=capability.capability_id,
+        status="completed",
+        risk_level="low",
+        approval_status="not_required",
+        executor_type="research",
+        trace_id=f"research-trace-{uuid.uuid4()}",
+    )
+    db.add_all([capability, execution])
+    db.commit()
+    return execution
+
+
+def research_payload(execution_id: str):
+    source_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{execution_id}:source:1"))
+    evidence_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{execution_id}:evidence:1"))
+    input_payload = {
+        "topic": "Alpha Research持久化",
+        "goal": "验证稳定ID与外键",
+        "max_queries": 2,
+        "max_sources": 2,
+        "min_sources": 1,
+        "language": "zh-CN",
+        "allowed_domains": [],
+        "blocked_domains": [],
+        "cross_validate": True,
+        "report_format": "中文研究报告",
+    }
+    output_payload = {
+        "query_count": 1,
+        "source_count": 1,
+        "duplicate_count": 0,
+        "core_conclusions": ["持久化ID必须稳定"],
+        "conflicts": [],
+        "uncertainties": [],
+        "report_title": "Research持久化报告",
+        "report_content": "正式报告内容",
+        "report_hash": uuid.uuid4().hex,
+        "sources": [{
+            "source_id": source_id,
+            "url": "https://docs.python.org/3/",
+            "redacted_url": "https://docs.python.org/3/",
+            "title": "Python Docs",
+            "content_hash": uuid.uuid4().hex,
+            "is_primary": True,
+        }],
+        "evidence": [{
+            "evidence_id": evidence_id,
+            "source_id": source_id,
+            "raw_url": "https://docs.python.org/3/",
+            "redacted_url": "https://docs.python.org/3/",
+            "page_title": "Python Docs",
+            "evidence_content_hash": uuid.uuid4().hex,
+            "trace_id": f"research-trace-{execution_id}",
+        }],
+    }
+    return input_payload, output_payload
+
+
+def research_counts_and_ids(db: Session):
+    from backend.research_runtime.models import ResearchClaim, ResearchEvidence, ResearchQuery, ResearchSource
+
+    models = (ResearchQuery, ResearchSource, ResearchClaim, ResearchEvidence)
+    counts = tuple(db.query(model).count() for model in models)
+    ids = {
+        "query": tuple(row.query_id for row in db.query(ResearchQuery).order_by(ResearchQuery.query_id)),
+        "source": tuple(row.source_id for row in db.query(ResearchSource).order_by(ResearchSource.source_id)),
+        "claim": tuple(row.claim_id for row in db.query(ResearchClaim).order_by(ResearchClaim.claim_id)),
+        "evidence": tuple(row.evidence_id for row in db.query(ResearchEvidence).order_by(ResearchEvidence.evidence_id)),
+    }
+    return counts, ids
+
+
+def test_research_persistence_uses_stable_uuid_ids_and_real_foreign_keys(
+    postgres_database_factory, migration_fix_commit
+):
+    from backend.research_runtime.models import ResearchClaim, ResearchEvidence, ResearchSource
+    from backend.research_runtime.service import persist_research_result
+
+    del migration_fix_commit
+    database_url = postgres_database_factory("research_ids")
+    alembic(ROOT, database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        execution = make_agent_execution(db)
+        input_payload, output_payload = research_payload(execution.execution_id)
+        persist_research_result(db, execution, input_payload, output_payload)
+        before_counts, before_ids = research_counts_and_ids(db)
+        assert all(before_counts)
+        for values in before_ids.values():
+            for value in values:
+                assert len(value) <= 36
+                assert str(uuid.UUID(value)) == value.lower(), f"ID必须是完整标准UUID，禁止字符串截断：{value}"
+        for row in db.query(ResearchEvidence):
+            assert db.get(ResearchSource, row.source_id) is not None
+            assert row.claim_id is None or db.get(ResearchClaim, row.claim_id) is not None
+
+        persist_research_result(db, execution, input_payload, output_payload)
+        after_counts, after_ids = research_counts_and_ids(db)
+        assert after_counts == before_counts
+        assert after_ids == before_ids
+    engine.dispose()
+
+
+@pytest.mark.parametrize("failure_point", ["claim_insert", "evidence_insert", "research_commit"])
+def test_research_persistence_failures_leave_one_recoverable_run_without_false_formal_data(
+    client, boss_headers, alpha_enabled, test_db, monkeypatch, failure_point
+):
+    from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
+    from backend.research_runtime.models import ResearchClaim, ResearchEvidence, ResearchExecution, ResearchQuery, ResearchSource
+
+    original_add = Session.add
+    original_commit = Session.commit
+    fired = False
+
+    def guarded_add(session, instance, *args, **kwargs):
+        nonlocal fired
+        if not fired and ((failure_point == "claim_insert" and isinstance(instance, ResearchClaim)) or (failure_point == "evidence_insert" and isinstance(instance, ResearchEvidence))):
+            fired = True
+            raise RuntimeError("database persistence failure")
+        return original_add(session, instance, *args, **kwargs)
+
+    def guarded_commit(session, *args, **kwargs):
+        nonlocal fired
+        has_research = any(isinstance(row, ResearchExecution) for row in list(session.new) + list(session.identity_map.values()))
+        if not fired and failure_point == "research_commit" and has_research:
+            fired = True
+            raise RuntimeError("database research commit failure")
+        return original_commit(session, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "add", guarded_add)
+    monkeypatch.setattr(Session, "commit", guarded_commit)
+    with test_db() as db:
+        baseline_formal_counts, _ = research_counts_and_ids(db)
+        baseline_run_count = db.query(AlphaWorkflowRun).count()
+        baseline_event_count = db.query(AlphaWorkflowEvent).count()
+
+    trace_id = f"research-failure-{failure_point}-{uuid.uuid4()}"
+    first = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "Research持久化故障注入", "trace_id": trace_id},
+    )
+    assert first.status_code == 200
+    run = first.json()["run"]
+    violations = []
+    if run["status"] not in {"已失败", "失败"}:
+        violations.append(f"Run留下非明确失败状态：{run['status']}")
+    if run["recovery_status"] != "待恢复":
+        violations.append(f"Run未进入可恢复状态：{run['recovery_status']}")
+
+    with test_db() as db:
+        if db.query(AlphaWorkflowRun).filter(AlphaWorkflowRun.trace_id == trace_id).count() != 1:
+            violations.append("同一trace未严格保留一条Run")
+        formal_counts, _ = research_counts_and_ids(db)
+        if formal_counts != baseline_formal_counts:
+            violations.append(
+                f"故障后正式Research数据数量变化：baseline={baseline_formal_counts}, actual={formal_counts}"
+            )
+        if db.query(ResearchExecution).count() != 0:
+            violations.append("故障后产生虚假Research报告记录")
+        success_events = db.query(AlphaWorkflowEvent).filter(
+            AlphaWorkflowEvent.trace_id == trace_id,
+            AlphaWorkflowEvent.event_code.in_(["research_executed", "workflow_completed"]),
+        ).all()
+        if success_events:
+            violations.append(
+                "故障后产生虚假成功Event：" + ",".join(row.event_code for row in success_events)
+            )
+        run_count = db.query(AlphaWorkflowRun).count()
+        event_count = db.query(AlphaWorkflowEvent).count()
+
+    replay = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "Research持久化故障注入", "trace_id": trace_id},
+    )
+    if replay.status_code != 200:
+        violations.append(f"同trace重放未返回200：{replay.status_code}")
+    elif replay.json()["run"]["run_id"] != run["run_id"]:
+        violations.append("同trace重放创建了第二条Run")
+    with test_db() as db:
+        if db.query(AlphaWorkflowRun).count() != run_count:
+            violations.append("同trace重放增加了Run数量")
+        if db.query(AlphaWorkflowEvent).count() != event_count:
+            violations.append("同trace重放增加了Event数量")
+        replay_formal_counts, _ = research_counts_and_ids(db)
+        if replay_formal_counts != baseline_formal_counts:
+            violations.append(
+                f"同trace重放改变正式Research数据数量：baseline={baseline_formal_counts}, actual={replay_formal_counts}"
+            )
+        if db.query(AlphaWorkflowRun).count() != baseline_run_count + 1:
+            violations.append("故障与重放后Run总数不是基线加一")
+        if db.query(AlphaWorkflowEvent).count() < baseline_event_count:
+            violations.append("故障处理异常删除了既有Event")
+
+    failure_reason = run.get("failure_reason") or ""
+    if re.search(r"database|integrityerror|sqlalchemy|psycopg|sqlstate", failure_reason, re.I):
+        violations.append(f"向用户暴露英文数据库异常：{failure_reason}")
+    assert not violations, "；".join(violations)

@@ -142,3 +142,12 @@ Gate实现整改完成，但当前证据包仍为BLOCK：
 PASS：merge-base Boolean缺陷复现与fresh upgrade；相同幂等键返回既有Run；0005 Revision DAG、has_table保护及fresh upgrade共同证明其为冻结历史命名债务。
 
 FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗留唯一性清理与跨Run复用；0042 downgrade不恢复Knowledge唯一性/不冲突；五种Required冲突的中文409及IntegrityError脱敏。
+
+## Research 持久化与故障恢复门禁
+
+- 真实PostgreSQL ID门禁：`persist_research_result` 插入 `ResearchClaim.claim_id=<36位execution_id>-c1`，PostgreSQL返回 `StringDataRightTruncation: value too long for type character varying(36)`。Query/Claim等派生ID必须使用稳定、完整、可复算的正式ID格式，禁止用字符串截断掩盖问题。
+- Claim插入失败：残留 `(Query, Source, Claim, Evidence)=(3, 4, 0, 0)`，并产生ResearchExecution虚假报告记录；向用户暴露 `database persistence failure`。
+- Evidence插入失败：残留 `(3, 4, 1, 0)`，并产生ResearchExecution虚假报告记录；向用户暴露 `database persistence failure`。
+- Research commit失败：残留 `(3, 4, 1, 4)`，并产生ResearchExecution虚假报告记录；向用户暴露 `database research commit failure`。
+- 已通过的子行为：三类故障均将Run标记为失败/待恢复；同trace重放返回200和相同 `run_id`，且不增加Run/Event。
+- 最小修复建议：Research正式记录必须位于可回滚原子事务内；故障后先rollback，再用独立安全事务记录Run失败/恢复状态；所有派生ID使用稳定UUID/正式规范生成并支持upsert或既有记录复用；API只返回中文领域错误，不泄漏DB/ORM异常文本。
