@@ -212,3 +212,18 @@ API门禁确认相同幂等键返回同一Run通过；对五项Required分别注
 Claim插入、Evidence插入、Research commit三类故障注入结果为 `0 passed, 3 failed`。三类Run均进入失败/待恢复状态，同trace重放返回同一 `run_id`，Run/Event数量未增加；但失败事务分别残留Query/Source/Claim/Evidence正式行和ResearchExecution虚假报告记录，且 `failure_reason` 直接暴露英文 `database ... failure`。因此半成品Run、正式数据原子性和中文错误脱敏门禁均为BLOCK。
 
 这些测试没有使用skip、xfail、字符串截断容错或弱化断言；③未修改业务实现。等待 `ALPHA_RESEARCH_FIX_COMMIT` 后再普通合并主功能分支并执行19项PostgreSQL专项，专项全绿前不运行完整863+回归。
+
+## 95465582 PostgreSQL 定向验收
+
+测试分支普通合并主功能Commit `95465582df8fa52ccb9703b98c71ecefa9a3d4ce`，Merge Commit为 `3c9acfc32743c316309e2b8aac3173f5bcd408da`。本轮将API幂等、五项409和故障补偿迁移到每用例独立的真实PostgreSQL数据库，不再使用SQLite证明事务原子性。
+
+定向专项聚合结果：**15 passed, 5 failed**。通过项包括0037字节冻结、最终Head 0042、五项Required真实Constraint、每项两条NULL、Knowledge Asset普通非unique索引及跨Run复用、0042→0041→0042、0005 Revision DAG与`_has_table`及fresh upgrade、同trace顺序和4路并发重放、五项真实跨Run冲突与中文409。
+
+剩余代码阻塞：
+
+1. 完整 `0042 → 0039` downgrade失败；`0042 → 0041 → 0042`已通过，必须区分。
+2. Research生成的ID均为完整标准UUID，但Evidence仍使用输入 `source_id`，没有关联实际生成的ResearchSource ID，真实PostgreSQL触发外键失败。
+3. Claim/Evidence插入失败均残留ResearchExecution、Query/Source及部分Claim，AgentExecution仍为`completed`，并泄漏英文database异常。
+4. Research commit失败后Run仍为`运行中`、Task仍为`running`、AgentExecution仍为`completed`，未进入失败/待恢复补偿状态。
+
+Migration Evidence Gate单独执行结果为 **5 passed, 8 failed**：旧Path A/B缺结构化RAW区、Manifest字段缺失、Checksum不匹配、0037双文档披露不足。该证据Bundle失败不计作代码专项失败。因代码专项未全绿，本轮未执行Backend 863+、Alpha E2E、Frontend、Static Security及V1完整回归，PR #19保持Draft/BLOCK。

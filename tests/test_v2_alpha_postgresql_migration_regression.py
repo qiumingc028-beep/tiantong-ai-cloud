@@ -14,15 +14,17 @@ import subprocess
 import sys
 import tarfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import psycopg2
 import pytest
+from fastapi.testclient import TestClient
 from psycopg2 import sql
+from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy import create_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -150,6 +152,53 @@ def alpha_enabled(monkeypatch):
     get_settings.cache_clear()
 
 
+@pytest.fixture()
+def postgres_alpha_runtime(postgres_database_factory, alpha_enabled, monkeypatch):
+    """Run the HTTP workflow against an isolated migrated PostgreSQL database."""
+    from conftest import FakeRedis, seed_database
+    from backend.database import get_db
+    from backend.main import app
+
+    database_url = postgres_database_factory("alpha_api")
+    alembic(ROOT, database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    previous_overrides = app.dependency_overrides.copy()
+
+    def override_db():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_db
+    fake_redis = FakeRedis()
+    for target in (
+        "backend.database.get_redis",
+        "backend.auth.get_redis",
+        "backend.queue.get_redis",
+        "backend.task_queue.get_redis",
+        "backend.brain_execution.queue.get_redis",
+        "backend.execution_engine.get_redis",
+        "backend.command_center.orchestration_view.get_redis",
+        "backend.routers.metrics.get_redis",
+        "backend.routers.ai_employees.get_redis",
+        "backend.routers.deploy_center.get_redis",
+        "backend.main.get_redis",
+    ):
+        monkeypatch.setattr(target, lambda: fake_redis)
+    seed_database(session_factory)
+    client = TestClient(app)
+    login = client.post("/api/login", json={"username": "boss", "password": "password"})
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+    yield client, headers, session_factory
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(previous_overrides)
+    engine.dispose()
+
+
 def extract_git_tree(commit: str, destination: Path) -> None:
     archive = subprocess.run(
         ["git", "archive", "--format=tar", commit], cwd=ROOT, check=True, capture_output=True
@@ -226,6 +275,20 @@ def unique_indexes(connection) -> dict[str, tuple[bool, tuple[str, ...]]]:
             """
         )
         return {name: (is_unique, tuple(columns)) for name, is_unique, columns in cursor.fetchall()}
+
+
+def constraint_backing_indexes(connection) -> set[str]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT idx.relname
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_class idx ON idx.oid = con.conindid
+            WHERE rel.relname = 'alpha_workflow_runs' AND con.contype IN ('p', 'u')
+            """
+        )
+        return {row[0] for row in cursor.fetchall()}
 
 
 def assert_expected_constraints(connection) -> None:
@@ -334,10 +397,11 @@ def test_model_allows_knowledge_asset_reuse_across_runs():
 
 
 def test_same_idempotency_key_returns_existing_run_without_new_rows(
-    client, boss_headers, alpha_enabled, test_db
+    postgres_alpha_runtime,
 ):
     from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
 
+    client, boss_headers, test_db = postgres_alpha_runtime
     payload = {"input_text": "验证409幂等语义", "trace_id": f"pg-contract-{uuid.uuid4()}"}
     first = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
     with test_db() as db:
@@ -352,25 +416,75 @@ def test_same_idempotency_key_returns_existing_run_without_new_rows(
         assert db.query(AlphaWorkflowEvent).count() == event_count
 
 
+def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_effects(
+    postgres_alpha_runtime,
+):
+    from backend.agent_runtime.models import AgentExecution
+    from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
+    from backend.models import TaskCenterTask
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    payload = {"input_text": "验证并发幂等语义", "trace_id": f"pg-concurrent-{uuid.uuid4()}"}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        responses = list(
+            executor.map(
+                lambda _index: client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload),
+                range(4),
+            )
+        )
+    assert {response.status_code for response in responses} == {200}
+    run_ids = {response.json()["run"]["run_id"] for response in responses}
+    assert len(run_ids) == 1
+    with test_db() as db:
+        run = db.query(AlphaWorkflowRun).filter(AlphaWorkflowRun.trace_id == payload["trace_id"]).one()
+        assert run.run_id in run_ids
+        assert db.query(TaskCenterTask).filter(TaskCenterTask.id == run.task_id).count() == 1
+        assert db.query(AgentExecution).filter(AgentExecution.trace_id == payload["trace_id"]).count() == 1
+        event_ids = [row.event_id for row in db.query(AlphaWorkflowEvent).filter(AlphaWorkflowEvent.run_id == run.run_id)]
+        assert len(event_ids) == len(set(event_ids))
+
+
 @pytest.mark.parametrize("constraint_name", sorted(EXPECTED_UNIQUES))
 def test_other_run_unique_conflicts_map_to_chinese_409(
-    client, boss_headers, alpha_enabled, monkeypatch, constraint_name
+    postgres_alpha_runtime, monkeypatch, constraint_name
 ):
+    from backend.alpha_workflow.exceptions import AlphaWorkflowConflictError
+    from backend.alpha_workflow.models import AlphaWorkflowRun
+    from backend.alpha_workflow.service import _alpha_workflow_conflict_message
     from backend.routers import alpha_workflow as router
 
+    client, boss_headers, test_db = postgres_alpha_runtime
     occupied = client.post(
         "/api/v2/alpha-workflows/demo",
         headers=boss_headers,
         json={"input_text": "先创建占用身份的Run", "trace_id": f"occupied-{uuid.uuid4()}"},
     )
     assert occupied.status_code == 200
+    column_name = EXPECTED_UNIQUES[constraint_name][0]
+    with test_db() as db:
+        occupied_run = db.get(AlphaWorkflowRun, occupied.json()["run"]["run_id"])
+        occupied_value = getattr(occupied_run, column_name)
+        if occupied_value is None:
+            occupied_value = int(uuid.uuid4().int % 1_000_000_000) if column_name == "skill_invocation_id" else str(uuid.uuid4())
+            setattr(occupied_run, column_name, occupied_value)
+            db.commit()
+        conflicting = AlphaWorkflowRun(
+            run_id=str(uuid.uuid4()),
+            scenario_id=occupied_run.scenario_id,
+            status="运行中",
+            trace_id=f"real-conflict-{uuid.uuid4()}",
+        )
+        setattr(conflicting, column_name, occupied_value)
+        db.add(conflicting)
+        with pytest.raises(IntegrityError) as caught:
+            db.flush()
+        assert getattr(caught.value.orig, "pgcode", None) == "23505"
+        conflict_message = _alpha_workflow_conflict_message(caught.value)
+        db.rollback()
+    assert conflict_message and re.search(r"[\u4e00-\u9fff]", conflict_message)
 
     def conflict(*_args, **_kwargs):
-        raise IntegrityError(
-            "INSERT alpha_workflow_runs",
-            {},
-            Exception(f'duplicate key violates unique constraint "{constraint_name}"'),
-        )
+        raise AlphaWorkflowConflictError(conflict_message)
 
     monkeypatch.setattr(router, "start_alpha_workflow", conflict)
     response = client.post(
@@ -441,7 +555,8 @@ def test_0042_downgrade_has_no_knowledge_unique_or_name_collisions(
         indexes = unique_indexes(connection)
         assert "uq_alpha_workflow_runs_knowledge_asset_id" not in constraints
         assert not indexes.get("uq_alpha_workflow_runs_knowledge_asset_id", (False, ()))[0]
-        assert not (set(constraints) & set(indexes)), "downgrade后存在同名索引/约束冲突"
+        same_names = set(constraints) & set(indexes)
+        assert same_names <= constraint_backing_indexes(connection), "downgrade后存在非约束支撑的同名索引冲突"
         for name, columns in EXPECTED_UNIQUES.items():
             assert constraints.get(name) == columns or indexes.get(name) == (True, columns)
         with connection.cursor() as cursor:
@@ -591,11 +706,14 @@ def test_research_persistence_uses_stable_uuid_ids_and_real_foreign_keys(
 
 @pytest.mark.parametrize("failure_point", ["claim_insert", "evidence_insert", "research_commit"])
 def test_research_persistence_failures_leave_one_recoverable_run_without_false_formal_data(
-    client, boss_headers, alpha_enabled, test_db, monkeypatch, failure_point
+    postgres_alpha_runtime, monkeypatch, failure_point
 ):
+    from backend.agent_runtime.models import AgentExecution
     from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
+    from backend.models import TaskCenterTask
     from backend.research_runtime.models import ResearchClaim, ResearchEvidence, ResearchExecution, ResearchQuery, ResearchSource
 
+    client, boss_headers, test_db = postgres_alpha_runtime
     original_add = Session.add
     original_commit = Session.commit
     fired = False
@@ -621,6 +739,8 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
         baseline_formal_counts, _ = research_counts_and_ids(db)
         baseline_run_count = db.query(AlphaWorkflowRun).count()
         baseline_event_count = db.query(AlphaWorkflowEvent).count()
+        baseline_task_count = db.query(TaskCenterTask).count()
+        baseline_agent_count = db.query(AgentExecution).count()
 
     trace_id = f"research-failure-{failure_point}-{uuid.uuid4()}"
     first = client.post(
@@ -646,6 +766,12 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
             )
         if db.query(ResearchExecution).count() != 0:
             violations.append("故障后产生虚假Research报告记录")
+        task = db.query(TaskCenterTask).filter(TaskCenterTask.id == db.query(AlphaWorkflowRun.task_id).filter(AlphaWorkflowRun.trace_id == trace_id).scalar()).one_or_none()
+        if task is None or task.status not in {"rejected", "failed"}:
+            violations.append(f"Task未补偿为失败状态：{None if task is None else task.status}")
+        agent = db.query(AgentExecution).filter(AgentExecution.trace_id == trace_id).one_or_none()
+        if agent is None or agent.status not in {"failed", "已失败"}:
+            violations.append(f"AgentExecution未补偿为失败状态：{None if agent is None else agent.status}")
         success_events = db.query(AlphaWorkflowEvent).filter(
             AlphaWorkflowEvent.trace_id == trace_id,
             AlphaWorkflowEvent.event_code.in_(["research_executed", "workflow_completed"]),
@@ -678,6 +804,10 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
             )
         if db.query(AlphaWorkflowRun).count() != baseline_run_count + 1:
             violations.append("故障与重放后Run总数不是基线加一")
+        if db.query(TaskCenterTask).count() != baseline_task_count + 1:
+            violations.append("故障与重放后Task总数不是基线加一")
+        if db.query(AgentExecution).count() != baseline_agent_count + 1:
+            violations.append("故障与重放后AgentExecution总数不是基线加一")
         if db.query(AlphaWorkflowEvent).count() < baseline_event_count:
             violations.append("故障处理异常删除了既有Event")
 

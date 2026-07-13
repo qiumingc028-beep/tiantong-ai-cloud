@@ -1,21 +1,22 @@
 {
-  "evaluated_commit": "3406c633c414d9c6408217ddc4925c260c147faf",
+  "evaluated_commit": "95465582df8fa52ccb9703b98c71ecefa9a3d4ce",
   "postgresql_version": "16.14",
   "final_head": "0042_v2_alpha_workflow_unique_constraints",
   "historical_0037_boolean_reproduced": true,
   "fresh_upgrade_to_head": true,
-  "migration_0037_frozen": false,
+  "migration_0037_frozen": true,
   "architecture_gate": {
-    "required_0042_columns_exact": false,
+    "required_0042_columns_exact": true,
     "trace_id_existing_unique_preserved": true,
-    "model_matches_schema_decision": false,
-    "legacy_0041_knowledge_unique_removed": false,
-    "ordinary_knowledge_index_preserved": "BLOCKED_BY_UNIQUE_CONSTRAINT",
-    "downgrade_without_knowledge_unique": false,
-    "downgrade_name_collision_free": false,
+    "model_matches_schema_decision": true,
+    "legacy_0041_knowledge_unique_removed": true,
+    "ordinary_knowledge_index_preserved": true,
+    "downgrade_without_knowledge_unique": true,
+    "downgrade_name_collision_free": true,
     "same_idempotency_key_returns_existing_run": true,
-    "five_other_run_conflicts_return_chinese_409": false,
-    "integrity_error_redacted": false
+    "concurrent_same_trace_returns_existing_run": true,
+    "five_other_run_conflicts_return_chinese_409": true,
+    "integrity_error_redacted": true
   },
   "required_unique_constraints": {
     "uq_alpha_workflow_runs_root_span_id": "PASS",
@@ -26,11 +27,13 @@
   },
   "required_duplicate_insert_rejected": true,
   "idempotent_on_conflict": true,
-  "downgrade_reupgrade": true,
-  "knowledge_asset_reusable_across_runs": false,
-  "knowledge_asset_unique_in_0042": true,
-  "knowledge_asset_unique_in_model": true,
-  "duplicate_start_returns_409": false,
+  "downgrade_reupgrade": false,
+  "downgrade_0042_to_0041_reupgrade": true,
+  "downgrade_to_0039": false,
+  "knowledge_asset_reusable_across_runs": true,
+  "knowledge_asset_unique_in_0042": false,
+  "knowledge_asset_unique_in_model": false,
+  "same_trace_returns_200_same_run_id": true,
   "migration_0005": {
     "two_nodes_in_same_chain": true,
     "both_nodes_contain_guarded_create_calls": true,
@@ -38,18 +41,23 @@
     "result": "STATIC_FALSE_POSITIVE_CLOSED"
   },
   "research_persistence_gate": {
-    "postgresql_id_and_fk_test": "FAIL",
-    "observed_database_error": "ResearchClaim.claim_id exceeds varchar(36)",
-    "stable_id_replay": "BLOCKED_BY_INITIAL_INSERT_FAILURE",
+    "postgresql_id_and_fk_test": "FAIL_FOREIGN_KEY",
+    "observed_database_error": "ResearchEvidence.source_id does not reference the generated ResearchSource row",
+    "stable_uuid_generation": true,
+    "stable_id_replay": "BLOCKED_BY_FOREIGN_KEY_FAILURE",
     "failure_injection": {
       "claim_insert": "FAIL_FORMAL_ROWS_REMAIN_AND_ENGLISH_ERROR_LEAKS",
       "evidence_insert": "FAIL_FORMAL_ROWS_REMAIN_AND_ENGLISH_ERROR_LEAKS",
       "research_commit": "FAIL_FORMAL_ROWS_REMAIN_AND_ENGLISH_ERROR_LEAKS"
     },
+    "task_compensated": true,
+    "agent_execution_compensated": false,
+    "formal_research_rows_rolled_back": false,
     "same_trace_reuses_run": true,
+    "concurrent_same_trace_reuses_run": true,
     "replay_run_and_event_counts_unchanged": true,
     "pytest": {"passed": 0, "failed": 4}
   },
-  "pytest": {"passed": 3, "failed": 11},
+  "pytest": {"passed": 15, "failed": 5},
   "result": "BLOCK"
 }

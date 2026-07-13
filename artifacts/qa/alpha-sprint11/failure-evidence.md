@@ -151,3 +151,12 @@ FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗
 - Research commit失败：残留 `(3, 4, 1, 4)`，并产生ResearchExecution虚假报告记录；向用户暴露 `database research commit failure`。
 - 已通过的子行为：三类故障均将Run标记为失败/待恢复；同trace重放返回200和相同 `run_id`，且不增加Run/Event。
 - 最小修复建议：Research正式记录必须位于可回滚原子事务内；故障后先rollback，再用独立安全事务记录Run失败/恢复状态；所有派生ID使用稳定UUID/正式规范生成并支持upsert或既有记录复用；API只返回中文领域错误，不泄漏DB/ORM异常文本。
+
+## 95465582 定向回归剩余失败
+
+- `test_final_head_unique_constraints_reject_duplicates_and_keep_idempotency_after_reupgrade`：五项Constraint、重复插入、ON CONFLICT幂等和多NULL均已通过，但继续downgrade到0039返回非零；0042→0041→0042单独场景通过。
+- `test_research_persistence_uses_stable_uuid_ids_and_real_foreign_keys`：ID超长问题已关闭，实际ID为标准UUID；当前失败变为`research_evidence_source_id_fkey`，Evidence引用的输入Source ID未对应实际生成的ResearchSource ID。
+- Claim插入失败：正式行残留 `(Query, Source, Claim, Evidence)=(3, 4, 0, 0)`，ResearchExecution虚假报告残留，AgentExecution仍为`completed`，英文DB错误泄漏。
+- Evidence插入失败：正式行残留 `(3, 4, 1, 0)`，ResearchExecution虚假报告残留，AgentExecution仍为`completed`，英文DB错误泄漏。
+- Research commit失败：Run=`运行中`、recovery_status=null、Task=`running`、AgentExecution=`completed`；补偿事务未完成。
+- 已关闭：同trace顺序及4路并发重放均返回200和同一run_id；五项真实跨Run约束冲突均映射中文409且未泄漏IntegrityError；0005真实执行链成功。
