@@ -126,6 +126,7 @@ class ResearchExecutionOutput(BaseModel):
     research_summary: str
     core_conclusions: list[str]
     structured_data: dict[str, Any] = Field(default_factory=dict)
+    identity_maps: dict[str, Any] = Field(default_factory=dict)
     sources: list[ResearchSourceRecord] = Field(default_factory=list)
     evidence: list[ResearchEvidenceRecord] = Field(default_factory=list)
     source_reliability: dict[str, Any] = Field(default_factory=dict)

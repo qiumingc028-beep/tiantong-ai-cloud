@@ -2,25 +2,28 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
-from uuid import uuid4
 
+from .identity import stable_research_id
 from .constants import SOURCE_TYPE_LABELS
 from .schemas import ResearchEvidenceRecord
 from .source_ranker import RankedSource
 from .sanitizer import sanitize_url
+from .deduplicator import canonicalize_url
 
 
 def build_evidence_records(execution_id: str, task_id: int | None, trace_id: str, sources: list[RankedSource]) -> list[ResearchEvidenceRecord]:
     records: list[ResearchEvidenceRecord] = []
-    for source in sources:
-        evidence_id = str(uuid4())
+    for index, source in enumerate(sources, start=1):
+        canonical_url = canonicalize_url(source.result.url)
+        source_id = stable_research_id(execution_id, "source", canonical_url)
+        evidence_id = stable_research_id(execution_id, "evidence", source_id, canonical_url)
         raw_url = source.result.url
         redacted = sanitize_url(raw_url)
         content_hash = hashlib.sha256(f"{raw_url}|{source.result.title}|{source.result.summary}".encode("utf-8")).hexdigest()
         records.append(
             ResearchEvidenceRecord(
                 evidence_id=evidence_id,
-                source_id=evidence_id,
+                source_id=source_id,
                 claim_id=None,
                 raw_url=raw_url,
                 redacted_url=redacted,

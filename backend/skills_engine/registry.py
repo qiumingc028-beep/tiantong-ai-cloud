@@ -41,6 +41,21 @@ def json_list(value) -> list:
     return [value]
 
 
+def _resolve_distinct_user(db: Session, *, exclude_ids: set[int] | None = None) -> User | None:
+    excluded = {item for item in (exclude_ids or set()) if item is not None}
+    for role in ("owner", "admin", "boss", "administrator"):
+        query = db.query(User).filter(User.role == role)
+        if excluded:
+            query = query.filter(~User.id.in_(excluded))
+        user = query.order_by(User.id.asc()).first()
+        if user:
+            return user
+    query = db.query(User)
+    if excluded:
+        query = query.filter(~User.id.in_(excluded))
+    return query.order_by(User.id.asc()).first()
+
+
 def build_manifest(defn: dict) -> SkillManifest:
     return SkillManifest(
         skill_code=defn["skill_code"],
@@ -85,6 +100,11 @@ def ensure_skill(db: Session, definition: dict, *, created_by: int | None = None
     skill = db.query(Skill).filter(Skill.skill_code == definition["skill_code"]).one_or_none()
     manifest = build_manifest(definition)
     if not skill:
+        reviewer = _resolve_distinct_user(db, exclude_ids={created_by} if created_by is not None else set())
+        approver = _resolve_distinct_user(
+            db,
+            exclude_ids={item for item in {created_by, reviewer.id if reviewer else None} if item is not None},
+        )
         skill = Skill(
             skill_code=definition["skill_code"],
             chinese_name=definition["skill_name"],
@@ -121,8 +141,8 @@ def ensure_skill(db: Session, definition: dict, *, created_by: int | None = None
             signature=definition["signature_status"],
             release_notes="系统内置安全技能",
             created_by=created_by,
-            reviewed_by=created_by,
-            approved_by=created_by,
+            reviewed_by=reviewer.id if reviewer else created_by,
+            approved_by=approver.id if approver else (reviewer.id if reviewer else created_by),
             approved_at=utcnow(),
         )
         db.add(version)
@@ -268,6 +288,7 @@ def invocation_to_dict(invocation: SkillInvocation) -> dict:
     return {
         "invocation_id": invocation.id,
         "skill_id": invocation.skill_id,
+        "skill_code": invocation.skill.skill_code if invocation.skill else None,
         "skill_version_id": invocation.skill_version_id,
         "installation_id": invocation.installation_id,
         "employee_id": invocation.employee_id,
