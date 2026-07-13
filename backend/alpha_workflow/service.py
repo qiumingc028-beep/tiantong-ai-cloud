@@ -13,12 +13,12 @@ from ..agent_runtime.models import AgentExecution, AgentExecutionAudit, AgentCap
 from ..agent_runtime.registry import seed_builtin_capabilities
 from ..ai_employees.registry import TIANCAI_DATA, employee_name
 from ..config import get_settings
-from ..knowledge_center.models import KnowledgeChunk
+from ..knowledge_center.models import KnowledgeAsset, KnowledgeCitation, KnowledgeChunk, KnowledgeReview, KnowledgeSourceLink, KnowledgeTagRelation, KnowledgeVersion
 from ..knowledge_center.service import record_use, submit_research_report
 from ..models import AiEmployee, TaskCenterResult, TaskCenterTask, User
 from ..research_runtime.executor import execute_research_workflow
 from ..research_runtime.exceptions import ResearchPersistenceError
-from ..research_runtime.models import ResearchExecution
+from ..research_runtime.models import ResearchClaim, ResearchEvidence, ResearchExecution, ResearchQuery, ResearchSource
 from ..research_runtime.service import persist_research_result
 from ..skills_engine.models import Skill, SkillInstallation, SkillInvocation
 from ..skills_engine.registry import ensure_default_skills
@@ -91,17 +91,54 @@ def _alpha_workflow_failure_message(exc: Exception) -> str:
     return "Alpha Workflow 执行失败，任务已进入可恢复状态。"
 
 
+def _cleanup_alpha_workflow_artifacts(
+    db: Session,
+    *,
+    task_id: int | None,
+    research_execution_id: str | None,
+    knowledge_id: str | None,
+    skill_invocation_id: int | None,
+) -> None:
+    if task_id is not None:
+        db.query(TaskCenterResult).filter(TaskCenterResult.task_id == task_id).delete(synchronize_session=False)
+    if research_execution_id:
+        db.query(ResearchEvidence).filter(ResearchEvidence.execution_id == research_execution_id).delete(synchronize_session=False)
+        db.query(ResearchClaim).filter(ResearchClaim.execution_id == research_execution_id).delete(synchronize_session=False)
+        db.query(ResearchSource).filter(ResearchSource.execution_id == research_execution_id).delete(synchronize_session=False)
+        db.query(ResearchQuery).filter(ResearchQuery.execution_id == research_execution_id).delete(synchronize_session=False)
+        db.query(ResearchExecution).filter(ResearchExecution.execution_id == research_execution_id).delete(synchronize_session=False)
+    if knowledge_id:
+        db.query(KnowledgeCitation).filter(KnowledgeCitation.knowledge_id == knowledge_id).delete(synchronize_session=False)
+        db.query(KnowledgeSourceLink).filter(KnowledgeSourceLink.knowledge_id == knowledge_id).delete(synchronize_session=False)
+        db.query(KnowledgeTagRelation).filter(KnowledgeTagRelation.knowledge_id == knowledge_id).delete(synchronize_session=False)
+        db.query(KnowledgeReview).filter(KnowledgeReview.knowledge_id == knowledge_id).delete(synchronize_session=False)
+        db.query(KnowledgeVersion).filter(KnowledgeVersion.knowledge_id == knowledge_id).delete(synchronize_session=False)
+        db.query(KnowledgeAsset).filter(KnowledgeAsset.knowledge_id == knowledge_id).delete(synchronize_session=False)
+    if skill_invocation_id is not None:
+        db.query(SkillInvocation).filter(SkillInvocation.id == skill_invocation_id).delete(synchronize_session=False)
+
+
 def _compensate_alpha_workflow_failure(
     db: Session,
     *,
     run_id: str,
     task_id: int | None,
     agent_execution_id: str | None,
+    research_execution_id: str | None,
+    knowledge_id: str | None,
+    skill_invocation_id: int | None,
     user: User,
     reason: str,
     context: AlphaWorkflowContext | None = None,
 ) -> AlphaWorkflowRun | None:
     db.rollback()
+    _cleanup_alpha_workflow_artifacts(
+        db,
+        task_id=task_id,
+        research_execution_id=research_execution_id,
+        knowledge_id=knowledge_id,
+        skill_invocation_id=skill_invocation_id,
+    )
     run = db.get(AlphaWorkflowRun, run_id)
     task = db.get(TaskCenterTask, task_id) if task_id else None
     agent_execution = db.get(AgentExecution, agent_execution_id) if agent_execution_id else None
@@ -116,7 +153,6 @@ def _compensate_alpha_workflow_failure(
             .filter(
                 AgentExecutionAudit.execution_id == agent_execution.execution_id,
                 AgentExecutionAudit.event_type == "execution_failed",
-                AgentExecutionAudit.error_summary == reason,
             )
             .first()
         )
@@ -155,7 +191,6 @@ def _compensate_alpha_workflow_failure(
         )
     if task:
         set_task_status(db, task, "rejected", user, "alpha_workflow_failed", reason)
-        write_audit_log(db, task, user, "alpha_workflow_failed", "running", "rejected", reason)
     db.commit()
     if run:
         db.refresh(run)
@@ -547,6 +582,12 @@ def start_alpha_workflow(
     task: TaskCenterTask | None = None
     agent_execution: AgentExecution | None = None
     result_row: TaskCenterResult | None = None
+    cached_run_id = run.run_id
+    cached_task_id: int | None = None
+    cached_agent_execution_id: str | None = None
+    cached_research_execution_id: str | None = None
+    cached_knowledge_id: str | None = None
+    cached_skill_invocation_id: int | None = None
     try:
         append_event(
             db,
@@ -564,6 +605,7 @@ def start_alpha_workflow(
         db.commit()
         db.refresh(run)
         task = _create_task(db, user=user, input_text=input_text, trace_id=trace_id)
+        cached_task_id = task.id
         set_task_status(db, task, "assigned", user, "alpha_assigned", "自动派给天采")
         task.assigned_ai_employee_code = employee.employee_code
         task.assigned_ai_employee_name = employee.employee_name
@@ -600,8 +642,10 @@ def start_alpha_workflow(
             parent_span_id=run.root_span_id,
         )
         agent_execution = _create_agent_execution(db, task=task, employee=employee, trace_id=trace_id, input_text=input_text)
+        cached_agent_execution_id = agent_execution.execution_id
         research_output = execute_research_workflow(research_input, trace_id=trace_id, browser_reader=_default_browser_reader)
         persist_research_result(db, agent_execution, research_input, research_output)
+        cached_research_execution_id = agent_execution.execution_id
         _emit_stage_event(
             context,
             db,
@@ -627,6 +671,7 @@ def start_alpha_workflow(
             tags=["Apple", "AI", "研究"],
         )
         knowledge_id = knowledge_result["knowledge"]["knowledge_id"]
+        cached_knowledge_id = knowledge_id
         version_id = knowledge_result["version"]["version_id"]
         chunk = (
             db.query(KnowledgeChunk)
@@ -670,6 +715,7 @@ def start_alpha_workflow(
             ),
             user,
         )
+        cached_skill_invocation_id = invocation["invocation_id"]
         _emit_stage_event(
             context,
             db,
@@ -847,9 +893,12 @@ def start_alpha_workflow(
         failure_reason = _alpha_workflow_failure_message(exc)
         compensated_run = _compensate_alpha_workflow_failure(
             db,
-            run_id=run.run_id,
-            task_id=task.id if task else None,
-            agent_execution_id=agent_execution.execution_id if agent_execution else None,
+            run_id=cached_run_id,
+            task_id=cached_task_id,
+            agent_execution_id=cached_agent_execution_id,
+            research_execution_id=cached_research_execution_id,
+            knowledge_id=cached_knowledge_id,
+            skill_invocation_id=cached_skill_invocation_id,
             user=user,
             reason=failure_reason,
             context=context,
@@ -868,9 +917,12 @@ def start_alpha_workflow(
         failure_reason = _alpha_workflow_failure_message(exc)
         compensated_run = _compensate_alpha_workflow_failure(
             db,
-            run_id=run.run_id,
-            task_id=task.id if task else None,
-            agent_execution_id=agent_execution.execution_id if agent_execution else None,
+            run_id=cached_run_id,
+            task_id=cached_task_id,
+            agent_execution_id=cached_agent_execution_id,
+            research_execution_id=cached_research_execution_id,
+            knowledge_id=cached_knowledge_id,
+            skill_invocation_id=cached_skill_invocation_id,
             user=user,
             reason=failure_reason,
             context=context,
