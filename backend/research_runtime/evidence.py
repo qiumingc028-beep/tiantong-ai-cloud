@@ -8,13 +8,15 @@ from .constants import SOURCE_TYPE_LABELS
 from .schemas import ResearchEvidenceRecord
 from .source_ranker import RankedSource
 from .sanitizer import sanitize_url
+from .deduplicator import canonicalize_url
 
 
 def build_evidence_records(execution_id: str, task_id: int | None, trace_id: str, sources: list[RankedSource]) -> list[ResearchEvidenceRecord]:
     records: list[ResearchEvidenceRecord] = []
     for index, source in enumerate(sources, start=1):
-        source_id = stable_research_id(execution_id, "source", source.result.url, source.result.title, source.result.search_rank)
-        evidence_id = stable_research_id(execution_id, "evidence", source_id, source.result.url, index)
+        canonical_url = canonicalize_url(source.result.url)
+        source_id = stable_research_id(execution_id, "source", canonical_url)
+        evidence_id = stable_research_id(execution_id, "evidence", source_id, canonical_url)
         raw_url = source.result.url
         redacted = sanitize_url(raw_url)
         content_hash = hashlib.sha256(f"{raw_url}|{source.result.title}|{source.result.summary}".encode("utf-8")).hexdigest()

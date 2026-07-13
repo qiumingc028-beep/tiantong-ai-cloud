@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import UUID, uuid5
 
 
@@ -13,6 +14,17 @@ def _normalize_component(value: object) -> str:
     return text.replace("\n", " ").replace("\r", " ")
 
 
+def _canonical_components(execution_id: str, resource_type: str, components: tuple[object, ...]) -> list[str]:
+    """Return a deterministic component list.
+
+    Rule: keep the provided order exactly as-is, do not sort, and do not de-duplicate.
+    """
+    payload = [_normalize_component(execution_id), _normalize_component(resource_type)]
+    payload.extend(_normalize_component(component) for component in components)
+    return payload
+
+
 def stable_research_id(execution_id: str, resource_type: str, *components: object) -> str:
-    raw = "::".join([_normalize_component(execution_id), _normalize_component(resource_type), *(_normalize_component(component) for component in components)])
+    payload = _canonical_components(execution_id, resource_type, components)
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return str(uuid5(_RESEARCH_ID_NAMESPACE, raw))
