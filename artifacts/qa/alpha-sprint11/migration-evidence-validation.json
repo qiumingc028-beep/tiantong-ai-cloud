@@ -14,7 +14,7 @@
   },
   "gate_tests": {
     "passed": 14,
-    "failed": 0
+    "failed": 2
   },
   "required_files": {
     "path_a_current.log": true,
@@ -63,6 +63,18 @@
     "valid": true,
     "result": "PASS"
   },
+  "authenticity_gate": {
+    "raw_command_authenticity": "FAIL",
+    "catalog_sql_authenticity": "FAIL",
+    "expected_failure_tests": [
+      "test_raw_command_authenticity",
+      "test_catalog_sql_authenticity"
+    ],
+    "raw_command_reason": "Path A/B use summary labels instead of reproducible Alembic and psql commands for repeat upgrade, downgrade/re-upgrade and catalog verification",
+    "catalog_sql_reason": "Path A/B omit authentic psql commands and complete SELECT statements referencing pg_constraint, pg_index or pg_indexes, pg_trigger and alembic_version",
+    "owner": "①",
+    "result": "BLOCK_AUTHENTICITY"
+  },
   "migration_0037_disclosed": true,
   "migration_0037_documents_match": true,
   "evidence_only_diff": {
@@ -77,5 +89,5 @@
   "skip_flags_found": [],
   "sqlite_formal_evidence_found": false,
   "secret_scan": "PASS",
-  "result": "PASS"
+  "result": "BLOCK_AUTHENTICITY"
 }

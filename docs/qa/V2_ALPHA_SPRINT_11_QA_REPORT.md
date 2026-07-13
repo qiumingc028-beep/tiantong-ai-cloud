@@ -301,3 +301,11 @@ Migration Evidence Gate最终结果为 **14 passed, 0 failed**。Path A、Path B
 独立复核结果：`checksums.sha256` 六个仓库相对目标全部重算成功，覆盖集合与Required Files精确一致且不包含自身；0037双文档八字段逐行一致；Secret Scan通过；正式证据未发现SQLite替代、Drift跳过变量、skip或xfail；Evidence-only Diff通过。代码门既有结果 **23/23 PostgreSQL专项、892 passed/0 failed完整回归**继续有效，本轮未重复运行代码回归，也未修改业务代码。
 
 Migration Evidence阻塞已关闭，最终建议为 `RECOMMEND_APPROVE`。PR #19可由Draft转为Ready for Review；③不执行合并。
+
+## Evidence RAW 命令真实性复审
+
+在合同复审中发现旧Gate仅验证摘要标签及PASS字段，可能接受不可复现的伪命令。已新增两个聚合门禁：`test_raw_command_authenticity`严格接受可执行的`alembic ...`、`python -m alembic ...`或`python3 -m alembic ...`命令，并要求真实heads/current/check、两次upgrade、0041 downgrade及re-upgrade顺序；`test_catalog_sql_authenticity`要求真实无凭据`psql`命令、以分号闭合的Catalog SQL正文、查询输出，以及`pg_constraint`、`pg_index`/`pg_indexes`、`pg_trigger`和`alembic_version`引用。
+
+对 `8fa62ee9c8974d939828fc380b225f704cd070ad` 旧Evidence执行结果为 **14 passed, 2 failed**。仅失败：`RAW_COMMAND_AUTHENTICITY`和`CATALOG_SQL_AUTHENTICITY`。当前日志使用`$ repeat upgrade head`、`$ downgrade 0041`、`$ upgrade 0042`、`$ constraint query`、`$ index query`、`$ trigger query`等摘要标签，且没有真实`psql`命令或完整Catalog SELECT正文。Checksum、Required Files、0037披露、Path A/B起点、Evidence-only Diff、Secret Scan等原门禁继续通过。
+
+PR #19临时回到 `Draft / BLOCK_AUTHENTICITY`，等待①提交 `AUTHENTIC_EVIDENCE_COMMIT`。③未修改正式Evidence或业务代码，也不重新运行892项代码回归。

@@ -223,3 +223,12 @@ FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗
 合同现为：最终Head=`0042_v2_alpha_workflow_unique_constraints`；Path A=`483ebf560e1a4cfadecee4912a3ff6bca99516f6`/`0027_v1_schema_alignment`；Path B=`85586868bad3dd5d0fecba5f840383feccdc1c78`/`0041_v2_alpha_migration_history_repair`。旧merge-base `2ca1a2579569324ce3ca82f68332fb7f96be004d`仅允许标记为`KNOWN_BROKEN_HISTORICAL_BASELINE`。
 
 旧证据Bundle复验为`5 passed, 9 failed`，当前失败均为证据内容缺失或过期：Path A/B无结构化RAW区、最终Revision仍未统一到0042、Manifest缺字段、Checksum不可复算、0037披露不完整。旧的“最终必须0041”和“Path B必须真实merge-base”均已从Gate删除，不再是失败原因。
+
+## Evidence命令真实性阻塞
+
+`8fa62ee9c8974d939828fc380b225f704cd070ad`在原14项Gate中全绿，但真实性硬化后结果为`14 passed, 2 failed`。仅保留两个证据阻塞：
+
+1. `RAW_COMMAND_AUTHENTICITY`：Path A/B使用摘要式伪命令，缺少真实的重复`upgrade head`、`downgrade 0041_v2_alpha_migration_history_repair`及后续`upgrade head`命令。
+2. `CATALOG_SQL_AUTHENTICITY`：Path A/B没有真实`psql`命令，也没有引用`pg_constraint`、`pg_index`/`pg_indexes`、`pg_trigger`、`alembic_version`的完整SQL正文。
+
+OWNER=①，BLOCKING=YES。Checksum、0037披露、Path起点、Evidence-only Diff和Secret Scan保持PASS。

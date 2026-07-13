@@ -66,6 +66,23 @@ RAW_RESULT_COMMANDS = {
     "alembic_check_result": "alembic check",
     "constraint_query_result": "constraint query",
 }
+ALEMBIC_EXECUTABLE = r"(?:(?:python|python3)\s+-m\s+)?alembic"
+AUTHENTIC_ALEMBIC_COMMAND = re.compile(
+    rf"^{ALEMBIC_EXECUTABLE}\s+"
+    r"(?:heads|current|check|history|upgrade\s+(?:head|[A-Za-z0-9_]+)|"
+    r"downgrade\s+[A-Za-z0-9_]+)\s*$",
+    re.IGNORECASE,
+)
+AUTHENTIC_PSQL_COMMAND = re.compile(r"^psql(?:\s+.+)?$", re.IGNORECASE)
+REQUIRED_UNIQUE_CONSTRAINTS = {
+    "uq_alpha_workflow_runs_workflow_id",
+    "uq_alpha_workflow_runs_root_span_id",
+    "uq_alpha_workflow_runs_orchestrator_run_id",
+    "uq_alpha_workflow_runs_research_report_id",
+    "uq_alpha_workflow_runs_skill_invocation_id",
+}
+TRACE_UNIQUE_CONSTRAINT = "uq_alpha_workflow_runs_trace_id"
+KNOWLEDGE_ASSET_INDEX = "ix_alpha_workflow_runs_knowledge_asset_id"
 DISCLOSURE_FIELDS = {
     "0037_baseline_commit_or_hash",
     "0037_modified_hash",
@@ -143,6 +160,29 @@ def parse_path_evidence(path: Path, expected_path_id: str) -> PathEvidence:
     return PathEvidence(fields, raw)
 
 
+def raw_shell_commands(raw: str) -> list[str]:
+    return [match.group(1).strip() for match in re.finditer(r"(?m)^\s*\$\s+(.+?)\s*$", raw)]
+
+
+def authentic_alembic_matches(raw: str, arguments: str) -> list[re.Match[str]]:
+    return list(
+        re.finditer(
+            rf"(?im)^\s*\$\s*{ALEMBIC_EXECUTABLE}\s+{arguments}\s*$",
+            raw,
+        )
+    )
+
+
+def complete_catalog_select(raw: str, catalog: str) -> bool:
+    return bool(
+        re.search(
+            rf"(?is)\bselect\b(?:(?!;).)*\b(?:from|join)\s+"
+            rf"(?:pg_catalog\.)?{re.escape(catalog)}\b(?:(?!;).)*;",
+            raw,
+        )
+    )
+
+
 def test_required_migration_evidence_files_exist():
     missing = [str(path.relative_to(ROOT)) for path in REQUIRED_FILES.values() if not path.is_file()]
     assert not missing, f"缺少Migration正式证据文件：{missing}"
@@ -151,6 +191,95 @@ def test_required_migration_evidence_files_exist():
 @pytest.mark.parametrize(("key", "path_id"), [("path_a", "A"), ("path_b", "B")])
 def test_each_postgresql_path_has_complete_structured_evidence(key, path_id):
     parse_path_evidence(REQUIRED_FILES[key], path_id)
+
+
+def test_raw_command_authenticity():
+    failures = []
+    for key, path_id in (("path_a", "A"), ("path_b", "B")):
+        raw = parse_path_evidence(REQUIRED_FILES[key], path_id).raw_output
+        commands = raw_shell_commands(raw)
+        pseudo = [
+            command
+            for command in commands
+            if not AUTHENTIC_ALEMBIC_COMMAND.fullmatch(command)
+            and not AUTHENTIC_PSQL_COMMAND.fullmatch(command)
+        ]
+        if pseudo:
+            failures.append(f"{path_id}:摘要式伪命令={pseudo}")
+
+        required = {
+            "heads": r"heads",
+            "current": r"current",
+            "check": r"check",
+            "downgrade_0041": r"downgrade\s+0041_v2_alpha_migration_history_repair",
+        }
+        for name, arguments in required.items():
+            if not authentic_alembic_matches(raw, arguments):
+                failures.append(f"{path_id}:缺少真实Alembic命令={name}")
+
+        upgrade_matches = authentic_alembic_matches(raw, r"upgrade\s+head")
+        downgrade_matches = authentic_alembic_matches(
+            raw, r"downgrade\s+0041_v2_alpha_migration_history_repair"
+        )
+        if len(upgrade_matches) < 3:
+            failures.append(
+                f"{path_id}:真实upgrade head少于3次（首次、重复no-op、downgrade后re-upgrade）"
+            )
+        elif downgrade_matches:
+            downgrade_offset = downgrade_matches[0].start()
+            before = [match for match in upgrade_matches if match.start() < downgrade_offset]
+            after = [match for match in upgrade_matches if match.start() > downgrade_offset]
+            if len(before) < 2 or not after:
+                failures.append(f"{path_id}:upgrade/downgrade/re-upgrade顺序不完整")
+
+    assert not failures, "RAW_COMMAND_AUTHENTICITY:\n" + "\n".join(failures)
+
+
+def test_catalog_sql_authenticity():
+    failures = []
+    required_catalogs = ("pg_constraint", "pg_trigger", "alembic_version")
+    for key, path_id in (("path_a", "A"), ("path_b", "B")):
+        raw = parse_path_evidence(REQUIRED_FILES[key], path_id).raw_output
+        psql_commands = [
+            command for command in raw_shell_commands(raw) if AUTHENTIC_PSQL_COMMAND.fullmatch(command)
+        ]
+        if not psql_commands:
+            failures.append(f"{path_id}:缺少真实psql命令")
+        for command in psql_commands:
+            if re.search(
+                r"(?i)(?:postgres(?:ql)?://|password|passwd|pwd|token|secret|PGPASSWORD)",
+                command,
+            ):
+                failures.append(f"{path_id}:psql命令包含连接串或敏感参数")
+
+        for catalog in required_catalogs:
+            if not complete_catalog_select(raw, catalog):
+                failures.append(f"{path_id}:缺少引用{catalog}的完整SELECT SQL正文")
+        if not (
+            complete_catalog_select(raw, "pg_index")
+            or complete_catalog_select(raw, "pg_indexes")
+        ):
+            failures.append(f"{path_id}:缺少引用pg_index或pg_indexes的完整SELECT SQL正文")
+
+        missing_constraints = sorted(
+            REQUIRED_UNIQUE_CONSTRAINTS - {name for name in REQUIRED_UNIQUE_CONSTRAINTS if name in raw}
+        )
+        if missing_constraints:
+            failures.append(f"{path_id}:五项Required约束输出缺失={missing_constraints}")
+        if TRACE_UNIQUE_CONSTRAINT not in raw:
+            failures.append(f"{path_id}:trace唯一约束输出缺失")
+        index_lines = [line for line in raw.splitlines() if KNOWLEDGE_ASSET_INDEX in line]
+        if not index_lines or not any(re.search(r"\bCREATE\s+INDEX\b", line, re.I) for line in index_lines):
+            failures.append(f"{path_id}:Knowledge Asset普通索引输出缺失")
+        if any(re.search(r"\bCREATE\s+UNIQUE\s+INDEX\b", line, re.I) for line in index_lines):
+            failures.append(f"{path_id}:Knowledge Asset索引错误为unique")
+        for trigger in ("alpha_workflow_events_no_update", "alpha_workflow_events_no_delete"):
+            if trigger not in raw:
+                failures.append(f"{path_id}:触发器输出缺失={trigger}")
+        if FINAL_REVISION not in raw:
+            failures.append(f"{path_id}:alembic_version输出缺少最终0042")
+
+    assert not failures, "CATALOG_SQL_AUTHENTICITY:\n" + "\n".join(failures)
 
 
 def test_path_a_and_b_are_independent_and_validate_same_code():
