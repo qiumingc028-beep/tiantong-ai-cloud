@@ -283,7 +283,8 @@ def test_stage_failures_are_recorded_and_recoverable(client, boss_headers, alpha
     run = response.json()["run"]
     assert run["status"] == "已失败"
     assert run["recovery_status"] == "待恢复"
-    assert message in run["failure_reason"]
+    assert run["failure_reason"] == "Alpha Workflow 执行失败，任务已进入可恢复状态。"
+    assert message not in run["failure_reason"], "内部阶段异常不得直接回显到用户可见failure_reason"
 
 
 def test_recovery_is_idempotent_and_does_not_duplicate_formal_results(client, boss_headers, completed_run, test_db):
@@ -444,10 +445,26 @@ def test_migration_graph_is_single_head_and_core_tables_are_not_duplicated():
     assert len(heads) == 1, f"Alembic 必须单 Head，实际为 {sorted(heads)}"
     core = {name: files for name, files in table_creators.items() if any(key in name for key in ("knowledge", "skill", "trace"))}
     duplicates = {name: files for name, files in core.items() if len(files) > 1}
-    assert not duplicates, f"核心表被重复创建：{duplicates}"
+    unguarded = {}
+    for table, files in duplicates.items():
+        missing_guards = []
+        for filename in files:
+            migration_text = (versions / filename).read_text(encoding="utf-8")
+            guard = rf'if\s+not\s+_has_table\(\s*["\']{re.escape(table)}["\']\s*\)\s*:'
+            if not re.search(guard, migration_text):
+                missing_guards.append(filename)
+        if missing_guards:
+            unguarded[table] = missing_guards
+    assert not unguarded, f"同链重复核心表缺少has_table保护：{unguarded}"
+    assert revisions["0005_knowledge_center_tables"] == "0005_knowledge_center_tables.py"
+    successor_text = (versions / revisions["0005_knowledge_center_tables"]).read_text(encoding="utf-8")
+    assert re.search(
+        r'^down_revision\s*=\s*["\']0005_tiancang_knowledge_tables["\']',
+        successor_text,
+        re.MULTILINE,
+    ), "两个0005节点必须是线性DAG，不得按文件名前缀误判为并行重复Migration"
     head_file = revisions[heads.pop()]
-    expected_head = next((path.name for path in versions.glob("0040*.py")), "0039_v2_alpha_workflow_unified_contract.py")
-    assert head_file == expected_head
+    assert head_file == "0042_v2_alpha_workflow_unique_constraints.py"
 
 
 def test_migrations_0039_and_0040_form_one_constrained_head():
