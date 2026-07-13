@@ -49,5 +49,3 @@ def downgrade():
 
     if _has_index(_NON_UNIQUE_NAME):
         op.drop_index(_NON_UNIQUE_NAME, table_name="alpha_workflow_runs")
-    if not _has_index(_UNIQUE_NAME):
-        op.create_index(_UNIQUE_NAME, "alpha_workflow_runs", ["knowledge_asset_id"], unique=True)
