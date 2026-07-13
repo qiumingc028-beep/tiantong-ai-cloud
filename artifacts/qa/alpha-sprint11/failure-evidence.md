@@ -232,3 +232,9 @@ FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗
 2. `CATALOG_SQL_AUTHENTICITY`：Path A/B没有真实`psql`命令，也没有引用`pg_constraint`、`pg_index`/`pg_indexes`、`pg_trigger`、`alembic_version`的完整SQL正文。
 
 OWNER=①，BLOCKING=YES。Checksum、0037披露、Path起点、Evidence-only Diff和Secret Scan保持PASS。
+
+## Evidence命令真实性阻塞关闭
+
+`f0f15f47dba447cee49a18568bbce18e72cb2ccb`已补齐真实Alembic/psql命令、完整Catalog SQL正文与对应输出。最终Gate为`16 passed, 0 failed`；`RAW_COMMAND_AUTHENTICITY`与`CATALOG_SQL_AUTHENTICITY`均PASS。六项Checksum、Required Files精确集合、0037双文档、Secret Scan、SQLite/skip/xfail扫描和Evidence-only Diff全部PASS。
+
+OWNER=①，BLOCKING=NO，STATUS=CLOSED。

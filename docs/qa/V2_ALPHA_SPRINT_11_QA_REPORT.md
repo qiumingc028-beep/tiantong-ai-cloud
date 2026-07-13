@@ -309,3 +309,13 @@ Migration Evidence阻塞已关闭，最终建议为 `RECOMMEND_APPROVE`。PR #19
 对 `8fa62ee9c8974d939828fc380b225f704cd070ad` 旧Evidence执行结果为 **14 passed, 2 failed**。仅失败：`RAW_COMMAND_AUTHENTICITY`和`CATALOG_SQL_AUTHENTICITY`。当前日志使用`$ repeat upgrade head`、`$ downgrade 0041`、`$ upgrade 0042`、`$ constraint query`、`$ index query`、`$ trigger query`等摘要标签，且没有真实`psql`命令或完整Catalog SELECT正文。Checksum、Required Files、0037披露、Path A/B起点、Evidence-only Diff、Secret Scan等原门禁继续通过。
 
 PR #19临时回到 `Draft / BLOCK_AUTHENTICITY`，等待①提交 `AUTHENTIC_EVIDENCE_COMMIT`。③未修改正式Evidence或业务代码，也不重新运行892项代码回归。
+
+## f0f15f47 正式真实性 Evidence 验收
+
+测试分支已普通Merge `f0f15f47dba447cee49a18568bbce18e72cb2ccb`，PR #19远程同步Merge Commit为 `2576c3c530c41db3088f571a8dfa67db5205a86f`。`8fa62ee9..f0f15f47`仅修改六个正式Evidence文件；`8d9b5f28..f0f15f47`严格保持七个正式Evidence文件，无Backend、Alembic、Frontend、Tests、Config或部署变化。
+
+完整Migration Evidence Gate结果为 **16 passed, 0 failed**。`RAW_COMMAND_AUTHENTICITY=PASS`：Path A/B均包含真实可执行的Alembic命令及首次升级、重复升级、0041 downgrade和re-upgrade顺序。`CATALOG_SQL_AUTHENTICITY=PASS`：Path A/B均包含无凭据`psql`命令、完整SQL正文及实际输出，并引用`pg_constraint`、`pg_index`、`pg_trigger`和`alembic_version`。
+
+独立复核全部通过：六项Checksum重算成功且Required Files集合精确；0037双文档字段一致；Secret Scan通过；无SQLite正式证据、Drift跳过变量、skip或xfail；Evidence-only Diff通过。代码冻结Commit仍为`8d9b5f28`，本轮未修改业务代码，也未重新运行892项完整回归。
+
+真实性阻塞关闭，PR #19状态可恢复为 `Ready for Review / RECOMMEND_APPROVE`。③不执行合并。

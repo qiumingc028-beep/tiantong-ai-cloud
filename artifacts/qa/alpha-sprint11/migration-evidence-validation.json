@@ -1,7 +1,8 @@
 {
   "evaluated_feature_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
   "evidence_bundle_commit": "8fa62ee9c8974d939828fc380b225f704cd070ad",
-  "sync_merge_commit": "a37af74f6a41d23401914e7a66b2be1c15f6abb1",
+  "authentic_evidence_commit": "f0f15f47dba447cee49a18568bbce18e72cb2ccb",
+  "sync_merge_commit": "2576c3c530c41db3088f571a8dfa67db5205a86f",
   "gate_contract": {
     "final_revision": "0042_v2_alpha_workflow_unique_constraints",
     "path_a_start_commit": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
@@ -13,8 +14,8 @@
     "result": "ALIGNED"
   },
   "gate_tests": {
-    "passed": 14,
-    "failed": 2
+    "passed": 16,
+    "failed": 0
   },
   "required_files": {
     "path_a_current.log": true,
@@ -64,22 +65,28 @@
     "result": "PASS"
   },
   "authenticity_gate": {
-    "raw_command_authenticity": "FAIL",
-    "catalog_sql_authenticity": "FAIL",
-    "expected_failure_tests": [
+    "raw_command_authenticity": "PASS",
+    "catalog_sql_authenticity": "PASS",
+    "tests": [
       "test_raw_command_authenticity",
       "test_catalog_sql_authenticity"
     ],
-    "raw_command_reason": "Path A/B use summary labels instead of reproducible Alembic and psql commands for repeat upgrade, downgrade/re-upgrade and catalog verification",
-    "catalog_sql_reason": "Path A/B omit authentic psql commands and complete SELECT statements referencing pg_constraint, pg_index or pg_indexes, pg_trigger and alembic_version",
-    "owner": "①",
-    "result": "BLOCK_AUTHENTICITY"
+    "authentic_alembic_commands": true,
+    "authentic_psql_commands": true,
+    "complete_catalog_sql": true,
+    "catalogs": [
+      "pg_constraint",
+      "pg_index",
+      "pg_trigger",
+      "alembic_version"
+    ],
+    "result": "PASS"
   },
   "migration_0037_disclosed": true,
   "migration_0037_documents_match": true,
   "evidence_only_diff": {
     "from": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
-    "to": "8fa62ee9c8974d939828fc380b225f704cd070ad",
+    "to": "f0f15f47dba447cee49a18568bbce18e72cb2ccb",
     "changed_files": 7,
     "unexpected_files": [],
     "result": "PASS"
@@ -89,5 +96,5 @@
   "skip_flags_found": [],
   "sqlite_formal_evidence_found": false,
   "secret_scan": "PASS",
-  "result": "BLOCK_AUTHENTICITY"
+  "result": "PASS"
 }
