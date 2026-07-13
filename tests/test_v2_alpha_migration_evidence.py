@@ -14,10 +14,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_DIR = ROOT / "artifacts/alpha-migration-evidence"
-FINAL_REVISION = "0041_v2_alpha_migration_history_repair"
+FINAL_REVISION = "0042_v2_alpha_workflow_unique_constraints"
 FEATURE_REF = "origin/feature/v2-alpha-workflow-engine"
-DEVELOP_REF = "origin/develop-v2"
 V1_TAG = "v1.0.1"
+CODE_FREEZE_COMMIT = "8d9b5f2890545f1f08d05b9b1618f71ff82d6621"
+PATH_B_START_COMMIT = "85586868bad3dd5d0fecba5f840383feccdc1c78"
+PATH_B_START_REVISION = "0041_v2_alpha_migration_history_repair"
+KNOWN_BROKEN_HISTORICAL_BASELINE = "2ca1a2579569324ce3ca82f68332fb7f96be004d"
 
 REQUIRED_FILES = {
     "path_a": EVIDENCE_DIR / "path_a_current.log",
@@ -164,13 +167,24 @@ def test_path_a_and_b_start_points_are_real_git_baselines():
     v1_commit = git("rev-parse", f"{V1_TAG}^{{commit}}")
     assert path_a["start_commit"] == v1_commit, "Path A起点必须是v1.0.1 Tag指向的Commit"
     assert path_a["start_revision"] == "0027_v1_schema_alignment"
-    expected_merge_base = git("merge-base", path_b["validated_code_commit"], DEVELOP_REF)
-    assert path_b["start_commit"] == expected_merge_base, "Path B起点必须是被验证代码与develop-v2的merge-base"
-    assert path_b["start_commit"] != path_b["validated_code_commit"], "Path B不得把被验证代码Commit伪装成起点"
+    assert path_b["start_commit"] == PATH_B_START_COMMIT, "Path B必须使用冻结可运行基线Commit"
+    assert path_b["start_revision"] == PATH_B_START_REVISION, "Path B必须从冻结可运行的0041 Revision开始"
+    assert path_b["start_commit"] != KNOWN_BROKEN_HISTORICAL_BASELINE, (
+        "Path B不得使用真实旧merge-base；该Commit只能标记为KNOWN_BROKEN_HISTORICAL_BASELINE"
+    )
     commit_check = subprocess.run(
         ["git", "cat-file", "-e", f"{path_b['start_commit']}^{{commit}}"], cwd=ROOT, capture_output=True
     )
     assert commit_check.returncode == 0
+
+
+def test_old_merge_base_is_only_documented_as_known_broken_historical_baseline():
+    corpus = "\n".join(read(path) for path in REQUIRED_FILES.values() if path.suffix != ".sha256")
+    for line in corpus.splitlines():
+        if KNOWN_BROKEN_HISTORICAL_BASELINE in line:
+            assert "KNOWN_BROKEN_HISTORICAL_BASELINE" in line, (
+                "真实旧merge-base只能以KNOWN_BROKEN_HISTORICAL_BASELINE分类出现"
+            )
 
 
 def test_validation_manifest_has_hardened_commit_and_path_model():
@@ -188,6 +202,11 @@ def test_validation_manifest_has_hardened_commit_and_path_model():
             assert entry.get(field), f"Manifest {key}缺少{field}"
     assert manifest["path_a"]["validated_code_commit"] == manifest["validated_code_commit"]
     assert manifest["path_b"]["validated_code_commit"] == manifest["validated_code_commit"]
+    assert manifest["validated_code_commit"] == CODE_FREEZE_COMMIT
+    assert manifest["path_a"]["start_commit"] == git("rev-parse", f"{V1_TAG}^{{commit}}")
+    assert manifest["path_a"]["start_revision"] == "0027_v1_schema_alignment"
+    assert manifest["path_b"]["start_commit"] == PATH_B_START_COMMIT
+    assert manifest["path_b"]["start_revision"] == PATH_B_START_REVISION
 
 
 def test_validated_code_commit_and_evidence_only_commit_interval():
@@ -195,6 +214,7 @@ def test_validated_code_commit_and_evidence_only_commit_interval():
     path_b = parse_path_evidence(REQUIRED_FILES["path_b"], "B").fields
     validated = path_a["validated_code_commit"]
     assert validated == path_b["validated_code_commit"]
+    assert validated == CODE_FREEZE_COMMIT, "正式证据必须验证Sprint 11.1代码冻结Commit"
     commit_check = subprocess.run(
         ["git", "cat-file", "-e", f"{validated}^{{commit}}"], cwd=ROOT, capture_output=True
     )
@@ -208,17 +228,17 @@ def test_validated_code_commit_and_evidence_only_commit_interval():
     assert not disallowed, f"validated code之后存在非证据变化，必须重测：{disallowed}"
 
 
-def test_all_evidence_agrees_on_0041_and_has_no_skip_or_sqlite_claims():
+def test_all_evidence_agrees_on_0042_and_has_no_skip_or_sqlite_claims():
     evidence = "\n".join(read(path) for path in REQUIRED_FILES.values() if path.suffix != ".sha256")
     assert "ALEMBIC_SKIP_SQLITE_DRIFT" not in evidence
     for key in ("path_a", "path_b"):
         path_log = read(REQUIRED_FILES[key])
         assert not re.search(r"(?im)^\s*database_engine\s*=\s*sqlite\s*$", path_log)
         assert not re.search(r"(?im)^\s*sqlite(?:_version)?\s*=", path_log)
-    assert not re.search(r"(?im)^\s*(?:final_revision|final_head|current_final)\s*[:=]\s*0040\b", evidence)
-    assert not re.search(r"(?im)^\s*(?:最终\s*(?:revision|head)|最终版本)\s*[:：]\s*0040\b", evidence)
+    assert not re.search(r"(?im)^\s*(?:final_revision|final_head|current_final)\s*[:=]\s*004[01]\b", evidence)
+    assert not re.search(r"(?im)^\s*(?:最终\s*(?:revision|head)|最终版本)\s*[:：]\s*004[01]\b", evidence)
     for key in ("path_a", "path_b", "alembic_evidence"):
-        assert FINAL_REVISION in read(REQUIRED_FILES[key]), f"{key} 最终Head不是0041"
+        assert FINAL_REVISION in read(REQUIRED_FILES[key]), f"{key} 最终Head不是0042"
 
 
 def test_checksums_are_strict_relative_paths_and_recompute_all_required_files():

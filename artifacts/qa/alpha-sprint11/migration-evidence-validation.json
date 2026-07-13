@@ -1,6 +1,15 @@
 {
-  "evaluated_feature_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
-  "gate_tests": {"passed": 5, "failed": 8},
+  "evaluated_feature_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+  "gate_contract": {
+    "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+    "path_a_start_revision": "0027_v1_schema_alignment",
+    "path_b_start_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
+    "path_b_start_revision": "0041_v2_alpha_migration_history_repair",
+    "known_broken_historical_baseline": "2ca1a2579569324ce3ca82f68332fb7f96be004d",
+    "old_merge_base_required": false,
+    "result": "ALIGNED"
+  },
+  "gate_tests": {"passed": 5, "failed": 9},
   "required_files": {
     "path_a_current.log": true,
     "path_b_current.log": true,
@@ -10,7 +19,7 @@
     "docs/V2_MIGRATION_FREEZE_POLICY.md": true,
     "validation-manifest.json": true
   },
-  "final_revision": "0041_v2_alpha_migration_history_repair",
+  "final_revision": "0042_v2_alpha_workflow_unique_constraints",
   "path_a": {
     "complete": false,
     "structured_format": false,
@@ -18,16 +27,18 @@
     "expected_v1_tag_commit": "60335cdb5eec9975b03c6d19b34c8669a96e8cc3",
     "start_revision_claim": "0027_v1_schema_alignment",
     "start_authentic": false,
-    "reason": "missing required structured fields/RAW OUTPUT; claimed commit differs from v1.0.1 tag and current_after_v1 is already 0041"
+    "reason": "evidence content is outdated: missing required structured fields/RAW OUTPUT and claimed commit differs from v1.0.1 tag"
   },
   "path_b": {
     "complete": false,
     "structured_format": false,
     "start_commit_claim": "cc8c77914dbc79a6821d8781f626b77a003b4f7f",
-    "expected_merge_base": "2ca1a2579569324ce3ca82f68332fb7f96be004d",
+    "required_frozen_start_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
+    "required_frozen_start_revision": "0041_v2_alpha_migration_history_repair",
+    "known_broken_historical_baseline": "2ca1a2579569324ce3ca82f68332fb7f96be004d",
     "start_revision_claim": "0037_v2_execution_observability_security_ops",
     "start_authentic": false,
-    "reason": "missing required structured fields/RAW OUTPUT; start commit equals validated code instead of develop-v2 merge-base"
+    "reason": "evidence content is outdated: missing required structured fields/RAW OUTPUT and start commit/revision do not match the frozen runnable baseline"
   },
   "checksums": {
     "relative_paths": true,

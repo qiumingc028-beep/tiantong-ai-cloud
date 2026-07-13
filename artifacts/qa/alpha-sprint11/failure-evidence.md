@@ -217,3 +217,9 @@ FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗
 - 0005结论保持：两个真实Revision在线性DAG上，逐表受`_has_table`保护，真实PostgreSQL fresh upgrade已通过；文件命名债务不是当前Migration执行失败。
 
 当前只剩独立Migration Evidence Bundle阻塞：`5 passed, 8 failed`。代码失败矩阵已清零。
+
+## Evidence Gate合同校正后的当前阻塞
+
+合同现为：最终Head=`0042_v2_alpha_workflow_unique_constraints`；Path A=`v1.0.1`实际Commit/`0027_v1_schema_alignment`；Path B=`85586868bad3dd5d0fecba5f840383feccdc1c78`/`0041_v2_alpha_migration_history_repair`。旧merge-base `2ca1a2579569324ce3ca82f68332fb7f96be004d`仅允许标记为`KNOWN_BROKEN_HISTORICAL_BASELINE`。
+
+旧证据Bundle复验为`5 passed, 9 failed`，当前失败均为证据内容缺失或过期：Path A/B无结构化RAW区、最终Revision仍未统一到0042、Manifest缺字段、Checksum不可复算、0037披露不完整。旧的“最终必须0041”和“Path B必须真实merge-base”均已从Gate删除，不再是失败原因。

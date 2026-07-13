@@ -4,9 +4,9 @@
 
 自动门禁已建立于 `tests/test_v2_alpha_migration_evidence.py`，机器可读当前结果位于 `artifacts/qa/alpha-sprint11/migration-evidence-validation.json`。
 
-门禁会自动验证：6个必需文件、0041最终Head一致性、两条独立PostgreSQL路径的完整字段与命令、禁用SQLite正式证据和Drift跳过变量、SHA256复算及覆盖率、V1.0.1的0001—0027逐文件字节一致性、0005专项一致性、0037冻结政策披露，以及密码/Token/Secret/完整连接串/生产数据扫描。
+门禁会自动验证：7个必需文件、0042最终Head一致性、两条独立PostgreSQL路径的完整字段与命令、禁用SQLite正式证据和Drift跳过变量、SHA256复算及覆盖率、V1.0.1的0001—0027逐文件字节一致性、0005专项一致性、0037冻结政策披露，以及密码/Token/Secret/完整连接串/生产数据扫描。
 
-当前①最终文件尚未到达，因此机器结果为 `BLOCK`，相关测试会明确失败而非skip或xfail。收到 `MIGRATION_EVIDENCE_FINAL_COMMIT` 后立即普通Merge并执行门禁；如Backend或Migration有变化，再执行不少于863项的全量回归。本门禁不修改业务实现、Migration、Contract或CI配置，也不降低任何既有测试标准。
+当前①最终文件尚未到达，因此机器结果为 `BLOCK`，相关测试会明确失败而非skip或xfail。收到 `EVIDENCE_BUNDLE_COMMIT` 后立即普通Merge并执行门禁；若差异严格为证据文件，则复用8d9代码闸的892项零失败结果，不重复运行代码回归。本门禁不修改业务实现、Migration、Contract或CI配置，也不降低任何既有测试标准。
 
 ## PR #17 fa9067 新证据阻塞矩阵（等待最终证据 Commit）
 
@@ -282,4 +282,12 @@ Migration Evidence Bundle Gate复跑仍为 **5 passed, 8 failed**，继续独立
 
 完整回归首次运行出现6个过时测试断言：五个断言要求将内部异常原文写入用户可见`failure_reason`，与最终Contract“用户可见错误为中文”和统一脱敏策略冲突；一个按文件名/create_table文本数量误报0005。测试已在允许目录中校正为统一中文脱敏断言，以及单Head、线性Revision DAG和逐表`_has_table`保护断言；6个节点复验通过，随后892项完整重跑零失败。未修改业务代码。
 
-Migration Evidence Gate继续独立为 **5 passed, 8 failed**，因此代码冻结成立，但PR #19状态为Draft/BLOCK_EVIDENCE_ONLY，等待最终证据Bundle。
+Migration Evidence Gate合同校正后独立结果为 **5 passed, 9 failed**，因此代码冻结成立，但PR #19状态为Draft/BLOCK_EVIDENCE_ONLY，等待最终证据Bundle。
+
+## Evidence Gate冻结基线合同校正
+
+Evidence Gate最终Revision已从过期的0041校正为 `0042_v2_alpha_workflow_unique_constraints`。Path A保持 `v1.0.1`实际Commit和`0027_v1_schema_alignment`；Path B正式固定为可运行基线Commit `85586868bad3dd5d0fecba5f840383feccdc1c78`、Revision `0041_v2_alpha_migration_history_repair`。
+
+已删除“Path B必须等于validated code与develop-v2真实merge-base”的错误断言。旧merge-base `2ca1a2579569324ce3ca82f68332fb7f96be004d`不得作为Path B起点，仅允许以`KNOWN_BROKEN_HISTORICAL_BASELINE`分类出现。代码冻结Commit明确为 `8d9b5f2890545f1f08d05b9b1618f71ff82d6621`。
+
+合同校正后旧证据执行结果为 **5 passed, 9 failed**。失败仅来自证据内容缺失或过期：Path A/B缺结构化字段及RAW OUTPUT、证据仍未统一到0042、Manifest字段缺失、Checksum不匹配、0037双文档披露不完整。不存在“最终必须0041”或“Path B必须真实merge-base”的合同失败。保留仓库相对Checksum、精确Required Files、evidence-only diff、V1字节冻结、无SQLite/skip/xfail等严格门禁。
