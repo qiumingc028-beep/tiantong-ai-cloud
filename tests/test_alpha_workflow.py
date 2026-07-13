@@ -75,7 +75,7 @@ def test_alpha_workflow_demo_runs_full_chain(client, boss_headers, monkeypatch, 
     assert any(event["event_code"] == "workflow_completed" for event in detail["events"])
 
 
-def test_alpha_workflow_recovery_uses_new_trace_and_replays(client, boss_headers, monkeypatch, test_db):
+def test_alpha_workflow_recovery_creates_new_trace_and_reuses_business_context(client, boss_headers, monkeypatch, test_db):
     enable_alpha_stack(monkeypatch)
 
     first = client.post(
@@ -103,8 +103,14 @@ def test_alpha_workflow_recovery_uses_new_trace_and_replays(client, boss_headers
     assert recovered.status_code == 200
     recovered_run = recovered.json()["run"]
     assert recovered_run["status"] == "已完成"
-    assert recovered_run["recovered_from_run_id"] == original_run["run_id"]
+    assert recovered_run["run_id"] == original_run["run_id"]
+    assert recovered_run["workflow_id"] == original_run["workflow_id"]
+    assert recovered_run["task_id"] == original_run["task_id"]
     assert recovered_run["trace_id"] != original_run["trace_id"]
+    assert recovered_run["root_span_id"] != original_run["root_span_id"]
+    assert recovered_run["recovered_from_run_id"] == original_run["run_id"]
+    assert recovered_run["workflow_context"]["recovery_from_run_id"] == original_run["run_id"]
+    assert recovered_run["workflow_context"]["step_trace"][-1]["stage"] == "recovery"
 
 
 def test_alpha_workflow_flags_default_off(client, boss_headers):

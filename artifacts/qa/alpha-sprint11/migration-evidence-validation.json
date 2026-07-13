@@ -1,0 +1,100 @@
+{
+  "evaluated_feature_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+  "evidence_bundle_commit": "8fa62ee9c8974d939828fc380b225f704cd070ad",
+  "authentic_evidence_commit": "f0f15f47dba447cee49a18568bbce18e72cb2ccb",
+  "sync_merge_commit": "2576c3c530c41db3088f571a8dfa67db5205a86f",
+  "gate_contract": {
+    "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+    "path_a_start_commit": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
+    "path_a_start_revision": "0027_v1_schema_alignment",
+    "path_b_start_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
+    "path_b_start_revision": "0041_v2_alpha_migration_history_repair",
+    "known_broken_historical_baseline": "2ca1a2579569324ce3ca82f68332fb7f96be004d",
+    "old_merge_base_required": false,
+    "result": "ALIGNED"
+  },
+  "gate_tests": {
+    "passed": 16,
+    "failed": 0
+  },
+  "required_files": {
+    "path_a_current.log": true,
+    "path_b_current.log": true,
+    "alembic-evidence.txt": true,
+    "checksums.sha256": true,
+    "docs/V2_ALPHA_MIGRATION_EVIDENCE.md": true,
+    "docs/V2_MIGRATION_FREEZE_POLICY.md": true,
+    "validation-manifest.json": true,
+    "exact_set": true
+  },
+  "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+  "path_a": {
+    "complete": true,
+    "structured_format": true,
+    "database_id": "alpha_authentic_v2_a",
+    "database_engine": "PostgreSQL",
+    "postgresql_version": "16.14 (Debian 16.14-1.pgdg13+1)",
+    "start_commit": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
+    "start_revision": "0027_v1_schema_alignment",
+    "validated_code_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+    "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+    "result": "PASS"
+  },
+  "path_b": {
+    "complete": true,
+    "structured_format": true,
+    "database_id": "alpha_authentic_v2_b",
+    "database_engine": "PostgreSQL",
+    "postgresql_version": "16.14 (Debian 16.14-1.pgdg13+1)",
+    "start_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
+    "start_revision": "0041_v2_alpha_migration_history_repair",
+    "validated_code_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+    "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+    "result": "PASS"
+  },
+  "checksums": {
+    "relative_paths": true,
+    "hashes_valid": true,
+    "required_set_exact": true,
+    "covered_files": 6,
+    "self_checksum_excluded": true,
+    "result": "PASS"
+  },
+  "manifest": {
+    "valid": true,
+    "result": "PASS"
+  },
+  "authenticity_gate": {
+    "raw_command_authenticity": "PASS",
+    "catalog_sql_authenticity": "PASS",
+    "tests": [
+      "test_raw_command_authenticity",
+      "test_catalog_sql_authenticity"
+    ],
+    "authentic_alembic_commands": true,
+    "authentic_psql_commands": true,
+    "complete_catalog_sql": true,
+    "catalogs": [
+      "pg_constraint",
+      "pg_index",
+      "pg_trigger",
+      "alembic_version"
+    ],
+    "result": "PASS"
+  },
+  "migration_0037_disclosed": true,
+  "migration_0037_documents_match": true,
+  "evidence_only_diff": {
+    "from": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+    "to": "f0f15f47dba447cee49a18568bbce18e72cb2ccb",
+    "changed_files": 7,
+    "unexpected_files": [],
+    "result": "PASS"
+  },
+  "v1_migrations_immutable": true,
+  "migration_0005_valid": true,
+  "skip_flags_found": [],
+  "sqlite_formal_evidence_found": false,
+  "secret_scan": "PASS",
+  "result": "PASS"
+}
