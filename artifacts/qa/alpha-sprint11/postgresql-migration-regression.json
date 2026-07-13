@@ -1,5 +1,5 @@
 {
-  "evaluated_commit": "f50a03148654605d103d6118d8ff57ea1bfba701",
+  "evaluated_commit": "d31565a6c18f20384e6140305ee2561a469aef11",
   "postgresql_version": "16.14",
   "final_head": "0042_v2_alpha_workflow_unique_constraints",
   "historical_0037_boolean_reproduced": true,
@@ -41,23 +41,24 @@
     "result": "STATIC_FALSE_POSITIVE_CLOSED"
   },
   "research_persistence_gate": {
-    "postgresql_id_and_fk_test": "FAIL_SOURCE_QUERY_FOREIGN_KEY",
-    "observed_database_error": "ResearchSource.query_id is NULL after committed persistence",
+    "postgresql_id_and_fk_test": "PASS",
+    "observed_database_error": "malicious upstream duplicate_of_source_id is persisted verbatim and exceeds varchar(36)",
     "stable_uuid_generation": true,
     "malicious_upstream_ids_replaced_by_internal_uuid": true,
     "evidence_source_and_claim_foreign_keys": true,
-    "source_query_foreign_key": false,
+    "source_query_foreign_key": true,
     "stable_id_replay": true,
     "formal_row_counts_idempotent": true,
-    "task_summary_idempotent": false,
+    "task_summary_idempotent": true,
     "cross_execution_rebinding_blocked": true,
     "failure_injection": {
-      "data_error": "FAIL_PENDING_ROLLBACK_ESCAPES_API",
-      "foreign_key_23503": "FAIL_DUPLICATE_TASK_AUDIT_AND_MISSING_AGENT_AUDIT",
-      "integrity_error_23505": "FAIL_DUPLICATE_TASK_AUDIT_AND_MISSING_AGENT_AUDIT"
+      "claim_data_error": "FAIL_PENDING_ROLLBACK_ESCAPES_API_AND_COMPENSATION_NOT_APPLIED",
+      "evidence_foreign_key_23503": "FAIL_DUPLICATE_TASK_AUDIT_AND_MISSING_AGENT_AUDIT",
+      "flush_unique_23505": "FAIL_DUPLICATE_TASK_AUDIT_AND_MISSING_AGENT_AUDIT",
+      "deferred_commit_foreign_key_23503": "FAIL_DUPLICATE_TASK_AUDIT_AND_MISSING_AGENT_AUDIT"
     },
-    "task_compensated": true,
-    "agent_execution_compensated": true,
+    "task_compensated": false,
+    "agent_execution_compensated": false,
     "formal_research_rows_rolled_back": true,
     "task_failure_audit_exactly_once": false,
     "agent_execution_failure_audit": false,
@@ -65,8 +66,9 @@
     "same_trace_reuses_run": true,
     "concurrent_same_trace_reuses_run": true,
     "replay_run_and_event_counts_unchanged": true,
-    "pytest": {"passed": 0, "failed": 5}
+    "malicious_duplicate_source_id_internalized": false,
+    "pytest": {"passed": 2, "failed": 5}
   },
-  "pytest": {"passed": 16, "failed": 5},
+  "pytest": {"passed": 18, "failed": 5},
   "result": "BLOCK"
 }

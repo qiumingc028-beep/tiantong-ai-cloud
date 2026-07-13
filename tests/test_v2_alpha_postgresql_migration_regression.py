@@ -406,7 +406,10 @@ def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_eff
 ):
     from backend.agent_runtime.models import AgentExecution
     from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
+    from backend.knowledge_center.models import KnowledgeAsset, KnowledgeVersion
     from backend.models import TaskCenterTask
+    from backend.research_runtime.models import ResearchExecution
+    from backend.skills_engine.models import SkillInvocation
 
     client, boss_headers, test_db = postgres_alpha_runtime
     payload = {"input_text": "验证并发幂等语义", "trace_id": f"pg-concurrent-{uuid.uuid4()}"}
@@ -425,6 +428,10 @@ def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_eff
         assert run.run_id in run_ids
         assert db.query(TaskCenterTask).filter(TaskCenterTask.id == run.task_id).count() == 1
         assert db.query(AgentExecution).filter(AgentExecution.trace_id == payload["trace_id"]).count() == 1
+        assert db.query(ResearchExecution).filter(ResearchExecution.trace_id == payload["trace_id"]).count() == 1
+        assert db.query(KnowledgeAsset).filter(KnowledgeAsset.knowledge_id == run.knowledge_asset_id).count() == 1
+        assert db.query(KnowledgeVersion).filter(KnowledgeVersion.knowledge_id == run.knowledge_asset_id).count() == 1
+        assert db.query(SkillInvocation).filter(SkillInvocation.trace_id == payload["trace_id"]).count() == 1
         event_ids = [row.event_id for row in db.query(AlphaWorkflowEvent).filter(AlphaWorkflowEvent.run_id == run.run_id)]
         assert len(event_ids) == len(set(event_ids))
 
@@ -725,12 +732,59 @@ def test_research_persistence_uses_stable_uuid_ids_and_real_foreign_keys(
     assert not violations, "；".join(violations)
 
 
-def test_research_upsert_never_rebinds_rows_across_executions(
+def test_malicious_upstream_duplicate_source_id_is_mapped_to_internal_uuid(
     postgres_database_factory, migration_fix_commit
+):
+    from backend.research_runtime.models import ResearchSource
+    from backend.research_runtime.service import persist_research_result
+
+    del migration_fix_commit
+    database_url = postgres_database_factory("research_duplicate_source")
+    alembic(ROOT, database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    SessionLocal = sessionmaker(bind=engine)
+    first_upstream_id = "恶意上游Source-A-" + ("A" * 160)
+    second_upstream_id = "恶意上游Source-B-" + ("B" * 160)
+    with SessionLocal() as db:
+        execution, _task_id = make_agent_execution(db)
+        input_payload, output_payload = research_payload(execution.execution_id)
+        first = dict(output_payload["sources"][0])
+        first.update({"source_id": first_upstream_id, "url": "https://example.com/source-a", "redacted_url": "https://example.com/source-a"})
+        second = dict(first)
+        second.update(
+            {
+                "source_id": second_upstream_id,
+                "url": "https://example.com/source-b",
+                "redacted_url": "https://example.com/source-b",
+                "duplicate_of_source_id": first_upstream_id,
+            }
+        )
+        output_payload["sources"] = [first, second]
+        output_payload["evidence"] = []
+        persist_research_result(db, execution, input_payload, output_payload)
+        db.commit()
+
+    with SessionLocal() as db:
+        sources = db.query(ResearchSource).order_by(ResearchSource.source_url).all()
+        assert len(sources) == 2
+        first_row, second_row = sources
+        for row in sources:
+            assert len(row.source_id) == 36 and str(uuid.UUID(row.source_id)) == row.source_id
+            assert row.source_id not in {first_upstream_id, second_upstream_id}
+        assert second_row.duplicate_of_source_id == first_row.source_id
+        assert len(second_row.duplicate_of_source_id) == 36
+        assert str(uuid.UUID(second_row.duplicate_of_source_id)) == second_row.duplicate_of_source_id
+    engine.dispose()
+
+
+def test_research_upsert_never_rebinds_rows_across_executions(
+    postgres_database_factory, migration_fix_commit, monkeypatch
 ):
     from backend.agent_runtime.models import AgentExecution
     from backend.models import TaskCenterTask
     from backend.research_runtime.models import ResearchQuery, ResearchSource
+    from backend.research_runtime.exceptions import ResearchPersistenceError
+    from backend.research_runtime import service as research_service
     from backend.research_runtime.service import persist_research_result
 
     del migration_fix_commit
@@ -755,12 +809,32 @@ def test_research_upsert_never_rebinds_rows_across_executions(
         persist_research_result(db, second_execution, input_payload, output_payload)
         db.commit()
 
+    with SessionLocal() as db:
+        forced_query_id = db.query(ResearchQuery.query_id).filter(ResearchQuery.execution_id == first_execution_id).order_by(ResearchQuery.query_id).first()[0]
+        third_execution, _third_task_id = make_agent_execution(db)
+        third_execution_id = third_execution.execution_id
+        original_stable_id = research_service.stable_research_id
+
+        def collide_with_first_execution(execution_id, resource_type, *components):
+            if resource_type == "query":
+                return forced_query_id
+            return original_stable_id(execution_id, resource_type, *components)
+
+        monkeypatch.setattr(research_service, "stable_research_id", collide_with_first_execution)
+        with pytest.raises(ResearchPersistenceError, match="归属冲突"):
+            persist_research_result(db, third_execution, input_payload, output_payload)
+        db.rollback()
+
     violations = []
     with SessionLocal() as db:
         first_ids = {row.query_id for row in db.query(ResearchQuery).filter(ResearchQuery.execution_id == first_execution_id)}
         second_ids = {row.query_id for row in db.query(ResearchQuery).filter(ResearchQuery.execution_id == second_execution_id)}
         if not first_ids or not second_ids or first_ids & second_ids:
             violations.append("不同Execution的内部Query ID未保持隔离")
+        if db.get(ResearchQuery, forced_query_id).execution_id != first_execution_id:
+            violations.append("跨Execution冲突改绑了既有Query")
+        if db.query(ResearchQuery).filter(ResearchQuery.execution_id == third_execution_id).count() != 0:
+            violations.append("跨Execution Upsert拒绝后仍产生第三套Query")
         for source in db.query(ResearchSource):
             query = db.get(ResearchQuery, source.query_id) if source.query_id else None
             if query is None or query.execution_id != source.execution_id:
@@ -772,7 +846,7 @@ def test_research_upsert_never_rebinds_rows_across_executions(
     assert not violations, "；".join(violations)
 
 
-@pytest.mark.parametrize("failure_point", ["data_error", "foreign_key", "integrity_error"])
+@pytest.mark.parametrize("failure_point", ["claim_failure", "evidence_fk", "flush_failure", "commit_failure"])
 def test_research_persistence_failures_leave_one_recoverable_run_without_false_formal_data(
     postgres_alpha_runtime, failure_point
 ):
@@ -783,6 +857,7 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
 
     client, boss_headers, test_db = postgres_alpha_runtime
     fired = False
+    evidence_flush_completed = False
 
     def inject_real_postgresql_failure(session, _flush_context, _instances):
         nonlocal fired
@@ -790,18 +865,24 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
             return
         new_rows = list(session.new)
         queries = [row for row in new_rows if isinstance(row, ResearchQuery)]
+        claims = [row for row in new_rows if isinstance(row, ResearchClaim)]
         evidence_rows = [row for row in new_rows if isinstance(row, ResearchEvidence)]
-        if failure_point == "data_error" and queries:
-            queries[0].query_id = "超长内部ID" + ("X" * 80)
+        if failure_point == "claim_failure" and claims:
+            claims[0].claim_id = "超长Claim内部ID" + ("X" * 80)
             fired = True
-        elif failure_point == "integrity_error" and len(queries) >= 2:
+        elif failure_point == "flush_failure" and len(queries) >= 2:
             duplicate_id = str(uuid.uuid4())
             queries[0].query_id = duplicate_id
             queries[1].query_id = duplicate_id
             fired = True
-        elif failure_point == "foreign_key" and evidence_rows:
+        elif failure_point in {"evidence_fk", "commit_failure"} and evidence_rows:
             evidence_rows[0].source_id = str(uuid.uuid4())
             fired = True
+
+    def observe_evidence_flush(session, _flush_context):
+        nonlocal evidence_flush_completed
+        if failure_point == "commit_failure" and any(isinstance(row, ResearchEvidence) for row in session.identity_map.values()):
+            evidence_flush_completed = True
 
     with test_db() as db:
         baseline_formal_counts, _ = research_counts_and_ids(db)
@@ -818,27 +899,45 @@ def test_research_persistence_failures_leave_one_recoverable_run_without_false_f
         captured_errors.append(exception_context.sqlalchemy_exception)
 
     engine = test_db.kw["bind"]
+    if failure_point == "commit_failure":
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE research_evidence ALTER CONSTRAINT research_evidence_source_id_fkey DEFERRABLE INITIALLY DEFERRED"
+            )
     event.listen(Session, "before_flush", inject_real_postgresql_failure)
+    event.listen(Session, "after_flush", observe_evidence_flush)
     event.listen(engine, "handle_error", capture_database_error)
+    api_exception = None
+    first = None
     try:
-        first = client.post(
-            "/api/v2/alpha-workflows/demo",
-            headers=boss_headers,
-            json={"input_text": "Research持久化故障注入", "trace_id": trace_id},
-        )
+        try:
+            first = client.post(
+                "/api/v2/alpha-workflows/demo",
+                headers=boss_headers,
+                json={"input_text": "Research持久化故障注入", "trace_id": trace_id},
+            )
+        except Exception as exc:
+            api_exception = exc
     finally:
         event.remove(Session, "before_flush", inject_real_postgresql_failure)
+        event.remove(Session, "after_flush", observe_evidence_flush)
         event.remove(engine, "handle_error", capture_database_error)
     assert fired, f"{failure_point}未由真实PostgreSQL flush路径触发"
-    expected_error = DataError if failure_point == "data_error" else IntegrityError
+    if failure_point == "commit_failure":
+        assert evidence_flush_completed, "最终commit故障在Evidence flush完成前提前触发"
+    expected_error = DataError if failure_point == "claim_failure" else IntegrityError
     assert any(isinstance(exc, expected_error) for exc in captured_errors), captured_errors
-    expected_pgcode = {"foreign_key": "23503", "integrity_error": "23505"}.get(failure_point)
+    expected_pgcode = {"evidence_fk": "23503", "flush_failure": "23505", "commit_failure": "23503"}.get(failure_point)
     if expected_pgcode:
         assert any(getattr(getattr(exc, "orig", None), "pgcode", None) == expected_pgcode for exc in captured_errors)
-    assert not any(isinstance(exc, PendingRollbackError) for exc in captured_errors)
-    assert first.status_code in {200, 400}
     violations = []
-    response_text = first.text
+    if isinstance(api_exception, PendingRollbackError):
+        violations.append("PendingRollbackError穿透API")
+    elif api_exception is not None:
+        violations.append(f"数据库故障异常穿透API：{type(api_exception).__name__}")
+    if first is not None and first.status_code not in {200, 400}:
+        violations.append(f"数据库故障返回异常HTTP状态：{first.status_code}")
+    response_text = first.text if first is not None else str(api_exception or "")
     if re.search(r"DataError|IntegrityError|PendingRollback|sqlalchemy|psycopg|duplicate key|foreign key", response_text, re.I):
         violations.append(f"API泄漏英文数据库异常：{response_text}")
 

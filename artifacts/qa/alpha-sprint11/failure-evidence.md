@@ -170,3 +170,24 @@ FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗
 - 23505唯一冲突：补偿和回滚通过；同样存在Task失败审计重复及AgentExecution失败审计缺失。
 - 五项409测试已改为Service真实创建Run并在Session flush触发PostgreSQL约束，不再在Router层抛裸IntegrityError；五项全部返回中文409。
 - Migration边界：0042→0041→0042通过；0039路径按裁决标记`UNSUPPORTED_SEMANTIC_DOWNGRADE`，不再列为代码失败。
+
+## d31565a6 PostgreSQL正式门禁失败矩阵
+
+当前代码评估Commit：`d31565a6c18f20384e6140305ee2561a469aef11`；测试分支同步Merge：`0a3f222408c8efdbeee561596070c0007fdc03d7`。真实隔离PostgreSQL 16.14结果：`18 passed, 5 failed`。
+
+1. `test_malicious_upstream_duplicate_source_id_is_mapped_to_internal_uuid`
+   - 预期：所有上游Source标识只用于映射，数据库保存内部36位标准UUID，`duplicate_of_source_id`引用真实持久化Source。
+   - 实际：第二条Source把160字符恶意上游ID原样写入`duplicate_of_source_id varchar(36)`，PostgreSQL抛出`StringDataRightTruncation`。
+   - 最小建议：建立upstream Source ID→内部Source UUID映射后再写`duplicate_of_source_id`；未知引用返回中文领域错误，禁止字符串截断。
+2. `...[claim_failure]`
+   - 预期：真实Claim DataError先rollback，再用安全事务将Run/Task/AgentExecution补偿为失败/可恢复，并各写一次失败Event/Audit。
+   - 实际：`PendingRollbackError`穿透API；Run=`运行中`、Task=`running`、AgentExecution=`completed`；workflow_failed、Task失败审计、AgentExecution失败审计均为0。
+   - 最小建议：异常边界第一步无条件rollback，缓存标量ID后再开启独立补偿事务，禁止从失败Session读取过期ORM属性。
+3. `...[evidence_fk]`
+4. `...[flush_failure]`
+5. `...[commit_failure]`
+   - 预期：真实23503/23505（含Evidence flush完成后的deferred commit失败）均只产生一次Task失败审计和一次AgentExecution `execution_failed`审计。
+   - 实际：三种路径均为Task失败审计2条、AgentExecution失败审计0条；状态补偿、正式Research回滚、同trace重放幂等通过。
+   - 最小建议：Task失败状态更新与显式审计只保留一个append入口；补偿事务按execution_id幂等写入唯一的AgentExecutionAudit。
+
+已关闭项：Source.query_id、Evidence外键、Task Summary重复、跨Execution改绑、四路并发正式数据唯一性、五项中文409。完整863+回归未执行，原因是第一阶段代码门禁非零失败。

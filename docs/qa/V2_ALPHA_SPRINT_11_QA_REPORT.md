@@ -245,3 +245,19 @@ Migration Evidence Gate单独执行结果为 **5 passed, 8 failed**：旧Path A/
 5. 真实23505 IntegrityError同样产生2条Task失败审计且缺少AgentExecution失败审计。
 
 Migration Evidence Bundle Gate复跑仍为 **5 passed, 8 failed**，继续独立归类。代码专项未全绿，因此未运行Backend 863+及其后的Alpha E2E、Frontend、Static Security、V1与敏感数据完整回归。
+
+## d31565a6 PostgreSQL 正式代码门禁
+
+测试分支通过普通Merge同步 `d31565a6c18f20384e6140305ee2561a469aef11`，Merge Commit为 `0a3f222408c8efdbeee561596070c0007fdc03d7`。23项门禁全部使用隔离PostgreSQL 16.14，结果为 **18 passed, 5 failed**。
+
+已关闭：Source→Query非NULL外键、Evidence→Source/Claim外键、稳定内部UUID、重复persist的记录数/ID/FK/Task Summary不变、跨Execution归属冲突拒绝、同trace顺序与四路并发仅保留一套Research/Knowledge/Skill正式数据。0037字节冻结、最终Head 0042、五项Required真实Constraint与多NULL、Knowledge Asset非唯一、0042→0041→0042、0005真实DAG/fresh upgrade及五项真实Service/DB中文409均通过。
+
+当前五项代码阻塞：
+
+1. 恶意超长上游 `duplicate_of_source_id` 被原样写入 `research_sources.duplicate_of_source_id varchar(36)`，触发PostgreSQL `StringDataRightTruncation`；应映射为本次持久化生成的内部Source UUID，不得截断。
+2. Claim DataError后未先rollback即读取事务对象，`PendingRollbackError`穿透API；Run仍为运行中、Task仍为running、AgentExecution仍为completed，且没有失败Event或失败审计。
+3. Evidence真实23503 FK故障完成状态补偿和正式数据回滚，但Task `alpha_workflow_failed`审计为2条，AgentExecution `execution_failed`审计为0条。
+4. flush阶段真实23505唯一冲突存在相同的Task重复审计和Agent审计缺失。
+5. Evidence已flush后的deferred FK在最终commit触发23503，仍存在相同的Task重复审计和Agent审计缺失。
+
+门禁未达到0 failed，按执行顺序未运行Backend 863+、Alpha E2E、Frontend Gate、Static Security、V1 Regression、Sensitive Data Scan，也未执行Migration Evidence Gate。PR #19继续Draft/BLOCK；历史f50结果仅作历史记录，不代表当前Head。
