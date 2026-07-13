@@ -16,6 +16,9 @@ down_revision = "0041_v2_alpha_migration_history_repair"
 branch_labels = None
 depends_on = None
 
+_KNOWLEDGE_ASSET_UNIQUE_NAME = "uq_alpha_workflow_runs_knowledge_asset_id"
+_KNOWLEDGE_ASSET_INDEX_NAME = "ix_alpha_workflow_runs_knowledge_asset_id"
+
 
 _UNIQUE_COLUMNS = [
     ("uq_alpha_workflow_runs_root_span_id", "root_span_id"),
@@ -54,10 +57,28 @@ def _index_names() -> set[str]:
     return {item["name"] for item in inspector.get_indexes("alpha_workflow_runs")}
 
 
+def _reconcile_knowledge_asset_identity() -> None:
+    unique_constraints = _unique_constraint_names()
+    index_names = _index_names()
+
+    if _KNOWLEDGE_ASSET_UNIQUE_NAME in unique_constraints:
+        op.drop_constraint(_KNOWLEDGE_ASSET_UNIQUE_NAME, "alpha_workflow_runs", type_="unique")
+        unique_constraints.discard(_KNOWLEDGE_ASSET_UNIQUE_NAME)
+        index_names.discard(_KNOWLEDGE_ASSET_UNIQUE_NAME)
+    elif _KNOWLEDGE_ASSET_UNIQUE_NAME in index_names:
+        op.drop_index(_KNOWLEDGE_ASSET_UNIQUE_NAME, table_name="alpha_workflow_runs")
+        index_names.discard(_KNOWLEDGE_ASSET_UNIQUE_NAME)
+
+    if _KNOWLEDGE_ASSET_INDEX_NAME not in index_names:
+        op.create_index(_KNOWLEDGE_ASSET_INDEX_NAME, "alpha_workflow_runs", ["knowledge_asset_id"], unique=False)
+
+
 def upgrade():
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
         return
+
+    _reconcile_knowledge_asset_identity()
 
     unique_constraints = _unique_constraint_names()
     index_names = _index_names()
