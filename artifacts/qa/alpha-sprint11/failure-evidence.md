@@ -204,3 +204,16 @@ FAIL：0037字节冻结；0042精确五项集合；Model一致性；Knowledge遗
    - 唯一剩余失败为Task `alpha_workflow_failed`审计各有2条，预期恰好1条。最小建议：状态更新隐式审计和显式`write_audit_log`只保留一个append入口，或以task/run/action幂等键抑制重复写入。
 
 已关闭：恶意duplicate_of_source_id内部UUID映射、Agent失败审计缺失、后三路失败Event与正式数据原子性。Evidence Gate单独为`5 passed, 8 failed`；完整回归因代码门禁非零失败未执行。
+
+## 8d9b5f28 代码阻塞关闭
+
+冻结代码Commit：`8d9b5f2890545f1f08d05b9b1618f71ff82d6621`。
+
+- 四个历史失败节点：`4 passed, 0 failed`。
+- PostgreSQL完整定向门禁：`23 passed, 0 failed`。
+- Backend/代码完整回归：`892 passed, 0 failed, 82 warnings in 330.38s`。
+- Alpha E2E/质量专项：`28 passed`；Frontend Gate：`6 passed`；V1：`2 passed`；Static Security：`1 passed`；Sensitive Scan：`2 passed`。
+- Claim DataError、Evidence 23503、flush 23505及deferred final-commit 23503均完成安全rollback和精确一次补偿审计；PendingRollback、重复Task Audit、缺失Agent Audit及正式数据残留全部关闭。
+- 0005结论保持：两个真实Revision在线性DAG上，逐表受`_has_table`保护，真实PostgreSQL fresh upgrade已通过；文件命名债务不是当前Migration执行失败。
+
+当前只剩独立Migration Evidence Bundle阻塞：`5 passed, 8 failed`。代码失败矩阵已清零。
