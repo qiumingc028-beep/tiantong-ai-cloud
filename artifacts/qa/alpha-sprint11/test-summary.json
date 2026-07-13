@@ -1,20 +1,20 @@
 {
-  "contract_commit": "eef1ed66638011503c7377d52104258b72ee80d0",
+  "contract_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
   "branch": "test/v2-alpha-e2e-quality",
-  "command": "PYTHONDONTWRITEBYTECODE=1 /private/tmp/tiantong-alpha-qa-venv/bin/python -m pytest -q",
-  "total": 863,
-  "passed": 863,
+  "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. V2_ALPHA_POSTGRES_ADMIN_URL=<isolated-local-postgresql> MIGRATION_CODE_FIX_COMMIT=8d9b5f2890545f1f08d05b9b1618f71ff82d6621 pytest -q --ignore=tests/test_v2_alpha_migration_evidence.py",
+  "total": 892,
+  "passed": 892,
   "failed": 0,
   "warnings": 82,
-  "duration_seconds": 158.92,
+  "duration_seconds": 330.38,
   "baseline": 835,
   "baseline_count_met": true,
   "all_passed": true,
   "migration_evidence_accepted": false,
   "failed_gates": [],
   "external_blockers": [
-    "migration evidence claims historical migrations are unchanged, but 0005_knowledge_center_tables.py differs",
-    "alembic check evidence bypasses SQLite drift with ALEMBIC_SKIP_SQLITE_DRIFT=1",
-    "separate V1.0.1 and develop-v2 predecessor upgrade evidence is absent"
+    "Path A and Path B logs lack the required structured RAW OUTPUT sections",
+    "validation manifest lacks hardened commit, revision, checksum, required-files, and path metadata",
+    "evidence checksum does not recompute and 0037 dual-document disclosure is incomplete"
   ]
 }
