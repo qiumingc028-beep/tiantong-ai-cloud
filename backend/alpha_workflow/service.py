@@ -111,6 +111,27 @@ def _compensate_alpha_workflow_failure(
         agent_execution.error_message = reason
         agent_execution.finished_at = agent_execution.finished_at or _utc_now()
         agent_execution.updated_at = _utc_now()
+        existing_audit = (
+            db.query(AgentExecutionAudit)
+            .filter(
+                AgentExecutionAudit.execution_id == agent_execution.execution_id,
+                AgentExecutionAudit.event_type == "execution_failed",
+                AgentExecutionAudit.error_summary == reason,
+            )
+            .first()
+        )
+        if not existing_audit:
+            write_audit_event(
+                db,
+                agent_execution,
+                event_type="execution_failed",
+                actor_type="system",
+                actor_id="alpha_workflow",
+                approval_status=agent_execution.approval_status,
+                risk_level=agent_execution.risk_level,
+                error_summary=reason,
+                executor_name="AlphaWorkflow",
+            )
     if run:
         run.status = "已失败"
         run.failure_reason = reason

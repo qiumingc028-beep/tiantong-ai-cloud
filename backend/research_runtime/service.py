@@ -217,7 +217,11 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
                 "summary": str(row.get("summary") or ""),
                 "content_excerpt": str(row.get("summary") or ""),
                 "is_primary": bool(row.get("is_primary", True)),
-                "duplicate_of_source_id": row.get("duplicate_of_source_id"),
+                "duplicate_of_source_id": (
+                    identity_maps.get("upstream_source_id_map", {}).get(str(row.get("duplicate_of_source_id") or "").strip())
+                    if str(row.get("duplicate_of_source_id") or "").strip()
+                    else None
+                ),
                 "provider_name": str(row.get("provider_name") or row.get("provider") or "mock"),
                 "validation_status": "已交叉验证",
             },
