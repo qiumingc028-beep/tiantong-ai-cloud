@@ -5,7 +5,8 @@
 ## 当前主线
 
 - 当前集成分支：`develop-v2`
-- 当前集成完整 Head：`bdae8a6300c0f9440638044f6e0230120204719b`
+- 当前集成完整 Head：`fb43d2d14dc6cfd41041a35bf7dff6c7a9033048`
+- 上述 Head 是 `develop-v2` 当前代码基线，不是生产部署版本，也不是 `main` 版本。
 - 本文档来源分支：`docs/v2-sprint11-1-project-handoff`
 - 下一阶段：内部环境投入使用准备，不是开发新功能。
 - 本次 Alpha Workflow 相关四项 Feature Flag 默认关闭，定义位置为 `backend/config.py`：
@@ -18,13 +19,19 @@
 
 ## Sprint 11.1 合并记录
 
-合并顺序固定为 PR #17 → PR #18 → PR #19：
+合并顺序为 PR #17 → PR #18 → PR #19 → PR #21 → PR #22：
 
 | PR | 内容 | Head Commit | Merge Commit |
 |---|---|---|---|
 | #17 | Alpha Workflow 后端、Migration 与正式证据 | `f0f15f47dba447cee49a18568bbce18e72cb2ccb` | `59d87762d8cf00d73ca1ff4e5728a53576dd64a4` |
 | #18 | Alpha 专属前端 | `2306c5ef7e0444fa41b7b58ce86595065547f3c4` | `41e05bb4a7441d3b37bb167aaf364a1bb4dfb49f` |
 | #19 | QA、验收报告与机器结果 | `2a18ec1dcace31a19bf0c878a394b7bccd79d8bd` | `bdae8a6300c0f9440638044f6e0230120204719b` |
+| #21 | 14 个 V1 页面脚本语法与管理员白名单修复 | `12ad6b5c4dfb49df155821c30d7d663a40245123` | `c97e43756f452611b6234f04012c9d531aa86f6c` |
+| #22 | Knowledge Center 与天藏两个页面恢复 | `2e7aaf727e7d18836ee5a60846ab34b56721f009` | `fb43d2d14dc6cfd41041a35bf7dff6c7a9033048` |
+
+PR #21 的范围为修复 14 个 V1 前端 HTML 页面内联脚本语法，并使用同序 23 项管理员明确白名单；非 admin 权限边界未扩大，且未修改 backend、Migration、Evidence 或测试。
+
+PR #22 只恢复 `frontend/knowledge-center.html` 并修复 `frontend/tiancang.html`；DOM ID、函数名、API 路径、请求合同和非 admin 权限保持不变。
 
 关键冻结点：
 
@@ -39,6 +46,14 @@
 - Backend 完整回归：`892 passed / 0 failed`
 - Official Authenticity Gate：`16 passed / 0 failed`
 - Migration 最终为单一 Head：`0042_v2_alpha_workflow_unique_constraints`
+
+③在 PR #22 合并后的 `develop-v2` 基线上独立复跑了正式前端静态 QA；以下结果来自③的正式 QA，不以 Claude 扫描替代：
+
+- `FRONTEND_HTML_COUNT = 73`
+- `INLINE_SCRIPT_TOTAL = 79`
+- `NODE_CHECK_PASSED = 79`
+- `NODE_CHECK_FAILED = 0`
+- `FAILED_FILES = NONE`
 
 正式 Migration 证据位于：
 
@@ -55,6 +70,18 @@
 - `artifacts/qa/alpha-sprint11/migration-evidence-validation.json`
 
 旧 QA 报告中的 `BLOCK`，以及 `artifacts/qa/alpha-sprint11/test-summary.json` 中的 `migration_evidence_accepted: false`，均是正式 Evidence Bundle 完成前的历史快照，不代表最终状态。最终 Migration 证据状态以 `migration-evidence-validation.json` 的 `PASS` 为准。历史文件保留原貌，不回写或篡改旧结论。
+
+## 前端 Recovery 证据边界
+
+- `RECOVERY_MAP_ITEM_COUNT = 65`
+- `FULL_ITEM_COUNT = 31`
+- `PARTIAL_ITEM_COUNT = 34`
+- `CLAUDE_BASELINE_COVERAGE = 82/82`
+- `MISSING_ITEMS = 0`
+- `FREEFORM_REWRITE = 0`
+- Recovery Map 保存在仓库外。
+- 外部原始文件 SHA256 未被独立复算；不得声称“Recovery Map SHA256 已独立验证”。
+- 已完成内容级逐项核对。
 
 ## 当前可用内部路径
 
@@ -74,10 +101,22 @@
 
 这是仓库中已经存在的能力路径；是否已有实际运行中的内部环境，仍需由部署负责人单独现场确认。京东真实接口授权尚未完成时，不得声称已实现实时自动采集。Excel 批量导入是当前最现实的短期数据进入方式。
 
+`CURRENT_USE_PATH_ACCURACY = CLOSED`
+
+- 之前阻塞京东、Excel、指标等当前路径的 14 个页面已由 PR #21 修复。
+- 最后两个独立页面已由 PR #22 修复。
+- 当前代码级前端静态解析为 `79/79` 通过。
+- 当前最小路径在代码静态层面可解析：login → index/control → stores/jd-dashboard/jd-integrations → metrics/import → task-center。
+- 静态可解析 ≠ 已部署。
+- 静态可解析 ≠ 已接入真实京东 60 店数据。
+- 静态可解析 ≠ 已正式投入公司内部使用。
+
 ## 发布与运行状态
 
 - 当前正式发布版本：`V1.0.1`。
 - V2 尚未部署内部环境或生产环境。
+- V2 未接入生产数据库，未执行生产 Migration。
+- `main` 仍为 V1.0.1 基线 `483ebf560e1a4cfadecee4912a3ff6bca99516f6`。
 - 仓库当前没有足够证据确认公司此刻实际在线运行实例及其精确版本。
 - 后续部署前，必须由部署负责人现场确认实际实例、版本、数据库状态、备份与回滚条件。
 - “V2 尚未部署”不等于“公司当前没有生产环境”，两者不得混同。
@@ -88,7 +127,7 @@
 
 - Task Center、Orchestrator、AI 员工、Research、Knowledge Center、Skills Engine、Agent Runtime、Computer Executor、Safe Workflow 与 Execution Observability 已完成 Alpha 首次全链路集成。
 - Sprint 11.1 代码冻结、PostgreSQL Migration、真实性证据和完整回归均有仓库内证据。
-- PR #17、#18、#19 已按固定顺序合入 `develop-v2`。
+- PR #17、#18、#19、#21、#22 已按上述顺序合入 `develop-v2`。
 
 ### 2. 代码完成但员工不可使用
 
@@ -120,15 +159,15 @@
 
 ## 内部使用缺口优先级
 
-以下事项均为待办，不代表已经批准或完成：
+以下事项均为 `Pending`，不代表已经批准或完成；编号和顺序保持不变：
 
-1. P0：PR #20 交接文档正式关门。
-2. P1：老板批准内部测试环境及部署窗口。
-3. P2：内部环境备份、Migration `0027` → `0042`、健康检查与回滚验证。
-4. P3：环境变量、老板/员工账号、角色与权限矩阵。
-5. P4：60 店第一批数据导入；短期使用 Excel，后续取得真实京东授权。
-6. P5：老板单人灰度 Alpha Workflow 四项 Flag。
-7. P6：员工操作手册和内部运营验收。
+1. P0（Pending）：PR #20 交接文档正式关门。
+2. P1（Pending）：老板批准内部测试环境及部署窗口。
+3. P2（Pending）：内部环境备份、Migration `0027` → `0042`、健康检查与回滚验证。
+4. P3（Pending）：环境变量、老板/员工账号、角色与权限矩阵。
+5. P4（Pending）：60 店第一批数据导入；短期使用 Excel，后续取得真实京东授权。
+6. P5（Pending）：老板单人灰度 Alpha Workflow 四项 Flag。
+7. P6（Pending）：员工操作手册和内部运营验收。
 
 ## 待老板授权清单
 
