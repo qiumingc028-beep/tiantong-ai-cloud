@@ -62,6 +62,10 @@ def test_reproducible_build_command_contract() -> None:
     assert "--provenance=false" in content
     assert "--sbom=false" in content
     assert "rewrite-timestamp=true" in content
+    assert "sha256:db8e83a44af476c636a6a753adace39ad37863b63c0afd2862db7bbafeeb3944" in content
+    assert (
+        "sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b" in content
+    )
 
 
 def _run_image_import(image_env: str, import_statement: str) -> None:

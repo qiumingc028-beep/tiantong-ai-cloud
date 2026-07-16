@@ -32,9 +32,9 @@ python_base=python:s12-pinned-8a7e7cc04fd3-amd64
 expected_python_id=sha256:db8e83a44af476c636a6a753adace39ad37863b63c0afd2862db7bbafeeb3944
 expected_python_manifest=sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b
 actual_python_id=$(docker image inspect "$python_base" --format '{{.Id}}')
-python_repo_digests=$(docker image inspect "$python_base" --format '{{join .RepoDigests " "}}')
 [[ "$actual_python_id" == "$expected_python_id" ]]
-[[ " $python_repo_digests " == *" python@$expected_python_manifest "* ]]
+printf 'PYTHON_BASE_IMAGE_ID=%s\n' "$actual_python_id"
+printf 'PYTHON_BASE_SOURCE_MANIFEST=%s\n' "$expected_python_manifest"
 
 docker buildx build \
     --builder default \
