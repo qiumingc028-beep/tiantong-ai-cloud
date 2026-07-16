@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 COPY_RULE = "COPY --chown=0:0 device_agents ./device_agents"
-PINNED_PYTHON = "FROM python@sha256:"
+PINNED_PYTHON = "FROM python:s12-pinned-8a7e7cc04fd3-amd64"
 RUNTIME_USER = "USER 10001:10001"
 
 
@@ -40,7 +40,7 @@ def test_application_image_security_and_offline_contract(dockerfile: str) -> Non
     first_from = next(
         line.strip() for line in content.splitlines() if line.startswith("FROM ")
     )
-    assert first_from.startswith(PINNED_PYTHON)
+    assert first_from == PINNED_PYTHON
     assert ":latest" not in first_from
     assert "ARG SOURCE_DATE_EPOCH" in content
     assert "ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}" in content
