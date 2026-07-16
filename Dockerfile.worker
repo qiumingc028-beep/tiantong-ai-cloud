@@ -1,23 +1,40 @@
-FROM python@sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b
+FROM python:s12-pinned-8a7e7cc04fd3-amd64
+
+ARG SOURCE_DATE_EPOCH
 
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 ARG REQUIREMENTS_LOCK=artifacts/wheelhouse/linux-amd64-cp312/requirements-linux-amd64-cp312.lock
 COPY ${REQUIREMENTS_LOCK} /tmp/requirements.lock
+COPY artifacts/wheelhouse/linux-amd64-cp312/*.whl /wheelhouse/
 RUN pip install --no-cache-dir \
-    --index-url=https://pypi.org/simple \
+    --no-index \
+    --find-links=/wheelhouse \
     --require-hashes \
     --only-binary=:all: \
     -r /tmp/requirements.lock \
     && pip check \
-    && rm -f /tmp/requirements.lock
+    && rm -rf /tmp/requirements.lock /wheelhouse
 
-COPY backend ./backend
-COPY alembic ./alembic
-COPY alembic.ini .
-COPY VERSION .
+RUN groupadd --gid 10001 tiantong \
+    && useradd --uid 10001 --gid 10001 \
+        --no-create-home --home-dir /nonexistent \
+        --shell /usr/sbin/nologin tiantong
+
+COPY --chown=0:0 backend ./backend
+COPY --chown=0:0 device_agents ./device_agents
+COPY --chown=0:0 alembic ./alembic
+COPY --chown=0:0 alembic.ini .
+COPY --chown=0:0 VERSION .
+
+RUN test -n "$SOURCE_DATE_EPOCH" \
+    && find /app -xdev -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} + \
+    && chmod -R a-w /app
+
+USER 10001:10001
 
 CMD ["python", "-m", "backend.worker"]
