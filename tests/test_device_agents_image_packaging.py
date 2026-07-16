@@ -1,0 +1,88 @@
+"""Regression gates for the top-level device_agents image package."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import subprocess
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+COPY_RULE = "COPY device_agents ./device_agents"
+
+
+@pytest.mark.parametrize("dockerfile", ["Dockerfile.backend", "Dockerfile.worker"])
+def test_application_dockerfile_copies_device_agents(dockerfile: str) -> None:
+    content = (ROOT / dockerfile).read_text(encoding="utf-8")
+    matching_rules = [
+        line.strip() for line in content.splitlines() if line.strip() == COPY_RULE
+    ]
+    assert matching_rules == [COPY_RULE]
+
+
+def test_device_agents_source_package_is_complete() -> None:
+    required_files = {
+        "device_agents/__init__.py",
+        "device_agents/macos_observer/__init__.py",
+        "device_agents/macos_observer/sanitizer.py",
+        "device_agents/macos_observer/window_provider.py",
+    }
+    assert all((ROOT / relative_path).is_file() for relative_path in required_files)
+
+
+def _run_image_import(image_env: str, import_statement: str) -> None:
+    image = os.environ.get(image_env)
+    if not image:
+        pytest.skip(f"{image_env} is required for the image-level import gate")
+
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=16m",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+    ]
+    runtime_env_file = os.environ.get("S12_RUNTIME_ENV_FILE")
+    if runtime_env_file:
+        command.extend(["--env-file", runtime_env_file])
+    for name in (
+        "AGENT_RUNTIME_ENABLED",
+        "ALPHA_WORKFLOW_ENABLED",
+        "ALPHA_SCENARIO_ENABLED",
+        "ALPHA_WORKFLOW_DASHBOARD_ENABLED",
+        "ALPHA_DASHBOARD_ENABLED",
+    ):
+        command.extend(["--env", f"{name}=false"])
+    command.extend([image, "python", "-c", import_statement])
+
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_backend_image_imports_device_agents_and_backend_main() -> None:
+    _run_image_import(
+        "S12_BACKEND_IMAGE",
+        "import device_agents; import backend.main",
+    )
+
+
+def test_worker_image_imports_device_agents_and_worker_entrypoint() -> None:
+    _run_image_import(
+        "S12_WORKER_IMAGE",
+        "import device_agents; import backend.worker",
+    )

@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir \
     && rm -f /tmp/requirements.lock
 
 COPY backend ./backend
+COPY device_agents ./device_agents
 COPY alembic ./alembic
 COPY alembic.ini .
 COPY VERSION .
