@@ -1,4 +1,5 @@
 import json
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .ai_employees.registry import AI_EMPLOYEE_REGISTRY, TIANBO, TIANCAI_DATA, TIANCE_STRATEGY, TIANSHU
@@ -10,6 +11,7 @@ from .skills_engine.registry import ensure_default_skills, resolve_manager_user
 
 
 BOSS_USERNAME = "boss"
+SEED_ADVISORY_LOCK_KEY = 0x5449414E544F4E47
 
 
 PERMISSIONS = [
@@ -103,7 +105,6 @@ REAL_AI_EMPLOYEES = [
 
 
 PERMISSIONS.append(("menu.account_center", "账号资料中心"))
-PERMISSIONS.append(("menu.computer_executor", "电脑执行中心"))
 for role_code in ("owner", "admin", "operator"):
     ROLE_PERMISSIONS.setdefault(role_code, []).extend(["menu.account_center"])
 for role_code in ("owner", "admin"):
@@ -113,7 +114,17 @@ for role_code in ("owner", "admin"):
     ROLE_PERMISSIONS.setdefault(role_code, []).extend(["device_center.read", "device_center.manage", "device_center.audit"])
 
 
+def _acquire_seed_lock(db: Session) -> None:
+    """Serialize PostgreSQL seed transactions without weakening uniqueness."""
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": SEED_ADVISORY_LOCK_KEY},
+        )
+
+
 def seed_defaults(db: Session):
+    _acquire_seed_lock(db)
     boss_initial_password = get_settings().BOSS_INITIAL_PASSWORD
     permission_by_code = {}
     for code, name in PERMISSIONS:
@@ -132,7 +143,10 @@ def seed_defaults(db: Session):
             db.add(role)
         else:
             role.name = label
-        role.permissions = [permission_by_code[p] for p in ROLE_PERMISSIONS.get(code, [])]
+        role.permissions = [
+            permission_by_code[p]
+            for p in dict.fromkeys(ROLE_PERMISSIONS.get(code, []))
+        ]
 
     boss_user = db.query(User).filter(User.username == BOSS_USERNAME).one_or_none()
     if not boss_user:
