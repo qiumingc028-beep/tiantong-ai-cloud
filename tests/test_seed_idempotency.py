@@ -35,6 +35,19 @@ def test_permission_seed_codes_are_unique():
     assert len(codes) == len(set(codes))
 
 
+def test_seed_defaults_initializes_empty_permission_table(monkeypatch):
+    Session = _session_factory()
+    with Session() as db:
+        _run_seed(monkeypatch, db)
+
+        assert (
+            db.query(Permission)
+            .filter(Permission.code == "menu.computer_executor")
+            .count()
+            == 1
+        )
+
+
 def test_seed_defaults_is_idempotent_with_existing_permission(monkeypatch):
     Session = _session_factory()
     with Session() as db:
