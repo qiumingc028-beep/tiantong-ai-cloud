@@ -17,11 +17,13 @@ if _environment() != "production":
     load_dotenv()
 
 
+
 def _required(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value or (value.startswith("<") and value.endswith(">")):
         raise ConfigurationError(f"{name} is required in production")
     return value
+
 
 
 def _boolean(name: str, default: bool) -> bool:
@@ -34,6 +36,7 @@ def _boolean(name: str, default: bool) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     raise ConfigurationError(f"{name} must be a boolean")
+
 
 
 def _cors_origins(raw: str, *, production: bool) -> list[str]:
@@ -49,6 +52,7 @@ def _cors_origins(raw: str, *, production: bool) -> list[str]:
     return origins
 
 
+
 def _present(name: str) -> str | None:
     raw = os.getenv(name)
     if raw is None:
@@ -57,11 +61,18 @@ def _present(name: str) -> str | None:
     return value or None
 
 
+
 def _fail_partial(group: str, names: tuple[str, ...], values: dict[str, str | None]) -> None:
     present = [name for name in names if values[name] is not None]
     if present and len(present) != len(names):
         missing = ", ".join(name for name in names if values[name] is None)
         raise ConfigurationError(f"{group} split configuration is incomplete: missing {missing}")
+
+
+
+def _quote_component(value: str) -> str:
+    return quote(value, safe="")
+
 
 
 def _database_url() -> str:
@@ -77,10 +88,11 @@ def _database_url() -> str:
     if all(values[name] is not None for name in names):
         return (
             "postgresql+psycopg2://"
-            f"{quote(values['DATABASE_USER'], safe='')}:{quote(values['DATABASE_PASSWORD'], safe='')}"
+            f"{_quote_component(values['DATABASE_USER'])}:{_quote_component(values['DATABASE_PASSWORD'])}"
             f"@{values['DATABASE_HOST']}:{values['DATABASE_PORT']}/{values['DATABASE_NAME']}"
         )
     return os.getenv("DATABASE_URL", "postgresql+psycopg2://tiantong:tiantong@postgres:5432/tiantong_ai")
+
 
 
 def _redis_url() -> str:
@@ -96,11 +108,10 @@ def _redis_url() -> str:
     if username is not None and not all(values[name] is not None for name in names):
         raise ConfigurationError("REDIS split configuration is incomplete: missing REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD")
     if all(values[name] is not None for name in names):
+        userinfo = f":{_quote_component(values['REDIS_PASSWORD'])}"
         if username is not None:
-            auth = f"{quote(username, safe='')}:{quote(values['REDIS_PASSWORD'], safe='')}@"
-        else:
-            auth = f":{quote(values['REDIS_PASSWORD'], safe='')}@"
-        return f"redis://{auth}{values['REDIS_HOST']}:{values['REDIS_PORT']}/{values['REDIS_DB']}"
+            userinfo = f"{_quote_component(username)}:{_quote_component(values['REDIS_PASSWORD'])}"
+        return f"redis://{userinfo}@{values['REDIS_HOST']}:{values['REDIS_PORT']}/{values['REDIS_DB']}"
     return os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 
@@ -123,9 +134,7 @@ class Settings:
         else:
             self.JWT_SECRET = os.getenv("JWT_SECRET", "development-only-jwt-secret-change-me")
             self.BOSS_INITIAL_PASSWORD = os.getenv("BOSS_INITIAL_PASSWORD", "Tiantong@2026")
-            cors_raw = os.getenv(
-                "CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-            )
+            cors_raw = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 
         self.CORS_ALLOWED_ORIGINS = _cors_origins(cors_raw, production=self.IS_PRODUCTION)
         self.CORS_ALLOW_CREDENTIALS = _boolean("CORS_ALLOW_CREDENTIALS", True)
@@ -216,10 +225,7 @@ class Settings:
             self._validate_production()
 
     def _validate_production(self):
-        if len(self.JWT_SECRET) < 32 or self.JWT_SECRET in {
-            "change-me-in-production",
-            "development-only-jwt-secret-change-me",
-        }:
+        if len(self.JWT_SECRET) < 32 or self.JWT_SECRET in {"change-me-in-production", "development-only-jwt-secret-change-me"}:
             raise ConfigurationError("JWT_SECRET must contain at least 32 non-default characters")
         if len(self.BOSS_INITIAL_PASSWORD) < 12 or self.BOSS_INITIAL_PASSWORD == "Tiantong@2026":
             raise ConfigurationError("BOSS_INITIAL_PASSWORD must be an explicit non-default value")

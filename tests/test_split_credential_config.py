@@ -1,35 +1,18 @@
 import importlib
 import os
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, unquote
 
 import pytest
 
 from backend.config import ConfigurationError, Settings, get_settings
 
-
 ALL_KEYS = (
-    "APP_ENV",
-    "ENV",
-    "DATABASE_URL",
-    "REDIS_URL",
-    "DATABASE_HOST",
-    "DATABASE_PORT",
-    "DATABASE_NAME",
-    "DATABASE_USER",
-    "DATABASE_PASSWORD",
-    "REDIS_HOST",
-    "REDIS_PORT",
-    "REDIS_DB",
-    "REDIS_USERNAME",
-    "REDIS_PASSWORD",
-    "JWT_SECRET",
-    "BOSS_INITIAL_PASSWORD",
-    "CORS_ALLOWED_ORIGINS",
-    "AGENT_RUNTIME_ENABLED",
-    "ALPHA_WORKFLOW_ENABLED",
-    "ALPHA_SCENARIO_ENABLED",
-    "ALPHA_WORKFLOW_DASHBOARD_ENABLED",
-    "ALPHA_DASHBOARD_ENABLED",
+    "APP_ENV", "ENV", "DATABASE_URL", "REDIS_URL",
+    "DATABASE_HOST", "DATABASE_PORT", "DATABASE_NAME", "DATABASE_USER", "DATABASE_PASSWORD",
+    "REDIS_HOST", "REDIS_PORT", "REDIS_DB", "REDIS_USERNAME", "REDIS_PASSWORD",
+    "JWT_SECRET", "BOSS_INITIAL_PASSWORD", "CORS_ALLOWED_ORIGINS",
+    "AGENT_RUNTIME_ENABLED", "ALPHA_WORKFLOW_ENABLED", "ALPHA_SCENARIO_ENABLED",
+    "ALPHA_WORKFLOW_DASHBOARD_ENABLED", "ALPHA_DASHBOARD_ENABLED",
 )
 
 
@@ -60,25 +43,16 @@ def reset_env(monkeypatch, **overrides):
 
 def test_legacy_database_url_compatible(monkeypatch):
     reset_env(monkeypatch)
-    settings = Settings()
-    assert settings.DATABASE_URL == "postgresql+psycopg2://legacy-user:legacy-password@legacy-db:5432/legacy_name"
+    assert Settings().DATABASE_URL == "postgresql+psycopg2://legacy-user:legacy-password@legacy-db:5432/legacy_name"
 
 
 def test_legacy_redis_url_compatible(monkeypatch):
     reset_env(monkeypatch)
-    settings = Settings()
-    assert settings.REDIS_URL == "redis://:legacy-password@legacy-redis:6379/5"
+    assert Settings().REDIS_URL == "redis://:legacy-password@legacy-redis:6379/5"
 
 
 def test_postgresql_split_fields_build_database_url(monkeypatch):
-    reset_env(
-        monkeypatch,
-        DATABASE_HOST="pg.internal",
-        DATABASE_PORT="6543",
-        DATABASE_NAME="service_db",
-        DATABASE_USER="svc_user",
-        DATABASE_PASSWORD="p@ss word:/?",
-    )
+    reset_env(monkeypatch, DATABASE_HOST="pg.internal", DATABASE_PORT="6543", DATABASE_NAME="service_db", DATABASE_USER="svc_user", DATABASE_PASSWORD="p@ss word:/?")
     settings = Settings()
     assert settings.DATABASE_URL == (
         "postgresql+psycopg2://svc_user:"
@@ -87,19 +61,28 @@ def test_postgresql_split_fields_build_database_url(monkeypatch):
 
 
 def test_redis_split_fields_build_redis_url(monkeypatch):
+    password = "pä ss@:/?#%42"
+    username = "服务@user"
     reset_env(
         monkeypatch,
         REDIS_HOST="redis.internal",
         REDIS_PORT="6380",
         REDIS_DB="7",
-        REDIS_USERNAME="service-user",
-        REDIS_PASSWORD="p@ss word:/?",
+        REDIS_USERNAME=username,
+        REDIS_PASSWORD=password,
     )
     settings = Settings()
-    assert settings.REDIS_URL == (
-        "redis://service-user:"
-        f"{quote('p@ss word:/?', safe='')}@redis.internal:6380/7"
-    )
+    parsed = urlsplit(settings.REDIS_URL)
+    assert parsed.scheme == "redis"
+    assert parsed.hostname == "redis.internal"
+    assert parsed.port == 6380
+    assert parsed.path == "/7"
+    userinfo = parsed.netloc.rsplit("@", 1)[0]
+    encoded_user, encoded_password = userinfo.split(":", 1)
+    assert encoded_user == quote(username, safe="")
+    assert encoded_password == quote(password, safe="")
+    assert unquote(encoded_user) == username
+    assert unquote(encoded_password) == password
 
 
 def test_database_partial_split_config_fails_closed(monkeypatch):
@@ -168,11 +151,10 @@ def test_flags_remain_false_when_bound_false(monkeypatch):
     assert settings.ALPHA_DASHBOARD_ENABLED is False
 
 
-@pytest.mark.parametrize(
-    ("database_password", "redis_password"),
-    [("db:p@ ss/word?", "redis:p@ ss/word?")],
-)
-def test_passwords_are_url_encoded(monkeypatch, database_password, redis_password):
+def test_passwords_are_url_encoded(monkeypatch):
+    database_password = "db:p@ ss/word?"
+    redis_password = "redis 密码@:/?#%"
+    redis_username = "redis 用户@:/?#%"
     reset_env(
         monkeypatch,
         DATABASE_HOST="pg.internal",
@@ -183,12 +165,22 @@ def test_passwords_are_url_encoded(monkeypatch, database_password, redis_passwor
         REDIS_HOST="redis.internal",
         REDIS_PORT="6379",
         REDIS_DB="8",
+        REDIS_USERNAME=redis_username,
         REDIS_PASSWORD=redis_password,
     )
     settings = Settings()
     assert quote(database_password, safe="") in settings.DATABASE_URL
     assert quote(redis_password, safe="") in settings.REDIS_URL
+    assert quote(redis_username, safe="") in settings.REDIS_URL
     assert database_password not in settings.DATABASE_URL
     assert redis_password not in settings.REDIS_URL
+    parsed = urlsplit(settings.REDIS_URL)
+    userinfo = parsed.netloc.rsplit("@", 1)[0]
+    encoded_user, encoded_password = userinfo.split(":", 1)
+    assert unquote(encoded_user) == redis_username
+    assert unquote(encoded_password) == redis_password
+    assert parsed.hostname == "redis.internal"
+    assert parsed.port == 6379
+    assert parsed.path == "/8"
     assert os.getenv("DATABASE_URL") == "postgresql+psycopg2://legacy-user:legacy-password@legacy-db:5432/legacy_name"
     assert os.getenv("REDIS_URL") == "redis://:legacy-password@legacy-redis:6379/5"
