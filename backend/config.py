@@ -1,6 +1,6 @@
 import os
 from functools import lru_cache
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
 
@@ -49,22 +49,78 @@ def _cors_origins(raw: str, *, production: bool) -> list[str]:
     return origins
 
 
+def _present(name: str) -> str | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    value = raw.strip()
+    return value or None
+
+
+def _fail_partial(group: str, names: tuple[str, ...], values: dict[str, str | None]) -> None:
+    present = [name for name in names if values[name] is not None]
+    if present and len(present) != len(names):
+        missing = ", ".join(name for name in names if values[name] is None)
+        raise ConfigurationError(f"{group} split configuration is incomplete: missing {missing}")
+
+
+def _database_url() -> str:
+    values = {name: _present(name) for name in (
+        "DATABASE_HOST",
+        "DATABASE_PORT",
+        "DATABASE_NAME",
+        "DATABASE_USER",
+        "DATABASE_PASSWORD",
+    )}
+    names = tuple(values)
+    _fail_partial("DATABASE", names, values)
+    if all(values[name] is not None for name in names):
+        return (
+            "postgresql+psycopg2://"
+            f"{quote(values['DATABASE_USER'], safe='')}:{quote(values['DATABASE_PASSWORD'], safe='')}"
+            f"@{values['DATABASE_HOST']}:{values['DATABASE_PORT']}/{values['DATABASE_NAME']}"
+        )
+    return os.getenv("DATABASE_URL", "postgresql+psycopg2://tiantong:tiantong@postgres:5432/tiantong_ai")
+
+
+def _redis_url() -> str:
+    values = {name: _present(name) for name in (
+        "REDIS_HOST",
+        "REDIS_PORT",
+        "REDIS_DB",
+        "REDIS_PASSWORD",
+    )}
+    username = _present("REDIS_USERNAME")
+    names = tuple(values)
+    _fail_partial("REDIS", names, values)
+    if username is not None and not all(values[name] is not None for name in names):
+        raise ConfigurationError("REDIS split configuration is incomplete: missing REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD")
+    if all(values[name] is not None for name in names):
+        if username is not None:
+            auth = f"{quote(username, safe='')}:{quote(values['REDIS_PASSWORD'], safe='')}@"
+        else:
+            auth = f":{quote(values['REDIS_PASSWORD'], safe='')}@"
+        return f"redis://{auth}{values['REDIS_HOST']}:{values['REDIS_PORT']}/{values['REDIS_DB']}"
+    return os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+
 class Settings:
     def __init__(self):
         self.APP_ENV = _environment()
         self.IS_PRODUCTION = self.APP_ENV == "production"
 
+        self.DATABASE_URL = _database_url()
+        self.REDIS_URL = _redis_url()
+
         if self.IS_PRODUCTION:
-            self.DATABASE_URL = _required("DATABASE_URL")
-            self.REDIS_URL = _required("REDIS_URL")
+            if not self.DATABASE_URL or (self.DATABASE_URL.startswith("<") and self.DATABASE_URL.endswith(">")):
+                raise ConfigurationError("DATABASE_URL is required in production")
+            if not self.REDIS_URL or (self.REDIS_URL.startswith("<") and self.REDIS_URL.endswith(">")):
+                raise ConfigurationError("REDIS_URL is required in production")
             self.JWT_SECRET = _required("JWT_SECRET")
             self.BOSS_INITIAL_PASSWORD = _required("BOSS_INITIAL_PASSWORD")
             cors_raw = _required("CORS_ALLOWED_ORIGINS")
         else:
-            self.DATABASE_URL = os.getenv(
-                "DATABASE_URL", "postgresql+psycopg2://tiantong:tiantong@postgres:5432/tiantong_ai"
-            )
-            self.REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
             self.JWT_SECRET = os.getenv("JWT_SECRET", "development-only-jwt-secret-change-me")
             self.BOSS_INITIAL_PASSWORD = os.getenv("BOSS_INITIAL_PASSWORD", "Tiantong@2026")
             cors_raw = os.getenv(
