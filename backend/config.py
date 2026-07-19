@@ -1,12 +1,31 @@
 import os
 from functools import lru_cache
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
+from redis import ConnectionPool
+from sqlalchemy.engine import URL
 
 
 class ConfigurationError(RuntimeError):
     pass
+
+
+DATABASE_SPLIT_FIELDS = (
+    "DATABASE_HOST",
+    "DATABASE_PORT",
+    "DATABASE_NAME",
+    "DATABASE_USER",
+    "DATABASE_PASSWORD",
+)
+REDIS_SPLIT_FIELDS = (
+    "REDIS_HOST",
+    "REDIS_PORT",
+    "REDIS_DB",
+    "REDIS_PASSWORD",
+)
+PLACEHOLDER_PREFIX = "<"
+PLACEHOLDER_SUFFIX = ">"
 
 
 def _environment() -> str:
@@ -17,11 +36,16 @@ if _environment() != "production":
     load_dotenv()
 
 
+def _is_placeholder(value: str) -> bool:
+    stripped = value.strip()
+    return stripped.startswith(PLACEHOLDER_PREFIX) and stripped.endswith(PLACEHOLDER_SUFFIX)
+
+
 def _required(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value or (value.startswith("<") and value.endswith(">")):
+    value = os.getenv(name, "")
+    if not value.strip() or _is_placeholder(value):
         raise ConfigurationError(f"{name} is required in production")
-    return value
+    return value.strip()
 
 
 def _boolean(name: str, default: bool) -> bool:
@@ -49,27 +73,99 @@ def _cors_origins(raw: str, *, production: bool) -> list[str]:
     return origins
 
 
+def _split_state(names: tuple[str, ...], extra: tuple[str, ...] = ()) -> tuple[str, dict[str, str | None]]:
+    values = {name: os.getenv(name) for name in names + extra}
+    if all(value is None for value in values.values()):
+        return "NONE", values
+    for name in names:
+        value = values[name]
+        if value is None or not value.strip() or _is_placeholder(value):
+            return "PARTIAL", values
+    for name in extra:
+        value = values[name]
+        if value is not None and (not value.strip() or _is_placeholder(value)):
+            return "PARTIAL", values
+    return "COMPLETE", values
+
+
+def _missing_required(names: tuple[str, ...], values: dict[str, str | None]) -> str:
+    missing = []
+    for name in names:
+        value = values[name]
+        if value is None or not value.strip() or _is_placeholder(value):
+            missing.append(name)
+    return ", ".join(missing)
+
+
+def _quote_component(value: str) -> str:
+    return quote(value, safe="")
+
+
+def _database_url(*, production: bool) -> str:
+    state, values = _split_state(DATABASE_SPLIT_FIELDS)
+    if state == "PARTIAL":
+        raise ConfigurationError(
+            f"DATABASE split configuration is incomplete: missing {_missing_required(DATABASE_SPLIT_FIELDS, values)}"
+        )
+    if state == "COMPLETE":
+        return URL.create(
+            "postgresql+psycopg2",
+            username=values["DATABASE_USER"],
+            password=values["DATABASE_PASSWORD"],
+            host=values["DATABASE_HOST"].strip(),
+            port=int(values["DATABASE_PORT"].strip()),
+            database=values["DATABASE_NAME"].strip(),
+        ).render_as_string(hide_password=False)
+    if production:
+        return _required("DATABASE_URL")
+    return os.getenv("DATABASE_URL", "postgresql+psycopg2://tiantong:tiantong@postgres:5432/tiantong_ai")
+
+
+def _redis_url(*, production: bool) -> str:
+    state, values = _split_state(REDIS_SPLIT_FIELDS, ("REDIS_USERNAME",))
+    if state == "PARTIAL":
+        raise ConfigurationError(
+            f"REDIS split configuration is incomplete: missing {_missing_required(REDIS_SPLIT_FIELDS, values)}"
+        )
+    if state == "COMPLETE":
+        userinfo = f":{_quote_component(values['REDIS_PASSWORD'])}"
+        if values["REDIS_USERNAME"] is not None:
+            userinfo = f"{_quote_component(values['REDIS_USERNAME'])}:{_quote_component(values['REDIS_PASSWORD'])}"
+        return f"redis://{userinfo}@{values['REDIS_HOST'].strip()}:{values['REDIS_PORT'].strip()}/{values['REDIS_DB'].strip()}"
+    if production:
+        return _required("REDIS_URL")
+    return os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+
+def _validate_production_redis_url(url: str) -> None:
+    try:
+        kwargs = ConnectionPool.from_url(url).connection_kwargs
+    except Exception as exc:
+        raise ConfigurationError("authenticated REDIS_URL is required in production") from exc
+    username = kwargs.get("username")
+    password = kwargs.get("password")
+    if username is not None and not username:
+        raise ConfigurationError("authenticated REDIS_URL is required in production")
+    if password is None or not password.strip() or _is_placeholder(password):
+        raise ConfigurationError("authenticated REDIS_URL is required in production")
+
+
 class Settings:
     def __init__(self):
         self.APP_ENV = _environment()
         self.IS_PRODUCTION = self.APP_ENV == "production"
 
+        self.DATABASE_URL = _database_url(production=self.IS_PRODUCTION)
+        self.REDIS_URL = _redis_url(production=self.IS_PRODUCTION)
+
         if self.IS_PRODUCTION:
-            self.DATABASE_URL = _required("DATABASE_URL")
-            self.REDIS_URL = _required("REDIS_URL")
             self.JWT_SECRET = _required("JWT_SECRET")
             self.BOSS_INITIAL_PASSWORD = _required("BOSS_INITIAL_PASSWORD")
             cors_raw = _required("CORS_ALLOWED_ORIGINS")
         else:
-            self.DATABASE_URL = os.getenv(
-                "DATABASE_URL", "postgresql+psycopg2://tiantong:tiantong@postgres:5432/tiantong_ai"
-            )
-            self.REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
             self.JWT_SECRET = os.getenv("JWT_SECRET", "development-only-jwt-secret-change-me")
             self.BOSS_INITIAL_PASSWORD = os.getenv("BOSS_INITIAL_PASSWORD", "Tiantong@2026")
-            cors_raw = os.getenv(
-                "CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-            )
+            cors_raw = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 
         self.CORS_ALLOWED_ORIGINS = _cors_origins(cors_raw, production=self.IS_PRODUCTION)
         self.CORS_ALLOW_CREDENTIALS = _boolean("CORS_ALLOW_CREDENTIALS", True)
@@ -160,17 +256,13 @@ class Settings:
             self._validate_production()
 
     def _validate_production(self):
-        if len(self.JWT_SECRET) < 32 or self.JWT_SECRET in {
-            "change-me-in-production",
-            "development-only-jwt-secret-change-me",
-        }:
+        if len(self.JWT_SECRET) < 32 or self.JWT_SECRET in {"change-me-in-production", "development-only-jwt-secret-change-me"}:
             raise ConfigurationError("JWT_SECRET must contain at least 32 non-default characters")
         if len(self.BOSS_INITIAL_PASSWORD) < 12 or self.BOSS_INITIAL_PASSWORD == "Tiantong@2026":
             raise ConfigurationError("BOSS_INITIAL_PASSWORD must be an explicit non-default value")
         if "tiantong:tiantong@" in self.DATABASE_URL:
             raise ConfigurationError("development database credentials are forbidden in production")
-        if self.REDIS_URL == "redis://redis:6379/0" or ":@" in self.REDIS_URL:
-            raise ConfigurationError("authenticated REDIS_URL is required in production")
+        _validate_production_redis_url(self.REDIS_URL)
         if self.DEBUG:
             raise ConfigurationError("DEBUG must be disabled in production")
         if self.EXTERNAL_VISION_PROVIDER_ENABLED:
