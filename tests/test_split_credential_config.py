@@ -1,8 +1,10 @@
 import importlib
 import os
-from urllib.parse import quote, urlsplit, unquote
+from urllib.parse import urlsplit, unquote
 
 import pytest
+import redis
+from sqlalchemy.engine import make_url
 
 from backend.config import ConfigurationError, Settings, get_settings
 
@@ -52,37 +54,37 @@ def test_legacy_redis_url_compatible(monkeypatch):
 
 
 def test_postgresql_split_fields_build_database_url(monkeypatch):
-    reset_env(monkeypatch, DATABASE_HOST="pg.internal", DATABASE_PORT="6543", DATABASE_NAME="service_db", DATABASE_USER="svc_user", DATABASE_PASSWORD="p@ss word:/?")
+    password = "空 格@:/?#%+\\中文ß"
+    reset_env(monkeypatch, DATABASE_HOST="pg.internal", DATABASE_PORT="6543", DATABASE_NAME="service_db", DATABASE_USER="svc_user", DATABASE_PASSWORD=password)
     settings = Settings()
-    assert settings.DATABASE_URL == (
-        "postgresql+psycopg2://svc_user:"
-        f"{quote('p@ss word:/?', safe='')}@pg.internal:6543/service_db"
-    )
+    parsed = make_url(settings.DATABASE_URL)
+    assert parsed.username == "svc_user"
+    assert parsed.password == password
+    assert parsed.host == "pg.internal"
+    assert parsed.port == 6543
+    assert parsed.database == "service_db"
 
 
 def test_redis_split_fields_build_redis_url(monkeypatch):
-    password = "pä ss@:/?#%42"
-    username = "服务@user"
-    reset_env(
-        monkeypatch,
-        REDIS_HOST="redis.internal",
-        REDIS_PORT="6380",
-        REDIS_DB="7",
-        REDIS_USERNAME=username,
-        REDIS_PASSWORD=password,
-    )
+    password = "空 格@:/?#%+\\中文ß"
+    username = "服务@user 空格"
+    reset_env(monkeypatch, REDIS_HOST="redis.internal", REDIS_PORT="6380", REDIS_DB="7", REDIS_USERNAME=username, REDIS_PASSWORD=password)
     settings = Settings()
     parsed = urlsplit(settings.REDIS_URL)
-    assert parsed.scheme == "redis"
+    pool = redis.ConnectionPool.from_url(settings.REDIS_URL)
+    kwargs = pool.connection_kwargs
+    userinfo = parsed.netloc.rsplit("@", 1)[0]
+    encoded_user, encoded_password = userinfo.split(":", 1)
+    assert unquote(encoded_user) == username
+    assert unquote(encoded_password) == password
+    assert kwargs["username"] == username
+    assert kwargs["password"] == password
     assert parsed.hostname == "redis.internal"
     assert parsed.port == 6380
     assert parsed.path == "/7"
-    userinfo = parsed.netloc.rsplit("@", 1)[0]
-    encoded_user, encoded_password = userinfo.split(":", 1)
-    assert encoded_user == quote(username, safe="")
-    assert encoded_password == quote(password, safe="")
-    assert unquote(encoded_user) == username
-    assert unquote(encoded_password) == password
+    assert kwargs["host"] == "redis.internal"
+    assert kwargs["port"] == 6380
+    assert kwargs["db"] == 7
 
 
 def test_database_partial_split_config_fails_closed(monkeypatch):
@@ -139,6 +141,7 @@ def test_backend_database_import_works_with_split_config(monkeypatch):
     module = importlib.import_module("backend.database")
     module = importlib.reload(module)
     assert str(module.engine.url) == "postgresql+psycopg2://user:***@db:5432/name"
+    assert module.get_redis().connection_pool.connection_kwargs["password"] == "password"
 
 
 def test_flags_remain_false_when_bound_false(monkeypatch):
@@ -152,9 +155,9 @@ def test_flags_remain_false_when_bound_false(monkeypatch):
 
 
 def test_passwords_are_url_encoded(monkeypatch):
-    database_password = "db:p@ ss/word?"
-    redis_password = "redis 密码@:/?#%"
-    redis_username = "redis 用户@:/?#%"
+    database_password = "db 空格@:/?#%+\\中文ß"
+    redis_password = "redis 空格@:/?#%+\\中文ß"
+    redis_username = "redis 用户 空格@:/?#%+\\中文ß"
     reset_env(
         monkeypatch,
         DATABASE_HOST="pg.internal",
@@ -169,18 +172,38 @@ def test_passwords_are_url_encoded(monkeypatch):
         REDIS_PASSWORD=redis_password,
     )
     settings = Settings()
-    assert quote(database_password, safe="") in settings.DATABASE_URL
-    assert quote(redis_password, safe="") in settings.REDIS_URL
-    assert quote(redis_username, safe="") in settings.REDIS_URL
-    assert database_password not in settings.DATABASE_URL
-    assert redis_password not in settings.REDIS_URL
-    parsed = urlsplit(settings.REDIS_URL)
-    userinfo = parsed.netloc.rsplit("@", 1)[0]
-    encoded_user, encoded_password = userinfo.split(":", 1)
-    assert unquote(encoded_user) == redis_username
-    assert unquote(encoded_password) == redis_password
-    assert parsed.hostname == "redis.internal"
-    assert parsed.port == 6379
-    assert parsed.path == "/8"
+    db_parsed = make_url(settings.DATABASE_URL)
+    redis_parsed = urlsplit(settings.REDIS_URL)
+    redis_pool = redis.ConnectionPool.from_url(settings.REDIS_URL)
+    kwargs = redis_pool.connection_kwargs
+    assert db_parsed.password == database_password
+    assert kwargs["password"] == redis_password
+    assert kwargs["username"] == redis_username
+    assert redis_parsed.hostname == "redis.internal"
+    assert redis_parsed.port == 6379
+    assert redis_parsed.path == "/8"
+    assert kwargs["host"] == "redis.internal"
+    assert kwargs["port"] == 6379
+    assert kwargs["db"] == 8
     assert os.getenv("DATABASE_URL") == "postgresql+psycopg2://legacy-user:legacy-password@legacy-db:5432/legacy_name"
     assert os.getenv("REDIS_URL") == "redis://:legacy-password@legacy-redis:6379/5"
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "<DATABASE_URL>"])
+def test_production_rejects_missing_blank_or_placeholder_database_url_without_split(monkeypatch, value):
+    reset_env(monkeypatch, DATABASE_URL=value)
+    with pytest.raises(ConfigurationError, match="DATABASE_URL"):
+        Settings()
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "<REDIS_URL>"])
+def test_production_rejects_missing_blank_or_placeholder_redis_url_without_split(monkeypatch, value):
+    reset_env(monkeypatch, REDIS_URL=value)
+    with pytest.raises(ConfigurationError, match="REDIS_URL"):
+        Settings()
+
+
+def test_production_rejects_unauthenticated_redis_url(monkeypatch):
+    reset_env(monkeypatch, REDIS_URL="redis://redis:6379/0")
+    with pytest.raises(ConfigurationError, match="REDIS_URL"):
+        Settings()

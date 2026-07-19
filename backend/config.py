@@ -3,10 +3,26 @@ from functools import lru_cache
 from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import URL
 
 
 class ConfigurationError(RuntimeError):
     pass
+
+
+DATABASE_SPLIT_FIELDS = (
+    "DATABASE_HOST",
+    "DATABASE_PORT",
+    "DATABASE_NAME",
+    "DATABASE_USER",
+    "DATABASE_PASSWORD",
+)
+REDIS_SPLIT_FIELDS = (
+    "REDIS_HOST",
+    "REDIS_PORT",
+    "REDIS_DB",
+    "REDIS_PASSWORD",
+)
 
 
 def _environment() -> str:
@@ -62,11 +78,19 @@ def _present(name: str) -> str | None:
 
 
 
-def _fail_partial(group: str, names: tuple[str, ...], values: dict[str, str | None]) -> None:
+def _split_state(names: tuple[str, ...], extra: tuple[str, ...] = ()) -> tuple[str, dict[str, str | None]]:
+    values = {name: _present(name) for name in names + extra}
     present = [name for name in names if values[name] is not None]
-    if present and len(present) != len(names):
-        missing = ", ".join(name for name in names if values[name] is None)
-        raise ConfigurationError(f"{group} split configuration is incomplete: missing {missing}")
+    if not present and all(values[name] is None for name in extra):
+        return "NONE", values
+    if len(present) != len(names):
+        return "PARTIAL", values
+    return "COMPLETE", values
+
+
+
+def _missing_required(names: tuple[str, ...], values: dict[str, str | None]) -> str:
+    return ", ".join(name for name in names if values[name] is None)
 
 
 
@@ -75,43 +99,40 @@ def _quote_component(value: str) -> str:
 
 
 
-def _database_url() -> str:
-    values = {name: _present(name) for name in (
-        "DATABASE_HOST",
-        "DATABASE_PORT",
-        "DATABASE_NAME",
-        "DATABASE_USER",
-        "DATABASE_PASSWORD",
-    )}
-    names = tuple(values)
-    _fail_partial("DATABASE", names, values)
-    if all(values[name] is not None for name in names):
-        return (
-            "postgresql+psycopg2://"
-            f"{_quote_component(values['DATABASE_USER'])}:{_quote_component(values['DATABASE_PASSWORD'])}"
-            f"@{values['DATABASE_HOST']}:{values['DATABASE_PORT']}/{values['DATABASE_NAME']}"
+def _database_url(*, production: bool) -> str:
+    state, values = _split_state(DATABASE_SPLIT_FIELDS)
+    if state == "PARTIAL":
+        raise ConfigurationError(
+            f"DATABASE split configuration is incomplete: missing {_missing_required(DATABASE_SPLIT_FIELDS, values)}"
         )
+    if state == "COMPLETE":
+        return URL.create(
+            "postgresql+psycopg2",
+            username=values["DATABASE_USER"],
+            password=values["DATABASE_PASSWORD"],
+            host=values["DATABASE_HOST"],
+            port=int(values["DATABASE_PORT"]),
+            database=values["DATABASE_NAME"],
+        ).render_as_string(hide_password=False)
+    if production:
+        return _required("DATABASE_URL")
     return os.getenv("DATABASE_URL", "postgresql+psycopg2://tiantong:tiantong@postgres:5432/tiantong_ai")
 
 
 
-def _redis_url() -> str:
-    values = {name: _present(name) for name in (
-        "REDIS_HOST",
-        "REDIS_PORT",
-        "REDIS_DB",
-        "REDIS_PASSWORD",
-    )}
-    username = _present("REDIS_USERNAME")
-    names = tuple(values)
-    _fail_partial("REDIS", names, values)
-    if username is not None and not all(values[name] is not None for name in names):
-        raise ConfigurationError("REDIS split configuration is incomplete: missing REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD")
-    if all(values[name] is not None for name in names):
+def _redis_url(*, production: bool) -> str:
+    state, values = _split_state(REDIS_SPLIT_FIELDS, ("REDIS_USERNAME",))
+    if state == "PARTIAL":
+        raise ConfigurationError(
+            f"REDIS split configuration is incomplete: missing {_missing_required(REDIS_SPLIT_FIELDS, values)}"
+        )
+    if state == "COMPLETE":
         userinfo = f":{_quote_component(values['REDIS_PASSWORD'])}"
-        if username is not None:
-            userinfo = f"{_quote_component(username)}:{_quote_component(values['REDIS_PASSWORD'])}"
+        if values["REDIS_USERNAME"] is not None:
+            userinfo = f"{_quote_component(values['REDIS_USERNAME'])}:{_quote_component(values['REDIS_PASSWORD'])}"
         return f"redis://{userinfo}@{values['REDIS_HOST']}:{values['REDIS_PORT']}/{values['REDIS_DB']}"
+    if production:
+        return _required("REDIS_URL")
     return os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 
@@ -120,14 +141,10 @@ class Settings:
         self.APP_ENV = _environment()
         self.IS_PRODUCTION = self.APP_ENV == "production"
 
-        self.DATABASE_URL = _database_url()
-        self.REDIS_URL = _redis_url()
+        self.DATABASE_URL = _database_url(production=self.IS_PRODUCTION)
+        self.REDIS_URL = _redis_url(production=self.IS_PRODUCTION)
 
         if self.IS_PRODUCTION:
-            if not self.DATABASE_URL or (self.DATABASE_URL.startswith("<") and self.DATABASE_URL.endswith(">")):
-                raise ConfigurationError("DATABASE_URL is required in production")
-            if not self.REDIS_URL or (self.REDIS_URL.startswith("<") and self.REDIS_URL.endswith(">")):
-                raise ConfigurationError("REDIS_URL is required in production")
             self.JWT_SECRET = _required("JWT_SECRET")
             self.BOSS_INITIAL_PASSWORD = _required("BOSS_INITIAL_PASSWORD")
             cors_raw = _required("CORS_ALLOWED_ORIGINS")
