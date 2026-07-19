@@ -7,6 +7,10 @@ from datetime import date, datetime, timezone
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
+from .config import require_service_role
+
+require_service_role("worker")
+
 from .ai_employees import DEFAULT_COLLECTOR_EMPLOYEE, DEFAULT_STRATEGY_EMPLOYEE, FLOW_EMPLOYEE_CODES, FLOW_TASK_TYPES, employee_name, normalize_employee_code
 from .core.orchestrator import handle_event
 from .database import SessionLocal, get_redis
