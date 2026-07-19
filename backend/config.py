@@ -3,6 +3,7 @@ from functools import lru_cache
 from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
+from redis import ConnectionPool
 from sqlalchemy.engine import URL
 
 
@@ -23,6 +24,8 @@ REDIS_SPLIT_FIELDS = (
     "REDIS_DB",
     "REDIS_PASSWORD",
 )
+PLACEHOLDER_PREFIX = "<"
+PLACEHOLDER_SUFFIX = ">"
 
 
 def _environment() -> str:
@@ -33,13 +36,16 @@ if _environment() != "production":
     load_dotenv()
 
 
+def _is_placeholder(value: str) -> bool:
+    stripped = value.strip()
+    return stripped.startswith(PLACEHOLDER_PREFIX) and stripped.endswith(PLACEHOLDER_SUFFIX)
+
 
 def _required(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value or (value.startswith("<") and value.endswith(">")):
+    value = os.getenv(name, "")
+    if not value.strip() or _is_placeholder(value):
         raise ConfigurationError(f"{name} is required in production")
-    return value
-
+    return value.strip()
 
 
 def _boolean(name: str, default: bool) -> bool:
@@ -52,7 +58,6 @@ def _boolean(name: str, default: bool) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     raise ConfigurationError(f"{name} must be a boolean")
-
 
 
 def _cors_origins(raw: str, *, production: bool) -> list[str]:
@@ -68,35 +73,32 @@ def _cors_origins(raw: str, *, production: bool) -> list[str]:
     return origins
 
 
-
-def _present(name: str) -> str | None:
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    value = raw.strip()
-    return value or None
-
-
-
 def _split_state(names: tuple[str, ...], extra: tuple[str, ...] = ()) -> tuple[str, dict[str, str | None]]:
-    values = {name: _present(name) for name in names + extra}
-    present = [name for name in names if values[name] is not None]
-    if not present and all(values[name] is None for name in extra):
+    values = {name: os.getenv(name) for name in names + extra}
+    if all(value is None for value in values.values()):
         return "NONE", values
-    if len(present) != len(names):
-        return "PARTIAL", values
+    for name in names:
+        value = values[name]
+        if value is None or not value.strip() or _is_placeholder(value):
+            return "PARTIAL", values
+    for name in extra:
+        value = values[name]
+        if value is not None and (not value.strip() or _is_placeholder(value)):
+            return "PARTIAL", values
     return "COMPLETE", values
 
 
-
 def _missing_required(names: tuple[str, ...], values: dict[str, str | None]) -> str:
-    return ", ".join(name for name in names if values[name] is None)
-
+    missing = []
+    for name in names:
+        value = values[name]
+        if value is None or not value.strip() or _is_placeholder(value):
+            missing.append(name)
+    return ", ".join(missing)
 
 
 def _quote_component(value: str) -> str:
     return quote(value, safe="")
-
 
 
 def _database_url(*, production: bool) -> str:
@@ -110,14 +112,13 @@ def _database_url(*, production: bool) -> str:
             "postgresql+psycopg2",
             username=values["DATABASE_USER"],
             password=values["DATABASE_PASSWORD"],
-            host=values["DATABASE_HOST"],
-            port=int(values["DATABASE_PORT"]),
-            database=values["DATABASE_NAME"],
+            host=values["DATABASE_HOST"].strip(),
+            port=int(values["DATABASE_PORT"].strip()),
+            database=values["DATABASE_NAME"].strip(),
         ).render_as_string(hide_password=False)
     if production:
         return _required("DATABASE_URL")
     return os.getenv("DATABASE_URL", "postgresql+psycopg2://tiantong:tiantong@postgres:5432/tiantong_ai")
-
 
 
 def _redis_url(*, production: bool) -> str:
@@ -130,10 +131,23 @@ def _redis_url(*, production: bool) -> str:
         userinfo = f":{_quote_component(values['REDIS_PASSWORD'])}"
         if values["REDIS_USERNAME"] is not None:
             userinfo = f"{_quote_component(values['REDIS_USERNAME'])}:{_quote_component(values['REDIS_PASSWORD'])}"
-        return f"redis://{userinfo}@{values['REDIS_HOST']}:{values['REDIS_PORT']}/{values['REDIS_DB']}"
+        return f"redis://{userinfo}@{values['REDIS_HOST'].strip()}:{values['REDIS_PORT'].strip()}/{values['REDIS_DB'].strip()}"
     if production:
         return _required("REDIS_URL")
     return os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+
+def _validate_production_redis_url(url: str) -> None:
+    try:
+        kwargs = ConnectionPool.from_url(url).connection_kwargs
+    except Exception as exc:
+        raise ConfigurationError("authenticated REDIS_URL is required in production") from exc
+    username = kwargs.get("username")
+    password = kwargs.get("password")
+    if username is not None and not username:
+        raise ConfigurationError("authenticated REDIS_URL is required in production")
+    if password is None or not password.strip() or _is_placeholder(password):
+        raise ConfigurationError("authenticated REDIS_URL is required in production")
 
 
 class Settings:
@@ -248,8 +262,7 @@ class Settings:
             raise ConfigurationError("BOSS_INITIAL_PASSWORD must be an explicit non-default value")
         if "tiantong:tiantong@" in self.DATABASE_URL:
             raise ConfigurationError("development database credentials are forbidden in production")
-        if self.REDIS_URL == "redis://redis:6379/0" or ":@" in self.REDIS_URL:
-            raise ConfigurationError("authenticated REDIS_URL is required in production")
+        _validate_production_redis_url(self.REDIS_URL)
         if self.DEBUG:
             raise ConfigurationError("DEBUG must be disabled in production")
         if self.EXTERNAL_VISION_PROVIDER_ENABLED:
