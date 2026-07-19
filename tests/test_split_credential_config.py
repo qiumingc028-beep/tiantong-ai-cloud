@@ -9,7 +9,7 @@ from sqlalchemy.engine import make_url
 from backend.config import ConfigurationError, Settings, get_settings
 
 ALL_KEYS = (
-    "APP_ENV", "ENV", "DATABASE_URL", "REDIS_URL",
+    "APP_ENV", "ENV", "SERVICE_ROLE", "DATABASE_URL", "REDIS_URL",
     "DATABASE_HOST", "DATABASE_PORT", "DATABASE_NAME", "DATABASE_USER", "DATABASE_PASSWORD",
     "REDIS_HOST", "REDIS_PORT", "REDIS_DB", "REDIS_USERNAME", "REDIS_PASSWORD",
     "JWT_SECRET", "BOSS_INITIAL_PASSWORD", "CORS_ALLOWED_ORIGINS",
@@ -28,6 +28,7 @@ def reset_env(monkeypatch, **overrides):
         monkeypatch.delenv(key, raising=False)
     values = {
         "APP_ENV": "production",
+        "SERVICE_ROLE": "backend",
         "JWT_SECRET": "isolated-production-policy-jwt-secret-32-plus",
         "BOSS_INITIAL_PASSWORD": "isolated-boss-password",
         "CORS_ALLOWED_ORIGINS": "https://app.example.com",

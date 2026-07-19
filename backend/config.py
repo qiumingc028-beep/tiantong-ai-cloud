@@ -26,6 +26,10 @@ REDIS_SPLIT_FIELDS = (
 )
 PLACEHOLDER_PREFIX = "<"
 PLACEHOLDER_SUFFIX = ">"
+SERVICE_ROLE_FIELD_NAME = "SERVICE_ROLE"
+BACKEND_SERVICE_ROLE = "backend"
+WORKER_SERVICE_ROLE = "worker"
+VALID_SERVICE_ROLES = {BACKEND_SERVICE_ROLE, WORKER_SERVICE_ROLE}
 
 
 def _environment() -> str:
@@ -46,6 +50,20 @@ def _required(name: str) -> str:
     if not value.strip() or _is_placeholder(value):
         raise ConfigurationError(f"{name} is required in production")
     return value.strip()
+
+
+def _service_role(*, production: bool) -> str:
+    raw = os.getenv(SERVICE_ROLE_FIELD_NAME)
+    if raw is None:
+        if production:
+            raise ConfigurationError(f"{SERVICE_ROLE_FIELD_NAME} is required in production")
+        return BACKEND_SERVICE_ROLE
+    normalized = raw.strip().lower()
+    if not normalized or _is_placeholder(raw) or normalized not in VALID_SERVICE_ROLES:
+        raise ConfigurationError(
+            f"{SERVICE_ROLE_FIELD_NAME} must be one of: {', '.join(sorted(VALID_SERVICE_ROLES))}"
+        )
+    return normalized
 
 
 def _boolean(name: str, default: bool) -> bool:
@@ -154,18 +172,30 @@ class Settings:
     def __init__(self):
         self.APP_ENV = _environment()
         self.IS_PRODUCTION = self.APP_ENV == "production"
+        self.SERVICE_ROLE = _service_role(production=self.IS_PRODUCTION)
+        self.IS_BACKEND_SERVICE = self.SERVICE_ROLE == BACKEND_SERVICE_ROLE
+        self.IS_WORKER_SERVICE = self.SERVICE_ROLE == WORKER_SERVICE_ROLE
 
         self.DATABASE_URL = _database_url(production=self.IS_PRODUCTION)
         self.REDIS_URL = _redis_url(production=self.IS_PRODUCTION)
 
-        if self.IS_PRODUCTION:
-            self.JWT_SECRET = _required("JWT_SECRET")
-            self.BOSS_INITIAL_PASSWORD = _required("BOSS_INITIAL_PASSWORD")
+        self._jwt_secret = None
+        self._boss_initial_password = None
+
+        if self.IS_BACKEND_SERVICE and self.IS_PRODUCTION:
+            self._jwt_secret = _required("JWT_SECRET")
+            self._boss_initial_password = _required("BOSS_INITIAL_PASSWORD")
             cors_raw = _required("CORS_ALLOWED_ORIGINS")
-        else:
-            self.JWT_SECRET = os.getenv("JWT_SECRET", "development-only-jwt-secret-change-me")
-            self.BOSS_INITIAL_PASSWORD = os.getenv("BOSS_INITIAL_PASSWORD", "Tiantong@2026")
+        elif self.IS_BACKEND_SERVICE:
+            self._jwt_secret = os.getenv("JWT_SECRET", "development-only-jwt-secret-change-me")
+            self._boss_initial_password = os.getenv("BOSS_INITIAL_PASSWORD", "Tiantong@2026")
             cors_raw = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+        else:
+            cors_raw = (
+                _required("CORS_ALLOWED_ORIGINS")
+                if self.IS_PRODUCTION
+                else os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+            )
 
         self.CORS_ALLOWED_ORIGINS = _cors_origins(cors_raw, production=self.IS_PRODUCTION)
         self.CORS_ALLOW_CREDENTIALS = _boolean("CORS_ALLOW_CREDENTIALS", True)
@@ -255,11 +285,24 @@ class Settings:
         if self.IS_PRODUCTION:
             self._validate_production()
 
+    @property
+    def JWT_SECRET(self) -> str:
+        if not self.IS_BACKEND_SERVICE or self._jwt_secret is None:
+            raise ConfigurationError("JWT_SECRET is only available for backend service role")
+        return self._jwt_secret
+
+    @property
+    def BOSS_INITIAL_PASSWORD(self) -> str:
+        if not self.IS_BACKEND_SERVICE or self._boss_initial_password is None:
+            raise ConfigurationError("BOSS_INITIAL_PASSWORD is only available for backend service role")
+        return self._boss_initial_password
+
     def _validate_production(self):
-        if len(self.JWT_SECRET) < 32 or self.JWT_SECRET in {"change-me-in-production", "development-only-jwt-secret-change-me"}:
-            raise ConfigurationError("JWT_SECRET must contain at least 32 non-default characters")
-        if len(self.BOSS_INITIAL_PASSWORD) < 12 or self.BOSS_INITIAL_PASSWORD == "Tiantong@2026":
-            raise ConfigurationError("BOSS_INITIAL_PASSWORD must be an explicit non-default value")
+        if self.IS_BACKEND_SERVICE:
+            if len(self._jwt_secret) < 32 or self._jwt_secret in {"change-me-in-production", "development-only-jwt-secret-change-me"}:
+                raise ConfigurationError("JWT_SECRET must contain at least 32 non-default characters")
+            if len(self._boss_initial_password) < 12 or self._boss_initial_password == "Tiantong@2026":
+                raise ConfigurationError("BOSS_INITIAL_PASSWORD must be an explicit non-default value")
         if "tiantong:tiantong@" in self.DATABASE_URL:
             raise ConfigurationError("development database credentials are forbidden in production")
         _validate_production_redis_url(self.REDIS_URL)
@@ -272,3 +315,10 @@ class Settings:
 @lru_cache
 def get_settings():
     return Settings()
+
+
+def require_service_role(expected_role: str) -> Settings:
+    settings = get_settings()
+    if settings.SERVICE_ROLE != expected_role:
+        raise ConfigurationError(f"{SERVICE_ROLE_FIELD_NAME} must be {expected_role}")
+    return settings

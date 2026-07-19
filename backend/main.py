@@ -3,13 +3,16 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .config import get_settings, require_service_role
+
+require_service_role("backend")
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 
 from .core.orchestrator import handle_event as orchestrator_handle_event
-from .config import get_settings
 from .database import SessionLocal, ensure_tables, engine, get_redis
 from .logging_config import configure_json_logging
 from .archive_sync import router as archive_sync_router
