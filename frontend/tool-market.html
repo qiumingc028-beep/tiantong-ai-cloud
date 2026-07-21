@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-required-menu="menu.settings">
 <head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -45,7 +45,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['AI工具调用权限中心','/tool-permissions.html'],['Tool Center 工具中心','/tool-center.html'],['Tool Market 工具市场','/tool-market.html'],['AI员工能力档案','/employee-capabilities.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['天盾部署中心','/deploy-center.html'],['Release Center','/release-center.html'],['系统设置','/settings.html']];
 const employeeCodes=['tiancai','tiancai_data','tianchuang','tianyu','tiancai_finance'];
 const employeeNames={tiancai:'天采',tiancai_data:'天采：数据采集',tianchuang:'天创',tianyu:'天誉',tiancai_finance:'天财'};

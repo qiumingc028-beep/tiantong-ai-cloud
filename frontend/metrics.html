@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-required-menu="menu.metrics">
 <head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>今日数据录入 - 天统AI云中台</title>
@@ -8,7 +8,7 @@
   .auth-pending .sidebar,.auth-pending .main,.auth-pending main{visibility:hidden}</style>
 </head>
 <body class="auth-pending">
-<script>
+<script type="text/plain" data-rbac-protected>
 (function(){
   if (window.__tiantongFrontSecurity) return;
   window.__tiantongFrontSecurity = true;
@@ -162,7 +162,7 @@
       <div id="pageState" class="state">正在加载店铺和今日数据...</div>
       <div class="table-wrap"><table><thead><tr><th>店铺</th><th>成交</th><th>利润</th><th>广告费</th><th>ROI</th><th>订单</th><th>访客</th><th>退款</th><th>售后</th></tr></thead><tbody id="metrics"></tbody></table></div>
     </section></main></div>
-  <script>
+  <script type="text/plain" data-rbac-protected>
     const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];let metricRows=[];
     function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/metrics.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'onclick="return disabledEntry()"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu();tick();setInterval(tick,1000);metric_date.value=new Date().toISOString().slice(0,10);const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
     const money=v=>'￥'+Number(v||0).toLocaleString('zh-CN',{maximumFractionDigits:2});

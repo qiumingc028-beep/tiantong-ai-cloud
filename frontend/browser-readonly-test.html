@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.computer_executor">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>公开网页采集 - 天统AI云中台</title>
@@ -106,7 +106,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const $=id=>document.getElementById(id);
 function tick(){$('time').innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
 async function api(url,options={}){const res=await fetch(url,{credentials:'include',...options});if(!res.ok){const data=await res.json().catch(()=>({}));throw new Error(data.detail||`${res.status} ${res.statusText}`)}return res.json()}

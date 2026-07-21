@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-required-menu="menu.knowledge_center">
 <head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,16 +10,11 @@
   </style>
 </head>
 <body class="auth-pending">
-<script>
+<script type="text/plain" data-rbac-protected>
 (function(){
-  const ALL_ACCESS=null;
-  const ROLE_ACCESS={owner:ALL_ACCESS,boss:ALL_ACCESS,admin:['/index.html','/control.html','/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/ai-employees.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html','/ai-assets.html','/settings.html'],operation:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html'],operator:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html'],ops:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html'],customer_service:['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],service:['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],designer:['/ai-assets.html','/workflows.html'],editor:['/ai-assets.html','/workflows.html'],finance:['/jd-dashboard.html','/metrics.html','/import.html']};
-  const ROLE_ALIASES={boss:'owner',owner:'owner',administrator:'admin',ads:'operation',operator:'operation',ops:'operation',service:'customer_service'};
   const rawFetch=window.fetch.bind(window);let currentUser=null,redirecting=false;
-  function normalizeRole(user){const raw=String((user&&(user.role_code||user.role))||'').trim();return ROLE_ALIASES[raw]||raw||'guest'}
-  function canOpen(role,href){const access=role==='owner'?ALL_ACCESS:(Object.prototype.hasOwnProperty.call(ROLE_ACCESS,role)?ROLE_ACCESS[role]:['/jd-dashboard.html']);return access===ALL_ACCESS||access.includes(href==='/'?'/index.html':href)}
   function safeRedirect(url){if(redirecting)return;redirecting=true;setTimeout(()=>location.href=url,300)}
-  function applyRoleUI(user){currentUser=user||currentUser;const role=normalizeRole(currentUser);document.querySelectorAll('.menu a').forEach(a=>{const ok=canOpen(role,a.getAttribute('href')||'');a.style.display=ok?'':'none'});if(!canOpen(role,location.pathname)){safeRedirect('/index.html');return}document.body.classList.remove('auth-pending')}
+  function applyRoleUI(user){currentUser=user||currentUser;document.body.classList.remove('auth-pending')}
   window.fetch=async function(input,init){const res=await rawFetch(input,init);const url=typeof input==='string'?input:(input&&input.url)||'';if(url.includes('/api/')&&res.status===401)safeRedirect('/login.html');if(url.includes('/api/')&&res.status===403){alert('没有访问权限');safeRedirect('/login.html')}return res};
   window.secureLogout=async function(){try{await rawFetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'};
   rawFetch('/api/me',{credentials:'include'}).then(r=>r.ok?r.json():Promise.reject()).then(applyRoleUI).catch(()=>safeRedirect('/login.html'));
@@ -65,7 +60,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];
 const tabs=[['articles','知识库'],['sops','SOP中心'],['prompts','Prompt库'],['bugs','Bug案例库'],['courses','课程中心'],['ppt','PPT课件'],['publish','自动发布记录']];
 let activeTab='articles',files=[],articles=[],assets={sops:[],prompts:[],bugs:[],courses:[]},selectedFile=null,selectedArticle=null,lastGenerated=null;

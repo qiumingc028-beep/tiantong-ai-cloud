@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-required-menu="menu.device_center">
 <head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -34,7 +34,7 @@
       <p>只读观察、窗口枚举、指定窗口截图、状态摘要和下一步建议。</p>
       <a href="/desktop-observer.html">进入桌面观察</a>
     </section>
-    <script>
+    <script type="text/plain" data-rbac-protected>
       async function renderDevices() {
         const target = document.getElementById('device-list');
         target.textContent = '正在加载设备...';

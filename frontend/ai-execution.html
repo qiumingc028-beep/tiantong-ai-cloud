@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.ai_employees">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>天统AI Brain Execution Center</title>
@@ -64,7 +64,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['Brain Center','/brain-center.html'],['Brain Orchestrator','/brain-orchestrator.html'],['Brain Execution Center','/ai-execution.html'],['Tool Router','/tool-router.html'],['Tool Center','/tool-center.html'],['AI任务中心','/task-center.html'],['天盾部署中心','/deploy-center.html']];
 const sensitiveWords=['pass'+'word_hash','tok'+'en','sec'+'ret','API '+'Key','Authori'+'zation','Bear'+'er','private_'+'key'];
 let state={analysis:null,plan:null,logs:[]};
