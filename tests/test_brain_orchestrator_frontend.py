@@ -64,7 +64,6 @@ def test_brain_orchestrator_page_has_no_sensitive_terms_or_external_automation()
 
 
 def test_index_menu_contains_brain_orchestrator_entry():
-    source = Path("frontend/index.html").read_text()
+    source = Path("frontend/rbac-navigation.js").read_text()
     assert "Brain Orchestrator" in source
     assert "/brain-orchestrator.html" in source
-
