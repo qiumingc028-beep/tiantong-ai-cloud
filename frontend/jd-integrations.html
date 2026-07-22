@@ -1,8 +1,8 @@
 <!doctype html>
 
-<html lang="zh-CN">
+<html lang="zh-CN" data-required-menu="menu.jd_data">
 
-<head>
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
 
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 
@@ -18,7 +18,7 @@
 
 <body class="auth-pending">
 
-<script>
+<script type="text/plain" data-rbac-protected>
 
 (function(){
 
@@ -286,15 +286,15 @@
 
 <div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main class="main">
 
-    <header class="topbar"><strong>京东数据接入</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>京东数据接入</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="jd-integrations-001">退出登录</button></div></header>
 
     <section class="content">
 
       <div class="card"><h1>京东数据接入中心</h1><p class="sub">京东商智 / 京准通 / 京东开放平台 / 手动导入 / 浏览器自动采集接入状态。</p></div>
 
-      <div class="card"><h2>新增数据接入</h2><p class="tip">不要填写京东登录密码。正式接入优先使用官方授权/API，没有接口的数据再评估浏览器自动采集或手动导入。</p><div class="form-row"><select id="store_id"></select><select id="source_type"><option value="jd_sz">京东商智：成交/访客/转化</option><option value="jd_jzt">京准通：广告费/ROI/投流</option><option value="jd_open">京东开放平台：订单/商品/售后</option><option value="manual_import">手动导入：Excel/CSV</option><option value="browser_auto">浏览器自动采集：待开发</option></select><select id="connection_mode"><option value="pending">待配置</option><option value="official_api">官方API授权</option><option value="browser_auto">浏览器自动采集</option><option value="excel_import">Excel导入</option></select><input id="merchant_id" placeholder="商家ID/店铺ID"><input id="app_key" placeholder="AppKey"><input id="notes" placeholder="备注"><button onclick="createIntegration()">新增接入</button></div></div>
+      <div class="card"><h2>新增数据接入</h2><p class="tip">不要填写京东登录密码。正式接入优先使用官方授权/API，没有接口的数据再评估浏览器自动采集或手动导入。</p><div class="form-row"><select id="store_id"></select><select id="source_type"><option value="jd_sz">京东商智：成交/访客/转化</option><option value="jd_jzt">京准通：广告费/ROI/投流</option><option value="jd_open">京东开放平台：订单/商品/售后</option><option value="manual_import">手动导入：Excel/CSV</option><option value="browser_auto">浏览器自动采集：待开发</option></select><select id="connection_mode"><option value="pending">待配置</option><option value="official_api">官方API授权</option><option value="browser_auto">浏览器自动采集</option><option value="excel_import">Excel导入</option></select><input id="merchant_id" placeholder="商家ID/店铺ID"><input id="app_key" placeholder="AppKey"><input id="notes" placeholder="备注"><button data-rbac-action="jd-integrations-002">新增接入</button></div></div>
 
-      <div class="card"><h2>接入列表</h2><div class="toolbar"><input id="search" placeholder="搜索店铺/来源/备注" oninput="renderList()"><select id="sourceFilter" onchange="renderList()"><option value="">全部来源</option><option value="jd_sz">京东商智</option><option value="jd_jzt">京准通</option><option value="jd_open">京东开放平台</option><option value="manual_import">手动导入</option><option value="browser_auto">浏览器自动采集</option></select><select id="statusFilter" onchange="renderList()"><option value="">全部状态</option><option value="authorized">已授权</option><option value="pending">待接入</option><option value="error">异常</option><option value="disabled">停用</option></select><button class="secondary" onclick="loadIntegrations()">刷新表格</button></div></div>
+      <div class="card"><h2>接入列表</h2><div class="toolbar"><input id="search" placeholder="搜索店铺/来源/备注" data-rbac-action="jd-integrations-003"><select id="sourceFilter" data-rbac-action="jd-integrations-004"><option value="">全部来源</option><option value="jd_sz">京东商智</option><option value="jd_jzt">京准通</option><option value="jd_open">京东开放平台</option><option value="manual_import">手动导入</option><option value="browser_auto">浏览器自动采集</option></select><select id="statusFilter" data-rbac-action="jd-integrations-005"><option value="">全部状态</option><option value="authorized">已授权</option><option value="pending">待接入</option><option value="error">异常</option><option value="disabled">停用</option></select><button class="secondary" data-rbac-action="jd-integrations-006">刷新表格</button></div></div>
 
       <div id="pageState" class="state">正在加载接入配置...</div>
 
@@ -302,11 +302,11 @@
 
     </section></main></div>
 
-  <script>
+  <script type="text/plain" data-rbac-protected>
 
     const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];let rows=[];
 
-    function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/jd-integrations.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'onclick="return disabledEntry()"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu();tick();setInterval(tick,1000);const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
+    function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/jd-integrations.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'data-rbac-action="jd-integrations-disabled-entry"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu();tick();setInterval(tick,1000);const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
 
     function sourceName(v){return {jd_sz:'京东商智',jd_jzt:'京准通',jd_open:'京东开放平台',manual_import:'手动导入',browser_auto:'浏览器自动采集'}[v]||v}function modeName(v){return {pending:'待配置',official_api:'官方API授权',browser_auto:'浏览器自动采集',excel_import:'Excel导入'}[v]||v}function statusHtml(v){if(v==='authorized')return'<span class="green">已授权</span>';if(v==='error')return'<span class="red">异常</span>';if(v==='disabled')return'<span class="red">停用</span>';return'<span class="yellow">待接入</span>'}
 
@@ -314,7 +314,7 @@
 
     async function loadIntegrations(){try{pageState.className='state';pageState.innerText='正在加载接入配置...';rows=await api('/api/jd/integrations');renderList()}catch(e){pageState.className='state error';pageState.innerText=e.message||'接入配置加载失败';integrations.innerHTML='<tr><td colspan="10">加载失败，请刷新重试</td></tr>'}}
 
-    function renderList(){const q=search.value.trim().toLowerCase(),sf=sourceFilter.value,st=statusFilter.value;const list=rows.filter(i=>(!sf||i.source_type===sf)&&(!st||i.status===st)&&(!q||[i.store_code,i.store_name,sourceName(i.source_type),i.notes].join(' ').toLowerCase().includes(q)));pageState.innerText=list.length?`已显示 ${list.length} / ${rows.length} 条接入配置。未授权来源会等待后端采集服务完成。`:'暂无符合条件的接入配置。接口开发中 / 等待后端采集服务完成。';integrations.innerHTML=list.length?list.map(i=>`<tr><td>${i.id}</td><td>${i.store_code}｜${i.store_name}</td><td>${sourceName(i.source_type)}</td><td>${modeName(i.connection_mode)}</td><td>${i.merchant_id||''}</td><td>${i.app_key||''}</td><td>${statusHtml(i.status)}</td><td>${i.notes||''}</td><td>${i.active?'<span class="green">启用</span>':'<span class="red">停用</span>'}</td><td><button onclick="setStatus(${i.id},'authorized')">已授权</button> <button onclick="setStatus(${i.id},'error')">异常</button> <button onclick="toggleIntegration(${i.id})">${i.active?'停用':'启用'}</button></td></tr>`).join(''):'<tr><td colspan="10">暂无接入配置</td></tr>'}
+    function renderList(){const q=search.value.trim().toLowerCase(),sf=sourceFilter.value,st=statusFilter.value;const list=rows.filter(i=>(!sf||i.source_type===sf)&&(!st||i.status===st)&&(!q||[i.store_code,i.store_name,sourceName(i.source_type),i.notes].join(' ').toLowerCase().includes(q)));pageState.innerText=list.length?`已显示 ${list.length} / ${rows.length} 条接入配置。未授权来源会等待后端采集服务完成。`:'暂无符合条件的接入配置。接口开发中 / 等待后端采集服务完成。';integrations.innerHTML=list.length?list.map(i=>`<tr><td>${i.id}</td><td>${i.store_code}｜${i.store_name}</td><td>${sourceName(i.source_type)}</td><td>${modeName(i.connection_mode)}</td><td>${i.merchant_id||''}</td><td>${i.app_key||''}</td><td>${statusHtml(i.status)}</td><td>${i.notes||''}</td><td>${i.active?'<span class="green">启用</span>':'<span class="red">停用</span>'}</td><td><button data-rbac-action="${TiantongRbac.registerDynamicAction("jd-integrations-007","click",function(event){setStatus((i.id),'authorized');})}>已授权</button> <button data-rbac-action="${TiantongRbac.registerDynamicAction("jd-integrations-008","click",function(event){setStatus((i.id),'error');})}>异常</button> <button data-rbac-action="${TiantongRbac.registerDynamicAction("jd-integrations-009","click",function(event){toggleIntegration((i.id));})}>${i.active?'停用':'启用'}</button></td></tr>`).join(''):'<tr><td colspan="10">暂无接入配置</td></tr>'}
 
     async function createIntegration(){try{await api('/api/jd/integrations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({store_id:Number(store_id.value),source_type:source_type.value,connection_mode:connection_mode.value,merchant_id:merchant_id.value.trim(),app_key:app_key.value.trim(),notes:notes.value.trim()})});await loadIntegrations();alert('接入记录已新增')}catch(e){alert(e.message)}}async function setStatus(id,status){try{await api(`/api/jd/integrations/${id}/status`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});await loadIntegrations()}catch(e){alert(e.message)}}async function toggleIntegration(id){try{await api(`/api/jd/integrations/${id}/toggle`,{method:'POST'});await loadIntegrations()}catch(e){alert(e.message)}}
 
@@ -322,6 +322,18 @@
 
   </script>
 
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "jd-integrations-disabled-entry":["click",function(event){return disabledEntry();}],
+  "jd-integrations-001":["click",function(event){return TiantongRbac.logout();}],
+  "jd-integrations-002":["click",function(event){createIntegration();}],
+  "jd-integrations-003":["input",function(event){renderList();}],
+  "jd-integrations-004":["change",function(event){renderList();}],
+  "jd-integrations-005":["change",function(event){renderList();}],
+  "jd-integrations-006":["click",function(event){loadIntegrations();}]
+});
+</script>
 </body>
 
 </html>

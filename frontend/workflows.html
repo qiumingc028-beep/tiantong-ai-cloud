@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.workflows">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI工作流中心 - 天统AI云中台</title>
   <style>
@@ -8,7 +8,7 @@
   .auth-pending .sidebar,.auth-pending .main,.auth-pending main{visibility:hidden}</style>
 </head>
 <body class="auth-pending">
-<script>
+<script type="text/plain" data-rbac-protected>
 (function(){
   if (window.__tiantongFrontSecurity) return;
   window.__tiantongFrontSecurity = true;
@@ -154,21 +154,31 @@
 })();
 </script>
 <div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main class="main">
-    <header class="topbar"><strong>AI工作流中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>AI工作流中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="workflows-001">退出登录</button></div></header>
     <section class="content">
       <div class="card"><h1>AI工作流中心</h1><div class="sub">围绕AI员工任务的自动化工作流视图</div></div>
-      <div class="toolbar"><input id="search" placeholder="搜索AI员工/任务/负责人" oninput="renderRows()"><select id="statusFilter" onchange="renderRows()"><option value="">全部状态</option><option value="idle">空闲</option><option value="running">执行中</option><option value="paused">暂停</option><option value="error">异常</option></select><button class="secondary" onclick="load()">刷新表格</button></div>
+      <div class="toolbar"><input id="search" placeholder="搜索AI员工/任务/负责人" data-rbac-action="workflows-002"><select id="statusFilter" data-rbac-action="workflows-003"><option value="">全部状态</option><option value="idle">空闲</option><option value="running">执行中</option><option value="paused">暂停</option><option value="error">异常</option></select><button class="secondary" data-rbac-action="workflows-004">刷新表格</button></div>
       <div id="pageState" class="state">正在加载AI工作流...</div>
       <div class="table-wrap"><table><thead><tr><th>AI员工</th><th>状态</th><th>今日任务</th><th>负责人</th><th>最后执行时间</th></tr></thead><tbody id="rows"></tbody></table></div>
     </section></main></div>
-  <script>
+  <script type="text/plain" data-rbac-protected>
     const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];let taskRows=[];
-    function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/workflows.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'onclick="return disabledEntry()"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu();tick();setInterval(tick,1000);const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
+    function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/workflows.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'data-rbac-action="workflows-disabled-entry"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu();tick();setInterval(tick,1000);const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
     function statusName(s){return {idle:'空闲',running:'执行中',paused:'暂停',error:'异常'}[s]||s}
     async function load(){try{pageState.className='state';pageState.innerText='正在加载AI工作流...';taskRows=await api('/api/ai/tasks');renderRows()}catch(e){pageState.className='state error';pageState.innerText=e.message||'AI工作流加载失败';rows.innerHTML='<tr><td colspan="5">加载失败，请刷新重试</td></tr>'}}
     function renderRows(){const q=search.value.trim().toLowerCase(),sf=statusFilter.value;const list=taskRows.filter(t=>(!sf||t.status===sf)&&(!q||[t.ai_employee_name,t.today_task,t.owner&&t.owner.display_name].join(' ').toLowerCase().includes(q)));pageState.innerText=list.length?`已显示 ${list.length} / ${taskRows.length} 个AI工作流。`:'暂无符合条件的AI工作流。接口开发中 / 等待后端AI任务服务完成。';rows.innerHTML=list.length?list.map(t=>`<tr><td>${t.ai_employee_name}</td><td><span class="tag">${statusName(t.status)}</span></td><td>${t.today_task||'-'}</td><td>${t.owner?t.owner.display_name:'未分配'}</td><td>${t.last_run_at?t.last_run_at.slice(0,19).replace('T',' '):'未执行'}</td></tr>`).join(''):'<tr><td colspan="5">暂无AI工作流任务</td></tr>'}
     init().then(load).catch(e=>{pageState.className='state error';pageState.innerText=e.message||'页面加载失败'});
   </script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "workflows-disabled-entry":["click",function(event){return disabledEntry();}],
+  "workflows-001":["click",function(event){return TiantongRbac.logout();}],
+  "workflows-002":["input",function(event){renderRows();}],
+  "workflows-003":["change",function(event){renderRows();}],
+  "workflows-004":["click",function(event){load();}]
+});
+</script>
 </body>
 </html>
 

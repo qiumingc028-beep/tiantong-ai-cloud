@@ -1,8 +1,8 @@
 <!doctype html>
 
-<html lang="zh-CN">
+<html lang="zh-CN" data-required-menu="menu.employees">
 
-<head>
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
 
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 
@@ -18,7 +18,7 @@
 
 <body class="auth-pending">
 
-<script>
+<script type="text/plain" data-rbac-protected>
 
 (function(){
 
@@ -286,15 +286,15 @@
 
 <div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main class="main">
 
-    <header class="topbar"><div class="top-title">老板控制中心</div><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><div class="top-title">老板控制中心</div><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="control-001">退出登录</button></div></header>
 
     <section class="content">
 
       <div class="card"><h1>老板控制中心</h1><p class="sub">员工账号、角色权限、初始密码和账号状态管理</p></div>
 
-      <div class="card"><h2>新增员工账号</h2><p class="tip">新增后会自动生成初始密码，请复制保存并通过安全渠道发给员工。</p><div class="form-row"><input id="username" placeholder="用户名"><input id="display_name" placeholder="姓名"><select id="role"><option value="admin">管理员</option><option value="operator">运营</option><option value="customer_service">客服</option><option value="designer">美工</option><option value="editor">剪辑</option><option value="finance">财务</option><option value="owner">Owner</option></select><button onclick="createUser()">创建账号</button></div><div id="newPassword"></div></div>
+      <div class="card"><h2>新增员工账号</h2><p class="tip">新增后会自动生成初始密码，请复制保存并通过安全渠道发给员工。</p><div class="form-row"><input id="username" placeholder="用户名"><input id="display_name" placeholder="姓名"><select id="role"><option value="admin">管理员</option><option value="operator">运营</option><option value="customer_service">客服</option><option value="designer">美工</option><option value="editor">剪辑</option><option value="finance">财务</option><option value="owner">Owner</option></select><button data-rbac-action="control-002">创建账号</button></div><div id="newPassword"></div></div>
 
-      <div class="card"><h2>员工账号列表</h2><div class="toolbar"><input id="search" placeholder="搜索用户名/姓名/角色" oninput="renderUsers()"><select id="roleFilter" onchange="renderUsers()"><option value="">全部角色</option><option value="owner">Owner</option><option value="admin">管理员</option><option value="operator">运营</option><option value="customer_service">客服</option><option value="designer">美工</option><option value="editor">剪辑</option><option value="finance">财务</option></select><select id="statusFilter" onchange="renderUsers()"><option value="">全部状态</option><option value="active">启用</option><option value="inactive">停用</option></select><button onclick="loadUsers()">刷新</button></div></div>
+      <div class="card"><h2>员工账号列表</h2><div class="toolbar"><input id="search" placeholder="搜索用户名/姓名/角色" data-rbac-action="control-003"><select id="roleFilter" data-rbac-action="control-004"><option value="">全部角色</option><option value="owner">Owner</option><option value="admin">管理员</option><option value="operator">运营</option><option value="customer_service">客服</option><option value="designer">美工</option><option value="editor">剪辑</option><option value="finance">财务</option></select><select id="statusFilter" data-rbac-action="control-005"><option value="">全部状态</option><option value="active">启用</option><option value="inactive">停用</option></select><button data-rbac-action="control-006">刷新</button></div></div>
 
       <div id="pageState" class="state">正在加载员工账号...</div>
 
@@ -302,17 +302,17 @@
 
     </section></main></div>
 
-  <script>
+  <script type="text/plain" data-rbac-protected>
 
     const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];let userRows=[];
 
-    function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/control.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'onclick="return disabledEntry()"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu();tick();setInterval(tick,1000);const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok');if(!['owner','admin'].includes(user.role_code)){alert('没有员工中心管理权限');location.href='/index.html'}}
+    function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/control.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'data-rbac-action="control-disabled-entry"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu();tick();setInterval(tick,1000);const user=await api('/api/me');me.innerText=`${user.display_name} · ${user.role_label||user.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
 
     function roleName(role){return {owner:'Owner',boss:'Owner',admin:'管理员',operator:'运营',service:'客服',customer_service:'客服',designer:'美工',editor:'剪辑',finance:'财务',ads:'运营'}[role]||role}
 
     async function loadUsers(){try{pageState.className='state';pageState.innerText='正在加载员工账号...';userRows=await api('/api/users');renderUsers()}catch(e){pageState.className='state error';pageState.innerText=e.message||'员工账号加载失败';users.innerHTML='<tr><td colspan="7">加载失败，请刷新重试</td></tr>'}}
 
-    function renderUsers(){const q=search.value.trim().toLowerCase(),rf=roleFilter.value,sf=statusFilter.value;const rows=userRows.filter(u=>(!q||[u.username,u.display_name,roleName(u.role)].join(' ').toLowerCase().includes(q))&&(!rf||u.role_code===rf||u.role===rf)&&(!sf||(sf==='active'?u.active:!u.active)));pageState.innerText=rows.length?`已显示 ${rows.length} / ${userRows.length} 个员工账号。`:'暂无符合条件的员工账号。';users.innerHTML=rows.length?rows.map(u=>`<tr><td>${u.id}</td><td>${u.username}</td><td>${u.display_name}</td><td>${roleName(u.role)}</td><td>${u.active?'<span class="green">启用</span>':'<span class="red">停用</span>'}</td><td>${u.created_at?u.created_at.slice(0,19).replace('T',' '):''}</td><td><button onclick="resetPassword(${u.id})">重置密码</button> <button onclick="toggleUser(${u.id})">${u.active?'停用':'启用'}</button></td></tr>`).join(''):'<tr><td colspan="7">暂无数据</td></tr>'}
+    function renderUsers(){const q=search.value.trim().toLowerCase(),rf=roleFilter.value,sf=statusFilter.value;const rows=userRows.filter(u=>(!q||[u.username,u.display_name,roleName(u.role)].join(' ').toLowerCase().includes(q))&&(!rf||u.role_code===rf||u.role===rf)&&(!sf||(sf==='active'?u.active:!u.active)));pageState.innerText=rows.length?`已显示 ${rows.length} / ${userRows.length} 个员工账号。`:'暂无符合条件的员工账号。';users.innerHTML=rows.length?rows.map(u=>`<tr><td>${u.id}</td><td>${u.username}</td><td>${u.display_name}</td><td>${roleName(u.role)}</td><td>${u.active?'<span class="green">启用</span>':'<span class="red">停用</span>'}</td><td>${u.created_at?u.created_at.slice(0,19).replace('T',' '):''}</td><td><button data-rbac-action="${TiantongRbac.registerDynamicAction("control-007","click",function(event){resetPassword((u.id));})}>重置密码</button> <button data-rbac-action="${TiantongRbac.registerDynamicAction("control-008","click",function(event){toggleUser((u.id));})}>${u.active?'停用':'启用'}</button></td></tr>`).join(''):'<tr><td colspan="7">暂无数据</td></tr>'}
 
     async function createUser(){try{const d=await api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:username.value.trim(),display_name:display_name.value.trim(),role:role.value})});newPassword.innerHTML=`<div class="password">新账号：${d.username}<br>初始密码：${d.password}<br>请马上复制保存。</div>`;await loadUsers()}catch(e){alert(e.message)}}async function resetPassword(id){if(!confirm('确定要重置这个账号密码吗？'))return;try{const d=await api(`/api/users/${id}/reset-password`,{method:'POST'});alert(`用户名：${d.username}\n新密码：${d.password}\n请复制保存。`)}catch(e){alert(e.message)}}async function toggleUser(id){try{await api(`/api/users/${id}/toggle`,{method:'POST'});await loadUsers()}catch(e){alert(e.message)}}
 
@@ -320,10 +320,21 @@
 
   </script>
 
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "control-disabled-entry":["click",function(event){return disabledEntry();}],
+  "control-001":["click",function(event){return TiantongRbac.logout();}],
+  "control-002":["click",function(event){createUser();}],
+  "control-003":["input",function(event){renderUsers();}],
+  "control-004":["change",function(event){renderUsers();}],
+  "control-005":["change",function(event){renderUsers();}],
+  "control-006":["click",function(event){loadUsers();}]
+});
+</script>
 </body>
 
 </html>
-
 
 
 

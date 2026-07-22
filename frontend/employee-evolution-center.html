@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.ai_employees">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AI员工自学习进化中心 - 天统AI云中台</title>
@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>AI员工自学习进化中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>AI员工自学习进化中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="employee-evolution-center-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>AI员工自学习进化中心</h1><p>查看 AI 员工执行后的成长档案、复盘分析、评分趋势、Skill 优化建议和风险事件。</p></div>
@@ -24,10 +24,10 @@
 
       <div class="card">
         <div class="toolbar">
-          <select id="employeeSelect" onchange="selectEmployee(this.value)"></select>
-          <input id="searchInput" placeholder="搜索任务 / 原因 / 建议 / 风险" oninput="renderAll()">
-          <select id="riskFilter" onchange="renderAll()"><option value="">全部风险</option><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option></select>
-          <button onclick="loadAll()">刷新</button>
+          <select id="employeeSelect" data-rbac-action="employee-evolution-center-002"></select>
+          <input id="searchInput" placeholder="搜索任务 / 原因 / 建议 / 风险" data-rbac-action="employee-evolution-center-003">
+          <select id="riskFilter" data-rbac-action="employee-evolution-center-004"><option value="">全部风险</option><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option></select>
+          <button data-rbac-action="employee-evolution-center-005">刷新</button>
           <a class="btn secondary" href="/review-learning-center.html">复盘学习中心</a>
           <a class="btn secondary" href="/employee-capabilities.html">能力档案</a>
           <a class="btn secondary" href="/employee-workspace.html">员工工作台</a>
@@ -59,7 +59,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['AI员工自学习进化中心','/employee-evolution-center.html'],['AI员工复盘学习中心','/review-learning-center.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
 let state={user:null,growth:[],profile:null,riskEvents:[],activeEmployee:'',activeGrowth:null};
 
@@ -188,7 +188,7 @@ function filteredGrowth(){
 function renderGrowthGrid(){
   const rows=filteredGrowth();
   if(!rows.length){growthGrid.innerHTML='<div class="state empty">暂无数据</div>';detailPanel.innerHTML='<h2>成长详情</h2><div class="muted">暂无数据</div>';return}
-  growthGrid.innerHTML=rows.map(row=>`<article class="growth-card ${esc(row.growth_level)} ${row.employee_code===employeeCode()?'selected':''}" onclick="selectEmployee('${esc(row.employee_code)}')">
+  growthGrid.innerHTML=rows.map(row=>`<article class="growth-card ${esc(row.growth_level)} ${row.employee_code===employeeCode()?'selected':''}" data-rbac-action="${TiantongRbac.registerDynamicAction("employee-evolution-center-006","click",function(event){selectEmployee((row.employee_code));})}>
     <div class="title-row"><div><h3>${esc(row.employee_code)}</h3><div class="code">task_id: ${esc(text(row.task_id))}</div></div>${badge(levelName(row.growth_level),row.growth_level)}</div>
     <div class="muted">评分 ${esc(text(row.score,'0'))} · 成功率 ${esc(pct(row.success_rate))} · 失败 ${esc(text(row.failure_count,'0'))}</div>
     ${progress(row.score)}
@@ -259,6 +259,16 @@ function renderStaticBoxes(){
 }
 
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "employee-evolution-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "employee-evolution-center-002":["change",function(event){selectEmployee(this.value);}],
+  "employee-evolution-center-003":["input",function(event){renderAll();}],
+  "employee-evolution-center-004":["change",function(event){renderAll();}],
+  "employee-evolution-center-005":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

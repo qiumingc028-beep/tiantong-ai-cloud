@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.knowledge_center">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>天藏：知识资产中心 - 天统AI云中台</title>
@@ -10,16 +10,11 @@
   </style>
 </head>
 <body class="auth-pending">
-<script>
+<script type="text/plain" data-rbac-protected>
 (function(){
-  const ALL_ACCESS=null;
-  const ROLE_ACCESS={owner:ALL_ACCESS,boss:ALL_ACCESS,admin:['/index.html','/control.html','/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/ai-employees.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html','/ai-assets.html','/settings.html'],operation:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html'],operator:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html'],ops:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-center.html'],customer_service:['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],service:['/jd-dashboard.html','/metrics.html','/account-center.html','/workflows.html'],designer:['/ai-assets.html','/workflows.html'],editor:['/ai-assets.html','/workflows.html'],finance:['/jd-dashboard.html','/metrics.html','/import.html']};
-  const ROLE_ALIASES={boss:'owner',owner:'owner',administrator:'admin',ads:'operation',operator:'operation',ops:'operation',service:'customer_service'};
   const rawFetch=window.fetch.bind(window);let currentUser=null,redirecting=false;
-  function normalizeRole(user){const raw=String((user&&(user.role_code||user.role))||'').trim();return ROLE_ALIASES[raw]||raw||'guest'}
-  function canOpen(role,href){const access=role==='owner'?ALL_ACCESS:(Object.prototype.hasOwnProperty.call(ROLE_ACCESS,role)?ROLE_ACCESS[role]:['/jd-dashboard.html']);return access===ALL_ACCESS||access.includes(href==='/'?'/index.html':href)}
   function safeRedirect(url){if(redirecting)return;redirecting=true;setTimeout(()=>location.href=url,300)}
-  function applyRoleUI(user){currentUser=user||currentUser;const role=normalizeRole(currentUser);document.querySelectorAll('.menu a').forEach(a=>{const ok=canOpen(role,a.getAttribute('href')||'');a.style.display=ok?'':'none'});if(!canOpen(role,location.pathname)){safeRedirect('/index.html');return}document.body.classList.remove('auth-pending')}
+  function applyRoleUI(user){currentUser=user||currentUser;document.body.classList.remove('auth-pending')}
   window.fetch=async function(input,init){const res=await rawFetch(input,init);const url=typeof input==='string'?input:(input&&input.url)||'';if(url.includes('/api/')&&res.status===401)safeRedirect('/login.html');if(url.includes('/api/')&&res.status===403){alert('没有访问权限');safeRedirect('/login.html')}return res};
   window.secureLogout=async function(){try{await rawFetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'};
   rawFetch('/api/me',{credentials:'include'}).then(r=>r.ok?r.json():Promise.reject()).then(applyRoleUI).catch(()=>safeRedirect('/login.html'));
@@ -30,29 +25,29 @@
   <main class="main">
     <header class="topbar">
       <div class="top-title">天藏：知识资产中心</div>
-      <div class="top-meta"><span id="currentTime" class="pill">--:--:--</span><span id="systemStatus" class="pill">系统检查中</span><span id="userInfo" class="pill">加载中</span><button onclick="secureLogout()">退出登录</button></div>
+      <div class="top-meta"><span id="currentTime" class="pill">--:--:--</span><span id="systemStatus" class="pill">系统检查中</span><span id="userInfo" class="pill">加载中</span><button data-rbac-action="knowledge-center-001">退出登录</button></div>
     </header>
     <section class="content">
       <div class="page-head">
         <div><h1>天藏：知识资产中心</h1><div class="sub">上传资料，自动总结、分类、生成知识文章和可复用资产，并发布到后台知识库</div></div>
-        <button class="secondary" onclick="loadAll()">刷新</button>
+        <button class="secondary" data-rbac-action="knowledge-center-002">刷新</button>
       </div>
       <div class="tabs" id="tabs"></div>
       <div class="layout">
         <section class="panel">
           <div class="upload">
             <input id="fileInput" type="file">
-            <button class="good" onclick="uploadFile()">上传资料</button>
-            <button class="secondary" onclick="summarizeSelected()" id="sumBtn" disabled>AI总结</button>
-            <button class="secondary" onclick="classifySelected()" id="clsBtn" disabled>AI分类</button>
-            <button onclick="generateSelected()" id="genBtn" disabled>生成知识文章</button>
-            <button class="warn" onclick="publishSelected()" id="pubBtn" disabled>一键发布</button>
+            <button class="good" data-rbac-action="knowledge-center-003">上传资料</button>
+            <button class="secondary" data-rbac-action="knowledge-center-004" id="sumBtn" disabled>AI总结</button>
+            <button class="secondary" data-rbac-action="knowledge-center-005" id="clsBtn" disabled>AI分类</button>
+            <button data-rbac-action="knowledge-center-006" id="genBtn" disabled>生成知识文章</button>
+            <button class="warn" data-rbac-action="knowledge-center-007" id="pubBtn" disabled>一键发布</button>
           </div>
           <div class="toolbar">
             <input id="q" placeholder="搜索标题、摘要、正文">
             <select id="category"><option value="">全部分类</option><option>知识库</option><option>SOP</option><option>Prompt</option><option>Bug案例</option><option>课程</option><option>广告</option><option>客服</option><option>运营</option></select>
             <select id="status"><option value="">全部状态</option><option value="草稿">草稿</option><option value="已发布">已发布</option><option value="待审核">待审核</option></select>
-            <button class="secondary" onclick="loadAll()">搜索/筛选</button>
+            <button class="secondary" data-rbac-action="knowledge-center-008">搜索/筛选</button>
           </div>
           <div id="notice" class="state">正在加载知识资产...</div>
           <div id="mainList"></div>
@@ -65,12 +60,12 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];
 const tabs=[['articles','知识库'],['sops','SOP中心'],['prompts','Prompt库'],['bugs','Bug案例库'],['courses','课程中心'],['ppt','PPT课件'],['publish','自动发布记录']];
 let activeTab='articles',files=[],articles=[],assets={sops:[],prompts:[],bugs:[],courses:[]},selectedFile=null,selectedArticle=null,lastGenerated=null;
 function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/knowledge-center.html'?'active':''}" href="${h}">${l}</a>`).join('')}
-function renderTabs(){tabsEl=tabs.map(([k,l])=>`<button class="${activeTab===k?'active':''}" onclick="switchTab('${k}')">${l}</button>`).join('');document.getElementById('tabs').innerHTML=tabsEl}
+function renderTabs(){tabsEl=tabs.map(([k,l])=>`<button class="${activeTab===k?'active':''}" data-rbac-action="${TiantongRbac.registerDynamicAction("knowledge-center-009","click",function(event){switchTab((k));})}>${l}</button>`).join('');document.getElementById('tabs').innerHTML=tabsEl}
 function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
 async function initShell(){renderMenu();renderTabs();tick();setInterval(tick,1000);const me=await fetch('/api/me',{credentials:'include'});if(!me.ok)return;const u=await me.json();userInfo.innerText=`${u.display_name} · ${u.role_label||u.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
 function params(){const p=new URLSearchParams();if(q.value)p.set('q',q.value);if(category.value)p.set('category',category.value);if(status.value)p.set('status',status.value);return p.toString()}
@@ -78,8 +73,8 @@ async function loadAll(){try{notice.className='state';notice.innerText='正在�
 function switchTab(tab){activeTab=tab;renderTabs();renderMain()}
 function statusBadge(row){const cls=row.status==='published'?'published':(row.status==='review'?'review':'');return `<span class="badge ${cls}">${row.status_label||row.status||'草稿'}</span>`}
 function renderMain(){if(activeTab==='articles')return renderArticles();if(activeTab==='ppt'||activeTab==='publish')return renderPlaceholder();renderAsset(activeTab)}
-function renderArticles(){const rows=articles.map(a=>`<tr><td><strong>${esc(a.title)}</strong><div class="sub">${esc(a.summary||'')}</div></td><td>${esc(a.category||'-')}</td><td>${statusBadge(a)}</td><td>${a.created_at?new Date(a.created_at).toLocaleString('zh-CN',{hour12:false}):'-'}</td><td><div class="row-actions"><button class="secondary" onclick="selectArticle(${a.id})">查看</button><button onclick="publishArticle(${a.id})">发布</button></div></td></tr>`).join('');mainList.innerHTML=`<div class="table-wrap"><table><thead><tr><th>知识文章</th><th>分类</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="empty">暂无知识文章，请先上传资料并生成</td></tr>'}</tbody></table></div><h2 style="font-size:18px;margin:18px 0 10px">资料库</h2>${renderFiles()}`}
-function renderFiles(){const rows=files.map(f=>`<tr><td><strong>${esc(f.filename)}</strong><div class="sub">${Math.ceil((f.file_size||0)/1024)} KB</div></td><td>${esc(f.category||'-')}</td><td>${statusBadge(f)}</td><td>${esc(f.summary||'未总结')}</td><td><div class="row-actions"><button class="secondary" onclick="selectFile(${f.id})">选择</button><button class="secondary" onclick="summarizeFile(${f.id})">总结</button><button class="secondary" onclick="classifyFile(${f.id})">分类</button><button onclick="generateFile(${f.id})">生成</button></div></td></tr>`).join('');return `<div class="table-wrap"><table><thead><tr><th>资料</th><th>分类</th><th>状态</th><th>AI总结</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="empty">暂无资料</td></tr>'}</tbody></table></div>`}
+function renderArticles(){const rows=articles.map(a=>`<tr><td><strong>${esc(a.title)}</strong><div class="sub">${esc(a.summary||'')}</div></td><td>${esc(a.category||'-')}</td><td>${statusBadge(a)}</td><td>${a.created_at?new Date(a.created_at).toLocaleString('zh-CN',{hour12:false}):'-'}</td><td><div class="row-actions"><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("knowledge-center-010","click",function(event){selectArticle((a.id));})}>查看</button><button data-rbac-action="${TiantongRbac.registerDynamicAction("knowledge-center-011","click",function(event){publishArticle((a.id));})}>发布</button></div></td></tr>`).join('');mainList.innerHTML=`<div class="table-wrap"><table><thead><tr><th>知识文章</th><th>分类</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="empty">暂无知识文章，请先上传资料并生成</td></tr>'}</tbody></table></div><h2 style="font-size:18px;margin:18px 0 10px">资料库</h2>${renderFiles()}`}
+function renderFiles(){const rows=files.map(f=>`<tr><td><strong>${esc(f.filename)}</strong><div class="sub">${Math.ceil((f.file_size||0)/1024)} KB</div></td><td>${esc(f.category||'-')}</td><td>${statusBadge(f)}</td><td>${esc(f.summary||'未总结')}</td><td><div class="row-actions"><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("knowledge-center-012","click",function(event){selectFile((f.id));})}>选择</button><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("knowledge-center-013","click",function(event){summarizeFile((f.id));})}>总结</button><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("knowledge-center-014","click",function(event){classifyFile((f.id));})}>分类</button><button data-rbac-action="${TiantongRbac.registerDynamicAction("knowledge-center-015","click",function(event){generateFile((f.id));})}>生成</button></div></td></tr>`).join('');return `<div class="table-wrap"><table><thead><tr><th>资料</th><th>分类</th><th>状态</th><th>AI总结</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="empty">暂无资料</td></tr>'}</tbody></table></div>`}
 function renderAsset(tab){const map={sops:['SOP','steps'],prompts:['Prompt','prompt_text'],bugs:['Bug案例','solution'],courses:['课程','outline']};const [label,field]=map[tab];const rows=(assets[tab]||[]).map(item=>`<div class="mini-item"><strong>${esc(item.title)}</strong><p>${esc(item[field]||'')}</p><div style="margin-top:8px">${statusBadge(item)}</div></div>`).join('');mainList.innerHTML=`<div class="mini-list">${rows||`<div class="empty">暂无${label}内容，请先生成知识文章</div>`}</div>`}
 function renderPlaceholder(){mainList.innerHTML='<div class="empty">MVP阶段已预留入口，下一阶段接入PPT课件生成和自动发布日志。</div>'}
 function selectFile(id){selectedFile=files.find(f=>f.id===id);selectedArticle=null;lastGenerated=null;sumBtn.disabled=clsBtn.disabled=genBtn.disabled=false;pubBtn.disabled=true;detailTitle.innerText=selectedFile.filename;detailBody.innerText=selectedFile.summary||'该资料尚未生成AI总结。'}
@@ -95,6 +90,19 @@ async function generateFile(id){lastGenerated=await fetch(`/api/knowledge/files/
 async function publishArticle(id){const data=await fetch(`/api/knowledge/articles/${id}/publish`,{method:'POST',credentials:'include'}).then(r=>r.json());detailTitle.innerText='发布结果';detailBody.innerText=JSON.stringify(data.article,null,2);await loadAll()}
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 initShell().then(loadAll);
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "knowledge-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "knowledge-center-002":["click",function(event){loadAll();}],
+  "knowledge-center-003":["click",function(event){uploadFile();}],
+  "knowledge-center-004":["click",function(event){summarizeSelected();}],
+  "knowledge-center-005":["click",function(event){classifySelected();}],
+  "knowledge-center-006":["click",function(event){generateSelected();}],
+  "knowledge-center-007":["click",function(event){publishSelected();}],
+  "knowledge-center-008":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

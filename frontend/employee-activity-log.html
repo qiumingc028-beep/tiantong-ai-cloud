@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.ai_employees">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AI员工执行日志中心 Employee Activity Log - 天统AI云中台</title>
@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>AI员工执行日志中心 Employee Activity Log</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>AI员工执行日志中心 Employee Activity Log</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="employee-activity-log-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>AI员工执行日志中心 Employee Activity Log</h1><p>查看 AI 员工执行轨迹、任务流转、验收、审计、部署和最近动作。只读展示，不派单、不开始任务、不部署、不提交代码。</p></div>
@@ -33,8 +33,8 @@
           <input id="dateFromInput" type="date">
           <input id="dateToInput" type="date">
           <input id="limitInput" type="number" min="1" max="200" value="50" placeholder="limit">
-          <button onclick="loadActivity()">筛选</button>
-          <button class="secondary" onclick="resetFilters()">重置</button>
+          <button data-rbac-action="employee-activity-log-002">筛选</button>
+          <button class="secondary" data-rbac-action="employee-activity-log-003">重置</button>
           <a class="btn secondary" href="/task-center.html">任务中心</a>
           <a class="btn secondary" href="/employee-workspace.html">AI员工工作台</a>
           <a class="btn secondary" href="/orchestrator.html">Orchestrator</a>
@@ -42,7 +42,7 @@
       </div>
       <div class="layout">
         <section>
-          <div class="card"><div class="head"><h2>日志时间线</h2><button class="secondary" onclick="loadActivity()">刷新</button></div><div id="timeline" class="timeline"></div></div>
+          <div class="card"><div class="head"><h2>日志时间线</h2><button class="secondary" data-rbac-action="employee-activity-log-004">刷新</button></div><div id="timeline" class="timeline"></div></div>
           <div class="card"><div class="head"><h2>任务维度</h2></div><div id="taskList" class="mini-grid"></div></div>
         </section>
         <aside>
@@ -58,7 +58,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
 let activity={summary:{},logs:[],employees:[],tasks:[],filters:{},timeline:[],blockers:[],pending_boss_confirmations:[],recent_commits:[],recent_deploys:[]};
 
@@ -163,6 +163,15 @@ function renderList(el,items,emptyText,formatter){
 }
 
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "employee-activity-log-001":["click",function(event){return TiantongRbac.logout();}],
+  "employee-activity-log-002":["click",function(event){loadActivity();}],
+  "employee-activity-log-003":["click",function(event){resetFilters();}],
+  "employee-activity-log-004":["click",function(event){loadActivity();}]
+});
 </script>
 </body>
 </html>

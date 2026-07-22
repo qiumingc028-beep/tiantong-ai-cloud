@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.settings">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tool Market 工具市场 - 天统AI云中台</title>
@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>Tool Market 工具市场</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>Tool Market 工具市场</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="tool-market-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>Tool Market 工具市场</h1><p>老板查看 AI 员工具备哪些工具能力、谁能使用、哪些工具需要审批、调用日志是否安全。</p></div>
@@ -23,10 +23,10 @@
       <section id="stats" class="stats"></section>
       <div class="card">
         <div class="toolbar">
-          <input id="searchInput" placeholder="搜索工具 / 员工 / 类型" oninput="renderAll()">
-          <select id="riskFilter" onchange="renderAll()"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
-          <select id="statusFilter" onchange="renderAll()"><option value="">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select>
-          <button onclick="loadAll()">刷新</button>
+          <input id="searchInput" placeholder="搜索工具 / 员工 / 类型" data-rbac-action="tool-market-002">
+          <select id="riskFilter" data-rbac-action="tool-market-003"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
+          <select id="statusFilter" data-rbac-action="tool-market-004"><option value="">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select>
+          <button data-rbac-action="tool-market-005">刷新</button>
           <a class="btn secondary" href="/tool-center.html">Tool Center</a>
         </div>
       </div>
@@ -45,7 +45,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['AI工具调用权限中心','/tool-permissions.html'],['Tool Center 工具中心','/tool-center.html'],['Tool Market 工具市场','/tool-market.html'],['AI员工能力档案','/employee-capabilities.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['天盾部署中心','/deploy-center.html'],['Release Center','/release-center.html'],['系统设置','/settings.html']];
 const employeeCodes=['tiancai','tiancai_data','tianchuang','tianyu','tiancai_finance'];
 const employeeNames={tiancai:'天采',tiancai_data:'天采：数据采集',tianchuang:'天创',tianyu:'天誉',tiancai_finance:'天财'};
@@ -112,7 +112,7 @@ function renderStats(){
 }
 function renderMarket(){
   const rows=filterTools();
-  marketGrid.innerHTML=rows.length?rows.map(tool=>`<article class="tool-card ${esc(tool.risk_level)} ${state.selected===tool.tool_name?'selected':''}" onclick="selectTool('${esc(tool.tool_name)}')"><div class="icon">${esc(iconMap[tool.tool_type]||'🧰')}</div><strong class="mono">${esc(tool.tool_name)}</strong><div class="muted">${esc(text(tool.description))}</div><div class="tag-list">${badge(tool.tool_type)}${badge(tool.risk_level)}${tool.enabled?badge('启用','enabled'):badge('停用','disabled')}</div><div class="muted">适用员工：${esc(text(applicableEmployees(tool.tool_name),'暂无绑定'))}</div></article>`).join(''):'<div class="state">暂无工具</div>';
+  marketGrid.innerHTML=rows.length?rows.map(tool=>`<article class="tool-card ${esc(tool.risk_level)} ${state.selected===tool.tool_name?'selected':''}" data-rbac-action="${TiantongRbac.registerDynamicAction("tool-market-006","click",function(event){selectTool((tool.tool_name));})}><div class="icon">${esc(iconMap[tool.tool_type]||'🧰')}</div><strong class="mono">${esc(tool.tool_name)}</strong><div class="muted">${esc(text(tool.description))}</div><div class="tag-list">${badge(tool.tool_type)}${badge(tool.risk_level)}${tool.enabled?badge('启用','enabled'):badge('停用','disabled')}</div><div class="muted">适用员工：${esc(text(applicableEmployees(tool.tool_name),'暂无绑定'))}</div></article>`).join(''):'<div class="state">暂无工具</div>';
 }
 function renderBindings(){
   const rows=bindingRows();
@@ -123,7 +123,7 @@ function renderLogs(){
 }
 function renderApprovals(){
   const rows=bindingRows().filter(row=>row.require_approval||['high','critical'].includes(String(row.risk_level)));
-  approvalBox.innerHTML=rows.length?rows.map(row=>`<div class="list-item approval"><strong>${esc(row.tool_name)}</strong> ${badge(row.risk_level)}<div class="muted">申请员工：${esc(employeeNames[row.employee]||row.employee)} · 申请时间：暂无</div><div class="tag-list"><button onclick="localDecision('允许','${esc(row.tool_name)}')">允许</button><button class="danger" onclick="localDecision('拒绝','${esc(row.tool_name)}')">拒绝</button><button class="secondary" onclick="selectTool('${esc(row.tool_name)}')">查看详情</button></div></div>`).join(''):'<div class="muted">暂无待审批工具</div>';
+  approvalBox.innerHTML=rows.length?rows.map(row=>`<div class="list-item approval"><strong>${esc(row.tool_name)}</strong> ${badge(row.risk_level)}<div class="muted">申请员工：${esc(employeeNames[row.employee]||row.employee)} · 申请时间：暂无</div><div class="tag-list"><button data-rbac-action="${TiantongRbac.registerDynamicAction("tool-market-007","click",function(event){localDecision('允许',(row.tool_name));})}>允许</button><button class="danger" data-rbac-action="${TiantongRbac.registerDynamicAction("tool-market-008","click",function(event){localDecision('拒绝',(row.tool_name));})}>拒绝</button><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("tool-market-009","click",function(event){selectTool((row.tool_name));})}>查看详情</button></div></div>`).join(''):'<div class="muted">暂无待审批工具</div>';
 }
 function renderSafety(){safetyBox.innerHTML=['不真实调用外部工具','不自动安装工具','不自动联网','不执行代码','不修改 Skill','所有审批按钮仅本地 simulation 提示'].map(item=>`<div class="list-item risk">${esc(item)}</div>`).join('')}
 function renderDetail(toolName){
@@ -136,6 +136,16 @@ function localDecision(action,toolName){pageState.className='state warn';pageSta
 function riskOf(toolName){const tool=state.tools.find(item=>item.tool_name===toolName);return tool?tool.risk_level:'unknown'}
 function countCalls(employeeCode,toolName){return state.logs.filter(log=>log.employee_code===employeeCode&&log.tool_name===toolName).length}
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "tool-market-001":["click",function(event){return TiantongRbac.logout();}],
+  "tool-market-002":["input",function(event){renderAll();}],
+  "tool-market-003":["change",function(event){renderAll();}],
+  "tool-market-004":["change",function(event){renderAll();}],
+  "tool-market-005":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

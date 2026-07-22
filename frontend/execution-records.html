@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.settings">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>执行记录 - 天统AI云中台</title>
@@ -88,10 +88,10 @@
             <input id="executionId" placeholder="执行ID">
             <input id="cancelReason" placeholder="取消 / 拒绝原因">
             <div class="tags full">
-              <button onclick="approveExecution()">批准并执行</button>
-              <button class="secondary" onclick="rejectExecution()">拒绝</button>
-              <button class="secondary" onclick="cancelExecution()">取消</button>
-              <button class="secondary" onclick="loadExecutions()">刷新</button>
+              <button data-rbac-action="execution-records-001">批准并执行</button>
+              <button class="secondary" data-rbac-action="execution-records-002">拒绝</button>
+              <button class="secondary" data-rbac-action="execution-records-003">取消</button>
+              <button class="secondary" data-rbac-action="execution-records-004">刷新</button>
             </div>
           </div>
           <h2 style="margin-top:18px">审计记录</h2>
@@ -101,7 +101,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const $=id=>document.getElementById(id);
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function tick(){$('time').innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
@@ -129,7 +129,7 @@ async function loadExecutions(){
       <td>${esc(x.started_at||'')}</td>
       <td>${esc(x.duration_ms==null?'':x.duration_ms)}</td>
       <td>${esc((x.output_payload&&JSON.stringify(x.output_payload).slice(0,60))||x.error_message||'')}</td>
-      <td><button class="secondary" onclick="showDetail(${i})">查看详情</button></td>
+      <td><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("execution-records-005","click",function(event){showDetail((i));})}>查看详情</button></td>
     </tr>`).join(''):'<tr><td colspan="10" class="muted">暂无执行记录</td></tr>';
     if(executions[0]) showDetail(0);
   }catch(e){
@@ -193,6 +193,15 @@ async function cancelExecution(){
   }catch(e){$('state').className='tag bad';$('state').innerText=e.message||'取消失败'}
 }
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "execution-records-001":["click",function(event){approveExecution();}],
+  "execution-records-002":["click",function(event){rejectExecution();}],
+  "execution-records-003":["click",function(event){cancelExecution();}],
+  "execution-records-004":["click",function(event){loadExecutions();}]
+});
 </script>
 </body>
 </html>

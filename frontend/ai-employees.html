@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.ai_employees">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI员工名册中心 - 天统AI云中台</title>
@@ -13,7 +13,7 @@
   </style>
 </head>
 <body class="auth-pending">
-<script>
+<script type="text/plain" data-rbac-protected>
 (function(){
   if (window.__tiantongFrontSecurity) return;
   window.__tiantongFrontSecurity = true;
@@ -55,11 +55,11 @@
 <div class="app">
   <aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main class="main">
-    <header class="topbar"><strong>AI员工名册中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>AI员工名册中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="ai-employees-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>AI员工名册中心</h1><p>管理天统AI公司所有AI员工，统一分配、启用、停用和任务协同。</p></div>
-        <button onclick="openEmployeeModal()">新增AI员工</button>
+        <button data-rbac-action="ai-employees-002">新增AI员工</button>
       </div>
       <div class="stats">
         <div class="stat"><div class="label">AI员工总数</div><div id="statTotal" class="value">-</div></div>
@@ -74,7 +74,7 @@
             <h2>AI员工运行状态</h2>
             <div class="muted">只读展示员工在线、工作、异常和工具配置情况，不触发任务执行。</div>
           </div>
-          <button class="secondary" onclick="loadRuntimeStatus()">刷新运行状态</button>
+          <button class="secondary" data-rbac-action="ai-employees-003">刷新运行状态</button>
         </div>
         <div class="runtime-grid">
           <div class="stat"><div class="label">员工总数</div><div id="runtimeTotal" class="value">-</div></div>
@@ -94,11 +94,11 @@
         <section>
           <div class="card">
             <div class="toolbar">
-              <input id="search" class="search" placeholder="搜索员工编号 / 名称 / 军团 / 职责" oninput="renderEmployees()">
-              <select id="statusFilter" onchange="loadEmployees()"><option value="">全部状态</option><option value="active">启用</option><option value="inactive">停用</option></select>
-              <select id="legionFilter" onchange="renderEmployees()"><option value="">全部军团</option></select>
-              <label class="check"><input id="legacyFilter" type="checkbox" onchange="loadEmployees()"> 显示旧占位员工</label>
-              <button class="secondary" onclick="loadEmployees()">刷新</button>
+              <input id="search" class="search" placeholder="搜索员工编号 / 名称 / 军团 / 职责" data-rbac-action="ai-employees-004">
+              <select id="statusFilter" data-rbac-action="ai-employees-005"><option value="">全部状态</option><option value="active">启用</option><option value="inactive">停用</option></select>
+              <select id="legionFilter" data-rbac-action="ai-employees-006"><option value="">全部军团</option></select>
+              <label class="check"><input id="legacyFilter" type="checkbox" data-rbac-action="ai-employees-007"> 显示旧占位员工</label>
+              <button class="secondary" data-rbac-action="ai-employees-008">刷新</button>
             </div>
           </div>
           <div id="pageState" class="state">正在加载AI员工名册...</div>
@@ -120,7 +120,7 @@
 
 <div id="employeeModal" class="modal">
   <div class="modal-panel">
-    <div class="modal-head"><h2 id="modalTitle">新增AI员工</h2><button class="secondary" onclick="closeEmployeeModal()">关闭</button></div>
+    <div class="modal-head"><h2 id="modalTitle">新增AI员工</h2><button class="secondary" data-rbac-action="ai-employees-009">关闭</button></div>
     <div class="form-grid">
       <div><label>员工编号</label><input id="formCode" placeholder="例如：tianyan"></div>
       <div><label>员工名称</label><input id="formName" placeholder="例如：天颜：前端联调优化"></div>
@@ -132,11 +132,11 @@
       <div><label>排序</label><input id="formSort" type="number" value="0"></div>
       <label class="check"><input id="formLegacy" type="checkbox"> 旧占位员工</label>
     </div>
-    <div class="modal-actions"><button class="secondary" onclick="closeEmployeeModal()">取消</button><button onclick="saveEmployee()">保存</button></div>
+    <div class="modal-actions"><button class="secondary" data-rbac-action="ai-employees-010">取消</button><button data-rbac-action="ai-employees-011">保存</button></div>
   </div>
 </div>
 
-<script>
+<script type="text/plain" data-rbac-protected>
   const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI任务中心','/task-center.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
   let employees = [];
   let runtimeStatus = null;
@@ -238,7 +238,7 @@
       <td class="chips">${chips(e.task_types)}</td>
       <td class="chips">${chips(e.default_permissions)}</td>
       <td>${statusLabel(e)}</td>
-      <td><div class="actions"><a class="button-link" href="/ai-employee-detail.html?code=${encodeURIComponent(e.employee_code)}">详情</a><button class="secondary" onclick="selectEmployee('${escapeHtml(e.employee_code)}')">查看</button><button class="secondary" onclick="openEmployeeModal('${escapeHtml(e.employee_code)}')">编辑</button><button class="${e.status==='active'?'warn':'good'}" onclick="toggleEmployee('${escapeHtml(e.employee_code)}','${e.status}')">${e.status==='active'?'停用':'启用'}</button></div></td>
+      <td><div class="actions"><a class="button-link" href="/ai-employee-detail.html?code=${encodeURIComponent(e.employee_code)}">详情</a><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("ai-employees-012","click",function(event){selectEmployee((e.employee_code));})}>查看</button><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("ai-employees-013","click",function(event){openEmployeeModal((e.employee_code));})}>编辑</button><button class="${e.status==='active'?'warn':'good'}" data-rbac-action="${TiantongRbac.registerDynamicAction("ai-employees-014","click",function(event){toggleEmployee((e.employee_code),(e.status));})}>${e.status==='active'?'停用':'启用'}</button></div></td>
     </tr>`).join(''):'<tr><td colspan="8">暂无AI员工，请初始化天统AI员工名册。</td></tr>';
     if(selectedEmployee){const fresh=employees.find(e=>e.employee_code===selectedEmployee.employee_code);if(fresh) renderDetail(fresh)}
   }
@@ -256,7 +256,7 @@
       <div class="detail-row"><div class="detail-label">默认权限</div><div>${chips(e.default_permissions)}</div></div>
       <div class="detail-row"><div class="detail-label">当前状态</div><div>${statusLabel(e)}</div></div>
       <div class="detail-row"><div class="detail-label">最近更新时间</div><div>${fmtTime(e.updated_at)}</div></div>
-      <div class="actions"><button class="secondary" onclick="openEmployeeModal('${escapeHtml(e.employee_code)}')">编辑</button><button class="${e.status==='active'?'warn':'good'}" onclick="toggleEmployee('${escapeHtml(e.employee_code)}','${e.status}')">${e.status==='active'?'停用':'启用'}</button></div>`;
+      <div class="actions"><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("ai-employees-015","click",function(event){openEmployeeModal((e.employee_code));})}>编辑</button><button class="${e.status==='active'?'warn':'good'}" data-rbac-action="${TiantongRbac.registerDynamicAction("ai-employees-016","click",function(event){toggleEmployee((e.employee_code),(e.status));})}>${e.status==='active'?'停用':'启用'}</button></div>`;
   }
 
   function openEmployeeModal(code){
@@ -294,6 +294,22 @@
   }
 
   init().catch(e=>{pageState.className='state error';pageState.innerText=`页面加载失败：${e.message}`});
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "ai-employees-001":["click",function(event){return TiantongRbac.logout();}],
+  "ai-employees-002":["click",function(event){openEmployeeModal();}],
+  "ai-employees-003":["click",function(event){loadRuntimeStatus();}],
+  "ai-employees-004":["input",function(event){renderEmployees();}],
+  "ai-employees-005":["change",function(event){loadEmployees();}],
+  "ai-employees-006":["change",function(event){renderEmployees();}],
+  "ai-employees-007":["change",function(event){loadEmployees();}],
+  "ai-employees-008":["click",function(event){loadEmployees();}],
+  "ai-employees-009":["click",function(event){closeEmployeeModal();}],
+  "ai-employees-010":["click",function(event){closeEmployeeModal();}],
+  "ai-employees-011":["click",function(event){saveEmployee();}]
+});
 </script>
 </body>
 </html>

@@ -1,8 +1,8 @@
 <!doctype html>
 
-<html lang="zh-CN">
+<html lang="zh-CN" data-required-menu="menu.account_center">
 
-<head>
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
 
   <meta charset="utf-8">
 
@@ -88,7 +88,7 @@
 
 <body class="auth-pending">
 
-<script>
+<script type="text/plain" data-rbac-protected>
 
 (function(){
 
@@ -378,7 +378,7 @@
 
           <span id="me" class="pill">加载中...</span>
 
-          <button onclick="logout()">退出登录</button>
+          <button data-rbac-action="account-center-001">退出登录</button>
 
         </div>
 
@@ -438,7 +438,7 @@
 
             <div style="grid-column:span 4"><label>备注</label><textarea id="notes" placeholder="权限、登录异常说明"></textarea></div>
 
-            <div class="actions"><button onclick="saveAccount()">保存</button><button class="secondary" onclick="resetForm()">清空</button></div>
+            <div class="actions"><button data-rbac-action="account-center-002">保存</button><button class="secondary" data-rbac-action="account-center-003">清空</button></div>
 
           </div>
 
@@ -454,9 +454,9 @@
 
             <div style="grid-column:span 2"><label>上传 xlsx</label><input id="import_file" type="file" accept=".xlsx"></div>
 
-            <div><button onclick="importAccounts()">导入账号资料</button></div>
+            <div><button data-rbac-action="account-center-004">导入账号资料</button></div>
 
-            <div><button class="secondary" onclick="location.href='/api/accounts/export'">导出账号资料</button></div>
+            <div><button class="secondary" data-rbac-action="account-center-005">导出账号资料</button></div>
 
           </div>
 
@@ -478,7 +478,7 @@
 
             <div><label>状态</label><select id="filter_status"><option value="">全部</option><option>正常</option><option>异常</option><option>待登录</option><option value="Cookie过期">登录态过期</option><option>暂停采集</option></select></div>
 
-            <div><button onclick="loadAccounts()">查询</button></div>
+            <div><button data-rbac-action="account-center-006">查询</button></div>
 
           </div>
 
@@ -514,7 +514,7 @@
 
 
 
-<script>
+<script type="text/plain" data-rbac-protected>
 
 const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];
 
@@ -532,7 +532,7 @@ function stateText(value){return value==='Cookie过期'?'登录态过期':(value
 
 function statusTag(status){const cls=status==='正常'?'good':(status==='异常'||status==='Cookie过期'?'bad':'warn');return `<span class="tag ${cls}">${stateText(status)}</span>`}
 
-async function loadAccounts(){const params=new URLSearchParams();['brand','owner','status'].forEach(k=>{const el=document.getElementById(`filter_${k}`);if(el&&el.value.trim())params.set(k,el.value.trim())});const list=await api(`/api/accounts?${params.toString()}`);state.innerText=`共 ${list.length} 条账号资料`;rows.innerHTML=list.map(row=>`<tr><td>${row.store_code}</td><td>${row.store_name}</td><td>${row.brand||''}</td><td>${row.owner||''}<br>${row.phone||''}</td><td>${row.login_account||''}</td><td>${statusTag(row.account_status)}<br><span class="state">登录态：${stateText(row.cookie_status)}</span></td><td>${row.last_login_at||''}</td><td>${row.tags||''}</td><td>${row.notes||''}</td><td class="actions"><button onclick='editAccount(${JSON.stringify(row)})'>编辑</button><button class="danger" onclick="deleteAccount(${row.id})">删除</button></td></tr>`).join('')||'<tr><td colspan="10">暂无账号资料</td></tr>'}
+async function loadAccounts(){const params=new URLSearchParams();['brand','owner','status'].forEach(k=>{const el=document.getElementById(`filter_${k}`);if(el&&el.value.trim())params.set(k,el.value.trim())});const list=await api(`/api/accounts?${params.toString()}`);state.innerText=`共 ${list.length} 条账号资料`;rows.innerHTML=list.map(row=>`<tr><td>${row.store_code}</td><td>${row.store_name}</td><td>${row.brand||''}</td><td>${row.owner||''}<br>${row.phone||''}</td><td>${row.login_account||''}</td><td>${statusTag(row.account_status)}<br><span class="state">登录态：${stateText(row.cookie_status)}</span></td><td>${row.last_login_at||''}</td><td>${row.tags||''}</td><td>${row.notes||''}</td><td class="actions"><button data-rbac-action="${TiantongRbac.registerDynamicAction("account-center-007","click",function(event){editAccount((row));})}>编辑</button><button class="danger" data-rbac-action="${TiantongRbac.registerDynamicAction("account-center-008","click",function(event){deleteAccount((row.id));})}>删除</button></td></tr>`).join('')||'<tr><td colspan="10">暂无账号资料</td></tr>'}
 
 function readForm(){return{store_code:store_code.value.trim(),store_name:store_name.value.trim(),brand:brand.value.trim(),owner:owner.value.trim(),phone:phone.value.trim(),login_account:login_account.value.trim(),cookie_status:cookie_status.value,account_status:account_status.value,last_login_at:last_login_at.value.trim(),tags:tags.value.trim(),notes:notes.value.trim()}}
 
@@ -550,6 +550,17 @@ init().catch(e=>alert(e.message));
 
 </script>
 
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "account-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "account-center-002":["click",function(event){saveAccount();}],
+  "account-center-003":["click",function(event){resetForm();}],
+  "account-center-004":["click",function(event){importAccounts();}],
+  "account-center-005":["click",function(event){location.href='/api/accounts/export';}],
+  "account-center-006":["click",function(event){loadAccounts();}]
+});
+</script>
 </body>
 
 </html>

@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.ai_employees">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>能力中心 - 天统AI云中台</title>
@@ -91,7 +91,7 @@
             <input id="execCapabilityId" placeholder="能力标识，例如 mock.echo">
             <select id="executorType"><option value="mock">模拟执行器</option><option value="browser">只读浏览器执行器</option></select>
             <textarea id="inputPayload" class="full" placeholder='输入 JSON，例如 {"message":"你好","simulate_mode":"success"}'></textarea>
-      <button class="full" onclick="createExecution()">创建执行</button>
+      <button class="full" data-rbac-action="capability-center-001">创建执行</button>
       </div>
       <p class="muted">高风险能力必须走审批；默认只开放模拟执行器。浏览器只读和多来源研究能力会显示允许员工、执行器状态、搜索状态和最近健康状态，但默认保持关闭。</p>
     </div>
@@ -99,7 +99,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const $=id=>document.getElementById(id);
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function tick(){$('time').innerText=new Date().toLocaleString('zh-CN',{hour12:false})}
@@ -129,7 +129,7 @@ async function loadCapabilities(){
       <td>${c.executor_status?tag(c.executor_status,c.executor_status==='就绪'?'ok':c.executor_status==='已关闭'?'warn':'bad'):tag('未知','warn')}</td>
       <td>${c.search_provider_status?tag(c.search_provider_status,c.search_provider_status==='就绪'?'ok':'warn'):'—'}</td>
       <td>${c.recent_health_status?tag(c.recent_health_status,c.recent_health_status==='就绪'?'ok':'warn'):'—'}</td>
-      <td><button class="secondary" onclick="showDetail(${i})">查看能力详情</button></td>
+      <td><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("capability-center-002","click",function(event){showDetail((i));})}>查看能力详情</button></td>
     </tr>`).join(''):'<tr><td colspan="12" class="muted">暂无能力</td></tr>';
     if(caps[0]) showDetail(0);
   }catch(e){
@@ -179,6 +179,12 @@ async function createExecution(){
   }
 }
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "capability-center-001":["click",function(event){createExecution();}]
+});
 </script>
 </body>
 </html>

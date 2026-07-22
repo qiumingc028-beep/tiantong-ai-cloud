@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.knowledge_center">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>知识资产详情 - 天统AI云中台</title>
@@ -10,14 +10,11 @@
   </style>
 </head>
 <body class="auth-pending">
-<script>
+<script type="text/plain" data-rbac-protected>
 (function(){
   const rawFetch=window.fetch.bind(window);let redirecting=false,currentUser=null,assetId=new URLSearchParams(location.search).get('id')||'';
-  const ALL_ACCESS=null;const ROLE_ACCESS={owner:ALL_ACCESS,boss:ALL_ACCESS,admin:['/index.html','/control.html','/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/ai-employees.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-asset-center.html','/knowledge-asset-detail.html','/settings.html'],operation:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-asset-center.html','/knowledge-asset-detail.html'],operator:['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html','/knowledge-asset-center.html','/knowledge-asset-detail.html']};
   function safeRedirect(url){if(redirecting)return;redirecting=true;setTimeout(()=>location.href=url,200)}
-  function normalizeRole(user){return String((user&&(user.role_code||user.role))||'').trim().toLowerCase()}
-  function canOpen(role,href){const access=role==='owner'?ALL_ACCESS:(Object.prototype.hasOwnProperty.call(ROLE_ACCESS,role)?ROLE_ACCESS[role]:['/jd-dashboard.html']);return access===ALL_ACCESS||access.includes(href)}
-  function applyRole(user){currentUser=user||currentUser;const role=normalizeRole(currentUser);document.querySelectorAll('.menu a').forEach(a=>{const ok=canOpen(role,a.getAttribute('href')||'');a.style.display=ok?'':'none'});if(!canOpen(role,location.pathname)){safeRedirect('/index.html');return}document.body.classList.remove('auth-pending')}
+  function applyRole(user){currentUser=user||currentUser;document.body.classList.remove('auth-pending')}
   window.fetch=async function(input,init){const res=await rawFetch(input,init);const url=typeof input==='string'?input:(input&&input.url)||'';if(url.includes('/api/')&&res.status===401)safeRedirect('/login.html');if(url.includes('/api/')&&res.status===403){notice('没有访问权限','error');safeRedirect('/login.html')}return res};
   window.secureLogout=async function(){try{await rawFetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'};
   function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
@@ -38,7 +35,7 @@
   <main class="main">
     <header class="topbar">
       <div class="top-title">知识资产详情</div>
-      <div class="top-meta"><span id="currentTime" class="pill">--:--:--</span><span id="userInfo" class="pill">加载中</span><button class="button" onclick="secureLogout()">退出</button></div>
+      <div class="top-meta"><span id="currentTime" class="pill">--:--:--</span><span id="userInfo" class="pill">加载中</span><button class="button" data-rbac-action="knowledge-asset-detail-001">退出</button></div>
     </header>
     <section class="content">
       <div class="page-head">
@@ -46,7 +43,7 @@
           <h1 id="headline">知识资产详情</h1>
           <div id="summary" class="sub">正在加载...</div>
         </div>
-        <div class="button-row"><button class="secondary button" onclick="location.href='/knowledge-asset-center.html'">返回列表</button><button class="good button" onclick="doAction('submit')">提交审核</button><button class="button" onclick="doAction('approve')">批准</button><button class="warn button" onclick="doAction('reject')">驳回</button><button class="good button" onclick="doAction('publish')">发布</button><button class="secondary button" onclick="doAction('archive')">归档</button></div>
+        <div class="button-row"><button class="secondary button" data-rbac-action="knowledge-asset-detail-002">返回列表</button><button class="good button" data-rbac-action="knowledge-asset-detail-003">提交审核</button><button class="button" data-rbac-action="knowledge-asset-detail-004">批准</button><button class="warn button" data-rbac-action="knowledge-asset-detail-005">驳回</button><button class="good button" data-rbac-action="knowledge-asset-detail-006">发布</button><button class="secondary button" data-rbac-action="knowledge-asset-detail-007">归档</button></div>
       </div>
       <div id="notice" class="state">正在加载知识资产详情...</div>
       <div id="meta" class="row" style="margin-bottom:16px"></div>
@@ -59,7 +56,7 @@
           <div class="row"><input id="newVersionTitle" placeholder="新版本标题"><input id="newVersionSummary" placeholder="新版本摘要"></div>
           <textarea id="newVersionContent" placeholder="新版本正文"></textarea>
           <input id="newVersionChange" placeholder="版本说明">
-          <div class="button-row" style="margin-top:10px"><button class="button good" onclick="createVersion()">创建新版本</button></div>
+          <div class="button-row" style="margin-top:10px"><button class="button good" data-rbac-action="knowledge-asset-detail-008">创建新版本</button></div>
         </section>
         <aside>
           <section class="panel"><strong>版本历史</strong><pre id="versionBody">加载中...</pre></section>
@@ -71,5 +68,18 @@
     </section>
   </main>
 </div>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "knowledge-asset-detail-001":["click",function(event){return TiantongRbac.logout();}],
+  "knowledge-asset-detail-002":["click",function(event){location.href='/knowledge-asset-center.html';}],
+  "knowledge-asset-detail-003":["click",function(event){doAction('submit');}],
+  "knowledge-asset-detail-004":["click",function(event){doAction('approve');}],
+  "knowledge-asset-detail-005":["click",function(event){doAction('reject');}],
+  "knowledge-asset-detail-006":["click",function(event){doAction('publish');}],
+  "knowledge-asset-detail-007":["click",function(event){doAction('archive');}],
+  "knowledge-asset-detail-008":["click",function(event){createVersion();}]
+});
+</script>
 </body>
 </html>

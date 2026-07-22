@@ -53,7 +53,6 @@ def test_brain_center_page_has_no_sensitive_terms_or_external_automation():
 
 
 def test_index_menu_contains_brain_center_entry():
-    source = Path("frontend/index.html").read_text()
+    source = Path("frontend/rbac-navigation.js").read_text()
     assert "天统AI Brain Center" in source
     assert "/brain-center.html" in source
-

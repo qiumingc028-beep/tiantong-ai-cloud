@@ -1,6 +1,6 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.computer_executor">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>桌面观察</title>
@@ -38,7 +38,7 @@
       <button type="button">立即断开</button>
     </section>
     <div id="observer-state">暂无数据</div>
-    <script>
+    <script type="text/plain" data-rbac-protected>
       async function renderObservations() {
         const target = document.getElementById('observer-state');
         target.textContent = '正在加载观察记录...';

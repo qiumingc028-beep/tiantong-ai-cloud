@@ -1,8 +1,8 @@
 <!doctype html>
 
-<html lang="zh-CN">
+<html lang="zh-CN" data-required-menu="menu.account_center">
 
-<head>
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
 
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 
@@ -18,7 +18,7 @@
 
 <body class="auth-pending">
 
-<script>
+<script type="text/plain" data-rbac-protected>
 
 (function(){
 
@@ -286,15 +286,15 @@
 
 <div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main>
 
-    <header class="topbar"><strong>品牌中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>品牌中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="brands-001">退出登录</button></div></header>
 
     <section class="content">
 
       <div class="hero"><h1>品牌中心</h1><p>维护京东60店品牌资料、负责人和运营备注。</p></div>
 
-      <div class="card"><h2>新增品牌</h2><div class="grid"><div><label>品牌编码</label><input id="brand_code" placeholder="BR001"></div><div><label>品牌名称</label><input id="brand_name" placeholder="品牌名称"></div><div><label>品牌负责人</label><input id="owner_name" placeholder="负责人"></div><div><label>备注</label><input id="notes" placeholder="备注"></div><button onclick="createBrand()">保存品牌</button></div></div>
+      <div class="card"><h2>新增品牌</h2><div class="grid"><div><label>品牌编码</label><input id="brand_code" placeholder="BR001"></div><div><label>品牌名称</label><input id="brand_name" placeholder="品牌名称"></div><div><label>品牌负责人</label><input id="owner_name" placeholder="负责人"></div><div><label>备注</label><input id="notes" placeholder="备注"></div><button data-rbac-action="brands-002">保存品牌</button></div></div>
 
-      <div class="card"><h2>品牌列表</h2><div class="toolbar"><input id="search" placeholder="搜索品牌/负责人/备注" oninput="renderRows()"><button class="secondary" onclick="loadBrands()">刷新表格</button></div></div>
+      <div class="card"><h2>品牌列表</h2><div class="toolbar"><input id="search" placeholder="搜索品牌/负责人/备注" data-rbac-action="brands-003"><button class="secondary" data-rbac-action="brands-004">刷新表格</button></div></div>
 
       <div id="pageState" class="state">正在加载品牌...</div>
 
@@ -302,7 +302,7 @@
 
     </section></main></div>
 
-<script>
+<script type="text/plain" data-rbac-protected>
 
 const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];let tableRows=[];
 
@@ -318,6 +318,15 @@ init().then(loadBrands).catch(e=>{pageState.className='state error';pageState.in
 
 </script>
 
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "brands-001":["click",function(event){return TiantongRbac.logout();}],
+  "brands-002":["click",function(event){createBrand();}],
+  "brands-003":["input",function(event){renderRows();}],
+  "brands-004":["click",function(event){loadBrands();}]
+});
+</script>
 </body>
 
 </html>

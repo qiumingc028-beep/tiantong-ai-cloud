@@ -74,7 +74,9 @@ def test_auto_dispatch_center_keeps_manual_safety_boundary():
 
 
 def test_auto_dispatch_center_menu_entry_points_to_new_page():
-    index_html = Path("frontend/index.html").read_text(encoding="utf-8")
+    navigation_script = Path("frontend/rbac-navigation.js").read_text(encoding="utf-8")
     task_center_html = Path("frontend/task-center.html").read_text(encoding="utf-8")
-    assert "['AI自动派单中心','/auto-dispatch-center.html']" in index_html
+    assert "['AI自动派单中心','/auto-dispatch-center.html']" in navigation_script
+    assert "'/auto-dispatch-center.html':'menu.settings'" in navigation_script
+    assert "ADMIN_ROLES" not in navigation_script
     assert "['AI自动派单中心','/auto-dispatch-center.html']" in task_center_html

@@ -1,8 +1,8 @@
 <!doctype html>
 
-<html lang="zh-CN">
+<html lang="zh-CN" data-required-menu="menu.import">
 
-<head>
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
 
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 
@@ -18,7 +18,7 @@
 
 <body class="auth-pending">
 
-<script>
+<script type="text/plain" data-rbac-protected>
 
 (function(){
 
@@ -286,25 +286,25 @@
 
 <div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main class="main">
 
-    <header class="topbar"><strong>Excel导入</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>Excel导入</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="import-001">退出登录</button></div></header>
 
     <section class="content">
 
       <div class="card"><h1>Excel批量导入</h1><p class="sub">上传真实Excel/CSV数据，后端采集服务完成前作为临时真实数据来源。</p></div>
 
-      <div class="card"><h2>字段要求</h2><p class="tip">Excel 第一行必须按下面表头填写。店铺编号要对应系统里的真实店铺编号。</p><div class="toolbar"><input id="fieldSearch" placeholder="搜索字段" oninput="filterFields()"><button class="secondary" onclick="filterFields()">刷新字段表</button></div></div>
+      <div class="card"><h2>字段要求</h2><p class="tip">Excel 第一行必须按下面表头填写。店铺编号要对应系统里的真实店铺编号。</p><div class="toolbar"><input id="fieldSearch" placeholder="搜索字段" data-rbac-action="import-002"><button class="secondary" data-rbac-action="import-003">刷新字段表</button></div></div>
 
       <div class="table-wrap"><table><thead><tr><th>店铺编号</th><th>日期</th><th>今日成交</th><th>今日利润</th><th>广告花费</th><th>ROI</th><th>订单数</th><th>访客数</th><th>退款数</th><th>售后数</th></tr></thead><tbody id="fieldRows"><tr><td>真实店铺编号</td><td>真实日期</td><td>真实成交金额</td><td>真实利润金额</td><td>真实广告花费</td><td>真实ROI</td><td>真实订单数</td><td>真实访客数</td><td>真实退款数</td><td>真实售后数</td></tr></tbody></table></div>
 
-      <div class="card" style="margin-top:16px"><h2>上传Excel</h2><p class="tip">支持 .xlsx 和 .csv。上传后会自动覆盖同一天、同一个店铺的数据。接口开发中 / 等待后端采集服务完成时，可先用这里导入真实数据。</p><div class="toolbar"><input id="file" type="file" accept=".xlsx,.csv"><button onclick="upload()">上传导入</button><button class="secondary" onclick="clearResult()">刷新状态</button></div><div id="result" class="result">请选择真实数据文件后上传。</div></div>
+      <div class="card" style="margin-top:16px"><h2>上传Excel</h2><p class="tip">支持 .xlsx 和 .csv。上传后会自动覆盖同一天、同一个店铺的数据。接口开发中 / 等待后端采集服务完成时，可先用这里导入真实数据。</p><div class="toolbar"><input id="file" type="file" accept=".xlsx,.csv"><button data-rbac-action="import-004">上传导入</button><button class="secondary" data-rbac-action="import-005">刷新状态</button></div><div id="result" class="result">请选择真实数据文件后上传。</div></div>
 
     </section></main></div>
 
-  <script>
+  <script type="text/plain" data-rbac-protected>
 
     const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];
 
-    function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/import.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'onclick="return disabledEntry()"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function init(){renderMenu();tick();setInterval(tick,1000);const r=await fetch('/api/me',{credentials:'include'});if(r.status===401){location.href='/login.html';return}const u=await r.json();me.innerText=`${u.display_name} · ${u.role_label||u.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
+    function renderMenu(){menu.innerHTML=menus.map(([l,h])=>`<a class="${h==='/import.html'?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'data-rbac-action="import-disabled-entry"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function init(){renderMenu();tick();setInterval(tick,1000);const r=await fetch('/api/me',{credentials:'include'});if(r.status===401){location.href='/login.html';return}const u=await r.json();me.innerText=`${u.display_name} · ${u.role_label||u.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
 
     function filterFields(){const q=fieldSearch.value.trim().toLowerCase();fieldRows.style.display=q&&!fieldRows.innerText.toLowerCase().includes(q)?'none':''}function clearResult(){result.className='result';result.innerText='请选择真实数据文件后上传。'}
 
@@ -314,6 +314,17 @@
 
   </script>
 
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "import-disabled-entry":["click",function(event){return disabledEntry();}],
+  "import-001":["click",function(event){return TiantongRbac.logout();}],
+  "import-002":["input",function(event){filterFields();}],
+  "import-003":["click",function(event){filterFields();}],
+  "import-004":["click",function(event){upload();}],
+  "import-005":["click",function(event){clearResult();}]
+});
+</script>
 </body>
 
 </html>
