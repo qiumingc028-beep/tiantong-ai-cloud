@@ -95,8 +95,8 @@
           </div>
         </div>
         <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
-          <button onclick="createExecution()">开始只读采集</button>
-          <button class="secondary" onclick="loadHealth()">刷新状态</button>
+          <button data-rbac-action="browser-readonly-test-001">开始只读采集</button>
+          <button class="secondary" data-rbac-action="browser-readonly-test-002">刷新状态</button>
         </div>
       </section>
       <section class="panel">
@@ -147,6 +147,13 @@ async function createExecution(){
   }
 }
 tick();setInterval(tick,1000);loadHealth();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "browser-readonly-test-001":["click",function(event){createExecution();}],
+  "browser-readonly-test-002":["click",function(event){loadHealth();}]
+});
 </script>
 </body>
 </html>

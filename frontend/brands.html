@@ -286,15 +286,15 @@
 
 <div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main>
 
-    <header class="topbar"><strong>品牌中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>品牌中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="brands-001">退出登录</button></div></header>
 
     <section class="content">
 
       <div class="hero"><h1>品牌中心</h1><p>维护京东60店品牌资料、负责人和运营备注。</p></div>
 
-      <div class="card"><h2>新增品牌</h2><div class="grid"><div><label>品牌编码</label><input id="brand_code" placeholder="BR001"></div><div><label>品牌名称</label><input id="brand_name" placeholder="品牌名称"></div><div><label>品牌负责人</label><input id="owner_name" placeholder="负责人"></div><div><label>备注</label><input id="notes" placeholder="备注"></div><button onclick="createBrand()">保存品牌</button></div></div>
+      <div class="card"><h2>新增品牌</h2><div class="grid"><div><label>品牌编码</label><input id="brand_code" placeholder="BR001"></div><div><label>品牌名称</label><input id="brand_name" placeholder="品牌名称"></div><div><label>品牌负责人</label><input id="owner_name" placeholder="负责人"></div><div><label>备注</label><input id="notes" placeholder="备注"></div><button data-rbac-action="brands-002">保存品牌</button></div></div>
 
-      <div class="card"><h2>品牌列表</h2><div class="toolbar"><input id="search" placeholder="搜索品牌/负责人/备注" oninput="renderRows()"><button class="secondary" onclick="loadBrands()">刷新表格</button></div></div>
+      <div class="card"><h2>品牌列表</h2><div class="toolbar"><input id="search" placeholder="搜索品牌/负责人/备注" data-rbac-action="brands-003"><button class="secondary" data-rbac-action="brands-004">刷新表格</button></div></div>
 
       <div id="pageState" class="state">正在加载品牌...</div>
 
@@ -318,6 +318,15 @@ init().then(loadBrands).catch(e=>{pageState.className='state error';pageState.in
 
 </script>
 
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "brands-001":["click",function(event){return TiantongRbac.logout();}],
+  "brands-002":["click",function(event){createBrand();}],
+  "brands-003":["input",function(event){renderRows();}],
+  "brands-004":["click",function(event){loadBrands();}]
+});
+</script>
 </body>
 
 </html>

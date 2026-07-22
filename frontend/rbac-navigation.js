@@ -50,7 +50,10 @@
     '/tool-permissions.html':'menu.settings','/tool-router.html':'menu.settings','/workflows.html':'menu.workflows'
   };
   const KNOWN_PERMISSIONS=new Set(Object.values(ROUTE_PERMISSIONS));
+  const BUSINESS_EVENTS=new Set(['click','change','input']);
   const FETCH_TIMEOUT_MS=10000;
+  const actions=new Map(),boundEvents=new Set(),pendingActions=new Map(),dynamicActionIds=new Set(),pendingScriptLoads=new Set();
+  let actionSequence=0,authorized=false,activated=false,activationPromise=null,activationEpoch=0,dynamicFlushPending=false,dynamicObserver=null,authorizationFingerprint=null,revalidationPromise=null;
 
   function normalize(path){return path==='/'?'/index.html':String(path||'').split(/[?#]/,1)[0]}
   function permissionsOf(user){
@@ -86,12 +89,83 @@
       const path=normalize(link.getAttribute('href'));if(ROUTE_PERMISSIONS[path]&&!allowed.has(path))link.remove();
     });
   }
+  function dispatchAction(event){
+    if(!authorized)return;
+    for(let target=event.target;target&&target!==global.document;target=target.parentElement){
+      const id=target.getAttribute&&target.getAttribute('data-rbac-action');
+      const binding=id&&actions.get(id);
+      if(!binding||binding[0]!==event.type)continue;
+      const result=binding[1].call(target,event);
+      if(result===false){event.preventDefault();event.stopPropagation()}
+      return;
+    }
+  }
+  function ensureEvent(type){
+    if(!authorized||!BUSINESS_EVENTS.has(type))throw new Error('business event refused before authorization');
+    if(boundEvents.has(type))return;
+    global.document.addEventListener(type,dispatchAction);
+    boundEvents.add(type);
+  }
+  function registerAction(id,type,handler){
+    if(!authorized||typeof id!=='string'||!/^[a-z0-9-]+$/i.test(id)||typeof handler!=='function'||!BUSINESS_EVENTS.has(type))throw new Error('invalid RBAC action');
+    actions.set(id,[type,handler]);
+    ensureEvent(type);
+    return id;
+  }
+  function flushDynamicActions(){
+    dynamicFlushPending=false;
+    if(!authorized){pendingActions.clear();return}
+    for(const [id,binding] of pendingActions){
+      if(global.document.querySelector(`[data-rbac-action="${id}"]`)){
+        registerAction(id,binding[0],binding[1]);dynamicActionIds.add(id);
+      }
+    }
+    pendingActions.clear();
+    for(const id of dynamicActionIds){
+      if(!global.document.querySelector(`[data-rbac-action="${id}"]`)){actions.delete(id);dynamicActionIds.delete(id)}
+    }
+  }
+  function scheduleDynamicFlush(){
+    if(!dynamicFlushPending){dynamicFlushPending=true;Promise.resolve().then(flushDynamicActions)}
+  }
+  function observeDynamicActions(){
+    if(dynamicObserver||typeof global.MutationObserver!=='function')return;
+    dynamicObserver=new global.MutationObserver(scheduleDynamicFlush);
+    dynamicObserver.observe(global.document.documentElement,{childList:true,subtree:true});
+  }
+  function registerDynamicAction(handlerId,type,handler){
+    if(!authorized||typeof handlerId!=='string'||!/^[a-z0-9-]+$/i.test(handlerId)||typeof handler!=='function'||!BUSINESS_EVENTS.has(type))throw new Error('invalid dynamic RBAC action');
+    const id=`${handlerId}-${++actionSequence}`;
+    pendingActions.set(id,[type,handler]);
+    scheduleDynamicFlush();
+    return id;
+  }
+  function bindActions(definitions){
+    for(const [id,binding] of Object.entries(definitions||{})){
+      if(!Array.isArray(binding)||binding.length!==2)throw new Error('invalid RBAC binding');
+      registerAction(id,binding[0],binding[1]);
+    }
+  }
+  function resetActions(){
+    for(const type of boundEvents)global.document.removeEventListener(type,dispatchAction);
+    if(dynamicObserver){dynamicObserver.disconnect();dynamicObserver=null}
+    for(const controller of pendingScriptLoads)controller.abort();
+    pendingScriptLoads.clear();
+    boundEvents.clear();actions.clear();pendingActions.clear();dynamicActionIds.clear();
+    authorized=false;activated=false;activationPromise=null;authorizationFingerprint=null;activationEpoch+=1;
+  }
+  function sessionFingerprint(user){
+    const storage=key=>{try{return typeof global.localStorage.getItem==='function'?(global.localStorage.getItem(key)||''):''}catch(error){return ''}};
+    return JSON.stringify([user&&user.id,user&&user.username,user&&user.email,[...permissionsOf(user)].sort(),storage('token'),storage('tiantong_token'),storage('session'),storage('tiantong_session')]);
+  }
   async function logout(){
+    resetActions();
     try{['token','tiantong_token','session','tiantong_session'].forEach(key=>global.localStorage.removeItem(key));global.sessionStorage.clear()}catch(error){}
     try{await global.fetch('/api/logout',{method:'POST',credentials:'include'})}catch(error){}
     global.location.href='/login.html';
   }
   function deny(){
+    resetActions();
     const aside=element('aside'),nav=element('nav'),main=element('main'),title=element('h1','无权访问'),button=element('button','退出登录');
     nav.className='menu';aside.appendChild(nav);button.id='rbacLogout';button.type='button';button.addEventListener('click',logout);
     main.append(title,button);global.document.body.replaceChildren(aside,main);
@@ -107,24 +181,49 @@
     }finally{global.clearTimeout(timer)}
   }
   async function activateProtectedScripts(){
-    global.__tiantongFrontSecurity=true;
-    for(const source of global.document.querySelectorAll('script[data-rbac-protected]')){
-      const script=global.document.createElement('script');
-      for(const attribute of source.attributes||[]){
-        if(!['type','data-rbac-protected'].includes(attribute.name))script.setAttribute(attribute.name,attribute.value);
+    if(activated)return;
+    if(activationPromise)return activationPromise;
+    const epoch=activationEpoch;
+    activationPromise=(async()=>{
+      global.__tiantongFrontSecurity=true;
+      for(const source of global.document.querySelectorAll('script[data-rbac-protected]')){
+        const script=global.document.createElement('script');
+        for(const attribute of source.attributes||[]){
+          if(!['type','data-rbac-protected','src','defer','async'].includes(attribute.name))script.setAttribute(attribute.name,attribute.value);
+        }
+        if(source.src){
+          const controller=new global.AbortController();pendingScriptLoads.add(controller);
+          try{
+            const response=await global.fetch(source.src,{credentials:'same-origin',signal:controller.signal});
+            if(!response.ok)throw new Error('protected script unavailable');
+            const code=await response.text();
+            if(epoch!==activationEpoch||!authorized)throw new Error('authorization changed during activation');
+            script.textContent=`${code}\n//# sourceURL=${source.src}`;
+          }finally{pendingScriptLoads.delete(controller)}
+        }else script.textContent=source.textContent;
+        if(epoch!==activationEpoch||!authorized)throw new Error('authorization changed during activation');
+        source.parentNode.insertBefore(script,source.nextSibling);
       }
-      if(source.src){script.async=false;await new Promise((resolve,reject)=>{script.onload=resolve;script.onerror=reject;source.parentNode.insertBefore(script,source.nextSibling)})}
-      else{script.textContent=source.textContent;source.parentNode.insertBefore(script,source.nextSibling)}
-    }
+      if(epoch!==activationEpoch)throw new Error('authorization changed during activation');
+      activated=true;
+    })();
+    return activationPromise;
   }
   async function guard(){
     let user=null;
+    const guardEpoch=activationEpoch;
     try{
       await domReady();
       user=await identity();
+      if(guardEpoch!==activationEpoch)throw new Error('authorization changed during identity check');
       const path=normalize(global.location.pathname);
       const declared=global.document.documentElement.dataset.requiredMenu;
       if(!declared||ROUTE_PERMISSIONS[path]!==declared||!canOpen(user,path)){deny();return {allowed:false,user}}
+      const fingerprint=sessionFingerprint(user);
+      if(authorizationFingerprint&&authorizationFingerprint!==fingerprint){deny();return {allowed:false,user:null,error:new Error('authorization identity changed')}}
+      authorizationFingerprint=fingerprint;
+      authorized=true;
+      observeDynamicActions();
       await activateProtectedScripts();
       global.document.body.classList.remove('auth-pending');
       global.logout=logout;
@@ -134,8 +233,21 @@
     }catch(error){deny();return {allowed:false,user:null,error}}
     finally{global.document.documentElement.style.visibility='visible'}
   }
+  function revalidateAuthorization(event){
+    if(!authorizationFingerprint||event&&event.type==='pageshow'&&!event.persisted)return Promise.resolve();
+    if(revalidationPromise)return revalidationPromise;
+    authorized=false;
+    global.document.documentElement.style.visibility='hidden';
+    revalidationPromise=guard().finally(()=>{revalidationPromise=null});
+    return revalidationPromise;
+  }
 
   global.document.documentElement.style.visibility='hidden';
-  global.TiantongRbac={canOpen,filterNavigation,guard,logout,navigationFor,renderNavigation,routePermissions:ROUTE_PERMISSIONS};
+  global.TiantongRbac={bindActions,canOpen,filterNavigation,guard,logout,navigationFor,registerDynamicAction,renderNavigation,routePermissions:ROUTE_PERMISSIONS};
   global.TiantongRbac.ready=guard();
+  if(typeof global.addEventListener==='function'){
+    global.addEventListener('pageshow',revalidateAuthorization);
+    global.addEventListener('focus',revalidateAuthorization);
+    global.addEventListener('storage',event=>{if(event.key===null||['token','tiantong_token','session','tiantong_session'].includes(event.key))return revalidateAuthorization(event)});
+  }
 })(window);

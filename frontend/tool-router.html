@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>Tool Router 工具路由中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>Tool Router 工具路由中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="tool-router-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>Tool Router 工具路由中心</h1><p>统一查看 AI 员工工具路由关系、模拟路由推荐、权限检查、路由日志和审批状态。</p></div>
@@ -24,10 +24,10 @@
       <section id="stats" class="stats"></section>
       <div class="card">
         <div class="toolbar">
-          <input id="searchInput" placeholder="搜索员工 / 工具 / 任务" oninput="renderAll()">
-          <select id="riskFilter" onchange="renderAll()"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
-          <select id="statusFilter" onchange="renderAll()"><option value="">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select>
-          <button onclick="loadAll()">刷新</button>
+          <input id="searchInput" placeholder="搜索员工 / 工具 / 任务" data-rbac-action="tool-router-002">
+          <select id="riskFilter" data-rbac-action="tool-router-003"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
+          <select id="statusFilter" data-rbac-action="tool-router-004"><option value="">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select>
+          <button data-rbac-action="tool-router-005">刷新</button>
           <a class="btn secondary" href="/tool-center.html">Tool Center</a>
           <a class="btn secondary" href="/tool-market.html">Tool Market</a>
         </div>
@@ -50,7 +50,7 @@
               <label>需求<input id="requirementInput" value="读取表格并输出趋势"></label>
             </div>
             <div class="tag-list"><label><input id="bossConfirmed" type="checkbox">老板确认</label><label><input id="securityAudited" type="checkbox">天监审核</label></div>
-            <div class="tag-list"><button onclick="checkRoute()">检查权限</button><button class="secondary" onclick="routeTask()">生成路由推荐</button></div>
+            <div class="tag-list"><button data-rbac-action="tool-router-006">检查权限</button><button class="secondary" data-rbac-action="tool-router-007">生成路由推荐</button></div>
             <div id="simulationResult" class="list-item muted">等待模拟检查。</div>
           </div>
           <div class="card"><div class="head"><h2>审批状态</h2></div><div id="approvalBox"></div></div>
@@ -99,6 +99,18 @@ function payloadBase(){return{employee_code:employeeInput.value.trim(),task:task
 function showResult(data){simulationResult.className='list-item';simulationResult.innerHTML=`<strong>simulation / dry-run</strong><div class="tag-list">${badge(data.recommended_tool||data.tool_name||'暂无工具')}${badge(data.risk_level)}${data.allowed?badge('已批准','approved'):badge('待确认','pending')}${data.require_approval?badge('需要审批','pending'):badge('无需审批','enabled')}</div><div class="muted">${esc(text(data.reason))}</div>`}
 function taskType(tool){if(tool==='browser_search')return '找爆款数据 / 搜索信息';if(tool==='excel_analyzer')return 'Excel / 表格分析';if(tool==='database_read')return '数据读取 / 指标查询';if(tool==='image_reader')return '图片理解';if(tool==='seo_analyzer')return 'SEO / GEO 分析';if(tool==='financial_reader')return '财务分析';return '通用任务'}
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "tool-router-001":["click",function(event){return TiantongRbac.logout();}],
+  "tool-router-002":["input",function(event){renderAll();}],
+  "tool-router-003":["change",function(event){renderAll();}],
+  "tool-router-004":["change",function(event){renderAll();}],
+  "tool-router-005":["click",function(event){loadAll();}],
+  "tool-router-006":["click",function(event){checkRoute();}],
+  "tool-router-007":["click",function(event){routeTask();}]
+});
 </script>
 </body>
 </html>

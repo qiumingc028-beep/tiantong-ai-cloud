@@ -286,15 +286,15 @@
 
 <div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main class="main">
 
-    <header class="topbar"><div class="top-title">京东60店数据中心</div><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="userInfo" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><div class="top-title">京东60店数据中心</div><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="userInfo" class="pill">加载中</span><button data-rbac-action="jd-dashboard-001">退出登录</button></div></header>
 
     <section class="content">
 
-      <div class="page-head"><div><h1>京东60店数据中心</h1><div class="sub">按今天汇总60店成交、利润、广告ROI、退款售后和异常提醒</div></div><button class="secondary" onclick="loadData()">刷新数据</button></div>
+      <div class="page-head"><div><h1>京东60店数据中心</h1><div class="sub">按今天汇总60店成交、利润、广告ROI、退款售后和异常提醒</div></div><button class="secondary" data-rbac-action="jd-dashboard-002">刷新数据</button></div>
 
       <div class="summary"><div class="card">京东店铺数<div class="num" id="total">-</div><div class="hint">系统内京东店铺</div></div><div class="card">健康店铺<div class="num" id="healthy">-</div><div class="hint">健康分大于等于80</div></div><div class="card">异常提醒<div class="num" id="alerts">-</div><div class="hint">需要处理的问题数</div></div><div class="card">今日数据状态<div class="num" id="dataStatus">-</div><div class="hint">采集/录入/导入</div></div></div>
 
-      <div class="toolbar"><input id="search" placeholder="搜索店铺/负责人/异常" oninput="renderRows()"><select id="healthFilter" onchange="renderRows()"><option value="">全部健康状态</option><option value="健康">健康</option><option value="关注">关注</option><option value="异常">异常</option></select><select id="dataFilter" onchange="renderRows()"><option value="">全部数据状态</option><option value="has">有今日数据</option><option value="empty">暂无今日数据</option></select><button class="secondary" onclick="loadData()">刷新表格</button></div>
+      <div class="toolbar"><input id="search" placeholder="搜索店铺/负责人/异常" data-rbac-action="jd-dashboard-003"><select id="healthFilter" data-rbac-action="jd-dashboard-004"><option value="">全部健康状态</option><option value="健康">健康</option><option value="关注">关注</option><option value="异常">异常</option></select><select id="dataFilter" data-rbac-action="jd-dashboard-005"><option value="">全部数据状态</option><option value="has">有今日数据</option><option value="empty">暂无今日数据</option></select><button class="secondary" data-rbac-action="jd-dashboard-006">刷新表格</button></div>
 
       <div id="pageState" class="state">正在加载京东60店数据...</div>
 
@@ -306,7 +306,7 @@
 
     const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['广告中心','/ads.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工中心','/ai-employees.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['天藏：知识资产中心','/knowledge-center.html'],['系统设置','/settings.html']];let storeRows=[];
 
-    function renderMenu(a){menu.innerHTML=menus.map(([l,h])=>`<a class="${h===a?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'onclick="return disabledEntry()"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu('/jd-dashboard.html');tick();setInterval(tick,1000);const me=await api('/api/me');userInfo.innerText=`${me.display_name} · ${me.role_label||me.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
+    function renderMenu(a){menu.innerHTML=menus.map(([l,h])=>`<a class="${h===a?'active ':''}${h.startsWith('#')?'disabled':''}" href="${h}" ${h.startsWith('#')?'data-rbac-action="jd-dashboard-disabled-entry"':''}>${l}</a>`).join('')}function disabledEntry(){alert('账号资料中心入口已预留，等待后端页面路由开放。');return false}function tick(){currentTime.innerText=new Date().toLocaleString('zh-CN',{hour12:false})}async function logout(){await fetch('/api/logout',{method:'POST',credentials:'include'});location.href='/login.html'}async function api(url,opt={}){const r=await fetch(url,{credentials:'include',...opt});if(r.status===401){location.href='/login.html';return}if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.detail||'请求失败')}return r.json()}async function init(){renderMenu('/jd-dashboard.html');tick();setInterval(tick,1000);const me=await api('/api/me');userInfo.innerText=`${me.display_name} · ${me.role_label||me.role}`;const h=await fetch('/api/health').then(r=>r.json()).catch(()=>null);systemStatus.innerText=h?`服务器正常 · 数据库 ${h.database} · Redis ${h.redis}`:'系统状态获取失败';if(h)systemStatus.classList.add('ok')}
 
     const money=v=>'￥'+Number(v||0).toLocaleString('zh-CN',{maximumFractionDigits:2});const cls=s=>s==='健康'?'ok':(s==='关注'?'warn':'bad');
 
@@ -318,6 +318,18 @@
 
   </script>
 
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "jd-dashboard-disabled-entry":["click",function(event){return disabledEntry();}],
+  "jd-dashboard-001":["click",function(event){return TiantongRbac.logout();}],
+  "jd-dashboard-002":["click",function(event){loadData();}],
+  "jd-dashboard-003":["input",function(event){renderRows();}],
+  "jd-dashboard-004":["change",function(event){renderRows();}],
+  "jd-dashboard-005":["change",function(event){renderRows();}],
+  "jd-dashboard-006":["click",function(event){loadData();}]
+});
+</script>
 </body>
 
 </html>

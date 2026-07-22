@@ -156,7 +156,7 @@
 })();
 </script>
 <div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main class="main">
-    <header class="topbar"><strong>模板中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>模板中心</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="template-center-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero"><h1>模板中心</h1><p>维护京东60店账号资料 Excel 字段模板，统一批量导入标准。</p></div>
       <div class="card">
@@ -164,11 +164,11 @@
         <div class="form-grid">
           <div><label>模板名称</label><input id="template_name" placeholder="京东60店账号资料模板"></div>
           <div><label>说明</label><input id="description" placeholder="适用于账号资料批量导入"></div>
-          <button onclick="createTemplate()">保存模板</button>
+          <button data-rbac-action="template-center-002">保存模板</button>
         </div>
         <p class="fields">默认字段：店铺编号、店铺名称、品牌、负责人、手机号、登录账号、Cookie状态、登录状态、最后登录时间、备注、标签。</p>
       </div>
-      <div class="card"><h2>模板列表</h2><div class="toolbar"><input id="search" placeholder="搜索模板名称/说明/字段" oninput="renderRows()"><button class="secondary" onclick="loadTemplates()">刷新表格</button></div></div>
+      <div class="card"><h2>模板列表</h2><div class="toolbar"><input id="search" placeholder="搜索模板名称/说明/字段" data-rbac-action="template-center-003"><button class="secondary" data-rbac-action="template-center-004">刷新表格</button></div></div>
       <div id="pageState" class="state">正在加载模板...</div>
       <div class="table-wrap"><table><thead><tr><th>ID</th><th>模板名称</th><th>说明</th><th>字段</th></tr></thead><tbody id="rows"></tbody></table></div>
     </section>
@@ -180,6 +180,15 @@ async function loadTemplates(){try{pageState.className='state';pageState.innerTe
 function renderRows(){const q=search.value.trim().toLowerCase();const list=tableRows.filter(t=>!q||[t.template_name,t.description,(t.fields||[]).join(' ')].join(' ').toLowerCase().includes(q));pageState.innerText=list.length?`已显示 ${list.length} / ${tableRows.length} 个模板。`:'暂无符合条件的模板。';rows.innerHTML=list.length?list.map(t=>`<tr><td>${t.id}</td><td>${t.template_name}</td><td>${t.description||''}</td><td class="fields">${(t.fields||[]).join('、')}</td></tr>`).join(''):'<tr><td colspan="4">暂无模板</td></tr>'}
 async function createTemplate(){try{await api('/api/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({template_name:template_name.value.trim(),description:description.value.trim()})});template_name.value='';description.value='';await loadTemplates()}catch(e){alert(e.message)}}
 init().then(loadTemplates).catch(e=>{pageState.className='state error';pageState.innerText=e.message||'页面加载失败'});
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "template-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "template-center-002":["click",function(event){createTemplate();}],
+  "template-center-003":["input",function(event){renderRows();}],
+  "template-center-004":["click",function(event){loadTemplates();}]
+});
 </script>
 </body>
 </html>

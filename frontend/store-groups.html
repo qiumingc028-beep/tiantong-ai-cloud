@@ -154,11 +154,11 @@
 })();
 </script>
 <div class="app"><aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside><main>
-    <header class="topbar"><strong>店铺分组</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>店铺分组</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="store-groups-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero"><h1>店铺分组</h1><p>维护60店分组，用于账号筛选、经营分析和运营管理。</p></div>
-      <div class="card"><h2>新增分组</h2><div class="grid"><div><label>分组编码</label><input id="group_code" placeholder="G001"></div><div><label>分组名称</label><input id="group_name" placeholder="重点店铺"></div><div><label>说明</label><input id="description" placeholder="分组说明"></div><button onclick="createGroup()">保存分组</button></div></div>
-      <div class="card"><h2>分组列表</h2><div class="toolbar"><input id="search" placeholder="搜索编码/名称/说明" oninput="renderRows()"><button class="secondary" onclick="loadGroups()">刷新表格</button></div></div>
+      <div class="card"><h2>新增分组</h2><div class="grid"><div><label>分组编码</label><input id="group_code" placeholder="G001"></div><div><label>分组名称</label><input id="group_name" placeholder="重点店铺"></div><div><label>说明</label><input id="description" placeholder="分组说明"></div><button data-rbac-action="store-groups-002">保存分组</button></div></div>
+      <div class="card"><h2>分组列表</h2><div class="toolbar"><input id="search" placeholder="搜索编码/名称/说明" data-rbac-action="store-groups-003"><button class="secondary" data-rbac-action="store-groups-004">刷新表格</button></div></div>
       <div id="pageState" class="state">正在加载店铺分组...</div>
       <div class="table-wrap"><table><thead><tr><th>ID</th><th>编码</th><th>分组</th><th>说明</th></tr></thead><tbody id="rows"></tbody></table></div>
     </section></main></div>
@@ -169,6 +169,15 @@ async function loadGroups(){try{pageState.className='state';pageState.innerText=
 function renderRows(){const q=search.value.trim().toLowerCase();const list=tableRows.filter(g=>!q||[g.group_code,g.group_name,g.description].join(' ').toLowerCase().includes(q));pageState.innerText=list.length?`已显示 ${list.length} / ${tableRows.length} 个店铺分组。`:'暂无符合条件的店铺分组。';rows.innerHTML=list.length?list.map(g=>`<tr><td>${g.id}</td><td>${g.group_code}</td><td>${g.group_name}</td><td>${g.description||''}</td></tr>`).join(''):'<tr><td colspan="4">暂无分组</td></tr>'}
 async function createGroup(){try{await api('/api/store-groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_code:group_code.value.trim(),group_name:group_name.value.trim(),description:description.value.trim()})});document.querySelectorAll('input').forEach(i=>i.value='');await loadGroups()}catch(e){alert(e.message)}}
 init().then(loadGroups).catch(e=>{pageState.className='state error';pageState.innerText=e.message||'页面加载失败'});
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "store-groups-001":["click",function(event){return TiantongRbac.logout();}],
+  "store-groups-002":["click",function(event){createGroup();}],
+  "store-groups-003":["input",function(event){renderRows();}],
+  "store-groups-004":["click",function(event){loadGroups();}]
+});
 </script>
 </body>
 </html>

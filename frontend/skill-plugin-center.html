@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>天赋：Skill / 插件赋能中心 Skill / Plugin Empowerment Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>天赋：Skill / 插件赋能中心 Skill / Plugin Empowerment Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="skill-plugin-center-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>天赋：Skill / 插件赋能中心</h1><p>查看 Skill、插件、MCP、外部工具候选能力，用于未来赋能 AI 员工。</p></div>
@@ -23,12 +23,12 @@
       <section id="summaryStats" class="stats"></section>
       <div class="card">
         <div class="toolbar">
-          <input id="searchInput" placeholder="搜索 Skill / 插件 / MCP / 工具 / 员工" oninput="renderAllLists()">
-          <select id="typeFilter" onchange="renderAllLists()"><option value="">全部类型</option><option value="skills">Skill</option><option value="plugins">插件</option><option value="mcps">MCP</option><option value="externalTools">外部工具</option></select>
-          <select id="riskFilter" onchange="renderAllLists()"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
-          <button onclick="renderAllLists()">筛选</button>
-          <button class="secondary" onclick="resetFilters()">重置</button>
-          <button class="secondary" onclick="loadAll()">刷新</button>
+          <input id="searchInput" placeholder="搜索 Skill / 插件 / MCP / 工具 / 员工" data-rbac-action="skill-plugin-center-002">
+          <select id="typeFilter" data-rbac-action="skill-plugin-center-003"><option value="">全部类型</option><option value="skills">Skill</option><option value="plugins">插件</option><option value="mcps">MCP</option><option value="externalTools">外部工具</option></select>
+          <select id="riskFilter" data-rbac-action="skill-plugin-center-004"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
+          <button data-rbac-action="skill-plugin-center-005">筛选</button>
+          <button class="secondary" data-rbac-action="skill-plugin-center-006">重置</button>
+          <button class="secondary" data-rbac-action="skill-plugin-center-007">刷新</button>
         </div>
         <div class="links" style="margin-top:12px">
           <a class="btn secondary" href="/employee-capabilities.html">跳转 AI员工能力档案</a>
@@ -155,7 +155,7 @@ function codeOf(row){return row.skill_code||row.plugin_code||row.mcp_code||row.t
 function nameOf(row){return row.skill_name||row.plugin_name||row.mcp_name||row.tool_name||row.employee_name||row.department||row.title||row.target_code}
 function cardList(rows,kind){
   if(!rows.length)return '<div class="state empty">暂无数据</div>';
-  return rows.map(row=>`<article class="item-card ${esc(row.risk_level)}" onclick="selectDetail('${esc(kind)}','${esc(codeOf(row))}')">
+  return rows.map(row=>`<article class="item-card ${esc(row.risk_level)}" data-rbac-action="${TiantongRbac.registerDynamicAction("skill-plugin-center-008","click",function(event){selectDetail((kind),(codeOf(row)));})}>
     <div class="title-row"><div><h3>${esc(text(nameOf(row)))}</h3><div class="code">${esc(text(codeOf(row)))}</div></div>${badge(row.risk_level||row.permission_level||'readonly')}</div>
     <div class="muted">${esc(text(row.skill_category||row.plugin_category||row.capability||row.tool_category))}</div>
     <div class="cap-list">${row.requires_boss_confirmation?badge('需老板确认','medium'):''}${row.can_auto_execute?badge('可自动执行','true'):badge('禁止自动执行','false')}${row.can_auto_install?badge('可自动安装','true'):badge('禁止自动安装','false')}${row.can_auto_enable?badge('可自动启用','true'):badge('禁止自动启用','false')}</div>
@@ -194,14 +194,14 @@ function detailLists(row){
 }
 
 function renderBindings(){
-  employeeTable.innerHTML=state.employees.length?`<table><thead><tr><th>员工</th><th>Skill</th><th>插件</th><th>MCP</th><th>外部工具</th><th>禁用/确认</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" onclick="selectDetail('employee','${esc(row.employee_code)}')">查看详情</button><div><strong>${esc(text(row.employee_name))}</strong></div><div class="code">${esc(text(row.employee_code))}</div><div class="muted">${esc(text(row.department))}</div></td><td>${listHtml(row.recommended_skills)}</td><td>${listHtml(row.recommended_plugins)}</td><td>${listHtml(row.recommended_mcps)}</td><td>${listHtml(row.recommended_external_tools)}</td><td><strong>forbidden_tools</strong>${listHtml(row.forbidden_tools)}<strong>boss_confirm_required_tools</strong>${listHtml(row.boss_confirm_required_tools)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
-  departmentTable.innerHTML=state.departments.length?`<table><thead><tr><th>部门</th><th>Skill</th><th>插件</th><th>MCP</th><th>外部工具</th><th>禁用</th></tr></thead><tbody>${state.departments.map(row=>`<tr onclick="selectDetail('department','${esc(row.department)}')"><td><strong>${esc(text(row.department))}</strong></td><td>${listHtml(row.recommended_skills)}</td><td>${listHtml(row.recommended_plugins)}</td><td>${listHtml(row.recommended_mcps)}</td><td>${listHtml(row.recommended_external_tools)}</td><td>${listHtml(row.forbidden_tools)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+  employeeTable.innerHTML=state.employees.length?`<table><thead><tr><th>员工</th><th>Skill</th><th>插件</th><th>MCP</th><th>外部工具</th><th>禁用/确认</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("skill-plugin-center-009","click",function(event){selectDetail('employee',(row.employee_code));})}>查看详情</button><div><strong>${esc(text(row.employee_name))}</strong></div><div class="code">${esc(text(row.employee_code))}</div><div class="muted">${esc(text(row.department))}</div></td><td>${listHtml(row.recommended_skills)}</td><td>${listHtml(row.recommended_plugins)}</td><td>${listHtml(row.recommended_mcps)}</td><td>${listHtml(row.recommended_external_tools)}</td><td><strong>forbidden_tools</strong>${listHtml(row.forbidden_tools)}<strong>boss_confirm_required_tools</strong>${listHtml(row.boss_confirm_required_tools)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+  departmentTable.innerHTML=state.departments.length?`<table><thead><tr><th>部门</th><th>Skill</th><th>插件</th><th>MCP</th><th>外部工具</th><th>禁用</th></tr></thead><tbody>${state.departments.map(row=>`<tr data-rbac-action="${TiantongRbac.registerDynamicAction("skill-plugin-center-010","click",function(event){selectDetail('department',(row.department));})}><td><strong>${esc(text(row.department))}</strong></td><td>${listHtml(row.recommended_skills)}</td><td>${listHtml(row.recommended_plugins)}</td><td>${listHtml(row.recommended_mcps)}</td><td>${listHtml(row.recommended_external_tools)}</td><td>${listHtml(row.forbidden_tools)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
 }
 
 function renderSideLists(){
-  riskBox.innerHTML=state.riskTools.length?state.riskTools.map(row=>`<div class="list-item" onclick="selectDetail('risk','${esc(row.tool_code)}')"><strong>${esc(text(row.tool_name))}</strong>${badge(row.risk_level)}<div class="code">${esc(text(row.tool_code))}</div><div class="muted">${esc(text(row.risk_type))} · ${esc(text(row.forbidden_reason))}</div>${badge(row.can_auto_execute?'可自动执行':'禁止自动执行',row.can_auto_execute?'true':'false')}</div>`).join(''):'<div class="muted">暂无数据</div>';
-  missingBox.innerHTML=state.missingConfigs.length?state.missingConfigs.map(row=>`<div class="list-item" onclick="selectDetail('missing','${esc(row.target_code)}')"><strong>${esc(text(row.target_type))}</strong>${badge(row.risk_level)}<div class="code">${esc(text(row.target_code))}</div><div class="muted">${esc(text(row.suggested_fix))}</div>${listHtml(row.missing_fields)}</div>`).join(''):'<div class="muted">暂无数据</div>';
-  upgradeBox.innerHTML=state.nextUpgrades.length?state.nextUpgrades.map(row=>`<div class="list-item" onclick="selectDetail('upgrade','${esc(row.upgrade_code)}')"><strong>${esc(text(row.title))}</strong>${badge(row.priority)}<div class="code">${esc(text(row.upgrade_code))}</div><div class="muted">${esc(text(row.target_module))} · ${esc(text(row.allowed_stage))}</div><strong>forbidden_actions</strong>${listHtml(row.forbidden_actions)}<div class="muted">${esc(text(row.acceptance_notes))}</div></div>`).join(''):'<div class="muted">暂无数据</div>';
+  riskBox.innerHTML=state.riskTools.length?state.riskTools.map(row=>`<div class="list-item" data-rbac-action="${TiantongRbac.registerDynamicAction("skill-plugin-center-011","click",function(event){selectDetail('risk',(row.tool_code));})}><strong>${esc(text(row.tool_name))}</strong>${badge(row.risk_level)}<div class="code">${esc(text(row.tool_code))}</div><div class="muted">${esc(text(row.risk_type))} · ${esc(text(row.forbidden_reason))}</div>${badge(row.can_auto_execute?'可自动执行':'禁止自动执行',row.can_auto_execute?'true':'false')}</div>`).join(''):'<div class="muted">暂无数据</div>';
+  missingBox.innerHTML=state.missingConfigs.length?state.missingConfigs.map(row=>`<div class="list-item" data-rbac-action="${TiantongRbac.registerDynamicAction("skill-plugin-center-012","click",function(event){selectDetail('missing',(row.target_code));})}><strong>${esc(text(row.target_type))}</strong>${badge(row.risk_level)}<div class="code">${esc(text(row.target_code))}</div><div class="muted">${esc(text(row.suggested_fix))}</div>${listHtml(row.missing_fields)}</div>`).join(''):'<div class="muted">暂无数据</div>';
+  upgradeBox.innerHTML=state.nextUpgrades.length?state.nextUpgrades.map(row=>`<div class="list-item" data-rbac-action="${TiantongRbac.registerDynamicAction("skill-plugin-center-013","click",function(event){selectDetail('upgrade',(row.upgrade_code));})}><strong>${esc(text(row.title))}</strong>${badge(row.priority)}<div class="code">${esc(text(row.upgrade_code))}</div><div class="muted">${esc(text(row.target_module))} · ${esc(text(row.allowed_stage))}</div><strong>forbidden_actions</strong>${listHtml(row.forbidden_actions)}<div class="muted">${esc(text(row.acceptance_notes))}</div></div>`).join(''):'<div class="muted">暂无数据</div>';
 }
 
 function renderSafety(){
@@ -209,6 +209,18 @@ function renderSafety(){
 }
 
 init().catch(e=>{pageState.className='state error';pageState.innerText=e.message||'页面加载失败'});
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "skill-plugin-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "skill-plugin-center-002":["input",function(event){renderAllLists();}],
+  "skill-plugin-center-003":["change",function(event){renderAllLists();}],
+  "skill-plugin-center-004":["change",function(event){renderAllLists();}],
+  "skill-plugin-center-005":["click",function(event){renderAllLists();}],
+  "skill-plugin-center-006":["click",function(event){resetFilters();}],
+  "skill-plugin-center-007":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

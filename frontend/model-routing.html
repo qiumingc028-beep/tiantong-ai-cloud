@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>多模型路由中心 Multi Model Routing Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>多模型路由中心 Multi Model Routing Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="model-routing-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>多模型路由中心 Multi Model Routing Center</h1><p>查看模型能力、模型成本、风险等级、员工模型适配、任务类型推荐、fallback 降级策略。</p></div>
@@ -23,12 +23,12 @@
       <section id="summaryStats" class="stats"></section>
       <div class="card">
         <div class="toolbar">
-          <input id="searchInput" placeholder="搜索模型 / 员工 / 任务 / 理由" oninput="renderModels()">
-          <select id="riskFilter" onchange="renderModels()"><option value="">全部风险</option><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option></select>
-          <select id="costFilter" onchange="renderModels()"><option value="">全部成本</option><option value="low">低成本</option><option value="medium">中成本</option><option value="high">高成本</option><option value="very_high">极高成本</option></select>
-          <button onclick="renderModels()">筛选</button>
-          <button class="secondary" onclick="resetFilters()">重置</button>
-          <button class="secondary" onclick="loadAll()">刷新</button>
+          <input id="searchInput" placeholder="搜索模型 / 员工 / 任务 / 理由" data-rbac-action="model-routing-002">
+          <select id="riskFilter" data-rbac-action="model-routing-003"><option value="">全部风险</option><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option></select>
+          <select id="costFilter" data-rbac-action="model-routing-004"><option value="">全部成本</option><option value="low">低成本</option><option value="medium">中成本</option><option value="high">高成本</option><option value="very_high">极高成本</option></select>
+          <button data-rbac-action="model-routing-005">筛选</button>
+          <button class="secondary" data-rbac-action="model-routing-006">重置</button>
+          <button class="secondary" data-rbac-action="model-routing-007">刷新</button>
         </div>
         <div class="links" style="margin-top:12px">
           <a class="btn secondary" href="/employee-capabilities.html">AI员工能力档案</a>
@@ -148,7 +148,7 @@ function renderModels(){
 }
 
 function modelCard(row){
-  return `<article class="model-card ${row.risk_level==='high'?'high':''} ${row.model_code===selectedModel?'selected':''}" onclick="selectModel('${esc(row.model_code)}')">
+  return `<article class="model-card ${row.risk_level==='high'?'high':''} ${row.model_code===selectedModel?'selected':''}" data-rbac-action="${TiantongRbac.registerDynamicAction("model-routing-008","click",function(event){selectModel((row.model_code));})}>
     <div class="title-row"><div><h3>${esc(text(row.model_name))}</h3><div class="code">${esc(text(row.model_code))}</div></div>${badge(row.current_status)}</div>
     <div class="muted">${esc(text(row.provider))} · ${esc(text(row.model_type))}</div>
     <div class="cap-list">${badge(row.cost_level)}${badge(row.risk_level)}${row.requires_boss_confirmation?badge('需老板确认','medium'):badge('无需确认','good')}${yesNo(row.can_auto_call)}</div>
@@ -194,7 +194,7 @@ function renderEmployeeDetail(row){
 }
 
 function renderEmployees(){
-  employeeTable.innerHTML=state.employees.length?`<table><thead><tr><th>员工</th><th>主模型</th><th>备用</th><th>任务类型</th><th>边界</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" onclick="selectEmployee('${esc(row.employee_code)}')">查看员工适配</button><div><strong>${esc(text(row.employee_name))}</strong></div><div class="code">${esc(text(row.employee_code))}</div><div class="muted">${esc(text(row.department))}</div></td><td>${esc(text(row.primary_model))}</td><td>${listHtml(row.backup_models)}</td><td>${listHtml(row.recommended_task_types)}</td><td>${badge(row.risk_level)} ${row.requires_boss_confirmation?badge('需老板确认','medium'):badge('无需确认','good')} ${yesNo(row.can_auto_call)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+  employeeTable.innerHTML=state.employees.length?`<table><thead><tr><th>员工</th><th>主模型</th><th>备用</th><th>任务类型</th><th>边界</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("model-routing-009","click",function(event){selectEmployee((row.employee_code));})}>查看员工适配</button><div><strong>${esc(text(row.employee_name))}</strong></div><div class="code">${esc(text(row.employee_code))}</div><div class="muted">${esc(text(row.department))}</div></td><td>${esc(text(row.primary_model))}</td><td>${listHtml(row.backup_models)}</td><td>${listHtml(row.recommended_task_types)}</td><td>${badge(row.risk_level)} ${row.requires_boss_confirmation?badge('需老板确认','medium'):badge('无需确认','good')} ${yesNo(row.can_auto_call)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
 }
 
 function renderTaskTypes(){
@@ -227,6 +227,18 @@ function summaryKv(o){
 }
 
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "model-routing-001":["click",function(event){return TiantongRbac.logout();}],
+  "model-routing-002":["input",function(event){renderModels();}],
+  "model-routing-003":["change",function(event){renderModels();}],
+  "model-routing-004":["change",function(event){renderModels();}],
+  "model-routing-005":["click",function(event){renderModels();}],
+  "model-routing-006":["click",function(event){resetFilters();}],
+  "model-routing-007":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

@@ -26,7 +26,7 @@
   async function load(){try{statusBox('正在加载知识资产...');const response=await rawFetch('/api/v2/knowledge?limit=50',{credentials:'include'});const data=await response.json();window.assets=data.items||[];renderStats(window.assets);renderTable(window.assets);statusBox(`已加载 ${window.assets.length} 条知识资产。`,'ok')}catch(err){statusBox(`加载失败：${err.message||err}`,'error')}}
   function renderStats(items){const total=items.length;const pending=items.filter(item=>['待审核','审核中'].includes(item.status)).length;const published=items.filter(item=>item.status==='已发布').length;const needUpdate=items.filter(item=>['已批准','已发布'].includes(item.status)).length;const archived=items.filter(item=>item.status==='已归档').length;const recent=items.slice(0,5).map(item=>item.title).join('、')||'暂无';document.getElementById('stats').innerHTML=`<div class="card"><div class="label">知识总数</div><div class="value">${total}</div></div><div class="card"><div class="label">待审核</div><div class="value">${pending}</div></div><div class="card"><div class="label">已发布</div><div class="value">${published}</div></div><div class="card"><div class="label">需要更新</div><div class="value">${needUpdate}</div></div><div class="card"><div class="label">已归档</div><div class="value">${archived}</div></div><div class="card"><div class="label">最近提交</div><div class="value" style="font-size:14px;line-height:1.5">${esc(recent)}</div></div>`}
   function badge(status){const cls=status==='已发布'?'published':(status==='待审核'||status==='审核中'?'review':(status==='已归档'?'archive':''));return `<span class="badge ${cls}">${esc(status||'草稿')}</span>`}
-  function renderTable(items){document.getElementById('tableBody').innerHTML=items.map(item=>`<tr><td><strong>${esc(item.title)}</strong><div class="sub">${esc(item.summary||'')}</div></td><td>${esc(item.knowledge_type||'')}</td><td>${esc(item.category||'')}</td><td>${badge(item.status)}</td><td>${esc(item.version_number||'-')}</td><td>${esc(item.owner_department||'')}</td><td>${esc(item.risk_level||'')}</td><td>${esc(item.updated_at||'')}</td><td><div class="button-row"><button class="secondary" onclick="openDetail('${item.knowledge_id}')">查看详情</button></div></td></tr>`).join('')||'<tr><td colspan="9" class="empty">暂无知识资产</td></tr>'}
+  function renderTable(items){document.getElementById('tableBody').innerHTML=items.map(item=>`<tr><td><strong>${esc(item.title)}</strong><div class="sub">${esc(item.summary||'')}</div></td><td>${esc(item.knowledge_type||'')}</td><td>${esc(item.category||'')}</td><td>${badge(item.status)}</td><td>${esc(item.version_number||'-')}</td><td>${esc(item.owner_department||'')}</td><td>${esc(item.risk_level||'')}</td><td>${esc(item.updated_at||'')}</td><td><div class="button-row"><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("knowledge-asset-center-001","click",function(event){openDetail((item.knowledge_id));})}>查看详情</button></div></td></tr>`).join('')||'<tr><td colspan="9" class="empty">暂无知识资产</td></tr>'}
   window.openDetail=function(id){location.href=`/knowledge-asset-detail.html?id=${encodeURIComponent(id)}`}
   window.createDraft=async function(){try{const payload={title:document.getElementById('newTitle').value.trim(),summary:document.getElementById('newSummary').value.trim(),content:document.getElementById('newContent').value.trim(),knowledge_type:document.getElementById('newType').value,value:'',category:document.getElementById('newCategory').value.trim(),visibility:document.getElementById('newVisibility').value, risk_level:document.getElementById('newRisk').value, tags:document.getElementById('newTags').value.split(',').map(s=>s.trim()).filter(Boolean),owner_department:document.getElementById('newDept').value.trim()};if(!payload.title){statusBox('请输入知识标题','warn');return}const res=await rawFetch('/api/v2/knowledge',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(payload)});const data=await res.json();if(!res.ok)throw new Error(data.detail||'创建失败');statusBox(`已创建知识草稿：${data.knowledge.title}`,'ok');await load();openDetail(data.knowledge.knowledge_id)}catch(err){statusBox(`创建失败：${err.message||err}`,'error')}}
   window.submitResearch=async function(){try{const reportId=document.getElementById('reportId').value.trim();const submitter=document.getElementById('submitter').value.trim()||'tiancai_data';if(!reportId){statusBox('请输入研究报告编号','warn');return}const payload={submitter_employee_code:submitter,title:document.getElementById('reportTitle').value.trim()||null,summary:document.getElementById('reportSummary').value.trim()||null,knowledge_type:'研究报告',category:document.getElementById('reportCategory').value.trim()||null,visibility:document.getElementById('reportVisibility').value,risk_level:document.getElementById('reportRisk').value,tags:document.getElementById('reportTags').value.split(',').map(s=>s.trim()).filter(Boolean),owner_department:document.getElementById('reportDept').value.trim()||null};const res=await rawFetch(`/api/v2/knowledge/research/${encodeURIComponent(reportId)}/submit-to-knowledge`,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(payload)});const data=await res.json();if(!res.ok)throw new Error(data.detail||'提交失败');statusBox(`已提交知识候选：${data.knowledge.title}`,'ok');await load();openDetail(data.knowledge.knowledge_id)}catch(err){statusBox(`提交失败：${err.message||err}`,'error')}}
@@ -39,7 +39,7 @@
   <main class="main">
     <header class="topbar">
       <div class="top-title">天藏知识资产中心</div>
-      <div class="top-meta"><span id="currentTime" class="pill">--:--:--</span><span id="userInfo" class="pill">加载中</span><button class="button" onclick="secureLogout()">退出</button></div>
+      <div class="top-meta"><span id="currentTime" class="pill">--:--:--</span><span id="userInfo" class="pill">加载中</span><button class="button" data-rbac-action="knowledge-asset-center-002">退出</button></div>
     </header>
     <section class="content">
       <div class="page-head">
@@ -48,8 +48,8 @@
           <div class="sub">将研究报告、SOP、运营经验、商品知识、客服知识、技术文档与业务规则统一沉淀为可版本化、可检索、可引用的企业知识资产。</div>
         </div>
         <div class="button-row">
-          <button class="secondary" onclick="loadLatest()">刷新</button>
-          <button class="good" onclick="openDetail('new')">查看详情页</button>
+          <button class="secondary" data-rbac-action="knowledge-asset-center-003">刷新</button>
+          <button class="good" data-rbac-action="knowledge-asset-center-004">查看详情页</button>
         </div>
       </div>
       <div id="notice" class="state">正在加载知识资产...</div>
@@ -72,7 +72,7 @@
           <div class="row"><input id="newTags" placeholder="标签，逗号分隔"></div>
           <textarea id="newSummary" placeholder="知识摘要"></textarea>
           <textarea id="newContent" placeholder="知识正文"></textarea>
-          <div class="button-row" style="margin-top:10px"><button class="button good" onclick="createDraft()">创建知识草稿</button></div>
+          <div class="button-row" style="margin-top:10px"><button class="button good" data-rbac-action="knowledge-asset-center-005">创建知识草稿</button></div>
           <hr style="border:none;border-top:1px solid var(--line);margin:16px 0">
           <div class="toolbar"><strong>从研究报告提交</strong></div>
           <div class="row"><input id="reportId" placeholder="研究报告编号 / execution_id"><input id="submitter" value="tiancai_data" placeholder="提交员工编号"></div>
@@ -82,11 +82,21 @@
           <input id="reportDept" placeholder="所属部门（可选）">
           <input id="reportTags" placeholder="标签，逗号分隔">
           <textarea id="reportSummary" placeholder="摘要（可选）"></textarea>
-          <div class="button-row" style="margin-top:10px"><button class="button warn" onclick="submitResearch()">提交为知识候选</button></div>
+          <div class="button-row" style="margin-top:10px"><button class="button warn" data-rbac-action="knowledge-asset-center-006">提交为知识候选</button></div>
         </aside>
       </div>
     </section>
   </main>
 </div>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "knowledge-asset-center-002":["click",function(event){return TiantongRbac.logout();}],
+  "knowledge-asset-center-003":["click",function(event){loadLatest();}],
+  "knowledge-asset-center-004":["click",function(event){openDetail('new');}],
+  "knowledge-asset-center-005":["click",function(event){createDraft();}],
+  "knowledge-asset-center-006":["click",function(event){submitResearch();}]
+});
+</script>
 </body>
 </html>

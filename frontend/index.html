@@ -14,7 +14,7 @@
 <div class="app">
   <aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main id="mainContent" class="main">
-    <header class="topbar"><strong>老板驾驶舱</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="userInfo" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>老板驾驶舱</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="userInfo" class="pill">加载中</span><button data-rbac-action="index-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>老板驾驶舱</h1><p>天统AI公司统一总控台。10 秒内看清系统、任务、AI员工、部署和下一步处理事项。</p></div>
@@ -168,6 +168,12 @@
   }
 
   init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "index-001":["click",function(event){return TiantongRbac.logout();}]
+});
 </script>
 </body>
 </html>

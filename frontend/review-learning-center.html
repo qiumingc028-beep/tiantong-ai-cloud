@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>AI员工复盘学习中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>AI员工复盘学习中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="review-learning-center-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>AI员工复盘学习中心</h1><p>自动读取执行日志，展示任务复盘、员工评分趋势、成长等级和 Skill 优化建议。</p></div>
@@ -25,10 +25,10 @@
       <div class="card">
         <div class="head"><h2>顶部：当前员工与复盘范围</h2><span id="scopeBadge" class="badge">读取中</span></div>
         <div class="toolbar">
-          <select id="employeeSelect" onchange="selectEmployee(this.value)"></select>
+          <select id="employeeSelect" data-rbac-action="review-learning-center-002"></select>
           <input id="taskIdInput" type="number" min="1" placeholder="输入任务 ID 生成复盘">
-          <button id="generateBtn" onclick="generateReview()">生成复盘报告</button>
-          <button class="secondary" onclick="loadAll()">刷新</button>
+          <button id="generateBtn" data-rbac-action="review-learning-center-003">生成复盘报告</button>
+          <button class="secondary" data-rbac-action="review-learning-center-004">刷新</button>
           <a class="btn secondary" href="/employee-workspace.html">AI员工工作台</a>
           <a class="btn secondary" href="/employee-activity-log.html">执行日志中心</a>
           <a class="btn secondary" href="/employee-activity-trace.html">执行追溯中心</a>
@@ -201,7 +201,7 @@ function renderSummary(){
 function renderReviews(){
   const rows=filteredReviews();
   if(!rows.length){reviewList.innerHTML='<div class="state empty">暂无数据</div>';detailPanel.innerHTML='<h2>复盘详情</h2><div class="muted">暂无数据</div>';return}
-  reviewList.innerHTML=rows.map(row=>`<article class="review-card ${row.success?'success':'failed'}" onclick="showReview(${row.id})">
+  reviewList.innerHTML=rows.map(row=>`<article class="review-card ${row.success?'success':'failed'}" data-rbac-action="${TiantongRbac.registerDynamicAction("review-learning-center-005","click",function(event){showReview((row.id));})}>
     <div class="title-row"><div><h3>任务 #${esc(row.task_id)}</h3><div class="code">${esc(row.employee_code)}</div></div>${badge(row.success?'成功':'失败',row.success?'success':'failed')}</div>
     <div class="muted">评分 ${esc(text(row.score,'0'))} · ${esc(fmt(row.created_at))}</div>
     <div class="detail-row"><strong>${row.success?'成功原因':'失败原因'}</strong><div class="muted">${esc(text(row.problem_reason))}</div></div>
@@ -240,7 +240,7 @@ function renderSkillAdvice(){
 function renderEmployeeScores(){
   if(!isPrivileged()){employeeScoreTable.innerHTML='<div class="muted">当前员工账号只能查看自己的评分。</div>';return}
   if(!state.employees.length){employeeScoreTable.innerHTML='<div class="muted">暂无数据</div>';return}
-  employeeScoreTable.innerHTML=`<table><thead><tr><th>员工</th><th>任务数</th><th>成功率</th><th>平均分</th><th>成长值</th><th>更新时间</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" onclick="selectEmployee('${esc(row.employee_code)}')">查看</button><div class="code">${esc(text(row.employee_code))}</div></td><td>${esc(text(row.task_count,'0'))}</td><td>${esc(pct(row.success_rate))}</td><td>${esc(text(row.average_score,'0'))}</td><td>${esc(text(row.skill_growth,'0'))}</td><td>${esc(fmt(row.updated_at))}</td></tr>`).join('')}</tbody></table>`;
+  employeeScoreTable.innerHTML=`<table><thead><tr><th>员工</th><th>任务数</th><th>成功率</th><th>平均分</th><th>成长值</th><th>更新时间</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("review-learning-center-006","click",function(event){selectEmployee((row.employee_code));})}>查看</button><div class="code">${esc(text(row.employee_code))}</div></td><td>${esc(text(row.task_count,'0'))}</td><td>${esc(pct(row.success_rate))}</td><td>${esc(text(row.average_score,'0'))}</td><td>${esc(text(row.skill_growth,'0'))}</td><td>${esc(fmt(row.updated_at))}</td></tr>`).join('')}</tbody></table>`;
 }
 
 function renderStaticBoxes(){
@@ -249,6 +249,15 @@ function renderStaticBoxes(){
 }
 
 init().catch(e=>{pageState.className='state error';pageState.innerText=e.message||'页面加载失败'});
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "review-learning-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "review-learning-center-002":["change",function(event){selectEmployee(this.value);}],
+  "review-learning-center-003":["click",function(event){generateReview();}],
+  "review-learning-center-004":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

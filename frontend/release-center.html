@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>🚀 Release Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>🚀 Release Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="release-center-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>🚀 Release Center</h1><p>统一检查 Commit、测试、Migration、Docker、Nginx、文档，并生成 Release 版本记录。</p></div>
@@ -27,10 +27,10 @@
         <div class="toolbar">
           <input id="versionInput" placeholder="版本号，例如 Sprint20-v1.0">
           <input id="sprintInput" placeholder="Sprint 名称">
-          <button onclick="createRelease()">生成Release</button>
-          <button class="secondary" onclick="submitReview()">提交审核</button>
-          <button onclick="approveRelease()">批准发布</button>
-          <button class="secondary" onclick="loadAll()">刷新</button>
+          <button data-rbac-action="release-center-002">生成Release</button>
+          <button class="secondary" data-rbac-action="release-center-003">提交审核</button>
+          <button data-rbac-action="release-center-004">批准发布</button>
+          <button class="secondary" data-rbac-action="release-center-005">刷新</button>
         </div>
         <p class="muted">批准发布只更新 Release 记录为 approved，不触发部署。部署仍由天盾流程单独执行。</p>
       </section>
@@ -82,6 +82,16 @@ function renderCurrent(){
   currentBox.innerHTML=[['当前版本',r.version],['Sprint编号',r.sprint_name],['Commit',r.commit_id],['Branch',r.branch],['Author',r.author],['测试状态',(state.check||{}).test?'通过':'未通过'],['安全状态',r.status==='approved'?'已批准':'等待'],['部署状态',r.deploy_status||'waiting'],['批准人',r.approved_by],['创建时间',r.created_at]].map(([k,v])=>`<div>${esc(k)}</div><div>${esc(text(v))}</div>`).join('');
 }
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "release-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "release-center-002":["click",function(event){createRelease();}],
+  "release-center-003":["click",function(event){submitReview();}],
+  "release-center-004":["click",function(event){approveRelease();}],
+  "release-center-005":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

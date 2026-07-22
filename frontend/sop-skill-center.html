@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>SOP / Skill 绑定中心 SOP Skill Binding Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>SOP / Skill 绑定中心 SOP Skill Binding Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="sop-skill-center-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>SOP / Skill 绑定中心 SOP Skill Binding Center</h1><p>查看员工、任务类型、部门与 SOP、Skill、Prompt 模板、验收规则和安全规则的只读配置档案。</p></div>
@@ -24,12 +24,12 @@
       <section id="summaryStats" class="stats"></section>
       <div class="card">
         <div class="toolbar">
-          <input id="searchInput" placeholder="搜索 SOP / Skill / Prompt / 员工 / 任务" oninput="renderLibraries()">
-          <select id="typeFilter" onchange="renderLibraries()"><option value="">全部类型</option><option value="sops">SOP</option><option value="skills">Skill</option><option value="prompts">Prompt 模板</option></select>
-          <select id="safetyFilter" onchange="renderLibraries()"><option value="">全部安全等级</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
-          <button onclick="renderLibraries()">筛选</button>
-          <button class="secondary" onclick="resetFilters()">重置</button>
-          <button class="secondary" onclick="loadAll()">刷新</button>
+          <input id="searchInput" placeholder="搜索 SOP / Skill / Prompt / 员工 / 任务" data-rbac-action="sop-skill-center-002">
+          <select id="typeFilter" data-rbac-action="sop-skill-center-003"><option value="">全部类型</option><option value="sops">SOP</option><option value="skills">Skill</option><option value="prompts">Prompt 模板</option></select>
+          <select id="safetyFilter" data-rbac-action="sop-skill-center-004"><option value="">全部安全等级</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
+          <button data-rbac-action="sop-skill-center-005">筛选</button>
+          <button class="secondary" data-rbac-action="sop-skill-center-006">重置</button>
+          <button class="secondary" data-rbac-action="sop-skill-center-007">刷新</button>
         </div>
         <div class="links" style="margin-top:12px">
           <a class="btn secondary" href="/employee-capabilities.html">跳转 AI员工能力档案</a>
@@ -162,7 +162,7 @@ function cardList(rows,kind,emptyText){
     const name=row.sop_name||row.skill_name||row.prompt_name;
     const sub=row.department||row.skill_category||row.task_type;
     const status=row.current_status||row.safety_level||'readonly';
-    return `<article class="item-card ${esc(row.safety_level||'')}" onclick="selectDetail('${esc(kind)}','${esc(code)}')">
+    return `<article class="item-card ${esc(row.safety_level||'')}" data-rbac-action="${TiantongRbac.registerDynamicAction("sop-skill-center-008","click",function(event){selectDetail((kind),(code));})}>
       <div class="title-row"><div><h3>${esc(text(name))}</h3><div class="code">${esc(text(code))}</div></div>${badge(status)}</div>
       <div class="muted">${esc(text(sub))} · ${esc(text(row.description||row.template_content_summary))}</div>
       <div class="cap-list">${row.requires_boss_confirmation?badge('需老板确认','medium'):badge('无需确认','good')}${row.requires_test_acceptance?badge('需天检','medium'):''}${row.requires_security_audit?badge('需天监','high'):''}${row.requires_deploy_review?badge('需天盾','critical'):''}${row.can_auto_execute?badge('可自动执行','yes'):badge('禁止自动执行','no')}</div>
@@ -197,7 +197,7 @@ function detailLists(row,pairs){
 }
 
 function renderRelations(){
-  employeeTable.innerHTML=state.employees.length?`<table><thead><tr><th>员工</th><th>SOP</th><th>Skill</th><th>Prompt</th><th>模型</th><th>工具</th><th>验收链路</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" onclick="selectDetail('employee','${esc(row.employee_code)}')">查看详情</button><div><strong>${esc(text(row.employee_name))}</strong></div><div class="code">${esc(text(row.employee_code))}</div><div class="muted">${esc(text(row.department))}</div></td><td>${listHtml(row.bound_sops)}</td><td>${listHtml(row.bound_skills)}</td><td>${listHtml(row.bound_prompt_templates)}</td><td>${listHtml(row.recommended_models)}</td><td>${listHtml(row.allowed_tools)}<div class="muted">禁用：${esc(text(row.forbidden_tools))}</div></td><td>${row.requires_boss_confirmation?badge('老板确认','medium'):''}${row.requires_test_acceptance?badge('天检','medium'):''}${row.requires_security_audit?badge('天监','high'):''}${row.requires_deploy_review?badge('天盾','critical'):''}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
+  employeeTable.innerHTML=state.employees.length?`<table><thead><tr><th>员工</th><th>SOP</th><th>Skill</th><th>Prompt</th><th>模型</th><th>工具</th><th>验收链路</th></tr></thead><tbody>${state.employees.map(row=>`<tr><td><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("sop-skill-center-009","click",function(event){selectDetail('employee',(row.employee_code));})}>查看详情</button><div><strong>${esc(text(row.employee_name))}</strong></div><div class="code">${esc(text(row.employee_code))}</div><div class="muted">${esc(text(row.department))}</div></td><td>${listHtml(row.bound_sops)}</td><td>${listHtml(row.bound_skills)}</td><td>${listHtml(row.bound_prompt_templates)}</td><td>${listHtml(row.recommended_models)}</td><td>${listHtml(row.allowed_tools)}<div class="muted">禁用：${esc(text(row.forbidden_tools))}</div></td><td>${row.requires_boss_confirmation?badge('老板确认','medium'):''}${row.requires_test_acceptance?badge('天检','medium'):''}${row.requires_security_audit?badge('天监','high'):''}${row.requires_deploy_review?badge('天盾','critical'):''}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
   taskTypeTable.innerHTML=state.taskTypes.length?`<table><thead><tr><th>任务类型</th><th>员工</th><th>SOP / Skill / Prompt</th><th>模型</th><th>工具</th><th>安全</th></tr></thead><tbody>${state.taskTypes.map(row=>`<tr><td><strong>${esc(text(row.task_type_name))}</strong><div class="code">${esc(text(row.task_type))}</div></td><td>${esc(text(row.recommended_employee))}</td><td>${listHtml([row.recommended_sop,row.recommended_skill,row.recommended_prompt].filter(Boolean))}</td><td>${esc(text(row.recommended_model))}</td><td>${listHtml(row.recommended_tools)}<div class="muted">禁用：${esc(text(row.forbidden_tools))}</div></td><td>${badge(row.safety_level)}${row.can_auto_execute?badge('可自动执行','yes'):badge('禁止自动执行','no')}${listHtml(row.required_acceptance_flow)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
   departmentTable.innerHTML=state.departments.length?`<table><thead><tr><th>部门</th><th>SOP</th><th>Skill</th><th>Prompt</th><th>模型</th><th>缺失</th></tr></thead><tbody>${state.departments.map(row=>`<tr><td><strong>${esc(text(row.department_name))}</strong><div class="code">${esc(text(row.department))}</div></td><td>${listHtml(row.bound_sops)}</td><td>${listHtml(row.bound_skills)}</td><td>${listHtml(row.bound_prompt_templates)}</td><td>${listHtml(row.recommended_models)}</td><td>${listHtml(row.missing_bindings)}</td></tr>`).join('')}</tbody></table>`:'<div class="muted">暂无数据</div>';
 }
@@ -231,6 +231,18 @@ function listItems(rows,emptyText){
 }
 
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "sop-skill-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "sop-skill-center-002":["input",function(event){renderLibraries();}],
+  "sop-skill-center-003":["change",function(event){renderLibraries();}],
+  "sop-skill-center-004":["change",function(event){renderLibraries();}],
+  "sop-skill-center-005":["click",function(event){renderLibraries();}],
+  "sop-skill-center-006":["click",function(event){resetFilters();}],
+  "sop-skill-center-007":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

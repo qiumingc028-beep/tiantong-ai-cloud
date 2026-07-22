@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>AI员工能力档案中心 Employee Capability Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>AI员工能力档案中心 Employee Capability Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="employee-capabilities-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>AI员工能力档案中心 Employee Capability Center</h1><p>查看 AI 员工会什么、不会什么、可用模型、可用工具、风险等级、成熟度、SOP / Skill 绑定、缺失能力和升级建议。</p></div>
@@ -23,12 +23,12 @@
       <section id="summaryStats" class="stats"></section>
       <div class="card">
         <div class="toolbar">
-          <input id="searchInput" placeholder="搜索员工 / code / 部门 / 能力" oninput="renderEmployees()">
-          <select id="riskFilter" onchange="renderEmployees()"><option value="">全部风险</option><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option></select>
-          <select id="capabilityFilter" onchange="renderEmployees()"><option value="">全部能力</option><option value="can_analyze">分析</option><option value="can_read_image">看图</option><option value="can_generate_image">做图</option><option value="can_generate_video">视频</option><option value="can_search_web">查资料</option><option value="can_write_code">写代码</option><option value="can_deploy">部署</option></select>
-          <button onclick="renderEmployees()">筛选</button>
-          <button class="secondary" onclick="resetFilters()">重置</button>
-          <button class="secondary" onclick="loadAll()">刷新</button>
+          <input id="searchInput" placeholder="搜索员工 / code / 部门 / 能力" data-rbac-action="employee-capabilities-002">
+          <select id="riskFilter" data-rbac-action="employee-capabilities-003"><option value="">全部风险</option><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option></select>
+          <select id="capabilityFilter" data-rbac-action="employee-capabilities-004"><option value="">全部能力</option><option value="can_analyze">分析</option><option value="can_read_image">看图</option><option value="can_generate_image">做图</option><option value="can_generate_video">视频</option><option value="can_search_web">查资料</option><option value="can_write_code">写代码</option><option value="can_deploy">部署</option></select>
+          <button data-rbac-action="employee-capabilities-005">筛选</button>
+          <button class="secondary" data-rbac-action="employee-capabilities-006">重置</button>
+          <button class="secondary" data-rbac-action="employee-capabilities-007">刷新</button>
         </div>
         <div class="links" style="margin-top:12px">
           <a class="btn secondary" href="/employee-workspace.html">AI员工工作台</a>
@@ -148,7 +148,7 @@ function renderEmployees(){
 
 function employeeCard(row){
   const caps=['can_analyze','can_read_image','can_generate_image','can_generate_video','can_search_web','can_write_code','can_deploy'].filter(k=>row[k]);
-  return `<article class="employee-card ${row.risk_level==='high'?'high':''} ${row.employee_code===selectedCode?'selected':''}" onclick="selectEmployee('${esc(row.employee_code)}')">
+  return `<article class="employee-card ${row.risk_level==='high'?'high':''} ${row.employee_code===selectedCode?'selected':''}" data-rbac-action="${TiantongRbac.registerDynamicAction("employee-capabilities-008","click",function(event){selectEmployee((row.employee_code));})}>
     <div class="employee-title"><div><h3>${esc(text(row.employee_name))}</h3><div class="code">${esc(text(row.employee_code))}</div></div>${badge(row.risk_level)}</div>
     <div class="muted">${esc(text(row.department))} · ${esc(text(row.legion))} · ${esc(text(row.role_title))}</div>
     <p>${esc(text(row.capability_summary))}</p>
@@ -207,6 +207,18 @@ function summary(value){
 }
 
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "employee-capabilities-001":["click",function(event){return TiantongRbac.logout();}],
+  "employee-capabilities-002":["input",function(event){renderEmployees();}],
+  "employee-capabilities-003":["change",function(event){renderEmployees();}],
+  "employee-capabilities-004":["change",function(event){renderEmployees();}],
+  "employee-capabilities-005":["click",function(event){renderEmployees();}],
+  "employee-capabilities-006":["click",function(event){resetFilters();}],
+  "employee-capabilities-007":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

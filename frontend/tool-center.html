@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>Tool Center 工具中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>Tool Center 工具中心</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="tool-center-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>Tool Center 工具中心</h1><p>查看 AI 员工工具能力、工具授权状态、调用记录和风险审批要求。</p></div>
@@ -23,10 +23,10 @@
       <section id="stats" class="stats"></section>
       <div class="card">
         <div class="toolbar">
-          <input id="searchInput" placeholder="搜索工具 / 类型 / 员工" oninput="renderAll()">
-          <select id="riskFilter" onchange="renderAll()"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
-          <select id="statusFilter" onchange="renderAll()"><option value="">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select>
-          <button onclick="loadAll()">刷新</button>
+          <input id="searchInput" placeholder="搜索工具 / 类型 / 员工" data-rbac-action="tool-center-002">
+          <select id="riskFilter" data-rbac-action="tool-center-003"><option value="">全部风险</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select>
+          <select id="statusFilter" data-rbac-action="tool-center-004"><option value="">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option></select>
+          <button data-rbac-action="tool-center-005">刷新</button>
           <a class="btn secondary" href="/tool-permissions.html">AI工具调用权限中心</a>
         </div>
       </div>
@@ -114,7 +114,7 @@ function renderStats(){
 }
 function renderTools(){
   const rows=filterTools();
-  toolTable.innerHTML=rows.length?`<table><thead><tr><th>工具名称</th><th>类型</th><th>版本</th><th>风险等级</th><th>状态</th><th>绑定员工</th></tr></thead><tbody>${rows.map(tool=>`<tr onclick="selectTool('${esc(tool.tool_name)}')"><td><strong class="mono">${esc(tool.tool_name)}</strong><div class="muted">${esc(text(tool.description))}</div></td><td>${esc(text(tool.tool_type))}</td><td>${esc(text(tool.version))}</td><td>${badge(tool.risk_level)}</td><td>${tool.enabled?badge('启用','enabled'):badge('停用','disabled')}</td><td>${esc(text(bindingText(tool.tool_name),'暂无绑定'))}</td></tr>`).join('')}</tbody></table>`:'<div class="state empty">暂无数据</div>';
+  toolTable.innerHTML=rows.length?`<table><thead><tr><th>工具名称</th><th>类型</th><th>版本</th><th>风险等级</th><th>状态</th><th>绑定员工</th></tr></thead><tbody>${rows.map(tool=>`<tr data-rbac-action="${TiantongRbac.registerDynamicAction("tool-center-006","click",function(event){selectTool((tool.tool_name));})}><td><strong class="mono">${esc(tool.tool_name)}</strong><div class="muted">${esc(text(tool.description))}</div></td><td>${esc(text(tool.tool_type))}</td><td>${esc(text(tool.version))}</td><td>${badge(tool.risk_level)}</td><td>${tool.enabled?badge('启用','enabled'):badge('停用','disabled')}</td><td>${esc(text(bindingText(tool.tool_name),'暂无绑定'))}</td></tr>`).join('')}</tbody></table>`:'<div class="state empty">暂无数据</div>';
 }
 function renderBindings(){
   const rows=Object.entries(state.bindings).flatMap(([employee,tools])=>tools.map(tool=>({employee,...tool})));
@@ -125,7 +125,7 @@ function renderLogs(){
 }
 function renderRisks(){
   const rows=state.tools.filter(tool=>['high','critical'].includes(String(tool.risk_level)));
-  riskBox.innerHTML=rows.length?rows.map(tool=>`<div class="item-card ${state.selected===tool.tool_name?'selected':''}" onclick="selectTool('${esc(tool.tool_name)}')"><strong class="mono">${esc(tool.tool_name)}</strong> ${badge(tool.risk_level)}<div class="muted">需要老板确认，需要天监审核。${esc(text(tool.description))}</div></div>`).join(''):'<div class="muted">暂无高风险工具</div>';
+  riskBox.innerHTML=rows.length?rows.map(tool=>`<div class="item-card ${state.selected===tool.tool_name?'selected':''}" data-rbac-action="${TiantongRbac.registerDynamicAction("tool-center-007","click",function(event){selectTool((tool.tool_name));})}><strong class="mono">${esc(tool.tool_name)}</strong> ${badge(tool.risk_level)}<div class="muted">需要老板确认，需要天监审核。${esc(text(tool.description))}</div></div>`).join(''):'<div class="muted">暂无高风险工具</div>';
 }
 function riskOf(toolName){const tool=state.tools.find(item=>item.tool_name===toolName);return tool?tool.risk_level:'unknown'}
 async function selectTool(toolName){
@@ -139,6 +139,16 @@ function renderDetail(tool){
   detailPanel.innerHTML=`<div class="head"><h2>${esc(text(tool.tool_name))}</h2>${badge(tool.risk_level)}</div><div class="list-item"><div><strong>类型</strong></div><div>${esc(text(tool.tool_type))}</div><div><strong>版本</strong></div><div>${esc(text(tool.version))}</div><div><strong>供应方</strong></div><div>${esc(text(tool.provider))}</div><div><strong>状态</strong></div><div>${tool.enabled?badge('启用','enabled'):badge('停用','disabled')}</div><div><strong>说明</strong></div><div class="muted">${esc(text(tool.description))}</div></div><div class="list-item"><strong>绑定员工</strong>${bindings.length?bindings.map(row=>`<div class="muted">${esc(row.employee)} · ${esc(row.permission_level)} · ${row.require_approval?'需要审批':'无需审批'}</div>`).join(''):'<div class="muted">暂无绑定</div>'}</div>`;
 }
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "tool-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "tool-center-002":["input",function(event){renderAll();}],
+  "tool-center-003":["change",function(event){renderAll();}],
+  "tool-center-004":["change",function(event){renderAll();}],
+  "tool-center-005":["click",function(event){loadAll();}]
+});
 </script>
 </body>
 </html>

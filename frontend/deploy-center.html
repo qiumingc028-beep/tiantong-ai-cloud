@@ -33,7 +33,7 @@
 <div class="app">
   <aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main class="main">
-    <header class="topbar"><strong>天盾 Deploy Center</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="topbar"><strong>天盾 Deploy Center</strong><div class="top-meta"><span id="currentTime" class="pill"></span><span id="systemStatus" class="pill">系统检查中</span><span id="me" class="pill">加载中</span><button data-rbac-action="deploy-center-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>天盾 Deploy Center</h1><p>查看系统部署状态、版本信息、数据库迁移、服务健康与最近部署记录。</p></div>
@@ -60,11 +60,11 @@
         </div>
       </section>
       <section class="card">
-        <div class="section-head"><h2>健康检查</h2><button id="healthCheckBtn" onclick="runHealthCheck()">手动健康检查</button></div>
+        <div class="section-head"><h2>健康检查</h2><button id="healthCheckBtn" data-rbac-action="deploy-center-002">手动健康检查</button></div>
         <div id="healthInfo" class="kv"></div>
       </section>
       <section class="card">
-        <div class="section-head"><h2>最近部署记录</h2><button class="secondary" onclick="loadRecords()">刷新记录</button></div>
+        <div class="section-head"><h2>最近部署记录</h2><button class="secondary" data-rbac-action="deploy-center-003">刷新记录</button></div>
         <div id="recordsState" class="state">正在加载部署记录...</div>
         <div class="table-wrap">
           <table>
@@ -167,6 +167,14 @@
   }
 
   init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "deploy-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "deploy-center-002":["click",function(event){runHealthCheck();}],
+  "deploy-center-003":["click",function(event){loadRecords();}]
+});
 </script>
 </body>
 </html>
