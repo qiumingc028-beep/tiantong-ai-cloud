@@ -12,13 +12,52 @@ EXPRESSION_ON_ATTRIBUTE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 DYNAMIC_ON_ASSIGNMENT = re.compile(
-    r"(?:\.|\[\s*['\"`])(on[a-z]+)(?:['\"`]\s*\])?\s*"
+    r"(?:\.\s*|\[\s*['\"`])(on[a-z]+)(?:['\"`]\s*\])?\s*"
     r"(?:\|\||&&|\?\?|>>>|>>|<<|\*\*|[+\-*/%&|^])?=(?!=|>)",
     re.IGNORECASE,
 )
 SETATTRIBUTE_ON_HANDLER = re.compile(
-    r"\.setAttribute\s*\(\s*['\"`]on[a-z]+['\"`]", re.IGNORECASE
+    r"\.\s*setAttribute\s*\(\s*['\"`]on[a-z]+['\"`]", re.IGNORECASE
 )
+HTML_DOCUMENT = re.compile(r"(?:<!doctype\s+html|<html\b)", re.IGNORECASE)
+MODULE_SOURCE = re.compile(r"^\s*(?:export|import)\b", re.MULTILINE)
+EXECUTABLE_SCRIPT_TYPES = {
+    "",
+    "application/ecmascript",
+    "application/javascript",
+    "module",
+    "text/ecmascript",
+    "text/javascript",
+}
+
+
+def parses_javascript(source: str, *, module: bool) -> bool:
+    command = ["node", "--check", "-"]
+    if module:
+        command.insert(1, "--input-type=module")
+    return subprocess.run(
+        command, input=source, text=True, capture_output=True
+    ).returncode == 0
+
+
+def has_executable_match(pattern: re.Pattern, source: str) -> bool:
+    scripts = (
+        extract_inline_scripts(source)
+        if HTML_DOCUMENT.search(source)
+        else ((source, bool(MODULE_SOURCE.search(source))),)
+    )
+    for script, module in scripts:
+        matches = tuple(pattern.finditer(script))
+        if matches and not parses_javascript(script, module=module):
+            return True
+        for match in matches:
+            probes = (
+                script[:position] + "@" + script[position:]
+                for position in (match.start(), match.end())
+            )
+            if all(not parses_javascript(probe, module=module) for probe in probes):
+                return True
+    return False
 
 
 class EventAttributeParser(HTMLParser):
@@ -39,10 +78,39 @@ class EventAttributeParser(HTMLParser):
             self.attributes.extend(parser.attributes)
 
 
+class ScriptBodyParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.bodies = []
+        self.current = None
+        self.module = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag.casefold() == "script":
+            script_type = dict(attrs).get("type", "").split(";", 1)[0].strip().casefold()
+            self.current = [] if script_type in EXECUTABLE_SCRIPT_TYPES else None
+            self.module = script_type == "module"
+
+    def handle_data(self, data):
+        if self.current is not None:
+            self.current.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.casefold() == "script" and self.current is not None:
+            self.bodies.append(("".join(self.current), self.module))
+            self.current = None
+
+
 def extract_event_attributes(source: str) -> list[str]:
     parser = EventAttributeParser()
     parser.feed(source)
     return parser.attributes
+
+
+def extract_inline_scripts(source: str) -> tuple[tuple[str, bool], ...]:
+    parser = ScriptBodyParser()
+    parser.feed(source)
+    return tuple(parser.bodies)
 
 
 def skip_template(source: str, index: int) -> int:
@@ -133,9 +201,9 @@ def event_policy_violations(source: str) -> set[str]:
     template_expression_attribute = template_expression_emits_event_attribute(source)
     if extract_event_attributes(source) or template_expression_attribute:
         violations.add("static-or-template-on-attribute")
-    if DYNAMIC_ON_ASSIGNMENT.search(source):
+    if has_executable_match(DYNAMIC_ON_ASSIGNMENT, source):
         violations.add("dynamic-on-assignment")
-    if SETATTRIBUTE_ON_HANDLER.search(source):
+    if has_executable_match(SETATTRIBUTE_ON_HANDLER, source):
         violations.add("setAttribute-on-handler")
     return violations
 
@@ -192,6 +260,41 @@ def test_backtick_handler_name_variants():
         "node.addEventListener(`click`, run)",
     )
     assert all(event_policy_violations(source) == set() for source in safe_samples)
+
+
+def test_dot_access_whitespace_variants():
+    samples = {
+        "node. onclick = run": "dynamic-on-assignment",
+        "node.\nonclick = run": "dynamic-on-assignment",
+        "node.\tonsubmit = run": "dynamic-on-assignment",
+        "node.\r\nOnFocus = run": "dynamic-on-assignment",
+        "const html = `${node.\nonclick = run}`": "dynamic-on-assignment",
+        "const x = obj.return / 2; node. onclick = run / 3;": "dynamic-on-assignment",
+        "node. setAttribute('onchange', run)": "setAttribute-on-handler",
+        "node.\nsetAttribute(`onclick`, run)": "setAttribute-on-handler",
+        'node.\tsetAttribute("OnSubmit", run)': "setAttribute-on-handler",
+    }
+    assert all(expected in event_policy_violations(source) for source, expected in samples.items())
+    safe_samples = (
+        "node. value = 'onclick = docs'",
+        "node. setAttribute('data-onclick', 'safe')",
+        'const docs = "node. onclick = forbidden"',
+        "// node. onsubmit = forbidden",
+        "/* node. setAttribute('onchange', run) */",
+        "const docs = `node. onclick = forbidden`",
+        "const example = /node. onclick = forbidden/",
+        "const example = /node. setAttribute('onchange', run)/",
+        r"const example = /node\. onclick = forbidden/u",
+        "if (ok) /node. onclick = forbidden/.test(text)",
+        'export const docs = "node. onclick = forbidden"',
+        '<html><script type="application/json">{"docs":"node. onclick = run","x":1}</script></html>',
+        "node. addEventListener('click', run)",
+    )
+    assert all(event_policy_violations(source) == set() for source in safe_samples)
+    html = "<html><body><p>Don't retry</p><script>node. onclick = run</script></body></html>"
+    assert "dynamic-on-assignment" in event_policy_violations(html)
+    quoted_tag = '<html><script data-note="1 > don\'t">node. onclick = run</script></html>'
+    assert "dynamic-on-assignment" in event_policy_violations(quoted_tag)
 
 
 def test_login_form_preserves_submit_behavior_and_blocks_duplicates():
