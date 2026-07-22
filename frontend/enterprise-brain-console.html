@@ -169,12 +169,15 @@ function renderCenters(centers){
   if(!centers.length){centerGrid.innerHTML='<div class="empty-state">暂无中心入口配置</div>';return}
   centerGrid.innerHTML=centers.map(center=>{
     const disabled=center.url==='#';
+    const action=disabled
+      ? `<span class="btn disabled" aria-disabled="true">${esc(center.primary_action||'查看')}</span>`
+      : `<a class="btn" href="${esc(center.url)}">${esc(center.primary_action||'查看')}</a>`;
     return `<article class="center-card">
       <h4>${esc(center.name)}</h4>
       <p>${esc(center.description)}</p>
       <div class="subgrid"><div class="subline"><span>数量</span><strong>${esc(center.count??0)}</strong></div><div class="subline"><span>最近更新</span><strong>${esc(fmt(center.last_updated))}</strong></div></div>
       <div class="tags"><span class="tag ${esc(center.status)}">${esc(statusText[center.status]||center.status)}</span><span class="tag ${esc(center.risk_level)}">风险：${esc(center.risk_level)}</span></div>
-      <a class="btn ${disabled?'disabled':''}" href="${disabled?'javascript:void(0)':esc(center.url)}">${esc(center.primary_action||'查看')}</a>
+      ${action}
     </article>`;
   }).join('');
 }
