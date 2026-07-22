@@ -49,6 +49,10 @@
     '/tiancang.html':'menu.tiancang','/tool-center.html':'menu.settings','/tool-market.html':'menu.settings',
     '/tool-permissions.html':'menu.settings','/tool-router.html':'menu.settings','/workflows.html':'menu.workflows'
   };
+  const ROLE_IDENTITIES={
+    boss:'owner',owner:'owner',admin:'admin',administrator:'admin',operator:'operator',ads:'operator',
+    service:'customer_service',customer_service:'customer_service',designer:'designer',editor:'editor',finance:'finance'
+  };
   const KNOWN_PERMISSIONS=new Set(Object.values(ROUTE_PERMISSIONS));
   const BUSINESS_EVENTS=new Set(['click','change','input']);
   const FETCH_TIMEOUT_MS=10000;
@@ -56,8 +60,13 @@
   let actionSequence=0,authorized=false,activated=false,activationPromise=null,activationEpoch=0,dynamicFlushPending=false,dynamicObserver=null,authorizationFingerprint=null,revalidationPromise=null;
 
   function normalize(path){return path==='/'?'/index.html':String(path||'').split(/[?#]/,1)[0]}
+  function canonicalRole(user){
+    if(!user||typeof user.role!=='string'||typeof user.role_code!=='string')return null;
+    const canonical=ROLE_IDENTITIES[user.role];
+    return canonical&&user.role_code===canonical?canonical:null;
+  }
   function permissionsOf(user){
-    if(!user||!Array.isArray(user.menus)||user.menus.length===0)return null;
+    if(!canonicalRole(user)||!Array.isArray(user.menus)||user.menus.length===0)return null;
     const permissions=new Set();
     for(const item of user.menus){
       if(!item||typeof item.permission!=='string'||!KNOWN_PERMISSIONS.has(item.permission)||permissions.has(item.permission))return null;

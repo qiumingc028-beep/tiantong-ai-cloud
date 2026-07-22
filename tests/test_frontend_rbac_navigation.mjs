@@ -7,12 +7,12 @@ import vm from 'node:vm';
 const guardScript=readFileSync(new URL('../frontend/rbac-navigation.js',import.meta.url),'utf8');
 const routePermissions=Object.fromEntries([...guardScript.matchAll(/'(\/[^']+\.html)':'(menu\.[^']+)'/g)].map(match=>[match[1],match[2]]));
 
-const designer={role:'designer',menus:[
+const designer={role:'designer',role_code:'designer',menus:[
   {label:'AI素材中心',href:'/ai-assets.html',permission:'menu.ai_assets'},
   {label:'AI工作流',href:'/workflows.html',permission:'menu.workflows'}
 ]};
 const adminPermissions=['dashboard','employees','stores','jd_data','ads','metrics','import','ai_assets','skills_center','computer_executor','tiancang','workflows','ai_employees','account_center','knowledge_center','device_center','settings'];
-const admin={role_code:'admin',menus:adminPermissions.map(permission=>({permission:`menu.${permission}`}))};
+const admin={role:'admin',role_code:'admin',menus:adminPermissions.map(permission=>({permission:`menu.${permission}`}))};
 
 function page({path='/index.html',user=admin,status=200,reject=false,timeout=false,protectedScript=false,externalScript=false,externalFailure=false,deferExternal=false}={}){
   const removed=[];
@@ -115,14 +115,50 @@ test('administrator keeps the prior legitimate navigation set',()=>{
 
 test('role aliases neither add nor remove server-authorized navigation',()=>{
   const {run}=page();
-  const count=run(`TiantongRbac.navigationFor({role:'boss',menus:admin.menus}).length`);
-  assert.equal(count,37);
+  for(const [role,roleCode] of Object.entries({boss:'owner',owner:'owner',admin:'admin',administrator:'admin',operator:'operator',ads:'operator',service:'customer_service',customer_service:'customer_service',designer:'designer',editor:'editor',finance:'finance'})){
+    assert.equal(run(`TiantongRbac.navigationFor({role:${JSON.stringify(role)},role_code:${JSON.stringify(roleCode)},menus:admin.menus}).length`),37,role);
+  }
 });
 
-test('unauthenticated users fail closed while unknown roles use only server menus',()=>{
+test('unauthenticated and unknown roles fail closed even with valid server menus',async()=>{
   const {run}=page();
   assert.equal(run('TiantongRbac.navigationFor(null).length'),0);
-  assert.equal(run(`TiantongRbac.navigationFor({role:'new_super_role',menus:admin.menus}).length`),37);
+  assert.equal(run(`TiantongRbac.navigationFor({role:'new_super_role',role_code:'new_super_role',menus:admin.menus}).length`),0);
+  const denied=page({path:'/index.html',user:{role:'new_super_role',role_code:'new_super_role',menus:admin.menus},protectedScript:true});
+  assert.equal((await denied.run('TiantongRbac.ready')).allowed,false);
+  assert.equal(denied.context.initializerCount,0);
+  assert.deepEqual(denied.context.document.registrations,[]);
+  assert.doesNotMatch(denied.context.document.body.innerHTML,/PROTECTED_PAGE_CONTENT/);
+});
+
+test('invalid or conflicting identities cannot navigate or activate with valid menus',async()=>{
+  const full=admin.menus,single=[{permission:'menu.dashboard'}];
+  const cases=[
+    ['unknown-full',{role:'new_super_role',role_code:'new_super_role',menus:full}],
+    ['unknown-single',{role:'new_super_role',role_code:'new_super_role',menus:single}],
+    ['missing-role',{role_code:'admin',menus:full}],
+    ['null-role',{role:null,role_code:'admin',menus:full}],
+    ['empty-role',{role:'',role_code:'admin',menus:full}],
+    ['blank-role',{role:'   ',role_code:'admin',menus:full}],
+    ['padded-canonical-role',{role:' admin ',role_code:'admin',menus:full}],
+    ['padded-alias-role',{role:' boss ',role_code:'owner',menus:full}],
+    ['non-string-role',{role:7,role_code:'admin',menus:full}],
+    ['missing-role-code',{role:'admin',menus:full}],
+    ['non-string-role-code',{role:'admin',role_code:{},menus:full}],
+    ['conflicting-fields',{role:'owner',role_code:'admin',menus:full}],
+    ['case-variant',{role:'Admin',role_code:'admin',menus:full}],
+    ['unicode-confusable',{role:'admіn',role_code:'admin',menus:full}]
+  ];
+  for(const [name,user] of cases){
+    const denied=page({path:'/index.html',user,protectedScript:true});
+    assert.equal(denied.run('TiantongRbac.navigationFor(identityUser).length'),0,`${name}: navigation`);
+    const result=await denied.run('TiantongRbac.ready');
+    assert.equal(result.allowed,false,`${name}: authorization`);
+    assert.equal(denied.context.initializerCount,0,`${name}: initializer`);
+    assert.deepEqual(denied.context.document.registrations,[],`${name}: events`);
+    assert.doesNotMatch(denied.context.document.body.innerHTML,/PROTECTED_PAGE_CONTENT/,`${name}: protected flash`);
+    assert.equal(denied.context.__tiantongFrontSecurity,undefined,`${name}: activation`);
+  }
 });
 
 test('non-admin roles neither inherit admin routes nor lose authorized legacy routes',()=>{
@@ -132,7 +168,7 @@ test('non-admin roles neither inherit admin routes nor lose authorized legacy ro
     ['customer_service',['dashboard','metrics']],
     ['finance',['dashboard','metrics','import']]
   ]){
-    const expression=`{role:${JSON.stringify(role)},menus:${JSON.stringify(permissions.map(permission=>({permission:`menu.${permission}`})))} }`;
+    const expression=`{role:${JSON.stringify(role)},role_code:${JSON.stringify(role)},menus:${JSON.stringify(permissions.map(permission=>({permission:`menu.${permission}`})))} }`;
     for(const forbidden of ['/brain-center.html','/brain-orchestrator.html','/task-center.html','/auto-dispatch-center.html'])assert.equal(run(`TiantongRbac.canOpen(${expression},'${forbidden}')`),false,`${role}:${forbidden}`);
     if(role==='operator')for(const allowed of ['/jd-integrations.html','/template-center.html','/brands.html','/store-groups.html'])assert.equal(run(`TiantongRbac.canOpen(${expression},'${allowed}')`),true,`${role}:${allowed}`);
   }
@@ -147,7 +183,7 @@ test('missing and malformed permissions fail closed',()=>{
   ]}).length`);
   assert.equal(count,0);
   assert.equal(run(`TiantongRbac.navigationFor({role:'admin'}).length`),0);
-  assert.equal(run(`TiantongRbac.navigationFor({role:'operator',menus:[]}).length`),0);
+  assert.equal(run(`TiantongRbac.navigationFor({role:'operator',role_code:'operator',menus:[]}).length`),0);
   assert.equal(run(`TiantongRbac.navigationFor({role:'admin',menus:[{permission:null}]}).length`),0);
 });
 
@@ -177,7 +213,7 @@ test('identity timeout fails closed before protected initialization',async()=>{
 
 test('malformed and unknown menu responses deny the direct route',async()=>{
   for(const menus of [null,[{permission:null}],[{permission:'menu.dashboard'},{permission:'menu.unknown'}]]){
-    const {context,run}=page({path:'/index.html',user:{role:'owner',menus}});
+    const {context,run}=page({path:'/index.html',user:{role:'owner',role_code:'owner',menus}});
     assert.equal((await run('TiantongRbac.ready')).allowed,false);
     assert.deepEqual(context.document.registrations,[]);
   }
@@ -217,7 +253,7 @@ test('external script load failure remains denied and a denied route never reque
   const failed=page({path:'/alpha-workflow.html',user:designer,externalScript:true,externalFailure:true});
   assert.equal((await failed.run('TiantongRbac.ready')).allowed,false);
   assert.equal(failed.context.externalLoads,1);
-  const denied=page({path:'/alpha-workflow.html',user:{role:'designer',menus:[{permission:'menu.ai_assets'}]},externalScript:true});
+  const denied=page({path:'/alpha-workflow.html',user:{role:'designer',role_code:'designer',menus:[{permission:'menu.ai_assets'}]},externalScript:true});
   assert.equal((await denied.run('TiantongRbac.ready')).allowed,false);
   assert.equal(denied.context.externalLoads,0);
 });
@@ -257,7 +293,7 @@ test('role fields cannot grant a route absent from server menus',()=>{
 
 test('unknown server menu identifiers invalidate the complete permission response',()=>{
   const {run}=page();
-  const user={role:'admin',menus:[{permission:'menu.dashboard'},{permission:'menu.future_unknown'}]};
+  const user={role:'admin',role_code:'admin',menus:[{permission:'menu.dashboard'},{permission:'menu.future_unknown'}]};
   assert.equal(run(`TiantongRbac.navigationFor(${JSON.stringify(user)}).length`),0);
   assert.equal(run(`TiantongRbac.canOpen(${JSON.stringify(user)},'/index.html')`),false);
 });
