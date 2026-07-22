@@ -165,13 +165,23 @@ function renderSystemHealth(health){
   if(!items.length){systemHealth.innerHTML='<div class="empty-state">系统健康暂不可用</div>';return}
   systemHealth.innerHTML=items.map(item=>`<article class="card"><div class="label">${esc(item.name)}</div><div class="value"><span class="tag ${esc(item.status)}">${esc(item.status)}</span></div><p class="label">${esc(item.message)}</p></article>`).join('');
 }
+function normalizeCenterUrl(value){
+  if(typeof value!=='string'||!value||value==='#'||/[^\x21-\x7e]/.test(value))return null;
+  if(value.includes('%')||value.includes('\\')||/^\/\//.test(value)||/&(?:#(?:x[0-9a-f]+|[0-9]+);?|[a-z][a-z0-9]+;)/i.test(value))return null;
+  try{
+    const url=new URL(value,location.href);
+    if(!['http:','https:'].includes(url.protocol)||url.origin!==location.origin||url.username||url.password)return null;
+    return url.href;
+  }catch{return null}
+}
 function renderCenters(centers){
   if(!centers.length){centerGrid.innerHTML='<div class="empty-state">暂无中心入口配置</div>';return}
   centerGrid.innerHTML=centers.map(center=>{
-    const disabled=center.url==='#';
+    const safeUrl=normalizeCenterUrl(center.url);
+    const disabled=safeUrl===null;
     const action=disabled
       ? `<span class="btn disabled" aria-disabled="true">${esc(center.primary_action||'查看')}</span>`
-      : `<a class="btn" href="${esc(center.url)}">${esc(center.primary_action||'查看')}</a>`;
+      : `<a class="btn" href="${esc(safeUrl)}">${esc(center.primary_action||'查看')}</a>`;
     return `<article class="center-card">
       <h4>${esc(center.name)}</h4>
       <p>${esc(center.description)}</p>
