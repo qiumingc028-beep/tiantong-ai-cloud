@@ -12,12 +12,12 @@ EXPRESSION_ON_ATTRIBUTE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 DYNAMIC_ON_ASSIGNMENT = re.compile(
-    r"(?:\.|\[\s*['\"])(on[a-z]+)(?:['\"]\s*\])?\s*"
+    r"(?:\.|\[\s*['\"`])(on[a-z]+)(?:['\"`]\s*\])?\s*"
     r"(?:\|\||&&|\?\?|>>>|>>|<<|\*\*|[+\-*/%&|^])?=(?!=|>)",
     re.IGNORECASE,
 )
 SETATTRIBUTE_ON_HANDLER = re.compile(
-    r"\.setAttribute\s*\(\s*['\"]on[a-z]+['\"]", re.IGNORECASE
+    r"\.setAttribute\s*\(\s*['\"`]on[a-z]+['\"`]", re.IGNORECASE
 )
 
 
@@ -173,6 +173,25 @@ def test_global_frontend_event_policy():
     assert event_policy_violations("const html = `<div title=\"${show ? 'onclick = documentation' : ''}\">x</div>`;") == set()
     assert event_policy_violations("const text = `1 < 2 ${show ? 'onclick = documentation' : ''}`;") == set()
     assert scan_frontend() == {}
+
+
+def test_backtick_handler_name_variants():
+    samples = {
+        "node.setAttribute(`onclick`, `run()`)": "setAttribute-on-handler",
+        "node.setAttribute(`onchange`,`run()` )": "setAttribute-on-handler",
+        "node.setAttribute( `OnFocus` , handler )": "setAttribute-on-handler",
+        "node[ `onclick` ] = run": "dynamic-on-assignment",
+        "node [ `onsubmit` ] = run": "dynamic-on-assignment",
+        "node[\n\t`OnBlur`\t]\n= run": "dynamic-on-assignment",
+    }
+    assert all(expected in event_policy_violations(source) for source, expected in samples.items())
+    safe_samples = (
+        "const label = `onclick = documentation`",
+        "node.setAttribute(`data-onclick`, `safe`)",
+        "node[`data-onclick`] = 'safe'",
+        "node.addEventListener(`click`, run)",
+    )
+    assert all(event_policy_violations(source) == set() for source in safe_samples)
 
 
 def test_login_form_preserves_submit_behavior_and_blocks_duplicates():
