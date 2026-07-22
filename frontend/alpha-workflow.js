@@ -30,9 +30,20 @@
   function runTitle(run){return run.workflow_context?.task_title||run.scenario_title||run.dashboard_summary?.['任务标题']||'Alpha 验证任务';}
   function nextStep(run){return run.dashboard_summary?.['下一步']||`当前阶段：${stageLabel(run.current_stage||run.workflow_context?.current_stage)}`;}
 
-  async function initList(){
+  let listEventsBound=false;
+  function applyDefaultScenario(){
+    const option=$('scenario-select').selectedOptions[0];
+    if(option&&option.dataset.input&&!$('workflow-input').value)$('workflow-input').value=option.dataset.input;
+  }
+  function bindListEvents(){
+    if(listEventsBound)return;
     document.querySelector('[data-action="refresh"]').addEventListener('click',loadList);
     $('start-form').addEventListener('submit',startRun);
+    $('scenario-select').addEventListener('change',applyDefaultScenario);
+    listEventsBound=true;
+  }
+  async function initList(){
+    bindListEvents();
     await loadList();
   }
 
@@ -56,8 +67,7 @@
     const enabled=items.filter(item=>item.enabled);
     select.innerHTML=enabled.length?enabled.map(item=>`<option value="${escapeHtml(item.scenario_code)}" data-input="${escapeHtml(item.default_input_text||'')}">${escapeHtml(item.title)}</option>`).join(''):'<option value="">暂无可用场景</option>';
     select.disabled=!enabled.length;
-    const applyDefault=()=>{const option=select.selectedOptions[0];if(option&&option.dataset.input&&!$('workflow-input').value)$('workflow-input').value=option.dataset.input;};
-    select.onchange=applyDefault;applyDefault();
+    applyDefaultScenario();
   }
 
   function renderRuns(runs,errorText){
@@ -83,11 +93,19 @@
   }
 
   let detail={run:null,trace:null,audit:null,stages:null,report:null};
-  async function initDetail(){
-    const runId=new URLSearchParams(location.search).get('run_id');
+  let detailEventsBound=false;
+  let pendingRunAction=null;
+  function bindDetailEvents(runId){
+    if(detailEventsBound)return;
     document.querySelector('[data-action="refresh"]').addEventListener('click',()=>loadDetail(runId));
     document.querySelector('[data-action="close-report"]').addEventListener('click',()=>{$('report-panel').hidden=true;});
     $('report-button').addEventListener('click',toggleReport);
+    $('reason-form').addEventListener('submit',submitReason);
+    detailEventsBound=true;
+  }
+  async function initDetail(){
+    const runId=new URLSearchParams(location.search).get('run_id');
+    bindDetailEvents(runId);
     if(!runId){showMessage('链接中缺少运行编号，请返回任务列表重新选择。','error');return;}
     await loadDetail(runId);
   }
@@ -177,8 +195,18 @@
   function handleAction(action){
     if(action==='report'){toggleReport();return;}if(action==='refresh'){loadDetail(detail.run.run_id);return;}
     const recover=action==='recover';$('reason-title').textContent=recover?'从检查点恢复':'取消 Alpha 任务';$('reason-help').textContent=recover?'系统会按契约创建新的恢复运行，并保留原任务审计记录。':'取消后任务不会继续执行。';
+    pendingRunAction=recover?'recover':'cancel';
     $('reason-confirm').className=`button ${recover?'':'button-danger'}`;$('reason-dialog').showModal();
-    $('reason-form').onsubmit=async event=>{if(event.submitter?.value==='cancel')return;event.preventDefault();$('reason-confirm').disabled=true;try{const current=detail.run.run_id;const result=await request(`/runs/${encodeURIComponent(current)}/${recover?'recover':'cancel'}`,{method:'POST',body:JSON.stringify({reason:$('reason-input').value.trim()||null})});$('reason-dialog').close();const next=result.run?.run_id||current;if(next!==current)history.replaceState(null,'',`?run_id=${encodeURIComponent(next)}`);await loadDetail(next);}catch(error){showMessage(error.message,'error');$('reason-dialog').close();}finally{$('reason-confirm').disabled=false;}};
+  }
+  async function submitReason(event){
+    if(event.submitter?.value==='cancel')return;
+    event.preventDefault();$('reason-confirm').disabled=true;
+    try{
+      const current=detail.run.run_id;
+      const result=await request(`/runs/${encodeURIComponent(current)}/${pendingRunAction}`,{method:'POST',body:JSON.stringify({reason:$('reason-input').value.trim()||null})});
+      $('reason-dialog').close();const next=result.run?.run_id||current;if(next!==current)history.replaceState(null,'',`?run_id=${encodeURIComponent(next)}`);await loadDetail(next);
+    }catch(error){showMessage(error.message,'error');$('reason-dialog').close();}
+    finally{$('reason-confirm').disabled=false;}
   }
   function facts(rows){return rows.map(([key,value])=>`<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`).join('');}
   function box(label,value){return `<div class="fact-box"><strong>${escapeHtml(label)}</strong><br>${escapeHtml(value)}</div>`;}
