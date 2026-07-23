@@ -17,7 +17,9 @@ DYNAMIC_ON_ASSIGNMENT = re.compile(
     re.IGNORECASE,
 )
 SETATTRIBUTE_ON_HANDLER = re.compile(
-    r"\.\s*setAttribute\s*\(\s*['\"`]on[a-z]+['\"`]", re.IGNORECASE
+    r"(?:\.\s*setAttribute|\[\s*['\"`]setAttribute['\"`]\s*\])\s*"
+    r"(?:\?\.\s*)?\(\s*['\"`]on[a-z]+['\"`]",
+    re.IGNORECASE,
 )
 HTML_DOCUMENT = re.compile(r"(?:<!doctype\s+html|<html\b)", re.IGNORECASE)
 MODULE_SOURCE = re.compile(r"^\s*(?:export|import)\b", re.MULTILINE)
@@ -295,6 +297,34 @@ def test_dot_access_whitespace_variants():
     assert "dynamic-on-assignment" in event_policy_violations(html)
     quoted_tag = '<html><script data-note="1 > don\'t">node. onclick = run</script></html>'
     assert "dynamic-on-assignment" in event_policy_violations(quoted_tag)
+
+
+def test_bracket_setattribute_member_variants():
+    samples = (
+        "node['setAttribute']('onclick', run)",
+        'node["setAttribute"]("onchange", run)',
+        "node[`setAttribute`](`onsubmit`, run)",
+        "node [ 'setAttribute' ] ('oninput', run)",
+        'node[\n"setAttribute"\n]("onchange", run)',
+        "node[\t`setAttribute`\t] (`onZephyr`, run)",
+        "node?.setAttribute('onclick', run)",
+        "node?.['setAttribute']('oninput', run)",
+        "node?.[\n`SetAttribute`\n] (`OnQuasar`, run)",
+        "node['setAttribute']?.('onclick', run)",
+        "node?.['setAttribute']?.('oninput', run)",
+    )
+    assert all("setAttribute-on-handler" in event_policy_violations(source) for source in samples)
+    safe_samples = (
+        "const method = node['setAttribute']",
+        "const value = node['onclick']",
+        "node['setAttribute']('data-onclick', 'safe')",
+        "node['getAttribute']('onclick')",
+        "node?.['addEventListener']('click', run)",
+        "const url = 'https://example.test/setAttribute?event=onclick'",
+        "// node['setAttribute']('onclick', run)",
+        'const docs = "node[\'setAttribute\'](\'onclick\', run)"',
+    )
+    assert all(event_policy_violations(source) == set() for source in safe_samples)
 
 
 def test_login_form_preserves_submit_behavior_and_blocks_duplicates():
