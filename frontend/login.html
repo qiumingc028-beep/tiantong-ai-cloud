@@ -18,18 +18,25 @@
   <div class="box">
     <h1>天统AI云中台</h1>
     <p>员工登录 · 老板驾驶舱 · 京东数据中心</p>
-    <input id="username" placeholder="用户名" autocomplete="username">
-    <input id="password" type="password" placeholder="密码" autocomplete="current-password">
-    <button onclick="login()">登录</button>
-    <div id="err" class="err"></div>
+    <form id="login-form">
+      <input id="username" placeholder="用户名" autocomplete="username">
+      <input id="password" type="password" placeholder="密码" autocomplete="current-password">
+      <button id="login-submit" type="submit">登录</button>
+      <div id="err" class="err"></div>
+    </form>
   </div>
 
   <script>
-    async function login() {
+    async function login(event) {
+      event.preventDefault();
+      const submit = document.getElementById('login-submit');
+      if (submit.disabled) return;
+
       const username = document.getElementById('username').value.trim();
       const password = document.getElementById('password').value;
       const err = document.getElementById('err');
       err.innerText = '';
+      submit.disabled = true;
 
       try {
         const res = await fetch('/api/login', {
@@ -42,22 +49,21 @@
         if (!res.ok) {
           const data = await res.json();
           err.innerText = data.detail || '登录失败';
+          submit.disabled = false;
           return;
         }
 
         location.href = '/index.html';
       } catch (e) {
         err.innerText = '服务器连接失败';
+        submit.disabled = false;
       }
     }
 
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') login();
-    });
+    document.getElementById('login-form').addEventListener('submit', login);
   </script>
 </body>
 </html>
-
 
 
 
