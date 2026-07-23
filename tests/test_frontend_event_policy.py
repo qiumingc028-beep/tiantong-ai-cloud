@@ -11,14 +11,17 @@ EXPRESSION_ON_ATTRIBUTE = re.compile(
     r"(?:'[^']*\bon[a-z]+\s*=|\"[^\"]*\bon[a-z]+\s*=|`[^`]*\bon[a-z]+\s*=)",
     re.IGNORECASE | re.DOTALL,
 )
+JS_TRIVIA = r"(?:\s|/\*[\s\S]*?\*/|//[^\r\n]*(?:\r\n|\r|\n))*"
 DYNAMIC_ON_ASSIGNMENT = re.compile(
-    r"(?:\.\s*|\[\s*['\"`])(on[a-z]+)(?:['\"`]\s*\])?\s*"
+    rf"(?:\.{JS_TRIVIA}|\[{JS_TRIVIA}['\"`])(on[a-z]+)"
+    rf"(?:['\"`]{JS_TRIVIA}\])?{JS_TRIVIA}"
     r"(?:\|\||&&|\?\?|>>>|>>|<<|\*\*|[+\-*/%&|^])?=(?!=|>)",
     re.IGNORECASE,
 )
 SETATTRIBUTE_ON_HANDLER = re.compile(
-    r"(?:\.\s*setAttribute|\[\s*['\"`]setAttribute['\"`]\s*\])\s*"
-    r"(?:\?\.\s*)?\(\s*['\"`]on[a-z]+['\"`]",
+    rf"(?:\.{JS_TRIVIA}setAttribute|\[{JS_TRIVIA}['\"`]setAttribute['\"`]"
+    rf"{JS_TRIVIA}\]){JS_TRIVIA}(?:\?\.{JS_TRIVIA})?\({JS_TRIVIA}"
+    r"['\"`]on[a-z]+['\"`]",
     re.IGNORECASE,
 )
 HTML_DOCUMENT = re.compile(r"(?:<!doctype\s+html|<html\b)", re.IGNORECASE)
@@ -323,6 +326,41 @@ def test_bracket_setattribute_member_variants():
         "const url = 'https://example.test/setAttribute?event=onclick'",
         "// node['setAttribute']('onclick', run)",
         'const docs = "node[\'setAttribute\'](\'onclick\', run)"',
+    )
+    assert all(event_policy_violations(source) == set() for source in safe_samples)
+
+
+def test_javascript_comment_trivia_variants():
+    samples = {
+        "node./*gap*/onclick = run": "dynamic-on-assignment",
+        'node[/*gap*/"onclick"] = run': "dynamic-on-assignment",
+        'node./*gap*/setAttribute("onchange", run)': "setAttribute-on-handler",
+        'node[/*gap*/"setAttribute"]("onsubmit", run)': "setAttribute-on-handler",
+        'node["setAttribute"](/*gap*/"oninput", run)': "setAttribute-on-handler",
+        "node/*a*/./*b*/onclick = run": "dynamic-on-assignment",
+        "node/*a*/[/*b*/'onclick'/*c*/] = run": "dynamic-on-assignment",
+        "node/*a*/./*b*/setAttribute/*c*/('onchange', run)": "setAttribute-on-handler",
+        "node[/*a*/'setAttribute'/*b*/](/*c*/'onsubmit', run)": "setAttribute-on-handler",
+        "node.//gap\nonclick = run": "dynamic-on-assignment",
+        "node[//gap\n'onchange'] = run": "dynamic-on-assignment",
+        "node?./*a*/setAttribute/*b*/(`OnFocus`, run)": "setAttribute-on-handler",
+        "node?.[/*a*/`setAttribute`/*b*/]?.(/*c*/`OnBlur`, run)": "setAttribute-on-handler",
+        "node./*a*//*b*/ \t\r\n/*c*/onchange = run": "dynamic-on-assignment",
+        "node.//a\r\n/*b*/\tsetAttribute(//c\n'oninput', run)": "setAttribute-on-handler",
+        "node[//a\n'setAttribute'](//b\n'onfocus', run)": "setAttribute-on-handler",
+    }
+    assert all(parses_javascript(source, module=False) for source in samples)
+    assert all(expected in event_policy_violations(source) for source, expected in samples.items())
+    safe_samples = (
+        'const docs = "node./*gap*/onclick = run"',
+        "const docs = `node[/*gap*/'onclick'] = run`",
+        "const url = 'https://example.test/a/*gap*/b//c'",
+        r"const example = /node\.\/\*gap\*\/onclick = run/u",
+        "/* node. onclick = docs */",
+        "// node./*gap*/onclick = run\nconst value = 1",
+        "node./*gap*/value = 'safe'",
+        "node[/*gap*/'setAttribute'](/*gap*/'data-onclick', 'safe')",
+        "node./*gap*/addEventListener('click', run)",
     )
     assert all(event_policy_violations(source) == set() for source in safe_samples)
 
