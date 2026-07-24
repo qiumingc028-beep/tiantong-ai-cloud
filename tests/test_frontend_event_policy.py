@@ -383,23 +383,42 @@ def test_login_form_preserves_submit_behavior_and_blocks_duplicates():
           let lastPrevented=false;
           const form={
             addEventListener(type,handler){listeners[type]=handler},
+            checkValidity(){
+              return elements.username.value.trim()!=='' && elements.password.value!=='';
+            },
             requestSubmit(trigger){
               lastPrevented=false;
+              if(!this.checkValidity())return;
               return listeners.submit({preventDefault(){lastPrevented=true},submitter:button,trigger});
             },
           };
           const button={disabled:false,click(){return form.requestSubmit('click')}};
-          const password={value:'secret',pressEnter(){return form.requestSubmit('enter')}};
+          const password={
+            value:'fake-test-only-value',
+            addEventListener(type,handler){listeners[`password:${type}`]=handler},
+            pressEnter(){
+              let prevented=false;
+              const pending=listeners['password:keydown']({
+                key:'Enter',preventDefault(){prevented=true},
+              });
+              assert.equal(prevented,true,'password Enter default');
+              return pending;
+            },
+          };
           const elements={
             'login-form':form,username:{value:' boss '},password,err:{innerText:''},
             'login-submit':button,
           };
           let resolveFetch,fetchCalls=0;
           const context={
-            document:{getElementById:id=>elements[id]},
+            document:{
+              documentElement:{dataset:{}},
+              getElementById:id=>elements[id],
+            },
             location:{href:'/login.html'},
             fetch(){fetchCalls+=1;return new Promise(resolve=>{resolveFetch=resolve})},
           };
+          context.window=context;
           vm.createContext(context);vm.runInContext(source,context);
           return {
             context,elements,listeners,
@@ -431,10 +450,30 @@ def test_login_form_preserves_submit_behavior_and_blocks_duplicates():
           assert.equal(click.context.location.href,'/index.html');
 
           const enter=page();
-          await submit(enter,'enter',{ok:false,json:async()=>({detail:'凭据错误'})});
+          const enterPending=enter.elements.password.pressEnter();
+          assert.equal(enter.fetchCalls,1);
+          assert.equal(enter.elements.password.value,'','secret cleared before network wait');
+          assert.equal(enter.context.document.documentElement.dataset.secretInFlight,'true');
+          enter.elements.password.pressEnter();
+          assert.equal(enter.fetchCalls,1,'duplicate Enter submit');
+          enter.resolve({ok:false,json:async()=>({detail:'凭据错误'})});
+          await enterPending;
+          assert.equal(enter.context.document.documentElement.dataset.secretInFlight,undefined);
           assert.equal(enter.elements.err.innerText,'凭据错误');
           assert.equal(enter.elements['login-submit'].disabled,false);
           assert.equal(enter.fetchCalls,1);
+
+          assert.match(html,/<input\b[^>]*id="username"[^>]*required/i);
+          assert.match(html,/<input\b[^>]*id="password"[^>]*required/i);
+          const invalid=page();
+          invalid.elements.username.value='';
+          invalid.elements.password.value='';
+          invalid.elements['login-submit'].click();
+          assert.equal(invalid.fetchCalls,0,'invalid form');
+
+          assert.doesNotMatch(html,/TiantongLoginDiagnostics/);
+          assert.match(html,/dataset\.secretInFlight\s*=\s*['"]true['"]/);
+          assert.match(html,/delete document\.documentElement\.dataset\.secretInFlight/);
         })().catch(error=>{console.error(error);process.exit(1)});
         """
     )

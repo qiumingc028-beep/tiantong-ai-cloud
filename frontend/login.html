@@ -19,21 +19,29 @@
     <h1>天统AI云中台</h1>
     <p>员工登录 · 老板驾驶舱 · 京东数据中心</p>
     <form id="login-form">
-      <input id="username" placeholder="用户名" autocomplete="username">
-      <input id="password" type="password" placeholder="密码" autocomplete="current-password">
+      <input id="username" name="username" placeholder="用户名" autocomplete="username" required>
+      <input id="password" name="password" type="password" placeholder="密码" autocomplete="current-password" required>
       <button id="login-submit" type="submit">登录</button>
       <div id="err" class="err"></div>
     </form>
   </div>
 
   <script>
+    const loginForm = document.getElementById('login-form');
+    const passwordField = document.getElementById('password');
+
     async function login(event) {
       event.preventDefault();
+      if (!loginForm.checkValidity()) return;
       const submit = document.getElementById('login-submit');
       if (submit.disabled) return;
 
       const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value;
+      let password = passwordField.value;
+      const requestBody = JSON.stringify({username, password});
+      password = '';
+      document.documentElement.dataset.secretInFlight = 'true';
+      passwordField.value = '';
       const err = document.getElementById('err');
       err.innerText = '';
       submit.disabled = true;
@@ -43,7 +51,7 @@
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           credentials: 'include',
-          body: JSON.stringify({username, password})
+          body: requestBody
         });
 
         if (!res.ok) {
@@ -57,15 +65,20 @@
       } catch (e) {
         err.innerText = '服务器连接失败';
         submit.disabled = false;
+      } finally {
+        delete document.documentElement.dataset.secretInFlight;
       }
     }
 
-    document.getElementById('login-form').addEventListener('submit', login);
+    passwordField.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || event.isComposing) return;
+      event.preventDefault();
+      return loginForm.requestSubmit();
+    });
+    loginForm.addEventListener('submit', login);
   </script>
 </body>
 </html>
-
-
 
 
 
