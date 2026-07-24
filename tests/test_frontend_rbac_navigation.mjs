@@ -9,8 +9,7 @@ const routePermissions=Object.fromEntries([...guardScript.matchAll(/'(\/[^']+\.h
 const authorityOutput=String.raw`(?:menu|permission|\/[^'"]+\.html|button|action|access|grant|canOpen|allowed)`;
 const clientRoleAuthority=new RegExp([
   String.raw`\bROLE_(?:ACCESS|MENUS?|PAGES?|PERMISSIONS?)\b`,
-  String.raw`\b(?:roleAccess|roleMenus|rolePages|rolePermissions)\b`,
-  String.raw`\bfunction\s+(?:accessFor|canOpenDeploy|isPrivileged|pageRole)\b`
+  String.raw`\b(?:roleAccess|roleMenus|rolePages|rolePermissions)\b`
 ].join('|'),'i');
 const jsTrivia=String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*`;
 const jsIdentifier=String.raw`[A-Za-z_$][\w$]*`;
@@ -101,7 +100,6 @@ function findClientRoleAuthority(script){
   const containsAuthorizationLiteral=(literalValue,codeValue)=>quotedAuthorizationLiteral(literalValue)||authorizationName.test(codeValue);
   const authorizationIdentifiers=new Set(declarations.filter(({name,literalValue,codeValue})=>(authorizationName.test(name)&&!displayName.test(name))||containsAuthorizationLiteral(literalValue,codeValue)).map(({name})=>name));
   const roleIdentifiers=new Set(['role','role_code','roleCode']);
-  for(const match of structuralCode.matchAll(/\b(?:role[\w$]*|[A-Za-z_$][\w$]+role[\w$]*)\b/gi))roleIdentifiers.add(match[0]);
   const normalizeExpression=value=>value.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g,'').trim().replace(/^\(([\s\S]*)\)$/,'$1').trim();
   const roleFieldAliases=new Set();
   const destructuringPattern=new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}\{([\s\S]{0,200}?)\}${jsTrivia}=`,'g');
@@ -112,14 +110,92 @@ function findClientRoleAuthority(script){
       if(/role/i.test(field[1]))roleIdentifiers.add(field[2]);
     for(const field of declaration[1].matchAll(destructuredFieldPattern))roleIdentifiers.add(field[1]);
   }
-  const isRoleSource=value=>{
+  const matchingDelimiter=(open,opening,closing)=>{
+    let depth=0;
+    for(let index=open;index<structuralCode.length;index++){
+      if(structuralCode[index]===opening)depth++;
+      else if(structuralCode[index]===closing&&--depth===0)return index;
+    }
+    return -1;
+  };
+  const matchingBrace=open=>matchingDelimiter(open,'{','}');
+  const expressionEnd=start=>{
+    if(structuralCode[start]==='('){
+      const close=matchingDelimiter(start,'(',')');
+      if(close>=0)return close+1;
+    }
+    const length=structuralCode.slice(start).search(/[;}\r\n]/);
+    return length<0?structuralCode.length:start+length;
+  };
+  const functionReturns=new Map();
+  const functionBodies=[];
+  const nestedBodyRanges=[];
+  const addFunctionBody=(name,open)=>{
+    const close=matchingBrace(open);
+    if(close>=0){
+      functionBodies.push({name,open,close});
+      nestedBodyRanges.push({open,close});
+    }
+  };
+  const functionHeaders=[
+    new RegExp(String.raw`\bfunction${jsTrivia}(${jsIdentifier})${jsTrivia}\([^)]*\)${jsTrivia}\{`,'dg'),
+    new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}function(?:${jsTrivia}${jsIdentifier})?${jsTrivia}\([^)]*\)${jsTrivia}\{`,'dg')
+  ];
+  for(const pattern of functionHeaders)
+    for(const match of structuralCode.matchAll(pattern))addFunctionBody(match[1],match.indices[0][1]-1);
+  const anyFunctionHeader=new RegExp(String.raw`\bfunction(?:${jsTrivia}${jsIdentifier})?${jsTrivia}\([^)]*\)${jsTrivia}\{`,'dg');
+  for(const match of structuralCode.matchAll(anyFunctionHeader)){
+    const open=match.indices[0][1]-1;
+    const close=matchingBrace(open);
+    if(close>=0&&!nestedBodyRanges.some(range=>range.open===open))nestedBodyRanges.push({open,close});
+  }
+  const arrowHeader=new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}(?:async${jsTrivia})?(?:${jsIdentifier}|\([^)]*\))${jsTrivia}=>${jsTrivia}`,'dg');
+  for(const match of structuralCode.matchAll(arrowHeader)){
+    const start=match.indices[0][1];
+    if(structuralCode[start]==='{')addFunctionBody(match[1],start);
+    else{
+      const stop=expressionEnd(start);
+      functionReturns.set(match[1],{returns:[script.slice(start,stop).trim()],bindings:[]});
+    }
+  }
+  const anyBlockArrowHeader=new RegExp(String.raw`(?:${jsIdentifier}|\([^)]*\))${jsTrivia}=>${jsTrivia}\{`,'dg');
+  for(const match of structuralCode.matchAll(anyBlockArrowHeader)){
+    const open=match.indices[0][1]-1;
+    const close=matchingBrace(open);
+    if(close>=0&&!nestedBodyRanges.some(range=>range.open===open))nestedBodyRanges.push({open,close});
+  }
+  for(const {name,open,close} of functionBodies){
+    const summary=functionReturns.get(name)||{returns:[],bindings:[]};
+    const body=structuralCode.slice(open+1,close);
+    const belongsToNestedFunction=position=>nestedBodyRanges.some(range=>range.open>open&&range.close<close&&position>range.open&&position<range.close);
+    const returnPattern=new RegExp(String.raw`\breturn${jsTrivia}`,'dg');
+    for(const match of body.matchAll(returnPattern)){
+      const start=open+1+match.indices[0][1];
+      const end=expressionEnd(start);
+      if(!belongsToNestedFunction(start))summary.returns.push(script.slice(start,end).trim());
+    }
+    const bindingPatterns=[
+      new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}([^;]+)`,'dg'),
+      new RegExp(String.raw`(?:^|[;\r\n])${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}([^;]+)`,'dg')
+    ];
+    for(const pattern of bindingPatterns)
+      for(const match of body.matchAll(pattern)){
+        const start=open+1+match.indices[2][0];
+        const end=open+1+match.indices[2][1];
+        if(!belongsToNestedFunction(start))summary.bindings.push({name:match[1],value:script.slice(start,end).trim()});
+      }
+    functionReturns.set(name,summary);
+  }
+  const roleReturningFunctions=new Set();
+  const isRoleSource=(value,identifiers=roleIdentifiers)=>{
     const normalized=normalizeExpression(value);
-    if(roleIdentifiers.has(normalized))return true;
-    if(new RegExp(String.raw`^${jsIdentifier}(?:\?\.|\.)role(?:_?code)?$`,'i').test(normalized))return true;
-    const bracket=normalized.match(new RegExp(String.raw`^${jsIdentifier}(?:\?\.)?\[${jsTrivia}(["'\x60]?)([^"' \x60\]]+)\1${jsTrivia}\]$`));
+    const compact=normalized.replace(/\s+/g,'');
+    if(identifiers.has(compact))return true;
+    if(new RegExp(String.raw`^${jsIdentifier}(?:\?\.|\.)role(?:_?code)?$`,'i').test(compact))return true;
+    const bracket=compact.match(new RegExp(String.raw`^${jsIdentifier}(?:\?\.)?\[(["'\x60]?)([^"'\x60\]]+)\1\]$`));
     if(bracket&&(/^role(?:_?code)?$/i.test(bracket[2])||roleFieldAliases.has(bracket[2])))return true;
-    const call=normalized.match(new RegExp(String.raw`^(${jsIdentifier})${jsTrivia}\([^)]*\)$`));
-    return Boolean(call&&/role/i.test(call[1]));
+    const call=compact.match(new RegExp(String.raw`^(${jsIdentifier})(?:\?\.)?\([^)]*\)$`));
+    return Boolean(call&&roleReturningFunctions.has(call[1]));
   };
   for(let changed=true;changed;){
     changed=false;
@@ -134,6 +210,28 @@ function findClientRoleAuthority(script){
       const alias=value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`));
       if(alias&&(authorizationIdentifiers.has(alias[1])||(authorizationName.test(alias[1])&&!displayName.test(alias[1])))&&!authorizationIdentifiers.has(name)){
         authorizationIdentifiers.add(name);
+        changed=true;
+      }
+    }
+    for(const [name,summary] of functionReturns){
+      const localRoles=new Set(roleIdentifiers);
+      for(let localChanged=true;localChanged;){
+        localChanged=false;
+        for(const binding of summary.bindings)
+          if(isRoleSource(binding.value,localRoles)&&!localRoles.has(binding.name)){
+            localRoles.add(binding.name);
+            localChanged=true;
+          }
+      }
+      if(summary.returns.some(value=>isRoleSource(value,localRoles))&&!roleReturningFunctions.has(name)){
+        roleReturningFunctions.add(name);
+        changed=true;
+      }
+    }
+    for(const {name,codeValue} of assignments){
+      const target=normalizeExpression(codeValue);
+      if(roleReturningFunctions.has(target)&&!roleReturningFunctions.has(name)){
+        roleReturningFunctions.add(name);
         changed=true;
       }
     }
@@ -153,6 +251,8 @@ function findClientRoleAuthority(script){
   const shorthandPropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}${jsIdentifier}${jsTrivia}(?=,|$)`,'g');
   const serverRoutePropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}["']\/[^"']+\.html["']${jsTrivia}:${jsTrivia}["']menu\.[^"']+["']`,'g');
   const roleExpression=identifierAlternation(roleIdentifiers);
+  const roleFunctionExpression=roleReturningFunctions.size?String.raw`${identifierAlternation(roleReturningFunctions)}${jsTrivia}(?:\?\.${jsTrivia})?\([^)]*\)`:String.raw`(?!)`;
+  const roleSourceExpression=String.raw`(?:${roleExpression}|${roleFunctionExpression})`;
   const simpleDisplayValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}["'\x60](?![^"'\x60]*(?:\/[^"'\x60]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b))[^"'\x60]*["'\x60]${jsTrivia},?)+$`);
   const displayMetadataOnly=(name,body,literalBody,bodyCode)=>{
     if(simpleDisplayValues.test(body))return !authorizationName.test(name)||displayName.test(name);
@@ -167,10 +267,17 @@ function findClientRoleAuthority(script){
     if(/\b(?:textContent|innerText|ariaLabel|roleLabel)\b/i.test(codeValue)&&!quotedAuthorizationLiteral(literalValue))return false;
     return quotedAuthorizationLiteral(literalValue)||authorizationName.test(codeValue)||/\b(?:privileg|entitl|can[A-Z]|allowed)\w*\b/.test(codeValue);
   };
+  for(const [name,summary] of functionReturns)
+    for(const value of summary.returns){
+      const codeValue=maskNonExecutable(value);
+      if(new RegExp(roleSourceExpression).test(codeValue)
+        &&(authorizationName.test(codeValue)||new RegExp(String.raw`^${jsTrivia}(?:${roleSourceExpression})${jsTrivia}(?:===|==|!==|!=)`).test(codeValue)))
+        return `${name}:return ${value}`;
+    }
   const roleDecisionPatterns=[
-    new RegExp(String.raw`\bswitch${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\)${jsTrivia}\{([\s\S]{0,500})\}`,'g'),
-    new RegExp(String.raw`\bif${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\)${jsTrivia}(\{[\s\S]{0,240}?\}|[^\n;]{0,240})`,'g'),
-    new RegExp(String.raw`(?:${roleExpression})${jsTrivia}(?:===|==)[^?:;\n]+[?:]([^;\n]{0,240})`,'g')
+    new RegExp(String.raw`\bswitch${jsTrivia}\([^)]*(?:${roleSourceExpression})[^)]*\)${jsTrivia}\{([\s\S]{0,500})\}`,'g'),
+    new RegExp(String.raw`\bif${jsTrivia}\([^)]*(?:${roleSourceExpression})[^)]*\)${jsTrivia}(\{[\s\S]{0,240}?\}|[^\n;]{0,240})`,'g'),
+    new RegExp(String.raw`(?:${roleSourceExpression})${jsTrivia}(?:===|==)[^?:;\n]+[?:]([^;\n]{0,240})`,'g')
   ];
   for(const pattern of roleDecisionPatterns)
     for(const match of structuralCode.matchAll(pattern))
@@ -200,7 +307,7 @@ function findClientRoleAuthority(script){
     const roleStructured=/role/i.test(name);
     const authorizationStructured=authorizationName.test(name)&&!displayName.test(name);
     const lookupNames=identifierAlternation(aliasesFor(name));
-    const roleLookupExpression=String.raw`${lookupNames}${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]*(?:${roleExpression})[^\]]*\]|\.${jsTrivia}get${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\))`;
+    const roleLookupExpression=String.raw`${lookupNames}${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]*(?:${roleSourceExpression})[^\]]*\]|\.${jsTrivia}get${jsTrivia}\([^)]*(?:${roleSourceExpression})[^)]*\))`;
     const roleLookup=new RegExp(roleLookupExpression).test(roleLookupCode);
     const lookupResults=[...roleLookupCode.matchAll(new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}${roleLookupExpression}`,'g'))].map(match=>match[1]);
     const lookupFeedsAuthority=lookupResults.some(result=>{
@@ -589,9 +696,9 @@ test('client role authority detector rejects authorization mappings but permits 
       /* computed */ [ roleKey ]	:	menuSettings
     };const byRole=source;const granted=byRole?.[user.role]`,
     `const roleKey='future_role';const byRole={[roleKey]:permissions};const granted=byRole[currentUser.roleCode]`,
-    `const roleKey='future_role';const byRole={[roleKey]:routes};const granted=byRole[getCurrentRole()]`,
+    `function getCurrentRole(){return user.role}const roleKey='future_role';const byRole={[roleKey]:routes};const granted=byRole[getCurrentRole()]`,
     `const {role:currentRole}=currentUser;const roleKey='future_role';const byRole={[roleKey]:features};const granted=byRole[currentRole]`,
-    `const roleKey='future_role';const source={[roleKey]:privileges};const alias=source;const granted=alias?.[getCurrentRole()]`,
+    `function getCurrentRole(){return user.role}const roleKey='future_role';const source={[roleKey]:privileges};const alias=source;const granted=alias?.[getCurrentRole()]`,
     `const {role_code:key}=currentUser;const map={[getKey()]:payload};const selected=map[key];const permissions=selected.permissions`,
     `const key=currentUser.roleCode;const source={[getKey()]:payload};const selected=source?.[key];const privileges=selected.details`,
     `const roleKey='future_role';const matrix={[roleKey]:menuSettings};const key=user['role'];const granted=matrix[key]`,
@@ -612,7 +719,32 @@ test('client role authority detector rejects authorization mappings but permits 
     `const roleKey='future_role';const matrix={[roleKey]:privileges};const field='role';const key=user[field];const granted=matrix[key]`,
     `const roleKey='future_role';const matrix={[roleKey]:permissions};const field='role';const alias=field;const key=user[alias];const granted=matrix[key]`,
     `const roleKey='future_role';const matrix={[roleKey]:routes};let field;field='role';const key=user[field];const granted=matrix[key]`,
-    `const roleKey='future_role';const matrix=Object.freeze({[roleKey]:allowedActions});const key=getCurrentRole();const granted=matrix[key]`,
+    `function getCurrentRole(){return user.role}const roleKey='future_role';const matrix=Object.freeze({[roleKey]:allowedActions});const key=getCurrentRole();const granted=matrix[key]`,
+    `function readIdentity(){return user['role']}const roleKey='future_role';const matrix={[roleKey]:menuSettings};const key=readIdentity();const granted=matrix[key]`,
+    `function x(){return user.role}const roleKey='future_role';const matrix={[roleKey]:permissions};const key=x();const granted=matrix[key]`,
+    `const x=function(){return currentUser['roleCode']};const roleKey='future_role';const matrix={[roleKey]:routes};const key=x();const granted=matrix[key]`,
+    `const x=()=>user.role;const roleKey='future_role';const matrix={[roleKey]:features};const key=x();const granted=matrix[key]`,
+    `const x=()=>{return user['role']};const roleKey='future_role';const matrix={[roleKey]:privileges};const key=x();const granted=matrix[key]`,
+    `const x=()=>{const key=user.role;return key};const roleKey='future_role';const matrix={[roleKey]:canAccess};const granted=matrix[x()]`,
+    `function a(){return user.role}function b(){return a()}const roleKey='future_role';const matrix={[roleKey]:allowedActions};const granted=matrix[b()]`,
+    `function qv(){return user['role']}const alias=qv;const roleKey='future_role';const matrix={[roleKey]:permissions};const key=alias();const granted=matrix[key]`,
+    `function qv(){return user['role']}const roleKey='future_role';const matrix={[roleKey]:routes};let key;key=qv();const granted=matrix[key]`,
+    `function qv(){return user['role']}const roleKey='future_role';const matrix={[roleKey]:features};const alias=qv();const granted=matrix[alias]`,
+    `function qv(){return user['role']}const roleKey='future_role';const matrix={[roleKey]:privileges};const first=qv();const second=first;const granted=matrix[second]`,
+    `function qv(){return user['role']}const roleKey='future_role';const matrix={[roleKey]:canAccess};const granted=matrix[qv()]`,
+    `function a(){return user.role}function wrapper(){return a()}const roleKey='future_role';const matrix={[roleKey]:allowedActions};const granted=matrix[wrapper()]`,
+    `function qv(){return user['role']}const roleKey='future_role';const matrix={[roleKey]:permissions};const granted=matrix[qv?.()]`,
+    `function qv(){return user['role']}const alias=qv;const roleKey='future_role';const matrix={[roleKey]:routes};const granted=matrix[alias?.()]`,
+    `function randomValueReader(){return user?.['role']}const roleKey='future_role';const matrix={[roleKey]:permissions};const granted=matrix[randomValueReader()]`,
+    `function qv/*name*/()/*body*/{/*return*/return (profile?.[\`roleCode\`])}const roleKey='future_role';const matrix={[roleKey]:routes};const granted=matrix[qv()]`,
+    `function qv(){return user /*gap*/ [/*field*/'role']}const roleKey='future_role';const matrix={[roleKey]:permissions};const granted=matrix[qv()]`,
+    `function qv(){return user /*a*/ ?. /*b*/ ['role']}const roleKey='future_role';const matrix={[roleKey]:routes};const granted=matrix[qv()]`,
+    `function qv(){return (
+      user?.['role']
+    )}const roleKey='future_role';const matrix={[roleKey]:features};const granted=matrix[qv()]`,
+    `const qv=()=>(
+      user?.['role']
+    );const roleKey='future_role';const matrix={[roleKey]:privileges};const granted=matrix[qv()]`,
     `const roleKey='future_role';const $matrix={[roleKey]:permissions};const $key=user['role'];const granted=$matrix[$key]`,
     `const roleKey='future_role';const matrix={
       /* computed */[roleKey]	:	menuSettings
@@ -679,6 +811,24 @@ test('client role authority detector rejects authorization mappings but permits 
     `const mapping={future:payload/* permission */};const selected=mapping[user.role]`,
     `const themesByRole={future:darkTheme/* "menu.settings" */};const selected=themesByRole[user.role]`,
     `const mapping={future:payload/* "/settings.html" */};const selected=mapping[user.role]`,
+    `function readLanguage(){return user['language']}const key='zh';const matrix={[key]:permissions};const selected=matrix[readLanguage()]`,
+    `function readTheme(){return user.theme}const key='dark';const matrix={[key]:routes};const selected=matrix[readTheme()]`,
+    `function readRoleButLanguage(){return user.language}const key='zh';const matrix={[key]:features};const selected=matrix[readRoleButLanguage()]`,
+    `const readRegion=()=>user.region;const regions={north:'华北'};label.textContent=regions[readRegion()]`,
+    `const readDisplayName=function(){return user.displayName};label.textContent=readDisplayName()`,
+    `function randomValueReader(){return user.role}label.textContent=randomValueReader()`,
+    `function readMenus(){return user.menus}const serverMenus=readMenus();const allowed=serverMenus.some(item=>item.permission===requiredMenu)`,
+    `function a(){return b()}function b(){return a()}const key='x';const matrix={[key]:permissions};const selected=matrix[a()]`,
+    `function outer(){function inner(){return user.role}return user.language}const key='x';const matrix={[key]:permissions};const selected=matrix[outer()]`,
+    `function outer(){consume(function(){return user.role});return user.language}const key='x';const matrix={[key]:permissions};const selected=matrix[outer()]`,
+    `function outer(){consume(()=>{return user.role});return user.language}const key='x';const matrix={[key]:permissions};const selected=matrix[outer()]`,
+    `function pageRole(){return user.language}const label=pageRole()`,
+    `function accessFor(){return theme.palette}applyTheme(accessFor())`,
+    `function canOpenDeploy(){return false}const visible=canOpenDeploy()`,
+    `function readOrder(){return order.id}const rows={a:payload};const selected=rows[readOrder()]`,
+    `const fixture="function readIdentity(){return user['role']} const granted=matrix[readIdentity()]"`,
+    `// function readIdentity(){return user['role']} const granted=matrix[readIdentity()]
+    const harmless=true`,
     `const serverMenus=user.menus;const allowed=serverMenus.some(item=>item.permission===requiredMenu)`,
     `const fixture="const roleKey='future_role'; const byRole={[roleKey]:menuSettings}"`,
     `const fixture="if(currentRole===x)return permissions"`,
