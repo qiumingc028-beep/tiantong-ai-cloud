@@ -16,62 +16,156 @@ const jsTrivia=String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*`;
 const jsIdentifier=String.raw`[A-Za-z_$][\w$]*`;
 const authorizationName=/(?:menu|permission|route|page|button|feature|flag|capabilit|privileg|entitl|grant|access|allow|canOpen)/i;
 const displayName=/(?:label|name|title|text|display)/i;
+const escapeRegex=value=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+const identifierToken=value=>String.raw`(?<![\w$])${escapeRegex(value)}(?![\w$])`;
+const identifierAlternation=values=>String.raw`(?:${[...values].map(identifierToken).join('|')})`;
 
 function findClientRoleAuthority(script){
-  const direct=script.match(clientRoleAuthority);
+  const maskNonExecutable=(source,maskStrings=true)=>{
+    const output=[...source];
+    let index=0;
+    const blank=position=>{if(output[position]!=='\r'&&output[position]!=='\n')output[position]=' '};
+    const scanQuoted=quote=>{
+      index++;
+      while(index<source.length){
+        if(source[index]==='\\'){
+          if(maskStrings)blank(index);
+          index++;
+          if(index<source.length){if(maskStrings)blank(index);index++}
+          continue;
+        }
+        if(source[index]===quote){index++;return}
+        if(maskStrings)blank(index);
+        index++;
+      }
+    };
+    const scanCode=templateExpression=>{
+      let braces=templateExpression?1:0;
+      while(index<source.length){
+        if(templateExpression&&source[index]==='{' ){braces++;index++;continue}
+        if(templateExpression&&source[index]==='}'&&--braces===0){index++;return}
+        if(source[index]==='/'&&source[index+1]==='/'){
+          blank(index++);blank(index++);
+          while(index<source.length&&source[index]!=='\r'&&source[index]!=='\n')blank(index++);
+          continue;
+        }
+        if(source[index]==='/'&&source[index+1]==='*'){
+          blank(index++);blank(index++);
+          while(index<source.length&&!(source[index]==='*'&&source[index+1]==='/'))blank(index++);
+          if(index<source.length){blank(index++);blank(index++)}
+          continue;
+        }
+        if(source[index]==="'"||source[index]==='"'){scanQuoted(source[index]);continue}
+        if(source[index]==='`'){
+          index++;
+          while(index<source.length&&source[index]!=='`'){
+            if(source[index]==='\\'){
+              if(maskStrings)blank(index);
+              index++;
+              if(index<source.length){if(maskStrings)blank(index);index++}
+              continue;
+            }
+            if(source[index]==='$'&&source[index+1]==='{'){index+=2;scanCode(true);continue}
+            if(maskStrings)blank(index);
+            index++;
+          }
+          if(source[index]==='`')index++;
+          continue;
+        }
+        index++;
+      }
+    };
+    scanCode(false);
+    return output.join('');
+  };
+  const structuralCode=maskNonExecutable(script);
+  const literalCode=maskNonExecutable(script,false);
+  const roleLookupCharacters=[...structuralCode];
+  const bracketRoleLiteral=/\[(?:\s)*(["'\x60])role(?:_?code)?\1(?:\s)*\]/gi;
+  for(const match of literalCode.matchAll(bracketRoleLiteral))
+    if(structuralCode[match.index]==='[')
+      for(let offset=0;offset<match[0].length;offset++)roleLookupCharacters[match.index+offset]=literalCode[match.index+offset];
+  const roleLookupCode=roleLookupCharacters.join('');
+  const direct=structuralCode.match(clientRoleAuthority);
   if(direct)return direct[0];
   const declarations=[];
-  const declarationPattern=new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}([^;]+)`,'g');
-  for(const match of script.matchAll(declarationPattern))declarations.push({name:match[1],value:match[2].trim()});
+  const declarationPattern=new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}([^;]+)`,'dg');
+  for(const match of structuralCode.matchAll(declarationPattern))
+    declarations.push({name:match[1],value:script.slice(...match.indices[2]).trim(),codeValue:structuralCode.slice(...match.indices[2]).trim(),literalValue:literalCode.slice(...match.indices[2]).trim()});
+  const assignments=[...declarations];
+  const assignmentPattern=new RegExp(String.raw`(?:^|[;\r\n])${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}([^;]+)`,'dg');
+  for(const match of structuralCode.matchAll(assignmentPattern))
+    assignments.push({name:match[1],value:script.slice(...match.indices[2]).trim(),codeValue:structuralCode.slice(...match.indices[2]).trim(),literalValue:literalCode.slice(...match.indices[2]).trim()});
   const quotedAuthorizationLiteral=value=>[...value.matchAll(/["'\x60]([^"'\x60]*)["'\x60]/g)]
     .some(match=>/\/[^'"]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b/i.test(match[1]));
-  const withoutStrings=value=>value.replace(/["'\x60][^"'\x60]*["'\x60]/g,'');
-  const containsAuthorizationLiteral=value=>quotedAuthorizationLiteral(value)||authorizationName.test(withoutStrings(value));
-  const authorizationIdentifiers=new Set(declarations.filter(({name,value})=>(authorizationName.test(name)&&!displayName.test(name))||containsAuthorizationLiteral(value)).map(({name})=>name));
-  const roleIdentifiers=new Set(['role','role_code']);
-  for(const match of script.matchAll(/\b(?:role[\w$]*|[A-Za-z_$][\w$]+role[\w$]*)\b/gi))roleIdentifiers.add(match[0]);
+  const containsAuthorizationLiteral=(literalValue,codeValue)=>quotedAuthorizationLiteral(literalValue)||authorizationName.test(codeValue);
+  const authorizationIdentifiers=new Set(declarations.filter(({name,literalValue,codeValue})=>(authorizationName.test(name)&&!displayName.test(name))||containsAuthorizationLiteral(literalValue,codeValue)).map(({name})=>name));
+  const roleIdentifiers=new Set(['role','role_code','roleCode']);
+  for(const match of structuralCode.matchAll(/\b(?:role[\w$]*|[A-Za-z_$][\w$]+role[\w$]*)\b/gi))roleIdentifiers.add(match[0]);
+  const normalizeExpression=value=>value.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g,'').trim().replace(/^\(([\s\S]*)\)$/,'$1').trim();
+  const roleFieldAliases=new Set();
   const destructuringPattern=new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}\{([\s\S]{0,200}?)\}${jsTrivia}=`,'g');
   const destructuredAliasPattern=new RegExp(String.raw`(${jsIdentifier})${jsTrivia}:${jsTrivia}(${jsIdentifier})`,'g');
-  for(const declaration of script.matchAll(destructuringPattern))
+  const destructuredFieldPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}(role(?:_?code)?)${jsTrivia}(?=,|$)`,'gi');
+  for(const declaration of structuralCode.matchAll(destructuringPattern)){
     for(const field of declaration[1].matchAll(destructuredAliasPattern))
       if(/role/i.test(field[1]))roleIdentifiers.add(field[2]);
+    for(const field of declaration[1].matchAll(destructuredFieldPattern))roleIdentifiers.add(field[1]);
+  }
+  const isRoleSource=value=>{
+    const normalized=normalizeExpression(value);
+    if(roleIdentifiers.has(normalized))return true;
+    if(new RegExp(String.raw`^${jsIdentifier}(?:\?\.|\.)role(?:_?code)?$`,'i').test(normalized))return true;
+    const bracket=normalized.match(new RegExp(String.raw`^${jsIdentifier}(?:\?\.)?\[${jsTrivia}(["'\x60]?)([^"' \x60\]]+)\1${jsTrivia}\]$`));
+    if(bracket&&(/^role(?:_?code)?$/i.test(bracket[2])||roleFieldAliases.has(bracket[2])))return true;
+    const call=normalized.match(new RegExp(String.raw`^(${jsIdentifier})${jsTrivia}\([^)]*\)$`));
+    return Boolean(call&&/role/i.test(call[1]));
+  };
   for(let changed=true;changed;){
     changed=false;
+    for(const {name,value} of assignments){
+      const normalized=normalizeExpression(value);
+      if((/^["'\x60]role(?:_?code)?["'\x60]$/i.test(normalized)||roleFieldAliases.has(normalized))&&!roleFieldAliases.has(name)){
+        roleFieldAliases.add(name);
+        changed=true;
+      }
+    }
     for(const {name,value} of declarations){
       const alias=value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`));
       if(alias&&(authorizationIdentifiers.has(alias[1])||(authorizationName.test(alias[1])&&!displayName.test(alias[1])))&&!authorizationIdentifiers.has(name)){
         authorizationIdentifiers.add(name);
         changed=true;
       }
-      const roleAlias=value.match(new RegExp(String.raw`^(?:${jsIdentifier}${jsTrivia}(?:\?\.|\.)${jsTrivia})?(${jsIdentifier})${jsTrivia}$`));
-      if(roleAlias&&roleIdentifiers.has(roleAlias[1])&&!roleIdentifiers.has(name)){
+    }
+    for(const {name,value} of assignments){
+      if(isRoleSource(value)&&!roleIdentifiers.has(name)){
         roleIdentifiers.add(name);
         changed=true;
       }
     }
   }
-  const expressionHasAuthority=value=>{
-    if(containsAuthorizationLiteral(value)||/\bmenu[A-Za-z0-9_$]*\b/i.test(value))return true;
-    return [...authorizationIdentifiers].some(name=>new RegExp(String.raw`\b${name}\b`).test(value));
+  const expressionHasAuthority=(literalValue,codeValue)=>{
+    if(containsAuthorizationLiteral(literalValue,codeValue)||/\bmenu[A-Za-z0-9_$]*\b/i.test(codeValue))return true;
+    return [...authorizationIdentifiers].some(name=>new RegExp(identifierToken(name)).test(codeValue));
   };
   const propertyKey=String.raw`(?:${jsIdentifier}|["'\x60][^"'\x60]+["'\x60]|\[[\s\S]+\])`;
   const propertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}`,'g');
   const shorthandPropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}${jsIdentifier}${jsTrivia}(?=,|$)`,'g');
   const serverRoutePropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}["']\/[^"']+\.html["']${jsTrivia}:${jsTrivia}["']menu\.[^"']+["']`,'g');
-  const roleExpression=[...roleIdentifiers].map(name=>String.raw`\b${name}\b`).join('|');
+  const roleExpression=identifierAlternation(roleIdentifiers);
   const simpleDisplayValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}["'\x60](?![^"'\x60]*(?:\/[^"'\x60]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b))[^"'\x60]*["'\x60]${jsTrivia},?)+$`);
-  const displayMetadataOnly=(name,body)=>{
+  const displayMetadataOnly=(name,body,literalBody,bodyCode)=>{
     if(simpleDisplayValues.test(body))return !authorizationName.test(name)||displayName.test(name);
     if(!displayName.test(name)&&!/metadata/i.test(name))return false;
-    if(quotedAuthorizationLiteral(body)||/\b(?:true|false)\b/i.test(body))return false;
+    if(quotedAuthorizationLiteral(literalBody)||/\b(?:true|false)\b/i.test(bodyCode))return false;
     if(displayName.test(name))return true;
-    const withoutDisplayFields=body.replace(/\b(?:menu|permission|route|page|button|feature|capability|grant|access)?(?:label|name|title|text|display)\b/gi,'');
+    const withoutDisplayFields=bodyCode.replace(/\b(?:menu|permission|route|page|button|feature|capability|grant|access)?(?:label|name|title|text|display)\b/gi,'');
     return !authorizationName.test(withoutDisplayFields);
   };
-  const roleDecisionHasAuthority=value=>{
+  const roleDecisionHasAuthority=(value,literalValue,codeValue)=>{
     if(/\breturn\s+(?:null|false|\[\])\b/.test(value))return false;
-    if(/\b(?:textContent|innerText|ariaLabel|roleLabel)\b/i.test(value)&&!quotedAuthorizationLiteral(value))return false;
-    return quotedAuthorizationLiteral(value)||authorizationName.test(withoutStrings(value))||/\b(?:privileg|entitl|can[A-Z]|allowed)\w*\b/.test(withoutStrings(value));
+    if(/\b(?:textContent|innerText|ariaLabel|roleLabel)\b/i.test(codeValue)&&!quotedAuthorizationLiteral(literalValue))return false;
+    return quotedAuthorizationLiteral(literalValue)||authorizationName.test(codeValue)||/\b(?:privileg|entitl|can[A-Z]|allowed)\w*\b/.test(codeValue);
   };
   const roleDecisionPatterns=[
     new RegExp(String.raw`\bswitch${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\)${jsTrivia}\{([\s\S]{0,500})\}`,'g'),
@@ -79,9 +173,9 @@ function findClientRoleAuthority(script){
     new RegExp(String.raw`(?:${roleExpression})${jsTrivia}(?:===|==)[^?:;\n]+[?:]([^;\n]{0,240})`,'g')
   ];
   for(const pattern of roleDecisionPatterns)
-    for(const match of script.matchAll(pattern))
-      if(roleDecisionHasAuthority(match[0]))return match[0];
-  const mappingAliases=new Map(declarations.map(({name,value})=>[name,value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1]]));
+    for(const match of structuralCode.matchAll(pattern))
+      if(roleDecisionHasAuthority(script.slice(match.index,match.index+match[0].length),literalCode.slice(match.index,match.index+match[0].length),match[0]))return match[0];
+  const mappingAliases=new Map(declarations.map(({name,codeValue})=>[name,codeValue.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1]]));
   const aliasesFor=source=>{
     const aliases=new Set([source]);
     for(let changed=true;changed;){
@@ -91,32 +185,37 @@ function findClientRoleAuthority(script){
     }
     return aliases;
   };
-  for(const {name,value} of declarations){
+  for(const {name,value,literalValue,codeValue} of declarations){
     const objectBody=value.match(new RegExp(String.raw`^${jsTrivia}(?:Object${jsTrivia}\.${jsTrivia}freeze${jsTrivia}\(${jsTrivia})?\{([\s\S]*)\}${jsTrivia}\)?${jsTrivia}$`));
+    const objectBodyLiteral=literalValue.match(new RegExp(String.raw`^${jsTrivia}(?:Object${jsTrivia}\.${jsTrivia}freeze${jsTrivia}\(${jsTrivia})?\{([\s\S]*)\}${jsTrivia}\)?${jsTrivia}$`));
+    const objectBodyCode=codeValue.match(new RegExp(String.raw`^${jsTrivia}(?:Object${jsTrivia}\.${jsTrivia}freeze${jsTrivia}\(${jsTrivia})?\{([\s\S]*)\}${jsTrivia}\)?${jsTrivia}$`));
     const mapExpression=new RegExp(String.raw`^${jsTrivia}new${jsTrivia}Map${jsTrivia}\(`).test(value);
     if(!objectBody&&!mapExpression)continue;
     const body=objectBody?objectBody[1]:value;
+    const bodyLiteral=objectBodyLiteral?objectBodyLiteral[1]:literalValue;
+    const bodyCode=objectBodyCode?objectBodyCode[1]:codeValue;
     if(objectBody&&!propertyPattern.test(body)&&!shorthandPropertyPattern.test(body))continue;
     propertyPattern.lastIndex=0;
     shorthandPropertyPattern.lastIndex=0;
     const roleStructured=/role/i.test(name);
     const authorizationStructured=authorizationName.test(name)&&!displayName.test(name);
-    const lookupNames=[...aliasesFor(name)].join('|');
-    const roleLookupExpression=String.raw`\b(?:${lookupNames})${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]*(?:${roleExpression})[^\]]*\]|\.${jsTrivia}get${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\))`;
-    const roleLookup=new RegExp(roleLookupExpression).test(script);
-    const lookupResults=[...script.matchAll(new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}${roleLookupExpression}`,'g'))].map(match=>match[1]);
+    const lookupNames=identifierAlternation(aliasesFor(name));
+    const roleLookupExpression=String.raw`${lookupNames}${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]*(?:${roleExpression})[^\]]*\]|\.${jsTrivia}get${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\))`;
+    const roleLookup=new RegExp(roleLookupExpression).test(roleLookupCode);
+    const lookupResults=[...roleLookupCode.matchAll(new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}${roleLookupExpression}`,'g'))].map(match=>match[1]);
     const lookupFeedsAuthority=lookupResults.some(result=>{
       if(authorizationName.test(result)&&!displayName.test(result))return true;
-      if(declarations.some(({name:target,value:expression})=>authorizationName.test(target)&&!displayName.test(target)&&new RegExp(String.raw`\b${result}\b`).test(expression)))return true;
-      return new RegExp(String.raw`\bif${jsTrivia}\([^)]*\b${result}\b[^)]*\)`).test(script);
+      if(declarations.some(({name:target,codeValue:expression})=>authorizationName.test(target)&&!displayName.test(target)&&new RegExp(identifierToken(result)).test(expression)))return true;
+      const conditional=structuralCode.match(new RegExp(String.raw`\bif${jsTrivia}\([^)]*${identifierToken(result)}[^)]*\)${jsTrivia}(?:\{[\s\S]{0,240}?\}|[^\n;]{0,240})`));
+      return Boolean(conditional&&roleDecisionHasAuthority(script.slice(conditional.index,conditional.index+conditional[0].length),literalCode.slice(conditional.index,conditional.index+conditional[0].length),conditional[0]));
     });
     const properties=objectBody?[...body.matchAll(propertyPattern),...body.matchAll(shorthandPropertyPattern)].length:0;
     propertyPattern.lastIndex=0;
     const serverRouteProperties=objectBody?[...body.matchAll(serverRoutePropertyPattern)].length:0;
     serverRoutePropertyPattern.lastIndex=0;
     if(properties>0&&serverRouteProperties===properties&&!roleLookup)continue;
-    const authoritativeValue=expressionHasAuthority(body)||/\b(?:true|false)\b/.test(body);
-    if(!displayMetadataOnly(name,body)&&((roleLookup&&(authoritativeValue||lookupFeedsAuthority))||(authoritativeValue&&(roleStructured||authorizationStructured))))return `${name}=${value}`;
+    const authoritativeValue=expressionHasAuthority(bodyLiteral,bodyCode)||/\b(?:true|false)\b/.test(bodyCode);
+    if(!displayMetadataOnly(name,body,bodyLiteral,bodyCode)&&((roleLookup&&(authoritativeValue||lookupFeedsAuthority))||(authoritativeValue&&(roleStructured||authorizationStructured))))return `${name}=${value}`;
   }
   return null;
 }
@@ -495,6 +594,29 @@ test('client role authority detector rejects authorization mappings but permits 
     `const roleKey='future_role';const source={[roleKey]:privileges};const alias=source;const granted=alias?.[getCurrentRole()]`,
     `const {role_code:key}=currentUser;const map={[getKey()]:payload};const selected=map[key];const permissions=selected.permissions`,
     `const key=currentUser.roleCode;const source={[getKey()]:payload};const selected=source?.[key];const privileges=selected.details`,
+    `const roleKey='future_role';const matrix={[roleKey]:menuSettings};const key=user['role'];const granted=matrix[key]`,
+    `const roleKey='future_role';const matrix={[roleKey]:'menu.settings'};const granted=matrix[user['role']]`,
+    `const roleKey='future_role';const matrix={[roleKey]:"permissions.read"};const granted=matrix[user?.["role"]]`,
+    'const roleKey="future_role";const matrix={[roleKey]:`routes.read`};const granted=matrix[profile?.[`roleCode`]]',
+    `const roleKey='future_role';const matrix={[roleKey]:menuSettings};const key=user["role"];const granted=matrix[key]`,
+    'const roleKey="future_role";const matrix={[roleKey]:menuSettings};const key=user[`role`];const granted=matrix[key]',
+    `const roleKey='future_role';const matrix={[roleKey]:permissions};const key=user?.role;const granted=matrix[key]`,
+    `const roleKey='future_role';const matrix={[roleKey]:routes};const key=user?.['role'];const granted=matrix[key]`,
+    `const roleKey='future_role';const matrix={[roleKey]:features};const key=currentUser['roleCode'];const granted=matrix[key]`,
+    `const roleKey='future_role';const matrix={[roleKey]:privileges};const key=sessionUser["role"];const granted=matrix[key]`,
+    'const roleKey="future_role";const matrix={[roleKey]:allowedActions};const key=profile?.[`roleCode`];const granted=matrix[key]',
+    `const roleKey='future_role';const matrix={[roleKey]:canAccess};let key;key=user['role'];const granted=matrix[key]`,
+    `const roleKey='future_role';const matrix={[roleKey]:permissions};let key=user.role;const alias=key;const granted=matrix[alias]`,
+    `const roleKey='future_role';const matrix={[roleKey]:routes};const {role:key}=user;const granted=matrix[key]`,
+    `const roleKey='future_role';const matrix={[roleKey]:features};const {roleCode}=currentUser;const granted=matrix[roleCode]`,
+    `const roleKey='future_role';const matrix={[roleKey]:privileges};const field='role';const key=user[field];const granted=matrix[key]`,
+    `const roleKey='future_role';const matrix={[roleKey]:permissions};const field='role';const alias=field;const key=user[alias];const granted=matrix[key]`,
+    `const roleKey='future_role';const matrix={[roleKey]:routes};let field;field='role';const key=user[field];const granted=matrix[key]`,
+    `const roleKey='future_role';const matrix=Object.freeze({[roleKey]:allowedActions});const key=getCurrentRole();const granted=matrix[key]`,
+    `const roleKey='future_role';const $matrix={[roleKey]:permissions};const $key=user['role'];const granted=$matrix[$key]`,
+    `const roleKey='future_role';const matrix={
+      /* computed */[roleKey]	:	menuSettings
+    };let key;key=/* source */user?.[/* field */'role'];const alias=key;const granted=matrix?.[alias]`,
     `const byRole={[keys[index]]:permissions};const granted=byRole[user.role]`,
     `const byRole={[roleKeys[getCurrentRole()]]:permissions};const granted=byRole[user.role]`,
     `const accessMatrix={future_role:permissionSet};const selected=accessMatrix[user.role]`,
@@ -515,6 +637,7 @@ test('client role authority detector rejects authorization mappings but permits 
     }`,
     `const permissionsByRole={future_role:'delete'};const permission=permissionsByRole[user.role]`,
     `const routesByRole={future_role:'/settings'};const route=routesByRole[user.role]`,
+    'const chosen=`${user.role===\'future_role\'?menuSettings:\'\'}`',
     'const permissionsByRole=new Map([[`future_role`,permissionSet]])',
     `const buttonsByRole={admin:{delete:true}}`,
     `const grants=new Map([['admin',['menu.settings']]])`,
@@ -546,8 +669,26 @@ test('client role authority detector rejects authorization mappings but permits 
     `const roleKey='future_role';const colorsByRole={[roleKey]:palette};const selected=colorsByRole[user.role]`,
     `const roleKey='future_role';const languagesByRole={[roleKey]:translation};const selected=languagesByRole[user.role]`,
     `const roleKey='future_role';const themesByRole={[keys[index]]:darkTheme};const selected=themesByRole[user.role]`,
+    `const labels={zh:'中文'};const selected=labels[user['language']]`,
+    `const themes={dark:palette};const selected=themes[user["theme"]]`,
+    `const field='language';const labels={zh:i18n.zh};const selected=labels[user[field]]`,
+    `const field='theme';const themes={[field]:palette};const selected=themes[user[field]]`,
+    `const roleKey='x';const themes={[roleKey]:darkTheme};const selected=themes[user.role];if(selected)applyTheme(selected)`,
+    `const themesByRole={future:darkTheme/* permissions */};const selected=themesByRole[user.role]`,
+    `const colorsByRole={future:palette/* menu.settings */};const selected=colorsByRole[user.role]`,
+    `const mapping={future:payload/* permission */};const selected=mapping[user.role]`,
+    `const themesByRole={future:darkTheme/* "menu.settings" */};const selected=themesByRole[user.role]`,
+    `const mapping={future:payload/* "/settings.html" */};const selected=mapping[user.role]`,
     `const serverMenus=user.menus;const allowed=serverMenus.some(item=>item.permission===requiredMenu)`,
     `const fixture="const roleKey='future_role'; const byRole={[roleKey]:menuSettings}"`,
+    `const fixture="if(currentRole===x)return permissions"`,
+    `// if(currentRole===x)return permissions
+    const harmless=true`,
+    `// const roleKey='future_role';const matrix={[roleKey]:permissions};const key=user['role'];const granted=matrix[key]
+    const harmless=true`,
+    `const fixture="const roleKey='future_role';const matrix={[roleKey]:permissions};const key=user['role'];const granted=matrix[key]"`,
+    `const fixture=\`safe
+    const roleKey='future_role';const matrix={[roleKey]:permissions};const key=user['role'];const granted=matrix[key]\``,
     `// const roleKey='future_role'; const byRole={[roleKey]:menuSettings}
     const harmless=true`,
     `if(user.role==='admin')label.textContent='管理员'`,
