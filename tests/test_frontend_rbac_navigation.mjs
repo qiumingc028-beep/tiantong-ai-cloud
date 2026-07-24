@@ -14,7 +14,7 @@ const clientRoleAuthority=new RegExp([
 ].join('|'),'i');
 const jsTrivia=String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*`;
 const jsIdentifier=String.raw`[A-Za-z_$][\w$]*`;
-const authorizationName=/(?:menu|permission|route|page|button|feature|capabilit|grant|access|allow|canOpen)/i;
+const authorizationName=/(?:menu|permission|route|page|button|feature|flag|capabilit|privileg|entitl|grant|access|allow|canOpen)/i;
 const displayName=/(?:label|name|title|text|display)/i;
 
 function findClientRoleAuthority(script){
@@ -29,6 +29,12 @@ function findClientRoleAuthority(script){
   const containsAuthorizationLiteral=value=>quotedAuthorizationLiteral(value)||authorizationName.test(withoutStrings(value));
   const authorizationIdentifiers=new Set(declarations.filter(({name,value})=>(authorizationName.test(name)&&!displayName.test(name))||containsAuthorizationLiteral(value)).map(({name})=>name));
   const roleIdentifiers=new Set(['role','role_code']);
+  for(const match of script.matchAll(/\b(?:role[\w$]*|[A-Za-z_$][\w$]+role[\w$]*)\b/gi))roleIdentifiers.add(match[0]);
+  const destructuringPattern=new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}\{([\s\S]{0,200}?)\}${jsTrivia}=`,'g');
+  const destructuredAliasPattern=new RegExp(String.raw`(${jsIdentifier})${jsTrivia}:${jsTrivia}(${jsIdentifier})`,'g');
+  for(const declaration of script.matchAll(destructuringPattern))
+    for(const field of declaration[1].matchAll(destructuredAliasPattern))
+      if(/role/i.test(field[1]))roleIdentifiers.add(field[2]);
   for(let changed=true;changed;){
     changed=false;
     for(const {name,value} of declarations){
@@ -48,7 +54,7 @@ function findClientRoleAuthority(script){
     if(containsAuthorizationLiteral(value)||/\bmenu[A-Za-z0-9_$]*\b/i.test(value))return true;
     return [...authorizationIdentifiers].some(name=>new RegExp(String.raw`\b${name}\b`).test(value));
   };
-  const propertyKey=String.raw`(?:${jsIdentifier}|["'\x60][^"'\x60]+["'\x60]|\[${jsTrivia}["'\x60][^"'\x60]+["'\x60]${jsTrivia}\])`;
+  const propertyKey=String.raw`(?:${jsIdentifier}|["'\x60][^"'\x60]+["'\x60]|\[[\s\S]+\])`;
   const propertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}`,'g');
   const shorthandPropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}${jsIdentifier}${jsTrivia}(?=,|$)`,'g');
   const serverRoutePropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}["']\/[^"']+\.html["']${jsTrivia}:${jsTrivia}["']menu\.[^"']+["']`,'g');
@@ -63,6 +69,7 @@ function findClientRoleAuthority(script){
     return !authorizationName.test(withoutDisplayFields);
   };
   const roleDecisionHasAuthority=value=>{
+    if(/\breturn\s+(?:null|false|\[\])\b/.test(value))return false;
     if(/\b(?:textContent|innerText|ariaLabel|roleLabel)\b/i.test(value)&&!quotedAuthorizationLiteral(value))return false;
     return quotedAuthorizationLiteral(value)||authorizationName.test(withoutStrings(value))||/\b(?:privileg|entitl|can[A-Z]|allowed)\w*\b/.test(withoutStrings(value));
   };
@@ -95,14 +102,21 @@ function findClientRoleAuthority(script){
     const roleStructured=/role/i.test(name);
     const authorizationStructured=authorizationName.test(name)&&!displayName.test(name);
     const lookupNames=[...aliasesFor(name)].join('|');
-    const roleLookup=new RegExp(String.raw`\b(?:${lookupNames})${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]*(?:${roleExpression})[^\]]*\]|\.${jsTrivia}get${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\))`).test(script);
+    const roleLookupExpression=String.raw`\b(?:${lookupNames})${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]*(?:${roleExpression})[^\]]*\]|\.${jsTrivia}get${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\))`;
+    const roleLookup=new RegExp(roleLookupExpression).test(script);
+    const lookupResults=[...script.matchAll(new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}${roleLookupExpression}`,'g'))].map(match=>match[1]);
+    const lookupFeedsAuthority=lookupResults.some(result=>{
+      if(authorizationName.test(result)&&!displayName.test(result))return true;
+      if(declarations.some(({name:target,value:expression})=>authorizationName.test(target)&&!displayName.test(target)&&new RegExp(String.raw`\b${result}\b`).test(expression)))return true;
+      return new RegExp(String.raw`\bif${jsTrivia}\([^)]*\b${result}\b[^)]*\)`).test(script);
+    });
     const properties=objectBody?[...body.matchAll(propertyPattern),...body.matchAll(shorthandPropertyPattern)].length:0;
     propertyPattern.lastIndex=0;
     const serverRouteProperties=objectBody?[...body.matchAll(serverRoutePropertyPattern)].length:0;
     serverRoutePropertyPattern.lastIndex=0;
     if(properties>0&&serverRouteProperties===properties&&!roleLookup)continue;
     const authoritativeValue=expressionHasAuthority(body)||/\b(?:true|false)\b/.test(body);
-    if(!displayMetadataOnly(name,body)&&(roleLookup||(authoritativeValue&&(roleStructured||authorizationStructured))))return `${name}=${value}`;
+    if(!displayMetadataOnly(name,body)&&((roleLookup&&(authoritativeValue||lookupFeedsAuthority))||(authoritativeValue&&(roleStructured||authorizationStructured))))return `${name}=${value}`;
   }
   return null;
 }
@@ -467,6 +481,22 @@ test('client role authority detector rejects authorization mappings but permits 
     `const catalog=menuSettings;const authorityByRole={future_role:catalog}`,
     `const catalog=['menu.settings'];const byRole={future_role:catalog}`,
     `const byRole={future_role:true}`,
+    `const roleKey='future_role';const byRole={[roleKey]:menuSettings};const granted=byRole[user.role]`,
+    `const byRole={[getRoleKey()]:permissions};const granted=byRole[user.role]`,
+    'const byRole={[`future_${suffix}`]:routes};const granted=byRole[user.role]',
+    `const byRole={[ROLE_CONSTANT]:features};const granted=byRole[user.role]`,
+    `const roleKey='future_role';const byRole=Object.freeze({[roleKey]:menuSettings});const granted=byRole[user.role]`,
+    `const roleKey='future_role';const source={
+      /* computed */ [ roleKey ]	:	menuSettings
+    };const byRole=source;const granted=byRole?.[user.role]`,
+    `const roleKey='future_role';const byRole={[roleKey]:permissions};const granted=byRole[currentUser.roleCode]`,
+    `const roleKey='future_role';const byRole={[roleKey]:routes};const granted=byRole[getCurrentRole()]`,
+    `const {role:currentRole}=currentUser;const roleKey='future_role';const byRole={[roleKey]:features};const granted=byRole[currentRole]`,
+    `const roleKey='future_role';const source={[roleKey]:privileges};const alias=source;const granted=alias?.[getCurrentRole()]`,
+    `const {role_code:key}=currentUser;const map={[getKey()]:payload};const selected=map[key];const permissions=selected.permissions`,
+    `const key=currentUser.roleCode;const source={[getKey()]:payload};const selected=source?.[key];const privileges=selected.details`,
+    `const byRole={[keys[index]]:permissions};const granted=byRole[user.role]`,
+    `const byRole={[roleKeys[getCurrentRole()]]:permissions};const granted=byRole[user.role]`,
     `const accessMatrix={future_role:permissionSet};const selected=accessMatrix[user.role]`,
     `const matrix={future_role:['orders.read']};const granted=matrix[user.role]`,
     `const matrix={future_role:flags};const chosen=matrix[user.role];if(chosen.export)open()`,
@@ -506,6 +536,20 @@ test('client role authority detector rejects authorization mappings but permits 
     `const labelsByRole={future_role:i18n.permissionManager};label.textContent=labelsByRole[user.role]`,
     `const roleMetadata={future_role:{menuLabel:translations.settings}}`,
     `const key=user.role;if(key==='future_role')label.textContent='Permission manager'`,
+    `const roleKey='future_role';const roleLabels={[roleKey]:i18n.futureRole};label.textContent=roleLabels[user.role]`,
+    `const themeKey='dark';const colors={[themeKey]:'#000'};const selected=colors[currentTheme]`,
+    `const localeKey='zh-CN';const languages={[localeKey]:'中文'};const selected=languages[currentLocale]`,
+    `const displayKey='future_role';const displayNames={[displayKey]:'未来角色'};label.textContent=displayNames[user.role]`,
+    `const objectKey=getObjectKey();const values={[objectKey]:payload};const selected=values[currentSelection]`,
+    `const key='x';const matrix={[key]:payload};const selected=matrix[user.role]`,
+    `const roleKey='future_role';const themesByRole={[roleKey]:darkTheme};const selected=themesByRole[user.role]`,
+    `const roleKey='future_role';const colorsByRole={[roleKey]:palette};const selected=colorsByRole[user.role]`,
+    `const roleKey='future_role';const languagesByRole={[roleKey]:translation};const selected=languagesByRole[user.role]`,
+    `const roleKey='future_role';const themesByRole={[keys[index]]:darkTheme};const selected=themesByRole[user.role]`,
+    `const serverMenus=user.menus;const allowed=serverMenus.some(item=>item.permission===requiredMenu)`,
+    `const fixture="const roleKey='future_role'; const byRole={[roleKey]:menuSettings}"`,
+    `// const roleKey='future_role'; const byRole={[roleKey]:menuSettings}
+    const harmless=true`,
     `if(user.role==='admin')label.textContent='管理员'`,
     `const label=user.role==='admin'?'管理员':'员工'`,
     `switch(user.role){case 'admin': return '管理员'; default: return '员工'}`,
