@@ -10,26 +10,6 @@
   </style>
 </head>
 <body class="auth-pending">
-<script type="text/plain" data-rbac-protected>
-(function(){
-  if (window.__tiantongFrontSecurity) return;
-  window.__tiantongFrontSecurity = true;
-  const rawFetch = window.fetch.bind(window);
-  let currentUser = null;
-  let redirecting = false;
-  function normalizeRole(user){const raw=String((user&&(user.role_code||user.role))||'').trim();return ({boss:'owner',owner:'owner',administrator:'admin'}[raw]||raw||'guest')}
-  function canOpenDeploy(user){return ['owner','boss','admin'].includes(normalizeRole(user))}
-  function clearClientAuth(){try{localStorage.removeItem('token');localStorage.removeItem('tiantong_token');localStorage.removeItem('session');localStorage.removeItem('tiantong_session');sessionStorage.clear()}catch(e){}}
-  function safeRedirect(url){if(redirecting)return;redirecting=true;setTimeout(function(){location.href=url},700)}
-  function showAccessDenied(){document.body.classList.remove('auth-pending');const nav=document.getElementById('menu');if(nav)nav.innerHTML='';const box=document.getElementById('pageState');if(box){box.className='state error';box.innerText='无权限访问部署中心。请使用 boss / owner / admin 账号访问。'}}
-  function applyRoleUI(user){currentUser=user||currentUser;if(!canOpenDeploy(currentUser)){showAccessDenied();return}document.body.classList.remove('auth-pending')}
-  async function verifyLogin(){try{const res=await rawFetch('/api/me',{credentials:'include'});if(res.status===401){clearClientAuth();safeRedirect('/login.html');return}if(res.status===403){showAccessDenied();return}if(!res.ok)throw new Error('登录状态检查失败');applyRoleUI(await res.json())}catch(e){document.body.classList.remove('auth-pending');const box=document.getElementById('pageState');if(box){box.className='state error';box.innerText=e.message||'登录状态检查失败，请刷新或重新登录。'}}}
-  window.fetch=async function(input,init){const res=await rawFetch(input,init);const url=typeof input==='string'?input:((input&&input.url)||'');if(url.includes('/api/')&&res.status===401){clearClientAuth();alert('登录已失效，请重新登录。');safeRedirect('/login.html')}if(url.includes('/api/')&&res.status===403){const data=await res.clone().json().catch(()=>({}));const box=document.getElementById('pageState');if(box){box.className='state error';box.innerText=data.detail||'无权限访问部署中心。'}showAccessDenied()}return res};
-  window.secureLogout=async function(){clearClientAuth();try{await rawFetch('/api/logout',{method:'POST',credentials:'include'})}catch(e){}location.href='/login.html'};
-  const keepLogoutSafe=setInterval(function(){window.logout=window.secureLogout},50);setTimeout(function(){clearInterval(keepLogoutSafe);window.logout=window.secureLogout},3000);
-  verifyLogin();
-})();
-</script>
 <div class="app">
   <aside class="sidebar"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main class="main">

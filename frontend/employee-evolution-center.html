@@ -90,8 +90,10 @@ async function api(url){
   return res.json();
 }
 
-function roleCode(){return String((state.user&&state.user.role_code)||(state.user&&state.user.role)||'').toLowerCase()}
-function isPrivileged(){return ['owner','admin','boss'].includes(roleCode())}
+function hasServerScope(){
+  const username=String((state.user&&state.user.username)||'');
+  return Boolean(username&&[...state.growth,...state.riskEvents].some(row=>row.employee_code&&row.employee_code!==username));
+}
 function employeeCode(){return state.activeEmployee||((state.user&&state.user.username)||'')}
 
 async function init(){
@@ -109,10 +111,10 @@ async function loadAll(){
   try{
     const growthData=await api('/api/employee-evolution/growth');
     state.growth=arr(obj(growthData).growth);
-    if(isPrivileged()&&state.growth.length&&!state.growth.some(row=>row.employee_code===state.activeEmployee)){
+    if(hasServerScope()&&state.growth.length&&!state.growth.some(row=>row.employee_code===state.activeEmployee)){
       state.activeEmployee=state.growth[0].employee_code;
     }
-    if(!isPrivileged())state.activeEmployee=state.user.username||state.activeEmployee;
+    if(!hasServerScope())state.activeEmployee=state.user.username||state.activeEmployee;
     await Promise.all([loadProfile(employeeCode(),false),loadRisks()]);
     pageState.className='state ok';pageState.innerText='AI员工成长中心已更新。';
   }catch(e){
@@ -136,7 +138,7 @@ async function loadRisks(){
 
 async function selectEmployee(code){
   state.activeEmployee=code;
-  if(!isPrivileged()&&code!==state.user.username){pageState.className='state error';pageState.innerText='只能查看自己的成长数据';return}
+  if(!hasServerScope()&&code!==state.user.username){pageState.className='state error';pageState.innerText='只能查看自己的成长数据';return}
   try{await loadProfile(code,false);pageState.className='state ok';pageState.innerText='员工成长档案已更新。'}
   catch(e){pageState.className='state error';pageState.innerText=e.message||'员工成长档案加载失败'}
   renderAll();
@@ -145,14 +147,14 @@ async function selectEmployee(code){
 function renderAll(){renderEmployeeSelect();renderSummary();renderGrowthGrid();renderTrend();renderScore();renderAnalysis();renderSkills();renderRisks();renderStaticBoxes()}
 
 function renderEmployeeSelect(){
-  if(isPrivileged()){
+  if(hasServerScope()){
     employeeSelect.disabled=false;
     employeeSelect.innerHTML=state.growth.length?state.growth.map(row=>`<option value="${esc(row.employee_code)}" ${row.employee_code===state.activeEmployee?'selected':''}>${esc(row.employee_code)}</option>`).join(''):'<option value="">暂无成长档案</option>';
   }else{
     employeeSelect.disabled=true;
     employeeSelect.innerHTML=`<option value="${esc(employeeCode())}">${esc(employeeCode())}</option>`;
   }
-  scopeBadge.outerHTML=isPrivileged()?'<span id="scopeBadge" class="badge owner">Owner/Admin/Boss · 全部员工</span>':'<span id="scopeBadge" class="badge">AI员工 · 仅本人</span>';
+  scopeBadge.outerHTML=hasServerScope()?'<span id="scopeBadge" class="badge owner">服务器授权 · 全部员工</span>':'<span id="scopeBadge" class="badge">仅本人</span>';
 }
 
 function activeGrowth(){
@@ -244,7 +246,7 @@ function renderSkills(){
 function filteredRisks(){
   const level=riskFilter.value;
   const code=employeeCode();
-  return state.riskEvents.filter(row=>(!code||row.employee_code===code||isPrivileged())&&(!level||row.risk_level===level)&&matchSearch(row));
+  return state.riskEvents.filter(row=>(!code||row.employee_code===code||hasServerScope())&&(!level||row.risk_level===level)&&matchSearch(row));
 }
 
 function renderRisks(){

@@ -6,6 +6,23 @@ import vm from 'node:vm';
 
 const guardScript=readFileSync(new URL('../frontend/rbac-navigation.js',import.meta.url),'utf8');
 const routePermissions=Object.fromEntries([...guardScript.matchAll(/'(\/[^']+\.html)':'(menu\.[^']+)'/g)].map(match=>[match[1],match[2]]));
+const authorityRole=String.raw`(?:owner|admin|administrator|boss|designer|operator|ads|service|customer_service|editor|finance|viewer|tianjian|tianjian_audit|security_auditor|auditor)`;
+const authorityOutput=String.raw`(?:menu|permission|\/[^'"]+\.html|button|action|access|grant|canOpen|allowed)`;
+const clientRoleAuthority=new RegExp([
+  String.raw`\bROLE_(?:ACCESS|MENUS?|PAGES?|PERMISSIONS?)\b`,
+  String.raw`\b(?:roleAccess|roleMenus|rolePages|rolePermissions)\b`,
+  String.raw`["']?${authorityRole}["']?\s*:\s*\[[^\]]*${authorityOutput}`,
+  String.raw`\b(?:const|let|var)\s+\w*(?:grant|access|menus?|pages?|buttons?|permissions?)\w*\s*=\s*\{[\s\S]{0,500}?["']?${authorityRole}["']?\s*:`,
+  String.raw`\bnew\s+Map\s*\(\s*\[\s*\[\s*["']${authorityRole}["']\s*,\s*\[[^\]]*${authorityOutput}`,
+  String.raw`\bswitch\s*\([^)]*\b(?:role|role_code)\b[^)]*\)\s*\{[\s\S]{0,500}?${authorityOutput}`,
+  String.raw`\b(?:role|role_code)\b\s*(?:===|==)\s*["'][^"']+["'][^\n;]{0,160}${authorityOutput}`,
+  String.raw`["'][^"']+["']\s*(?:===|==)\s*[^)\n;]*(?:\brole\b|\brole_code\b)[^\n;]{0,160}${authorityOutput}`,
+  String.raw`\bfunction\s+(?:accessFor|canOpenDeploy|isPrivileged|pageRole)\b`
+].join('|'),'i');
+
+function assertNoClientRoleAuthority(script,message){
+  assert.doesNotMatch(script,clientRoleAuthority,message);
+}
 
 const designer={role:'designer',role_code:'designer',menus:[
   {label:'AI素材中心',href:'/ai-assets.html',permission:'menu.ai_assets'},
@@ -331,11 +348,46 @@ test('activated page scripts contain no client role-to-route authority',()=>{
   const visit=dir=>readdirSync(dir,{withFileTypes:true}).flatMap(entry=>entry.isDirectory()?visit(new URL(`${entry.name}/`,dir)):[new URL(entry.name,dir)]);
   for(const file of visit(root).filter(file=>file.pathname.endsWith('.html'))){
     const html=readFileSync(file,'utf8');
-    for(const match of html.matchAll(/<script\b[^>]*data-rbac-protected[^>]*>([\s\S]*?)<\/script>/gi)){
-      const script=match[1];
-      if(script.includes('__tiantongFrontSecurity'))continue;
-      assert.doesNotMatch(script,/ROLE_ACCESS|pageRole|canOpenDeploy|function canOpen\([^)]*(?:role|r),href/,file.pathname);
-    }
+    for(const match of html.matchAll(/<script\b(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi))
+      assertNoClientRoleAuthority(match[1],file.pathname);
+  }
+  for(const file of visit(root).filter(file=>file.pathname.endsWith('.js')))
+    assertNoClientRoleAuthority(readFileSync(file,'utf8'),file.pathname);
+});
+
+test('client role authority detector rejects authorization mappings but permits display labels',()=>{
+  for(const script of [
+    `const ROLE_ACCESS={admin:['/settings.html']}`,
+    `const roleMenus={admin:['menu.settings']}`,
+    `const rolePages={designer:['/ai-assets.html']}`,
+    `const rolePermissions={owner:['users.write']}`,
+    `const grantsByRole={admin:['menu.settings']}`,
+    `const pagesFor={designer:['/ai-assets.html']}`,
+    `const grants={'admin':['menu.settings']}`,
+    `const grants={'finance':['menu.metrics']}`,
+    `const grants={administrator:['menu.settings']}`,
+    `const buttonsByRole={admin:{delete:true}}`,
+    `const grants=new Map([['admin',['menu.settings']]])`,
+    `switch(user.role){case 'admin': return ['/settings.html']}`,
+    `if(role==='admin')return adminMenus`,
+    `if('admin'===user.role)return adminMenus`,
+    `const menus=user.role==='admin'?adminMenus:[]`,
+    `function accessFor(role){return roleMenus[role]||adminMenus}`,
+    `function isPrivileged(){return role==='owner'}`
+  ])assert.throws(()=>assertNoClientRoleAuthority(script,'mutation'));
+  for(const script of [
+    `function roleCode(user){return user.role_code}; const roleLabels={owner:'老板',designer:'设计师'}; label.textContent=roleLabels[roleCode(user)]||user.role_label`,
+    `if(user.role==='admin')label.textContent='管理员'`,
+    `const label=user.role==='admin'?'管理员':'员工'`,
+    `switch(user.role){case 'admin': return '管理员'; default: return '员工'}`
+  ])assertNoClientRoleAuthority(script,'display labels');
+});
+
+test('server-returned rows, never page-open permission, prove broader employee scope',()=>{
+  for(const name of ['employee-evolution-center.html','review-learning-center.html']){
+    const html=readFileSync(new URL(`../frontend/${name}`,import.meta.url),'utf8');
+    assert.doesNotMatch(html,/function hasServerScope\(\)[^{]*\{[^}]*TiantongRbac\.canOpen/s,name);
+    assert.match(html,/function hasServerScope\(\)[\s\S]*?\.some\(row=>row\.employee_code&&row\.employee_code!==username\)/,name);
   }
 });
 
