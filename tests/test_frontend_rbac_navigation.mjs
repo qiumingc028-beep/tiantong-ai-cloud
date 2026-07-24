@@ -6,22 +6,109 @@ import vm from 'node:vm';
 
 const guardScript=readFileSync(new URL('../frontend/rbac-navigation.js',import.meta.url),'utf8');
 const routePermissions=Object.fromEntries([...guardScript.matchAll(/'(\/[^']+\.html)':'(menu\.[^']+)'/g)].map(match=>[match[1],match[2]]));
-const authorityRole=String.raw`(?:owner|admin|administrator|boss|designer|operator|ads|service|customer_service|editor|finance|viewer|tianjian|tianjian_audit|security_auditor|auditor)`;
 const authorityOutput=String.raw`(?:menu|permission|\/[^'"]+\.html|button|action|access|grant|canOpen|allowed)`;
 const clientRoleAuthority=new RegExp([
   String.raw`\bROLE_(?:ACCESS|MENUS?|PAGES?|PERMISSIONS?)\b`,
   String.raw`\b(?:roleAccess|roleMenus|rolePages|rolePermissions)\b`,
-  String.raw`["']?${authorityRole}["']?\s*:\s*\[[^\]]*${authorityOutput}`,
-  String.raw`\b(?:const|let|var)\s+\w*(?:grant|access|menus?|pages?|buttons?|permissions?)\w*\s*=\s*\{[\s\S]{0,500}?["']?${authorityRole}["']?\s*:`,
-  String.raw`\bnew\s+Map\s*\(\s*\[\s*\[\s*["']${authorityRole}["']\s*,\s*\[[^\]]*${authorityOutput}`,
-  String.raw`\bswitch\s*\([^)]*\b(?:role|role_code)\b[^)]*\)\s*\{[\s\S]{0,500}?${authorityOutput}`,
-  String.raw`\b(?:role|role_code)\b\s*(?:===|==)\s*["'][^"']+["'][^\n;]{0,160}${authorityOutput}`,
-  String.raw`["'][^"']+["']\s*(?:===|==)\s*[^)\n;]*(?:\brole\b|\brole_code\b)[^\n;]{0,160}${authorityOutput}`,
   String.raw`\bfunction\s+(?:accessFor|canOpenDeploy|isPrivileged|pageRole)\b`
 ].join('|'),'i');
+const jsTrivia=String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*`;
+const jsIdentifier=String.raw`[A-Za-z_$][\w$]*`;
+const authorizationName=/(?:menu|permission|route|page|button|feature|capabilit|grant|access|allow|canOpen)/i;
+const displayName=/(?:label|name|title|text|display)/i;
+
+function findClientRoleAuthority(script){
+  const direct=script.match(clientRoleAuthority);
+  if(direct)return direct[0];
+  const declarations=[];
+  const declarationPattern=new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}([^;]+)`,'g');
+  for(const match of script.matchAll(declarationPattern))declarations.push({name:match[1],value:match[2].trim()});
+  const quotedAuthorizationLiteral=value=>[...value.matchAll(/["'\x60]([^"'\x60]*)["'\x60]/g)]
+    .some(match=>/\/[^'"]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b/i.test(match[1]));
+  const withoutStrings=value=>value.replace(/["'\x60][^"'\x60]*["'\x60]/g,'');
+  const containsAuthorizationLiteral=value=>quotedAuthorizationLiteral(value)||authorizationName.test(withoutStrings(value));
+  const authorizationIdentifiers=new Set(declarations.filter(({name,value})=>(authorizationName.test(name)&&!displayName.test(name))||containsAuthorizationLiteral(value)).map(({name})=>name));
+  const roleIdentifiers=new Set(['role','role_code']);
+  for(let changed=true;changed;){
+    changed=false;
+    for(const {name,value} of declarations){
+      const alias=value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`));
+      if(alias&&(authorizationIdentifiers.has(alias[1])||(authorizationName.test(alias[1])&&!displayName.test(alias[1])))&&!authorizationIdentifiers.has(name)){
+        authorizationIdentifiers.add(name);
+        changed=true;
+      }
+      const roleAlias=value.match(new RegExp(String.raw`^(?:${jsIdentifier}${jsTrivia}(?:\?\.|\.)${jsTrivia})?(${jsIdentifier})${jsTrivia}$`));
+      if(roleAlias&&roleIdentifiers.has(roleAlias[1])&&!roleIdentifiers.has(name)){
+        roleIdentifiers.add(name);
+        changed=true;
+      }
+    }
+  }
+  const expressionHasAuthority=value=>{
+    if(containsAuthorizationLiteral(value)||/\bmenu[A-Za-z0-9_$]*\b/i.test(value))return true;
+    return [...authorizationIdentifiers].some(name=>new RegExp(String.raw`\b${name}\b`).test(value));
+  };
+  const propertyKey=String.raw`(?:${jsIdentifier}|["'\x60][^"'\x60]+["'\x60]|\[${jsTrivia}["'\x60][^"'\x60]+["'\x60]${jsTrivia}\])`;
+  const propertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}`,'g');
+  const shorthandPropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}${jsIdentifier}${jsTrivia}(?=,|$)`,'g');
+  const serverRoutePropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}["']\/[^"']+\.html["']${jsTrivia}:${jsTrivia}["']menu\.[^"']+["']`,'g');
+  const roleExpression=[...roleIdentifiers].map(name=>String.raw`\b${name}\b`).join('|');
+  const simpleDisplayValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}["'\x60](?![^"'\x60]*(?:\/[^"'\x60]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b))[^"'\x60]*["'\x60]${jsTrivia},?)+$`);
+  const displayMetadataOnly=(name,body)=>{
+    if(simpleDisplayValues.test(body))return !authorizationName.test(name)||displayName.test(name);
+    if(!displayName.test(name)&&!/metadata/i.test(name))return false;
+    if(quotedAuthorizationLiteral(body)||/\b(?:true|false)\b/i.test(body))return false;
+    if(displayName.test(name))return true;
+    const withoutDisplayFields=body.replace(/\b(?:menu|permission|route|page|button|feature|capability|grant|access)?(?:label|name|title|text|display)\b/gi,'');
+    return !authorizationName.test(withoutDisplayFields);
+  };
+  const roleDecisionHasAuthority=value=>{
+    if(/\b(?:textContent|innerText|ariaLabel|roleLabel)\b/i.test(value)&&!quotedAuthorizationLiteral(value))return false;
+    return quotedAuthorizationLiteral(value)||authorizationName.test(withoutStrings(value))||/\b(?:privileg|entitl|can[A-Z]|allowed)\w*\b/.test(withoutStrings(value));
+  };
+  const roleDecisionPatterns=[
+    new RegExp(String.raw`\bswitch${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\)${jsTrivia}\{([\s\S]{0,500})\}`,'g'),
+    new RegExp(String.raw`\bif${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\)${jsTrivia}(\{[\s\S]{0,240}?\}|[^\n;]{0,240})`,'g'),
+    new RegExp(String.raw`(?:${roleExpression})${jsTrivia}(?:===|==)[^?:;\n]+[?:]([^;\n]{0,240})`,'g')
+  ];
+  for(const pattern of roleDecisionPatterns)
+    for(const match of script.matchAll(pattern))
+      if(roleDecisionHasAuthority(match[0]))return match[0];
+  const mappingAliases=new Map(declarations.map(({name,value})=>[name,value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1]]));
+  const aliasesFor=source=>{
+    const aliases=new Set([source]);
+    for(let changed=true;changed;){
+      changed=false;
+      for(const [name,target] of mappingAliases)
+        if(target&&aliases.has(target)&&!aliases.has(name)){aliases.add(name);changed=true}
+    }
+    return aliases;
+  };
+  for(const {name,value} of declarations){
+    const objectBody=value.match(new RegExp(String.raw`^${jsTrivia}(?:Object${jsTrivia}\.${jsTrivia}freeze${jsTrivia}\(${jsTrivia})?\{([\s\S]*)\}${jsTrivia}\)?${jsTrivia}$`));
+    const mapExpression=new RegExp(String.raw`^${jsTrivia}new${jsTrivia}Map${jsTrivia}\(`).test(value);
+    if(!objectBody&&!mapExpression)continue;
+    const body=objectBody?objectBody[1]:value;
+    if(objectBody&&!propertyPattern.test(body)&&!shorthandPropertyPattern.test(body))continue;
+    propertyPattern.lastIndex=0;
+    shorthandPropertyPattern.lastIndex=0;
+    const roleStructured=/role/i.test(name);
+    const authorizationStructured=authorizationName.test(name)&&!displayName.test(name);
+    const lookupNames=[...aliasesFor(name)].join('|');
+    const roleLookup=new RegExp(String.raw`\b(?:${lookupNames})${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]*(?:${roleExpression})[^\]]*\]|\.${jsTrivia}get${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\))`).test(script);
+    const properties=objectBody?[...body.matchAll(propertyPattern),...body.matchAll(shorthandPropertyPattern)].length:0;
+    propertyPattern.lastIndex=0;
+    const serverRouteProperties=objectBody?[...body.matchAll(serverRoutePropertyPattern)].length:0;
+    serverRoutePropertyPattern.lastIndex=0;
+    if(properties>0&&serverRouteProperties===properties&&!roleLookup)continue;
+    const authoritativeValue=expressionHasAuthority(body)||/\b(?:true|false)\b/.test(body);
+    if(!displayMetadataOnly(name,body)&&(roleLookup||(authoritativeValue&&(roleStructured||authorizationStructured))))return `${name}=${value}`;
+  }
+  return null;
+}
 
 function assertNoClientRoleAuthority(script,message){
-  assert.doesNotMatch(script,clientRoleAuthority,message);
+  assert.equal(findClientRoleAuthority(script),null,message);
 }
 
 const designer={role:'designer',role_code:'designer',menus:[
@@ -366,6 +453,39 @@ test('client role authority detector rejects authorization mappings but permits 
     `const grants={'admin':['menu.settings']}`,
     `const grants={'finance':['menu.metrics']}`,
     `const grants={administrator:['menu.settings']}`,
+    `const byRole={regional_manager:menuSettings}`,
+    `const byRole={'unlisted_role':menuSettings}`,
+    `const byRole={"partner_operator":permissionSet}`,
+    'const byRole={[`tenant_role_v9`]:routeList}',
+    `const accessByRole/*map*/=/*open*/{/*key*/future_role/*colon*/:/*value*/permissionSet}`,
+    `const routesByRole={
+      // unlisted role
+      future_role:
+        routeList
+    }`,
+    `const featureFlagsByRole\t=\t{\tfuture_role\t:\ttrue\t}`,
+    `const catalog=menuSettings;const authorityByRole={future_role:catalog}`,
+    `const catalog=['menu.settings'];const byRole={future_role:catalog}`,
+    `const byRole={future_role:true}`,
+    `const accessMatrix={future_role:permissionSet};const selected=accessMatrix[user.role]`,
+    `const matrix={future_role:['orders.read']};const granted=matrix[user.role]`,
+    `const matrix={future_role:flags};const chosen=matrix[user.role];if(chosen.export)open()`,
+    `const key=user.role;const matrix={future_role:flags};const chosen=matrix[key]`,
+    `const matrix=new Map([['future_role',flags]]);const chosen=matrix.get(user.role)`,
+    `const source={future_role:flags};const matrix=source;const chosen=matrix[user.role]`,
+    `const matrix=Object.freeze({future_role:permissionSet});const chosen=matrix[user.role]`,
+    `const future_role=permissionSet;const matrix={future_role};const chosen=matrix[user.role]`,
+    `const matrix={future_role:flags};const chosen=matrix?.[user.role]`,
+    `const key=user.role;switch(key){case 'future_role':return menuSettings}`,
+    `const key=user.role;if(key==='future_role')return permissionSet`,
+    `const key=user?.role;if(
+      key==='future_role'
+    ){
+      return menuSettings
+    }`,
+    `const permissionsByRole={future_role:'delete'};const permission=permissionsByRole[user.role]`,
+    `const routesByRole={future_role:'/settings'};const route=routesByRole[user.role]`,
+    'const permissionsByRole=new Map([[`future_role`,permissionSet]])',
     `const buttonsByRole={admin:{delete:true}}`,
     `const grants=new Map([['admin',['menu.settings']]])`,
     `switch(user.role){case 'admin': return ['/settings.html']}`,
@@ -374,13 +494,25 @@ test('client role authority detector rejects authorization mappings but permits 
     `const menus=user.role==='admin'?adminMenus:[]`,
     `function accessFor(role){return roleMenus[role]||adminMenus}`,
     `function isPrivileged(){return role==='owner'}`
-  ])assert.throws(()=>assertNoClientRoleAuthority(script,'mutation'));
+  ])assert.throws(()=>assertNoClientRoleAuthority(script,script),script);
   for(const script of [
     `function roleCode(user){return user.role_code}; const roleLabels={owner:'老板',designer:'设计师'}; label.textContent=roleLabels[roleCode(user)]||user.role_label`,
+    `const byRole={future_role:'未来角色'}`,
+    'const roleLabels={`future_role`:`未来角色`}',
+    `const departmentMenuLabels={regional_manager:'区域经理'}`,
+    `const roleLabels={future_role:'Menu Manager'}`,
+    `const roleMetadata={future_role:{menuLabel:'Settings'}}`,
+    `const labelsByRole={future_role:'Permission manager'};label.textContent=labelsByRole[user.role]`,
+    `const labelsByRole={future_role:i18n.permissionManager};label.textContent=labelsByRole[user.role]`,
+    `const roleMetadata={future_role:{menuLabel:translations.settings}}`,
+    `const key=user.role;if(key==='future_role')label.textContent='Permission manager'`,
     `if(user.role==='admin')label.textContent='管理员'`,
     `const label=user.role==='admin'?'管理员':'员工'`,
-    `switch(user.role){case 'admin': return '管理员'; default: return '员工'}`
+    `switch(user.role){case 'admin': return '管理员'; default: return '员工'}`,
+    `const serverMenus=user.menus.filter(item=>item&&item.permission);const allowed=serverMenus.some(item=>item.permission===requiredMenu)`,
+    `const ROUTE_PERMISSIONS={'/settings.html':'menu.settings'};const permissions=new Set(user.menus.map(item=>item.permission));permissions.has(ROUTE_PERMISSIONS[path])`
   ])assertNoClientRoleAuthority(script,'display labels');
+  assert.doesNotMatch(`${clientRoleAuthority.source}\n${findClientRoleAuthority}`,/\b(?:owner|admin|designer|regional_manager)\b/i,'detector must not hardcode role names');
 });
 
 test('server-returned rows, never page-open permission, prove broader employee scope',()=>{
