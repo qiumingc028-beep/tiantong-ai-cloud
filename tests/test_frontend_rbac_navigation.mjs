@@ -163,7 +163,8 @@ function findClientRoleAuthority(script){
       }
     }
     const authoritativeValue=expressionHasAuthority(body,bodyStart)||((roleStructured||authorizationStructured)&&executableTest(/\b(?:true|false)\b/,body,bodyStart));
-    const memberCalls=executableMatches(new RegExp(String.raw`\b(${jsIdentifier})${jsTrivia}(?:(?:\.|\?\.)${jsTrivia}${jsIdentifier}|(?:\?\.${jsTrivia})?\[[^\]]+\])${jsTrivia}(?:\?\.${jsTrivia})?\(([^;\r\n]{0,400})\)`));
+    const memberSegment=String.raw`(?:(?:\.|\?\.)${jsTrivia}${jsIdentifier}|(?:\?\.${jsTrivia})?\[[^\]]+\])`;
+    const memberCalls=executableMatches(new RegExp(String.raw`\b(${jsIdentifier})(?:${jsTrivia}\([^;()\r\n]{0,200}\))?${jsTrivia}(?:${memberSegment}${jsTrivia})+(?:\?\.${jsTrivia})?\(([^;\r\n]{0,400})\)`));
     const lookupResultExpression=lookupResultIdentifiers.size?identifierAlternation(lookupResultIdentifiers):null;
     const memberAuthorizationSink=memberCalls.some(match=>
       (new RegExp(mappingLookupExpression).test(match[2])||(lookupResultExpression&&new RegExp(lookupResultExpression).test(match[2])))&&
@@ -591,6 +592,17 @@ test('client role authority detector rejects authorization mappings but permits 
     `const matrix={future_role:payload};let selected;selected=matrix[key];const permissions=selected.permissions;render(permissions)`,
     `const matrix={future_role:payload};renderPermissions(matrix[key])`,
     `const matrix={future:payload};allowedActions.add(matrix[condition?a:b])`,
+    `const matrix={future:payload};permissions.registry.current.add(matrix[user.role])`,
+    ...Array.from({length:9},(_,depth)=>`const mapping={future:permissions};receiver${Array.from({length:depth},(_,index)=>`.child${index}`).join('')}.method(mapping[key])`),
+    `const mapping={future:permissions};receiver${Array.from({length:32},(_,index)=>`.child${index}`).join('')}.method(mapping[key])`,
+    `const mapping={future:permissions};receiver["child"].current["method"](mapping[key])`,
+    `const mapping={future:permissions};receiver?.child?.current?.method?.(mapping[key])`,
+    `const mapping={future:permissions};getReceiver().registry.current.method(mapping[key])`,
+    `const mapping={future:permissions};receiver.child.method(firstArg,mapping[key],thirdArg)`,
+    `const mapping={future:permissions};const selected=mapping[key];receiver.child.current.method(selected)`,
+    `const mapping=Object.assign({}, {future:permissions});receiver.child.current.method(mapping[key])`,
+    `const mapping=Object.fromEntries([['future',routes]]);receiver.child.current.method(mapping[key])`,
+    `const mapping={future:permissions};receiver.child.current.method(mapping[key].nested)`,
     `const matrix={future:payload};permissions.add(matrix[key])`,
     `const mapping={future:payload};actions.push(mapping[selector])`,
     `const source={future:payload};grantedSet.add(source[condition?left:right])`,
@@ -697,6 +709,7 @@ test('client role authority detector rejects authorization mappings but permits 
     `const values={future:payload};formatter.write(values[key])`,
     `const messages={future:logEntry};logger.info(messages[key])`,
     `const copy={future:i18n.future};ui.render(copy[key])`,
+    `const copy={future:i18n.future};ui${Array.from({length:8},(_,index)=>`.layer${index}`).join('')}.render(copy[key])`,
     `const translations={future:i18n.future};logEntries.add(translations[key])`,
     `const labels={future:'Future'};displayList.add(labels[key])`,
     `const key='x';const matrix={[key]:payload};const selected=matrix[user.role]`,
