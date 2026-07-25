@@ -213,6 +213,211 @@ function findClientRoleAuthorityAst(script){
     const propertyKey=node.computed&&node.property.type==='Identifier'?resolveScopedBinding(node.property,node.property.name):null;
     return propertyKey&&fieldAliases.has(propertyKey)?fieldAliases.get(propertyKey):memberProperty(node);
   };
+  const staticPatternProperty=property=>{
+    if(!property.computed)return propertyName(property.key);
+    if(property.key.type==='Literal'||property.key.type==='TemplateLiteral'&&property.key.expressions.length===0)
+      return propertyName(property.key);
+    if(property.key.type==='Identifier'){
+      const key=resolveScopedBinding(property.key,property.key.name);
+      return fieldAliases.get(key)??null;
+    }
+    return null;
+  };
+  const patternPathBindings=(pattern,path=[])=>{
+    pattern=unwrap(pattern);
+    if(!pattern)return [];
+    if(pattern.type==='Identifier')return [{identifier:pattern,path}];
+    if(pattern.type==='AssignmentPattern')return patternPathBindings(pattern.left,path);
+    if(pattern.type==='RestElement')return patternPathBindings(pattern.argument,path);
+    if(pattern.type==='ObjectPattern'){
+      const extracted=[];
+      const result=[];
+      for(const property of pattern.properties){
+        if(property.type==='RestElement'){
+          result.push(...patternPathBindings(property.argument,[...path,{objectRest:[...extracted]}]));
+          continue;
+        }
+        const key=staticPatternProperty(property);
+        if(key===null)result.push(...patternPathBindings(property.value,[...path,{unknown:true}]));
+        else{
+          extracted.push(key);
+          result.push(...patternPathBindings(property.value,[...path,{property:key}]));
+        }
+      }
+      return result;
+    }
+    if(pattern.type==='ArrayPattern'){
+      const result=[];
+      pattern.elements.forEach((element,index)=>{
+        if(element?.type==='RestElement')
+          result.push(...patternPathBindings(element.argument,[...path,{arrayRest:index}]));
+        else result.push(...patternPathBindings(element,[...path,{index}]));
+      });
+      return result;
+    }
+    return [];
+  };
+  const dependencyKey=(index,path=[],trail=[])=>JSON.stringify([index,path,trail]);
+  const dependencyParts=dependency=>typeof dependency==='number'?[dependency,[],[]]:JSON.parse(dependency);
+  const appendDependencyPath=(dependencies,path)=>new Set([...dependencies].map(dependency=>{
+    const [index,current,trail]=dependencyParts(dependency);
+    return dependencyKey(index,[...current,...path],trail);
+  }));
+  const resolveObjectProperty=(input,key,seenBindings=new Set())=>{
+    const node=unwrap(input);
+    if(!node)return {status:'missing',values:[]};
+    if(node.type==='Identifier'){
+      const bindingKey=resolveScopedBinding(node,node.name);
+      const binding=bindings.find(candidate=>candidate.key===bindingKey&&candidate.value);
+      if(binding&&!seenBindings.has(bindingKey))
+        return resolveObjectProperty(binding.value,key,new Set(seenBindings).add(bindingKey));
+      return {
+        status:'unknown',
+        values:[{type:'MemberExpression',object:node,property:{type:'Literal',value:key},computed:true,optional:false}]
+      };
+    }
+    if(node.type==='Task229ObjectRest')
+      return node.excluded.includes(key)?
+        {status:'missing',values:[]}:
+        resolveObjectProperty(node.source,key,new Set(seenBindings));
+    if(node.type!=='ObjectExpression')return {
+      status:'unknown',
+      values:[{type:'MemberExpression',object:node,property:{type:'Literal',value:key},computed:true,optional:false}]
+    };
+    const uncertain=[];
+    for(let index=node.properties.length-1;index>=0;index--){
+      const property=node.properties[index];
+      if(property.type==='SpreadElement'){
+        const projection=resolveObjectProperty(property.argument,key,new Set(seenBindings));
+        if(projection.status==='found')return {status:'found',values:[...uncertain,...projection.values]};
+        if(projection.status==='unknown')uncertain.push(...projection.values);
+        continue;
+      }
+      const propertyKey=staticPatternProperty(property);
+      if(propertyKey===null)uncertain.push(property.value);
+      else if(propertyKey===key)return {status:'found',values:[...uncertain,property.value]};
+    }
+    return uncertain.length?{status:'unknown',values:uncertain}:{status:'missing',values:[]};
+  };
+  const projectObjectRest=(input,excluded,seenBindings=new Set())=>{
+    const node=unwrap(input);
+    if(!node)return null;
+    if(node.type==='Identifier'){
+      const key=resolveScopedBinding(node,node.name);
+      const binding=bindings.find(candidate=>candidate.key===key&&candidate.value);
+      if(binding&&!seenBindings.has(key))
+        return projectObjectRest(binding.value,excluded,new Set(seenBindings).add(key));
+    }
+    if(node.type!=='ObjectExpression')return {type:'Task229ObjectRest',source:node,excluded};
+    const properties=[];
+    for(const property of node.properties){
+      if(property.type==='SpreadElement'){
+        const projected=projectObjectRest(property.argument,excluded,new Set(seenBindings));
+        if(projected?.type==='ObjectExpression')properties.push(...projected.properties);
+        else if(projected)properties.push({type:'SpreadElement',argument:projected});
+      }else if(!excluded.includes(staticPatternProperty(property)))properties.push(property);
+    }
+    return {type:'ObjectExpression',properties};
+  };
+  const expandArrayElements=(input,seenBindings=new Set())=>{
+    const node=unwrap(input);
+    if(!node)return {elements:[],exact:true};
+    if(node.type==='Identifier'){
+      const key=resolveScopedBinding(node,node.name);
+      const binding=bindings.find(candidate=>candidate.key===key&&candidate.value);
+      if(binding&&!seenBindings.has(key))
+        return expandArrayElements(binding.value,new Set(seenBindings).add(key));
+    }
+    if(node.type!=='ArrayExpression')
+      return {elements:[{type:'Task229ArraySpread',source:node}],exact:false};
+    const elements=[];
+    let exact=true;
+    for(const element of node.elements){
+      if(element?.type==='SpreadElement'){
+        const expanded=expandArrayElements(element.argument,new Set(seenBindings));
+        elements.push(...expanded.elements);
+        exact&&=expanded.exact;
+      }else elements.push(element);
+    }
+    return {elements,exact};
+  };
+  const projectArrayIndex=(input,index,rest,seenBindings=new Set())=>{
+    const {elements,exact}=expandArrayElements(input,seenBindings);
+    if(exact)return rest?
+      {type:'ArrayExpression',elements:elements.slice(index)}:
+      elements[index]||null;
+    if(rest){
+      const projected=[];
+      let uncertain=false;
+      let minimumIndex=0;
+      elements.forEach(element=>{
+        if(element?.type==='Task229ArraySpread'){
+          uncertain=true;
+          projected.push({type:'SpreadElement',argument:element.source});
+        }else{
+          if(uncertain||minimumIndex>=index)projected.push(element);
+          minimumIndex++;
+        }
+      });
+      return {type:'ArrayExpression',elements:projected};
+    }
+    const candidates=[];
+    let uncertain=false;
+    let minimumIndex=0;
+    elements.forEach(element=>{
+      if(element?.type==='Task229ArraySpread'){
+        uncertain=true;
+        if(minimumIndex<=index)candidates.push(element.source);
+      }else{
+        if(minimumIndex===index||uncertain&&minimumIndex<=index)candidates.push(element);
+        minimumIndex++;
+      }
+    });
+    return candidates.length>1?{type:'ArrayExpression',elements:candidates}:candidates[0]||null;
+  };
+  const projectPath=(input,path,seenBindings=new Set())=>{
+    let node=unwrap(input);
+    for(let offset=0;offset<path.length;offset++){
+      const segment=path[offset];
+      if(!node)return null;
+      if(node.type==='Identifier'){
+        const key=resolveScopedBinding(node,node.name);
+        const binding=bindings.find(candidate=>candidate.key===key&&candidate.value);
+        if(binding&&!seenBindings.has(key)){
+          const nextSeen=new Set(seenBindings).add(key);
+          return projectPath(binding.value,path.slice(offset),nextSeen);
+        }
+      }
+      if(segment.argumentsFrom!==undefined)continue;
+      if(segment.unknown)return node;
+      if(segment.property!==undefined){
+        if(node.type==='ObjectExpression'){
+          const candidates=resolveObjectProperty(node,segment.property,new Set(seenBindings)).values;
+          if(candidates.length>1)return {
+            type:'ArrayExpression',
+            elements:candidates.map(candidate=>projectPath(candidate,path.slice(offset+1),new Set(seenBindings))).filter(Boolean)
+          };
+          node=candidates[0]||null;
+        }else node={type:'MemberExpression',object:node,property:{type:'Literal',value:segment.property},computed:true,optional:false};
+      }else if(segment.index!==undefined){
+        if(node.type==='ArrayExpression'||node.type==='Identifier')
+          node=projectArrayIndex(node,segment.index,false,new Set(seenBindings));
+        else node={type:'MemberExpression',object:node,property:{type:'Literal',value:segment.index},computed:true,optional:false};
+      }else if(segment.objectRest){
+        node=projectObjectRest(node,segment.objectRest,new Set(seenBindings));
+      }else if(segment.arrayRest!==undefined){
+        node=projectArrayIndex(node,segment.arrayRest,true,new Set(seenBindings));
+      }
+    }
+    return node;
+  };
+  const projectCallDependency=(call,dependency)=>{
+    const [index,path]=dependencyParts(dependency);
+    const argumentsFrom=path[0]?.argumentsFrom;
+    if(argumentsFrom!==undefined)
+      return projectPath({type:'ArrayExpression',elements:call.arguments.slice(argumentsFrom)},path.slice(1));
+    return projectPath(call.arguments[index],path);
+  };
   const objectMethods=[];
   const classMethods=[];
   const classInstances=[];
@@ -297,7 +502,8 @@ function findClientRoleAuthorityAst(script){
         let result=(roleReturningFunctions.has(target)?1:0)|
           (mappedReturningFunctions.has(target)?4:0)|
           (roleMappedReturningFunctions.has(target)?8:0);
-        for(const index of passThroughParameters.get(target)||[])result|=signal(node.arguments[index],new Set(seen));
+        for(const dependency of passThroughParameters.get(target)||[])
+          result|=signal(projectCallDependency(node,dependency),new Set(seen));
         for(const index of returnMapKeyParameters.get(target)||[]){
           result|=4;
           if(signal(node.arguments[index],new Set(seen))&1)result|=8;
@@ -502,34 +708,49 @@ function findClientRoleAuthorityAst(script){
     for(const value of source)if(!target.has(value)){target.add(value);changed=true}
     return changed;
   };
-  const argumentDependencies=(node,index,summary,dependencies)=>{
-    if(index>=node.arguments.length)return new Set();
-    const parameter=functions.get(localCallTarget(node))?.params[index];
-    if(parameter?.type==='RestElement'){
-      const result=new Set();
-      for(const argument of node.arguments.slice(index))addAll(result,dependencies(argument));
-      return result;
-    }
-    return dependencies(node.arguments[index]);
+  const argumentDependencies=(node,dependency,dependencies)=>
+    dependencies(projectCallDependency(node,dependency));
+  const callDependencies=(node,dependency,dependencies,caller)=>{
+    const [, ,calleeTrail]=dependencyParts(dependency);
+    if(calleeTrail.includes(caller))return new Set();
+    return new Set([...argumentDependencies(node,dependency,dependencies)].map(result=>{
+      const [index,path,callerTrail]=dependencyParts(result);
+      return dependencyKey(index,path,[...new Set([...calleeTrail,...callerTrail])]);
+    }));
   };
-  for(let changed=true;changed;){
+  for(let changed=true,remaining=functions.size+2;changed;){
+    if(remaining--===0)return 'UNRESOLVED_AUTHORIZATION_DATAFLOW';
     changed=false;
     for(const [name,fn] of functions){
       const scoped=functionNodes(fn).sort((left,right)=>left.start-right.start);
       const environment=new Map();
       fn.params.forEach((parameter,index)=>{
-        for(const identifier of patternIdentifiers(parameter))
-          environment.set(resolveScopedBinding(identifier,identifier.name),new Set([index]));
+        const root=parameter.type==='RestElement'?
+          patternPathBindings(parameter.argument,[{argumentsFrom:index}]):
+          patternPathBindings(parameter);
+        for(const {identifier,path} of root)
+          environment.set(resolveScopedBinding(identifier,identifier.name),new Set([dependencyKey(index,path,[name])]));
       });
       const dependencies=input=>{
         const node=unwrap(input);
         if(!node)return new Set();
         if(node.type==='Identifier')return new Set(environment.get(resolveScopedBinding(node,node.name))||[]);
+        if(node.type==='MemberExpression'){
+          const source=dependencies(node.object);
+          const parent=parents.get(node);
+          const callParent=parent?.type==='ChainExpression'?parents.get(parent):parent;
+          if(callParent?.type==='CallExpression'&&unwrap(callParent.callee)===node)return source;
+          const property=staticMemberProperty(node);
+          if(property===null)return source;
+          const segment=node.computed&&node.property.type==='Literal'&&typeof node.property.value==='number'?
+            {index:node.property.value}:{property};
+          return appendDependencyPath(source,[segment]);
+        }
         if(node.type==='CallExpression'){
           const summary=parameterSummaries.get(localCallTarget(node));
           if(summary){
             const result=new Set();
-            for(const index of summary.returns)addAll(result,argumentDependencies(node,index,summary,dependencies));
+            for(const dependency of summary.returns)addAll(result,callDependencies(node,dependency,dependencies,name));
             return result;
           }
         }
@@ -542,8 +763,8 @@ function findClientRoleAuthorityAst(script){
       for(const node of scoped){
         if(node.type==='VariableDeclarator'&&node.init){
           const source=dependencies(node.init);
-          for(const identifier of patternIdentifiers(node.id))
-            environment.set(resolveScopedBinding(identifier,identifier.name),new Set(source));
+          for(const {identifier,path} of patternPathBindings(node.id))
+            environment.set(resolveScopedBinding(identifier,identifier.name),appendDependencyPath(source,path));
         }
         if(node.type==='AssignmentExpression'&&node.operator==='='){
           const source=dependencies(node.right);
@@ -571,7 +792,7 @@ function findClientRoleAuthorityAst(script){
         }
         if(node.type==='CallExpression'){
           const summary=parameterSummaries.get(localCallTarget(node));
-          if(summary)for(const index of summary.effects)addAll(nextEffects,argumentDependencies(node,index,summary,dependencies));
+          if(summary)for(const dependency of summary.effects)addAll(nextEffects,callDependencies(node,dependency,dependencies,name));
           const callee=unwrap(node.callee);
           let rootObject=callee?.type==='MemberExpression'?unwrap(callee.object):null;
           while(rootObject?.type==='MemberExpression')rootObject=unwrap(rootObject.object);
@@ -622,7 +843,7 @@ function findClientRoleAuthorityAst(script){
     if(node.type==='CallExpression'&&isDirectMappedAuthorizationCall(node))return text(node);
     if(node.type==='CallExpression'){
       const summary=parameterSummaries.get(localCallTarget(node));
-      if(summary&&[...summary.effects].some(index=>signal(node.arguments[index])&8))return text(node);
+      if(summary&&[...summary.effects].some(dependency=>signal(projectCallDependency(node,dependency))&8))return text(node);
     }
   }
   return null;
@@ -636,6 +857,8 @@ const task223OriginalMutation=Buffer.from(
   'Y29uc3QgYWNjZXNzPXtmdXR1cmU6dHJ1ZX07ZnVuY3Rpb24gcmV2ZWFsKGFsbG93ZWQpe2lmKGFsbG93ZWQpcGFnZS5oaWRkZW49ZmFsc2V9cmV2ZWFsKGFjY2Vzc1t1c2VyLnJvbGVdKQo=',
   'base64'
 ).toString('utf8');
+const task228BlockerReproduction=
+  'const access={future:true};function reveal({allowed}){if(allowed)page.hidden=false}reveal({allowed:false,decoy:access[user.role]})';
 
 const designer={role:'designer',role_code:'designer',menus:[
   {label:'AI素材中心',href:'/ai-assets.html',permission:'menu.ai_assets'},
@@ -974,6 +1197,11 @@ test('client role authority detector rejects authorization mappings but permits 
     '5999c5bf96780defeb2b060d82a8781436df4e08c5277e3de995a3fd7471bd27'
   );
   assert.notEqual(findClientRoleAuthorityAst(task223OriginalMutation),null,'Task223 original mutation');
+  assert.equal(
+    createHash('sha256').update(task228BlockerReproduction).digest('hex'),
+    '095d82fc964e0a6732f3e3b7a6ce95e8e6d46813cd2840309a875cbe33f30b39'
+  );
+  assertNoClientRoleAuthority(task228BlockerReproduction,'Task228 original false positive');
   const parameterEffectPositiveCases=[
     `const access={future:true};function reveal(allowed){page.hidden=!allowed}reveal(access[user.role])`,
     `const access={future:true};function reveal(allowed){const alias=allowed;const next=alias;if(next)page.hidden=false}reveal(access[user.role])`,
@@ -1005,7 +1233,23 @@ test('client role authority detector rejects authorization mappings but permits 
     `const access={future:true};function first(){class Gate{reveal(value){if(value)page.hidden=false}}const gate=new Gate;gate.reveal(access[user.role])}function second(){class Gate{reveal(value){console.log(value)}}}first()`,
     `const access={future:true};function first(){const selected=access[user.role];if(selected)page.hidden=false}function second(){const selected=false;console.log(selected)}first()`,
     `const access={future:true};function reveal(value){{const selected=value;if(selected)page.hidden=false}{const selected=false;console.log(selected)}}reveal(access[user.role])`,
-    `const access={future:true};function f(){if(condition){var selected=access[user.role]}if(selected)page.hidden=false}f()`
+    `const access={future:true};function f(){if(condition){var selected=access[user.role]}if(selected)page.hidden=false}f()`,
+    `const access={future:true};function reveal({allowed}){if(allowed)page.hidden=false}reveal({allowed:access[user.role]})`,
+    `const access={future:true};function reveal({allowed:canView}){if(canView)page.hidden=false}reveal({allowed:access[user.role]})`,
+    `const access={future:true};function reveal({permissions:{allowed}}){if(allowed)page.hidden=false}reveal({permissions:{allowed:access[user.role]}})`,
+    `const access={future:true};function reveal([ignored,allowed]){if(allowed)page.hidden=false}reveal([false,access[user.role]])`,
+    `const access={future:true};function reveal([ignored,allowed]){if(allowed)page.hidden=false}reveal([...[false,access[user.role]]])`,
+    `const access={future:true};function reveal([a,b,c,allowed]){if(allowed)page.hidden=false}reveal([false,...items,access[user.role]])`,
+    `const access={future:true};function reveal({allowed=false}){if(allowed)page.hidden=false}reveal({allowed:access[user.role]})`,
+    `const access={future:true};function reveal({visible,...rest}){if(rest.allowed)page.hidden=false}reveal({visible:false,allowed:access[user.role]})`,
+    `const access={future:true};function reveal({visible,...rest}){if(rest.granted)page.hidden=false}reveal({...{visible:false,granted:access[user.role]}})`,
+    `const access={future:true};function reveal([ignored,...rest]){if(rest[0])page.hidden=false}reveal([false,access[user.role]])`,
+    `const access={future:true};function reveal([ignored,...rest]){if(rest[0])page.hidden=false}reveal([...[false,access[user.role]]])`,
+    `const access={future:true};const field='allowed';function reveal({[field]:canView}){if(canView)page.hidden=false}reveal({allowed:access[user.role]})`,
+    `const access={future:true};const input={allowed:access[user.role]};function reveal({allowed}){if(allowed)page.hidden=false}reveal(input)`,
+    `const access={future:true};function reveal({allowed}){if(allowed)page.hidden=false}reveal({allowed:false,...{allowed:access[user.role]}})`,
+    `const access={future:true};function reveal({allowed}){if(allowed)page.hidden=false}reveal({allowed:access[user.role],...extra})`,
+    `const access={future:true};function reveal({allowed}){if(allowed)page.hidden=false}reveal({allowed:access[user.role],[dynamic]:false})`
   ];
   for(const script of parameterEffectPositiveCases)
     assert.notEqual(findClientRoleAuthorityAst(script),null,script);
@@ -1026,6 +1270,20 @@ test('client role authority detector rejects authorization mappings but permits 
     `const access={future:true};function reveal(value){let selected=value;selected=false;if(selected)page.hidden=false}reveal(access[user.role])`,
     `const access={future:true};function reveal(value){{const value=false;if(value)page.hidden=false}}reveal(access[user.role])`,
     `const selected=access[user.role];try{throw false}catch(selected){if(selected)page.hidden=false}`,
+    `const access={future:true};function reveal({allowed:{value}}){if(value)page.hidden=false}reveal({allowed:{value:false},decoy:{value:access[user.role]}})`,
+    `const access={future:true};function reveal([allowed]){if(allowed)page.hidden=false}reveal([false,access[user.role]])`,
+    `const access={future:true};function reveal([ignored,allowed]){if(allowed)page.hidden=false}reveal([...[access[user.role],false]])`,
+    `const access={future:true};function reveal([allowed]){if(allowed)page.hidden=false}reveal([false,...items,access[user.role]])`,
+    `const access={future:true};function reveal([ignored,...rest]){if(rest[0])page.hidden=false}reveal([...[access[user.role],false]])`,
+    `const access={future:true};function reveal({allowed:canView}){if(canView)page.hidden=false}reveal({allowed:false,decoy:access[user.role]})`,
+    `const access={future:true};function reveal({allowed=false}){if(allowed)page.hidden=false}reveal({decoy:access[user.role]})`,
+    `const access={future:true};function reveal({allowed,...rest}){if(allowed)page.hidden=false}reveal({allowed:false,decoy:access[user.role]})`,
+    `const access={future:true};function reveal({allowed,...rest}){if(rest.allowed)page.hidden=false}reveal({...{allowed:access[user.role]}})`,
+    `const access={future:true};const field='allowed';function reveal({[field]:canView}){if(canView)page.hidden=false}reveal({allowed:false,decoy:access[user.role]})`,
+    `const access={future:true};const input={allowed:false,decoy:access[user.role]};function reveal({allowed}){if(allowed)page.hidden=false}reveal(input)`,
+    `const access={future:true};function reveal({allowed}){if(allowed)page.hidden=false}reveal({...{allowed:access[user.role]},allowed:false})`,
+    `const access={future:true};function reveal({allowed}){if(allowed)page.hidden=false}reveal({...extra,allowed:false,decoy:access[user.role]})`,
+    `const access={future:true};function reveal({allowed}){if(allowed)page.hidden=false}reveal({[dynamic]:access[user.role],allowed:false})`,
     `function render(items){items.forEach(draw)}render(user.menus)`
   ];
   for(const script of parameterEffectNegativeCases)assertNoClientRoleAuthority(script,script);
