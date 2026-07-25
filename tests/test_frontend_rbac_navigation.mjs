@@ -13,7 +13,7 @@ const clientRoleAuthority=new RegExp([
 ].join('|'),'i');
 const jsTrivia=String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*`;
 const jsIdentifier=String.raw`[A-Za-z_$][\w$]*`;
-const authorizationName=/(?:menu|permission|route|page|button|feature|flag|capabilit|privileg|entitl|grant|access|allow|canOpen)/i;
+const authorizationName=/(?:menu|permission|route|page|button|feature|flag|capabilit|privileg|entitl|grant|access|allow|canOpen|\baction)/i;
 const displayName=/(?:label|name|title|text|display)/i;
 const escapeRegex=value=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const identifierToken=value=>String.raw`(?<![\w$])${escapeRegex(value)}(?![\w$])`;
@@ -82,7 +82,7 @@ function findClientRoleAuthority(script){
         changed=true;
       }
     }
-    for(const {name,value} of declarations){
+    for(const {name,value} of assignments){
       const alias=value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`));
       if(alias&&(authorizationIdentifiers.has(alias[1])||(authorizationName.test(alias[1])&&!displayName.test(alias[1])))&&!authorizationIdentifiers.has(name)){
         authorizationIdentifiers.add(name);
@@ -154,19 +154,34 @@ function findClientRoleAuthority(script){
     const mappingLookupExpression=String.raw`${lookupNames}${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]+\]|\.${jsTrivia}get${jsTrivia}\([^)]*\))`;
     const mappingLookup=executableMatches(new RegExp(mappingLookupExpression)).length>0;
     const lookupResults=assignments.filter(({value})=>new RegExp(String.raw`^${mappingLookupExpression}`).test(value)).map(({name})=>name);
+    const lookupResultIdentifiers=new Set(lookupResults);
+    for(let changed=true;changed;){
+      changed=false;
+      for(const {name,value} of assignments){
+        const alias=value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1];
+        if(alias&&lookupResultIdentifiers.has(alias)&&!lookupResultIdentifiers.has(name)){lookupResultIdentifiers.add(name);changed=true}
+      }
+    }
+    const authoritativeValue=expressionHasAuthority(body,bodyStart)||((roleStructured||authorizationStructured)&&executableTest(/\b(?:true|false)\b/,body,bodyStart));
+    const memberCalls=executableMatches(new RegExp(String.raw`\b(${jsIdentifier})${jsTrivia}(?:(?:\.|\?\.)${jsTrivia}${jsIdentifier}|(?:\?\.${jsTrivia})?\[[^\]]+\])${jsTrivia}(?:\?\.${jsTrivia})?\(([^;\r\n]{0,400})\)`));
+    const lookupResultExpression=lookupResultIdentifiers.size?identifierAlternation(lookupResultIdentifiers):null;
+    const memberAuthorizationSink=memberCalls.some(match=>
+      (new RegExp(mappingLookupExpression).test(match[2])||(lookupResultExpression&&new RegExp(lookupResultExpression).test(match[2])))&&
+      (authoritativeValue||authorizationIdentifiers.has(match[1])||(authorizationName.test(match[1])&&!displayName.test(match[1])))
+    );
+    const standaloneAuthorizationSink=executableMatches(new RegExp(String.raw`\b(${jsIdentifier})${jsTrivia}\([^;\r\n]{0,240}?${mappingLookupExpression}`))
+      .some(match=>!new RegExp(String.raw`(?:\.|\?\.)${jsTrivia}$`).test(script.slice(0,match.index))&&authorizationName.test(match[1])&&!displayName.test(match[1]));
     const lookupFeedsAuthority=lookupResults.some(result=>{
       if(authorizationName.test(result)&&!displayName.test(result))return true;
       if(declarations.some(({name:target,value:expression,start:expressionStart})=>authorizationName.test(target)&&!displayName.test(target)&&executableTest(new RegExp(identifierToken(result)),expression,expressionStart)))return true;
       const conditional=executableMatches(new RegExp(String.raw`\bif${jsTrivia}\([^)]*${identifierToken(result)}[^)]*\)${jsTrivia}(?:\{[\s\S]{0,240}?\}|[^\n;]{0,240})`))[0];
       return Boolean(conditional&&roleDecisionHasAuthority(conditional[0],conditional.index));
-    })||executableMatches(new RegExp(String.raw`\b(${jsIdentifier})${jsTrivia}\([^;\r\n]{0,240}?${mappingLookupExpression}`))
-      .some(match=>authorizationName.test(match[1])&&!displayName.test(match[1]));
+    })||standaloneAuthorizationSink||memberAuthorizationSink;
     const properties=objectBody?[...body.matchAll(propertyPattern),...body.matchAll(shorthandPropertyPattern)].length:0;
     propertyPattern.lastIndex=0;
     const serverRouteProperties=objectBody?[...body.matchAll(serverRoutePropertyPattern)].length:0;
     serverRoutePropertyPattern.lastIndex=0;
     if(properties>0&&serverRouteProperties===properties)continue;
-    const authoritativeValue=expressionHasAuthority(body,bodyStart)||((roleStructured||authorizationStructured)&&executableTest(/\b(?:true|false)\b/,body,bodyStart));
     if(!displayMetadataOnly(name,body,bodyStart)&&((mappingLookup&&(authoritativeValue||lookupFeedsAuthority))||(authoritativeValue&&(roleStructured||authorizationStructured))))return `${name}=${value}`;
   }
   return null;
@@ -575,6 +590,20 @@ test('client role authority detector rejects authorization mappings but permits 
     `const matrix=Object.fromEntries([['future_role',routes]]);const granted=matrix[key]`,
     `const matrix={future_role:payload};let selected;selected=matrix[key];const permissions=selected.permissions;render(permissions)`,
     `const matrix={future_role:payload};renderPermissions(matrix[key])`,
+    `const matrix={future:payload};allowedActions.add(matrix[condition?a:b])`,
+    `const matrix={future:payload};permissions.add(matrix[key])`,
+    `const mapping={future:payload};actions.push(mapping[selector])`,
+    `const source={future:payload};grantedSet.add(source[condition?left:right])`,
+    `const mapping={future:permissions};receiver.method(mapping[key])`,
+    `const mapping={future:permissions};optionalReceiver?.method?.(mapping[key])`,
+    `const mapping={future:payload};const selected=mapping[key];allowedActions.add(selected)`,
+    `const mapping={future:payload};const selected=mapping[key];const alias=selected;allowedActions.add(alias)`,
+    `const mapping={future:payload};const sink=allowedActions;sink.method(mapping[key])`,
+    `const mapping={future:payload};let sink;sink=allowedActions;sink.method(mapping[key])`,
+    `const mapping={future:permissions};receiver.method(context,mapping[key])`,
+    `const mapping={future:permissions};receiver[operation](mapping[key])`,
+    `const mapping=Object.assign({}, {future:permissions});receiver.method(mapping[key])`,
+    `const mapping=Object.fromEntries([['future',routes]]);receiver.method(mapping[key])`,
     `const matrix={future_role:payload};const filteredMenus=matrix[key].filter(canSee);render(filteredMenus)`,
     `function x(){return user.role}const roleKey='future_role';const matrix={[roleKey]:permissions};const key=x();const granted=matrix[key]`,
     `const x=function(){return currentUser['roleCode']};const roleKey='future_role';const matrix={[roleKey]:routes};const key=x();const granted=matrix[key]`,
@@ -662,6 +691,14 @@ test('client role authority detector rejects authorization mappings but permits 
     `const preferences={compact:true,animations:false};const enabled=preferences[key]`,
     `const themes=Object.assign({}, {dark:darkTheme});applyTheme(themes[key])`,
     `const colors=Object.fromEntries([['brand',palette]]);applyColors(colors[key])`,
+    `const values={future:payload};items.push(values[key])`,
+    `const values={future:payload};items.allow(values[key])`,
+    `const values={future:payload};transactions.push(values[key])`,
+    `const values={future:payload};formatter.write(values[key])`,
+    `const messages={future:logEntry};logger.info(messages[key])`,
+    `const copy={future:i18n.future};ui.render(copy[key])`,
+    `const translations={future:i18n.future};logEntries.add(translations[key])`,
+    `const labels={future:'Future'};displayList.add(labels[key])`,
     `const key='x';const matrix={[key]:payload};const selected=matrix[user.role]`,
     `const roleKey='future_role';const themesByRole={[roleKey]:darkTheme};const selected=themesByRole[user.role]`,
     `const roleKey='future_role';const colorsByRole={[roleKey]:palette};const selected=colorsByRole[user.role]`,
