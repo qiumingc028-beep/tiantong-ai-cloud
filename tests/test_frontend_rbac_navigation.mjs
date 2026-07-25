@@ -13,8 +13,14 @@ const clientRoleAuthority=new RegExp([
 ].join('|'),'i');
 const jsTrivia=String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*`;
 const jsIdentifier=String.raw`[A-Za-z_$][\w$]*`;
-const authorizationName=/(?:menu|permission|route|page|button|feature|flag|capabilit|privileg|entitl|grant|access|allow|canOpen|\baction)/i;
+const authorizationName=/(?:menu|permission|route|page|button|feature|flag|capabilit|privileg|entitl|grant|access|allow|\baction)/i;
+const camelAuthorizationName=/\bcan[A-Z]/;
 const displayName=/(?:label|name|title|text|display)/i;
+const identifierHasAuthority=name=>
+  /(?:^|_)(?:menus?|permissions?|routes?|pages?|buttons?|features?|flags?|capabilit(?:y|ies)|privileges?|entitlements?|grants?|access|allows?|actions?)(?:_|$)/i.test(name)||
+  /^(?:menus?|permissions?|routes?|pages?|buttons?|features?|flags?|capabilities|privileges?|entitlements?|grants?|granted|access|allows?|allowed|actions?)(?:[A-Z]|$)/.test(name)||
+  /(?:Menus?|Permissions?|Routes?|Pages?|Buttons?|Features?|Flags?|Capabilities|Privileges?|Entitlements?|Grants?|Granted|Access|Allows?|Allowed|Actions?)(?:[A-Z]|$)/.test(name)||
+  camelAuthorizationName.test(name);
 const escapeRegex=value=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const identifierToken=value=>String.raw`(?<![\w$])${escapeRegex(value)}(?![\w$])`;
 const identifierAlternation=values=>String.raw`(?:${[...values].map(identifierToken).join('|')})`;
@@ -52,8 +58,8 @@ function findClientRoleAuthority(script){
   }
   const quotedAuthorizationLiteral=(value,start)=>[...value.matchAll(/["'\x60]([^"'\x60]*)["'\x60]/g)]
     .some(match=>isExecutable(start+match.index,match[0].length)&&/\/[^'"]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b/i.test(match[1]));
-  const containsAuthorizationLiteral=(value,start)=>quotedAuthorizationLiteral(value,start)||executableTest(authorizationName,value,start);
-  const authorizationIdentifiers=new Set(declarations.filter(({name,value,start})=>(authorizationName.test(name)&&!displayName.test(name))||containsAuthorizationLiteral(value,start)).map(({name})=>name));
+  const containsAuthorizationLiteral=(value,start)=>quotedAuthorizationLiteral(value,start)||executableTest(authorizationName,value,start)||executableTest(camelAuthorizationName,value,start);
+  const authorizationIdentifiers=new Set(declarations.filter(({name,value,start})=>(identifierHasAuthority(name)&&!displayName.test(name))||containsAuthorizationLiteral(value,start)).map(({name})=>name));
   const roleIdentifiers=new Set(['role','role_code','roleCode']);
   const normalizeExpression=value=>value.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g,'').trim().replace(/^\(([\s\S]*)\)$/,'$1').trim();
   const roleFieldAliases=new Set();
@@ -84,7 +90,7 @@ function findClientRoleAuthority(script){
     }
     for(const {name,value} of assignments){
       const alias=value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`));
-      if(alias&&(authorizationIdentifiers.has(alias[1])||(authorizationName.test(alias[1])&&!displayName.test(alias[1])))&&!authorizationIdentifiers.has(name)){
+      if(alias&&(authorizationIdentifiers.has(alias[1])||(identifierHasAuthority(alias[1])&&!displayName.test(alias[1])))&&!authorizationIdentifiers.has(name)){
         authorizationIdentifiers.add(name);
         changed=true;
       }
@@ -106,8 +112,14 @@ function findClientRoleAuthority(script){
   const serverRoutePropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}["']\/[^"']+\.html["']${jsTrivia}:${jsTrivia}["']menu\.[^"']+["']`,'g');
   const roleExpression=identifierAlternation(roleIdentifiers);
   const simpleDisplayValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}["'\x60](?![^"'\x60]*(?:\/[^"'\x60]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b))[^"'\x60]*["'\x60]${jsTrivia},?)+$`);
+  const displayListValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}\[(?:${jsTrivia}["'\x60](?![^"'\x60]*(?:\/[^"'\x60]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b))[^"'\x60]*["'\x60]${jsTrivia},?)+\]${jsTrivia},?)+$`);
+  const apiEndpointValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}["']\/(?![^"']*\.html["'])[^"']+["']${jsTrivia},?)+$`);
+  const emptyStateValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}(?:\{\}|\[\]|null|false|0|["']["'])${jsTrivia},?)+$`);
+  const primitiveConfigValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}(?:-?\d+(?:\.\d+)?|true|false|null|["'][^"']*["'])${jsTrivia},?)+$`);
+  const projectionValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}${jsIdentifier}(?:(?:\.${jsTrivia}${jsIdentifier})|(?:\[[^\]]+\]))+${jsTrivia},?)+$`);
+  const presentationValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}(?:${jsIdentifier}\.)*(?:darkTheme|palette|translation|translations|i18n|logEntry|statusPayload)${jsTrivia},?)+$`,'i');
   const displayMetadataOnly=(name,body,bodyStart)=>{
-    if(simpleDisplayValues.test(body))return !authorizationName.test(name)||displayName.test(name);
+    if(simpleDisplayValues.test(body)||displayListValues.test(body))return !authorizationName.test(name)||displayName.test(name);
     if(!displayName.test(name)&&!/metadata/i.test(name))return false;
     if(quotedAuthorizationLiteral(body,bodyStart)||executableTest(/\b(?:true|false)\b/i,body,bodyStart))return false;
     if(displayName.test(name))return true;
@@ -119,7 +131,7 @@ function findClientRoleAuthority(script){
     if(executableTest(/\b(?:textContent|innerText|ariaLabel|roleLabel)\b/i,value,start)&&!quotedAuthorizationLiteral(value,start))return false;
     return quotedAuthorizationLiteral(value,start)||executableTest(authorizationName,value,start)||executableTest(/\b(?:privileg|entitl|can[A-Z]|allowed)\w*\b/,value,start);
   };
-  const directRoleDecision=executableMatches(new RegExp(String.raw`\breturn${jsTrivia}(?:${roleExpression})${jsTrivia}(?:===|==|!==|!=)[^;}\r\n]+`))[0];
+  const directRoleDecision=executableMatches(new RegExp(String.raw`\breturn${jsTrivia}(?<![.\w$])(?:${roleExpression})${jsTrivia}(?:===|==|!==|!=)[^;}\r\n]+`))[0];
   if(directRoleDecision)return directRoleDecision[0];
   const roleDecisionPatterns=[
     new RegExp(String.raw`\bswitch${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\)${jsTrivia}\{([\s\S]{0,500})\}`,'g'),
@@ -129,19 +141,9 @@ function findClientRoleAuthority(script){
   for(const pattern of roleDecisionPatterns)
     for(const match of executableMatches(pattern))
       if(roleDecisionHasAuthority(match[0],match.index))return match[0];
-  const mappingAliases=new Map(declarations.map(({name,value})=>[name,value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1]]));
-  const aliasesFor=source=>{
-    const aliases=new Set([source]);
-    for(let changed=true;changed;){
-      changed=false;
-      for(const [name,target] of mappingAliases)
-        if(target&&aliases.has(target)&&!aliases.has(name)){aliases.add(name);changed=true}
-    }
-    return aliases;
-  };
   for(const {name,value,start} of declarations){
     const objectBody=value.match(new RegExp(String.raw`^${jsTrivia}(?:Object${jsTrivia}\.${jsTrivia}freeze${jsTrivia}\(${jsTrivia})?\{([\s\S]*)\}${jsTrivia}\)?${jsTrivia}$`));
-    const constructedMapping=new RegExp(String.raw`^${jsTrivia}(?:new${jsTrivia}Map|Object${jsTrivia}\.${jsTrivia}(?:assign|fromEntries))${jsTrivia}\(`).test(value);
+    const constructedMapping=new RegExp(String.raw`^${jsTrivia}(?:new${jsTrivia}Map${jsTrivia}\(${jsTrivia}(?!\))|Object${jsTrivia}\.${jsTrivia}(?:assign|fromEntries)${jsTrivia}\()`).test(value);
     if(!objectBody&&!constructedMapping)continue;
     const body=objectBody?objectBody[1]:value;
     const bodyStart=start+(objectBody?objectBody.index+objectBody[0].indexOf(body):0);
@@ -149,41 +151,84 @@ function findClientRoleAuthority(script){
     propertyPattern.lastIndex=0;
     shorthandPropertyPattern.lastIndex=0;
     const roleStructured=/role/i.test(name);
-    const authorizationStructured=authorizationName.test(name)&&!displayName.test(name);
-    const lookupNames=identifierAlternation(aliasesFor(name));
-    const mappingLookupExpression=String.raw`${lookupNames}${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]+\]|\.${jsTrivia}get${jsTrivia}\([^)]*\))`;
-    const mappingLookup=executableMatches(new RegExp(mappingLookupExpression)).length>0;
-    const lookupResults=assignments.filter(({value})=>new RegExp(String.raw`^${mappingLookupExpression}`).test(value)).map(({name})=>name);
-    const lookupResultIdentifiers=new Set(lookupResults);
+    const authorizationStructured=identifierHasAuthority(name)&&!displayName.test(name);
+    const authoritativeValue=expressionHasAuthority(body,bodyStart)||((roleStructured||authorizationStructured)&&executableTest(/\b(?:true|false)\b/,body,bodyStart));
+    const configurationNamed=/(?:config|options|preferences|settings|sizes|limits|defaults)$/i.test(name);
+    const booleanCapabilityMapping=executableTest(/\b(?:true|false)\b/,body,bodyStart)&&!configurationNamed;
+    const mappingAliases=new Set([name]);
     for(let changed=true;changed;){
       changed=false;
-      for(const {name,value} of assignments){
-        const alias=value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1];
-        if(alias&&lookupResultIdentifiers.has(alias)&&!lookupResultIdentifiers.has(name)){lookupResultIdentifiers.add(name);changed=true}
+      for(const assignment of assignments){
+        const target=assignment.value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1];
+        if(target&&mappingAliases.has(target)&&!mappingAliases.has(assignment.name)){mappingAliases.add(assignment.name);changed=true}
       }
     }
-    const authoritativeValue=expressionHasAuthority(body,bodyStart)||((roleStructured||authorizationStructured)&&executableTest(/\b(?:true|false)\b/,body,bodyStart));
-    const memberSegment=String.raw`(?:(?:\.|\?\.)${jsTrivia}${jsIdentifier}|(?:\?\.${jsTrivia})?\[[^\]]+\])`;
-    const memberCalls=executableMatches(new RegExp(String.raw`\b(${jsIdentifier})(?:${jsTrivia}\([^;()\r\n]{0,200}\))?${jsTrivia}(?:${memberSegment}${jsTrivia})+(?:\?\.${jsTrivia})?\(([^;\r\n]{0,400})\)`));
-    const lookupResultExpression=lookupResultIdentifiers.size?identifierAlternation(lookupResultIdentifiers):null;
-    const memberAuthorizationSink=memberCalls.some(match=>
-      (new RegExp(mappingLookupExpression).test(match[2])||(lookupResultExpression&&new RegExp(lookupResultExpression).test(match[2])))&&
-      (authoritativeValue||authorizationIdentifiers.has(match[1])||(authorizationName.test(match[1])&&!displayName.test(match[1])))
+    const mappingLookupExpression=String.raw`${identifierAlternation(mappingAliases)}${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]+\]|\.${jsTrivia}get${jsTrivia}\([^)]*\))`;
+    const lookupUses=executableMatches(new RegExp(mappingLookupExpression));
+    const roleIndexed=lookupUses.some(match=>[...roleIdentifiers].some(roleIdentifier=>new RegExp(identifierToken(roleIdentifier)).test(match[0])));
+    const lookupResults=new Set(assignments.filter(assignment=>new RegExp(mappingLookupExpression).test(assignment.value)).map(assignment=>assignment.name));
+    for(let changed=true;changed;){
+      changed=false;
+      for(const assignment of assignments){
+        const target=assignment.value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1];
+        if(target&&lookupResults.has(target)&&!lookupResults.has(assignment.name)){lookupResults.add(assignment.name);changed=true}
+      }
+    }
+    const resultFeedsAuthorization=assignments.some(assignment=>
+      identifierHasAuthority(assignment.name)&&
+      [...lookupResults].some(result=>executableTest(new RegExp(identifierToken(result)),assignment.value,assignment.start))
     );
-    const standaloneAuthorizationSink=executableMatches(new RegExp(String.raw`\b(${jsIdentifier})${jsTrivia}\([^;\r\n]{0,240}?${mappingLookupExpression}`))
-      .some(match=>!new RegExp(String.raw`(?:\.|\?\.)${jsTrivia}$`).test(script.slice(0,match.index))&&authorizationName.test(match[1])&&!displayName.test(match[1]));
-    const lookupFeedsAuthority=lookupResults.some(result=>{
-      if(authorizationName.test(result)&&!displayName.test(result))return true;
-      if(declarations.some(({name:target,value:expression,start:expressionStart})=>authorizationName.test(target)&&!displayName.test(target)&&executableTest(new RegExp(identifierToken(result)),expression,expressionStart)))return true;
-      const conditional=executableMatches(new RegExp(String.raw`\bif${jsTrivia}\([^)]*${identifierToken(result)}[^)]*\)${jsTrivia}(?:\{[\s\S]{0,240}?\}|[^\n;]{0,240})`))[0];
-      return Boolean(conditional&&roleDecisionHasAuthority(conditional[0],conditional.index));
-    })||standaloneAuthorizationSink||memberAuthorizationSink;
+    const resultUsedWithAuthorization=[...lookupResults].some(result=>
+      executableMatches(new RegExp(String.raw`[^;\r\n]*${identifierToken(result)}[^;\r\n]*`)).some(match=>
+        [...match[0].matchAll(/[A-Za-z_$][\w$]*/g)].some(identifier=>
+          identifier[0]!==result&&
+          isExecutable(match.index+identifier.index,identifier[0].length)&&
+          (authorizationIdentifiers.has(identifier[0])||identifierHasAuthority(identifier[0]))&&
+          !displayName.test(identifier[0])&&
+          match[0][identifier.index-1]!=='.'
+        )
+      )
+    );
+    const contextualAuthorizationUse=lookupUses.some(match=>{
+      const statementStart=Math.max(script.lastIndexOf(';',match.index-1),script.lastIndexOf('\n',match.index-1))+1;
+      const nextSemicolon=script.indexOf(';',match.index);
+      const nextNewline=script.indexOf('\n',match.index);
+      const statementEnd=Math.min(...[nextSemicolon,nextNewline,script.length].filter(index=>index>=0));
+      const statement=script.slice(statementStart,statementEnd);
+      return [...statement.matchAll(/[A-Za-z_$][\w$]*/g)].some(identifier=>
+        isExecutable(statementStart+identifier.index,identifier[0].length)&&
+        (authorizationIdentifiers.has(identifier[0])||identifierHasAuthority(identifier[0]))&&
+        !displayName.test(identifier[0])&&
+        statement[identifier.index-1]!=='.'
+      );
+    })||resultFeedsAuthorization||resultUsedWithAuthorization;
+    if(emptyStateValues.test(body)&&/(?:state|cache|form|filter|query|options|defaults|config)$/i.test(name)&&!roleStructured&&!roleIndexed)continue;
+    const authorizationMappingCandidate=roleStructured||authorizationStructured||authoritativeValue||booleanCapabilityMapping||roleIndexed||contextualAuthorizationUse;
+    if(!authorizationMappingCandidate)continue;
+    const formSubmissionValues=/(?:body|requestBody|payload)$/i.test(name)&&
+      executableTest(/\.(?:value|checked)\b/,body,bodyStart)&&
+      !executableTest(camelAuthorizationName,body,bodyStart);
+    const serializedRequest=!roleStructured&&!authorizationStructured&&!roleIndexed&&(!authoritativeValue||formSubmissionValues)&&
+      executableMatches(new RegExp(String.raw`\bJSON${jsTrivia}\.${jsTrivia}stringify${jsTrivia}\(${jsTrivia}${identifierToken(name)}${jsTrivia}\)`)).length>0&&
+      executableMatches(new RegExp(String.raw`\b(?:fetch|api)${jsTrivia}\(`)).length>0;
+    const apiTransportMapping=apiEndpointValues.test(body)&&!roleStructured&&!roleIndexed;
+    const endpointFactories=/endpoint/i.test(name)&&/\/api\//.test(body)&&!roleStructured&&!authorizationStructured&&!authoritativeValue&&!roleIndexed;
+    const clearlyNonAuthorization=serializedRequest||
+      apiTransportMapping||
+      endpointFactories||
+      (presentationValues.test(body)&&!authorizationStructured&&!authoritativeValue)||
+      (primitiveConfigValues.test(body)&&configurationNamed&&!roleStructured&&!authoritativeValue&&!roleIndexed)||
+      (!roleStructured&&!authorizationStructured&&!authoritativeValue&&!roleIndexed&&(
+        (emptyStateValues.test(body)&&/(?:state|cache|form|filter|query|options|defaults|config)$/i.test(name))||
+        projectionValues.test(body)
+      ));
     const properties=objectBody?[...body.matchAll(propertyPattern),...body.matchAll(shorthandPropertyPattern)].length:0;
     propertyPattern.lastIndex=0;
     const serverRouteProperties=objectBody?[...body.matchAll(serverRoutePropertyPattern)].length:0;
     serverRoutePropertyPattern.lastIndex=0;
     if(properties>0&&serverRouteProperties===properties)continue;
-    if(!displayMetadataOnly(name,body,bodyStart)&&((mappingLookup&&(authoritativeValue||lookupFeedsAuthority))||(authoritativeValue&&(roleStructured||authorizationStructured))))return `${name}=${value}`;
+    const roleIndexedEndpointMapping=roleIndexed&&apiEndpointValues.test(body);
+    if((!displayMetadataOnly(name,body,bodyStart)||roleIndexedEndpointMapping)&&!clearlyNonAuthorization)return `${name}=${value}`;
   }
   return null;
 }
@@ -593,6 +638,41 @@ test('client role authority detector rejects authorization mappings but permits 
     `const matrix={future_role:payload};renderPermissions(matrix[key])`,
     `const matrix={future:payload};allowedActions.add(matrix[condition?a:b])`,
     `const matrix={future:payload};permissions.registry.current.add(matrix[user.role])`,
+    `const matrix={future:payload};permissions.registry[methods[index]](matrix[user.role])`,
+    ...[
+      '',
+      'consume(matrix[key])',
+      'receiver.method(matrix[key])',
+      `receiver${Array.from({length:9},(_,index)=>`.layer${index}`).join('')}.method(matrix[key])`,
+      'receiver[methods[index]](matrix[key])',
+      'receiver?.method?.(matrix[key])',
+      'new Consumer(matrix[key])',
+      'function pass(value){return value}const result=pass(matrix[key])',
+      'Promise.resolve().then(()=>matrix[key])',
+      'const wrapped=[matrix[key]]',
+      'const wrapped={value:matrix[key]}',
+      'const selected=condition?matrix[left]:matrix[right]',
+      'const alias=matrix;const next=alias;consume(next[key])'
+    ].map(consumer=>`const matrix={future:permissions};${consumer}`),
+    `const matrix=Object.freeze({future:permissions})`,
+    `const matrix=Object.assign({}, {future:permissions})`,
+    `const matrix=Object.fromEntries([['future',permissions]])`,
+    `const roleKey='unknown_role';const matrix={[roleKey]:permissions}`,
+    `const matrix={future:{nested:permissions}}`,
+    `const payload={future:permissions}`,
+    `const statusMap={future:permissions}`,
+    `const payloadMap={future:{canDelete:true}}`,
+    `const matrix={future:document.permissions}`,
+    `const permissionsByRole={admin:false};const allowed=permissionsByRole[user.role]`,
+    `const routePermissions={admin:null};const allowed=routePermissions[user.role]`,
+    `const permissionsByRole={admin:form.permission.checked};const allowed=permissionsByRole[user.role]`,
+    `const permissionEndpoints={admin:'/api/admin'};const endpoint=permissionEndpoints[user.role]`,
+    `const permissions={admin:true};JSON.stringify(permissions)`,
+    `const matrix={admin:false}`,
+    `const routes={admin:'/api/admin'};fetch(routes[user.role])`,
+    `const endpoints={admin:'/api/admin'};fetch(endpoints[user.role])`,
+    `const state={admin:false};const allowed=state[user.role]`,
+    `const requestBody={admin:canDelete};fetch('/api/x',{body:JSON.stringify(requestBody)})`,
     ...Array.from({length:9},(_,depth)=>`const mapping={future:permissions};receiver${Array.from({length:depth},(_,index)=>`.child${index}`).join('')}.method(mapping[key])`),
     `const mapping={future:permissions};receiver${Array.from({length:32},(_,index)=>`.child${index}`).join('')}.method(mapping[key])`,
     `const mapping={future:permissions};receiver["child"].current["method"](mapping[key])`,
@@ -699,6 +779,15 @@ test('client role authority detector rejects authorization mappings but permits 
     `const localeKey='zh-CN';const languages={[localeKey]:'中文'};const selected=languages[currentLocale]`,
     `const displayKey='future_role';const displayNames={[displayKey]:'未来角色'};label.textContent=displayNames[user.role]`,
     `const objectKey=getObjectKey();const values={[objectKey]:payload};const selected=values[currentSelection]`,
+    `const config={maxRetries:3};schedule(config.maxRetries)`,
+    `const endpoints={overview:'/api/overview',employee:'/api/employee'}`,
+    `const state={summary:{},logs:[]}`,
+    `const requestBody={default_permissions:form.permissions.value};fetch('/api/settings',{method:'POST',body:JSON.stringify(requestBody)})`,
+    `const projection={department:state.departments,risk:state.risks}`,
+    `const widgets={a:makeWidget()};render(widgets.a);const permissions=user.menus`,
+    `const config={retry:{max:3}};consume(config.retry,permissions)`,
+    `const pageSizes={compact:20,comfortable:40}`,
+    `const accessibilityOptions={contrast:true}`,
     `const themeKey='dark';const themes={[themeKey]:darkTheme};const selected=themes[condition?a:b];applyTheme(selected)`,
     `const preferences={compact:true,animations:false};const enabled=preferences[key]`,
     `const themes=Object.assign({}, {dark:darkTheme});applyTheme(themes[key])`,
@@ -712,7 +801,7 @@ test('client role authority detector rejects authorization mappings but permits 
     `const copy={future:i18n.future};ui${Array.from({length:8},(_,index)=>`.layer${index}`).join('')}.render(copy[key])`,
     `const translations={future:i18n.future};logEntries.add(translations[key])`,
     `const labels={future:'Future'};displayList.add(labels[key])`,
-    `const key='x';const matrix={[key]:payload};const selected=matrix[user.role]`,
+    `const key='x';const statusMap={[key]:statusPayload};const selected=statusMap[user.role]`,
     `const roleKey='future_role';const themesByRole={[roleKey]:darkTheme};const selected=themesByRole[user.role]`,
     `const roleKey='future_role';const colorsByRole={[roleKey]:palette};const selected=colorsByRole[user.role]`,
     `const roleKey='future_role';const languagesByRole={[roleKey]:translation};const selected=languagesByRole[user.role]`,
@@ -724,9 +813,9 @@ test('client role authority detector rejects authorization mappings but permits 
     `const roleKey='x';const themes={[roleKey]:darkTheme};const selected=themes[user.role];if(selected)applyTheme(selected)`,
     `const themesByRole={future:darkTheme/* permissions */};const selected=themesByRole[user.role]`,
     `const colorsByRole={future:palette/* menu.settings */};const selected=colorsByRole[user.role]`,
-    `const mapping={future:payload/* permission */};const selected=mapping[user.role]`,
+    `const statusMap={future:statusPayload/* permission */};const selected=statusMap[user.role]`,
     `const themesByRole={future:darkTheme/* "menu.settings" */};const selected=themesByRole[user.role]`,
-    `const mapping={future:payload/* "/settings.html" */};const selected=mapping[user.role]`,
+    `const statusMap={future:statusPayload/* "/settings.html" */};const selected=statusMap[user.role]`,
     `const readRegion=()=>user.region;const regions={north:'华北'};label.textContent=regions[readRegion()]`,
     `const readDisplayName=function(){return user.displayName};label.textContent=readDisplayName()`,
     `function randomValueReader(){return user.role}label.textContent=randomValueReader()`,
@@ -760,6 +849,7 @@ test('client role authority detector rejects authorization mappings but permits 
   const removedLexerSymbols=[['mask','NonExecutable'],['scan','Quoted'],['scan','Code']].map(parts=>parts.join(''));
   assert.ok(removedLexerSymbols.every(symbol=>!`${findClientRoleAuthority}`.includes(symbol)),'detector must use the native parser instead of a handwritten lexer');
   assert.doesNotMatch(`${findClientRoleAuthority}`,/\b(?:functionReturns|functionBodies|nestedBodyRanges|matchingDelimiter|roleReturningFunctions)\b/,'detector must not parse function syntax');
+  assert.doesNotMatch(`${findClientRoleAuthority}`,/\b(?:memberCalls|memberAuthorizationSink|standaloneAuthorizationSink|lookupFeedsAuthority)\b/,'authorization mapping detection must not depend on sink shape');
   assert.doesNotMatch(`${findClientRoleAuthority}`,/\b(?:eval|new Function)\b/,'detector must not execute scanned code');
 });
 
