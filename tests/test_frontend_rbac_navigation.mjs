@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {readFileSync,readdirSync} from 'node:fs';
 import {join,relative} from 'node:path';
 import {createRequire} from 'node:module';
@@ -42,11 +43,13 @@ function findClientRoleAuthorityAst(script){
     catch{return 'UNPARSABLE_JAVASCRIPT'}
   }
   const nodes=[];
-  const visit=node=>{
+  const parents=new WeakMap();
+  const visit=(node,parent=null)=>{
     if(!node||typeof node!=='object')return;
     if(typeof node.type==='string'){
+      if(parent)parents.set(node,parent);
       nodes.push(node);
-      for(const child of astChildren(node))visit(child);
+      for(const child of astChildren(node))visit(child,node);
     }
   };
   visit(ast);
@@ -83,6 +86,55 @@ function findClientRoleAuthorityAst(script){
   };
   const bindings=[];
   const functions=new Map();
+  const scopedFunctions=new WeakMap();
+  const scopedBindings=new WeakMap();
+  const isFunction=node=>/Function(?:Declaration|Expression)$/.test(node?.type)||node?.type==='ArrowFunctionExpression';
+  const enclosingScope=node=>{
+    for(let current=parents.get(node);current;current=parents.get(current))
+      if(current.type==='Program'||current.type==='BlockStatement'||current.type==='CatchClause'||current.type==='SwitchStatement'||
+        /For(?:In|Of)?Statement/.test(current.type)||isFunction(current))return current;
+    return ast;
+  };
+  const enclosingVarScope=node=>{
+    for(let current=parents.get(node);current;current=parents.get(current))
+      if(current.type==='Program'||isFunction(current))return current;
+    return ast;
+  };
+  const registerScopedFunction=(bindingNode,name,fn)=>{
+    const scope=enclosingScope(bindingNode);
+    const key=`${name}@${scope.start}:${fn.start}`;
+    const entries=scopedFunctions.get(scope)||new Map();
+    if(entries.has(name))return entries.get(name);
+    entries.set(name,key);
+    scopedFunctions.set(scope,entries);
+    functions.set(key,fn);
+    return key;
+  };
+  const resolveScopedFunction=(node,name)=>{
+    for(let scope=enclosingScope(node);scope;scope=enclosingScope(scope)){
+      const key=scopedFunctions.get(scope)?.get(name);
+      if(key)return key;
+      if(scope===ast)break;
+    }
+    return null;
+  };
+  const registerScopedBinding=(bindingNode,name,kind='lexical')=>{
+    const scope=kind==='var'?enclosingVarScope(bindingNode):enclosingScope(bindingNode);
+    const entries=scopedBindings.get(scope)||new Map();
+    if(entries.has(name))return entries.get(name);
+    const key=`${name}@${scope.start}:${bindingNode.start}`;
+    entries.set(name,key);
+    scopedBindings.set(scope,entries);
+    return key;
+  };
+  const resolveScopedBinding=(node,name)=>{
+    for(let scope=enclosingScope(node);scope;scope=enclosingScope(scope)){
+      const key=scopedBindings.get(scope)?.get(name);
+      if(key)return key;
+      if(scope===ast)break;
+    }
+    return name;
+  };
   const returnedNodes=functionNode=>{
     if(functionNode.body.type!=='BlockStatement')return [functionNode.body];
     const returns=[];
@@ -95,17 +147,37 @@ function findClientRoleAuthorityAst(script){
     collect(functionNode.body);
     return returns;
   };
+  const patternIdentifiers=pattern=>{
+    pattern=unwrap(pattern);
+    if(!pattern)return [];
+    if(pattern.type==='Identifier')return [pattern];
+    if(pattern.type==='AssignmentPattern')return patternIdentifiers(pattern.left);
+    if(pattern.type==='RestElement')return patternIdentifiers(pattern.argument);
+    if(pattern.type==='ObjectPattern')return pattern.properties.flatMap(property=>patternIdentifiers(property.value||property.argument));
+    if(pattern.type==='ArrayPattern')return pattern.elements.flatMap(patternIdentifiers);
+    return [];
+  };
   for(const node of nodes){
-    if(node.type==='FunctionDeclaration'&&node.id)functions.set(node.id.name,node);
-    if(node.type==='VariableDeclarator'&&node.id.type==='Identifier'){
-      bindings.push({name:node.id.name,value:node.init});
-      if(/FunctionExpression|ArrowFunctionExpression/.test(node.init?.type||''))functions.set(node.id.name,node.init);
+    if(node.type==='FunctionDeclaration'&&node.id)registerScopedFunction(node,node.id.name,node);
+    if(isFunction(node))
+      for(const parameter of node.params)
+        for(const identifier of patternIdentifiers(parameter))registerScopedBinding(identifier,identifier.name);
+    if(node.type==='CatchClause'&&node.param)
+      for(const identifier of patternIdentifiers(node.param))registerScopedBinding(identifier,identifier.name);
+    if(node.type==='VariableDeclarator'){
+      const kind=parents.get(node)?.kind==='var'?'var':'lexical';
+      for(const identifier of patternIdentifiers(node.id))registerScopedBinding(identifier,identifier.name,kind);
+      if(node.id.type==='Identifier'){
+        bindings.push({name:node.id.name,key:resolveScopedBinding(node,node.id.name),value:node.init,node});
+        if(/FunctionExpression|ArrowFunctionExpression/.test(node.init?.type||''))registerScopedFunction(node,node.id.name,node.init);
+      }
     }
     if(node.type==='AssignmentExpression'&&node.operator==='='&&node.left.type==='Identifier')
-      bindings.push({name:node.left.name,value:node.right});
+      bindings.push({name:node.left.name,value:node.right,node});
   }
-  const mappings=new Set(bindings.filter(binding=>isMappingExpression(binding.value)).map(binding=>binding.name));
-  const mappingBindings=new Map(bindings.filter(binding=>isMappingExpression(binding.value)).map(binding=>[binding.name,binding.value]));
+  for(const binding of bindings)binding.key??=resolveScopedBinding(binding.node,binding.name);
+  const mappings=new Set(bindings.filter(binding=>isMappingExpression(binding.value)).map(binding=>binding.key));
+  const mappingBindings=new Map(bindings.filter(binding=>isMappingExpression(binding.value)).map(binding=>[binding.key,binding.value]));
   const roleValues=new Set();
   const mappedValues=new Set();
   const roleMappedValues=new Set();
@@ -118,30 +190,80 @@ function findClientRoleAuthorityAst(script){
   const passThroughParameters=new Map();
   const returnMapKeyParameters=new Map();
   const returnMappingParameterPairs=new Map();
-  const fieldAliases=new Map(bindings.flatMap(({name,value})=>{
+  const fieldAliases=new Map(bindings.flatMap(({key,value})=>{
     const field=propertyName(value);
-    return value&&(value.type==='Literal'||value.type==='TemplateLiteral'&&value.expressions.length===0)?[[name,field]]:[];
+    return value&&(value.type==='Literal'||value.type==='TemplateLiteral'&&value.expressions.length===0)?[[key,field]]:[];
   }));
   for(let changed=true;changed;){
     changed=false;
-    for(const {name,value} of bindings)
-      if(value?.type==='Identifier'&&fieldAliases.has(value.name)&&!fieldAliases.has(name)){fieldAliases.set(name,fieldAliases.get(value.name));changed=true}
+    for(const {key,value} of bindings){
+      const source=value?.type==='Identifier'?resolveScopedBinding(value,value.name):null;
+      if(source&&fieldAliases.has(source)&&!fieldAliases.has(key)){fieldAliases.set(key,fieldAliases.get(source));changed=true}
+    }
   }
   for(let changed=true;changed;){
     changed=false;
-    for(const {name,value} of bindings)
-      if((value?.type==='Identifier'&&storageAliases.has(value.name)||isQualifiedStorage(value))&&!storageAliases.has(name)){storageAliases.add(name);changed=true}
+    for(const {key,value} of bindings){
+      const source=value?.type==='Identifier'?resolveScopedBinding(value,value.name):null;
+      if((source&&storageAliases.has(source)||isQualifiedStorage(value))&&!storageAliases.has(key)){storageAliases.add(key);changed=true}
+    }
   }
+  const staticMemberProperty=node=>{
+    if(node?.type!=='MemberExpression')return null;
+    const propertyKey=node.computed&&node.property.type==='Identifier'?resolveScopedBinding(node.property,node.property.name):null;
+    return propertyKey&&fieldAliases.has(propertyKey)?fieldAliases.get(propertyKey):memberProperty(node);
+  };
+  const objectMethods=[];
+  const classMethods=[];
+  const classInstances=[];
+  for(const node of nodes){
+    if(node.type==='VariableDeclarator'&&node.id.type==='Identifier'&&node.init?.type==='ObjectExpression')
+      for(const property of node.init.properties){
+        const method=propertyName(property.key);
+        const value=property.value;
+        if(method&&/FunctionExpression|ArrowFunctionExpression/.test(value?.type||''))objectMethods.push({name:`${node.id.name}.${method}`,bindingNode:node,fn:value});
+      }
+    if(node.type==='ClassDeclaration'&&node.id)
+      for(const method of node.body.body){
+        const name=propertyName(method.key);
+        if(name&&method.value)classMethods.push({name:`${node.id.name}.${name}`,className:node.id.name,methodName:name,bindingNode:node,fn:method.value});
+      }
+    if(node.type==='VariableDeclarator'&&node.id.type==='Identifier'&&node.init?.type==='NewExpression'&&unwrap(node.init.callee)?.type==='Identifier')
+      classInstances.push({instance:node.id.name,className:node.init.callee.name,bindingNode:node});
+  }
+  for(const {name,bindingNode,fn} of objectMethods)
+    registerScopedFunction(bindingNode,name,fn);
+  for(const {name,bindingNode,fn} of classMethods)
+    registerScopedFunction(bindingNode,name,fn);
+  for(const {instance,className,bindingNode} of classInstances)
+    for(const {className:declaredClass,methodName} of classMethods)
+      if(declaredClass===className){
+        const target=resolveScopedFunction(bindingNode,`${className}.${methodName}`);
+        if(target)registerScopedFunction(bindingNode,`${instance}.${methodName}`,functions.get(target));
+      }
+  const localCallTarget=node=>{
+    const callee=unwrap(node?.callee);
+    if(callee?.type==='Identifier')return resolveScopedFunction(node,callee.name);
+    if(callee?.type!=='MemberExpression'||unwrap(callee.object)?.type!=='Identifier')return null;
+    const method=staticMemberProperty(callee);
+    return method?resolveScopedFunction(node,`${callee.object.name}.${method}`):null;
+  };
   for(let changed=true;changed;){
     changed=false;
-    for(const {name,value} of bindings)
-      if(value?.type==='Identifier'&&functions.has(value.name)&&!functions.has(name)){functions.set(name,functions.get(value.name));changed=true}
+    for(const {name,value,node} of bindings){
+      if(value?.type!=='Identifier')continue;
+      const target=resolveScopedFunction(node,value.name);
+      if(!target||resolveScopedFunction(node,name))continue;
+      registerScopedFunction(node,name,functions.get(target));
+      changed=true;
+    }
   }
   for(const node of nodes){
     if(node.type!=='VariableDeclarator'||node.id.type!=='ObjectPattern')continue;
     for(const property of node.id.properties){
       const key=propertyName(property.key);
-      if(authorizationContract.identityFields.has(key)&&property.value?.type==='Identifier')roleValues.add(property.value.name);
+      if(authorizationContract.identityFields.has(key)&&property.value?.type==='Identifier')
+        roleValues.add(registerScopedBinding(property.value,property.value.name));
     }
   }
   const signal=(input,seen=new Set())=>{
@@ -149,15 +271,16 @@ function findClientRoleAuthorityAst(script){
     if(!node||seen.has(node))return 0;
     seen.add(node);
     if(node.type==='Identifier'){
-      return (roleValues.has(node.name)?1:0)|
-        (mappings.has(node.name)?2:0)|
-        (mappedValues.has(node.name)?4:0)|
-        (roleMappedValues.has(node.name)?8:0)|
-        (serverMenusValues.has(node.name)?16:0);
+      const key=resolveScopedBinding(node,node.name);
+      return (roleValues.has(key)?1:0)|
+        (mappings.has(key)?2:0)|
+        (mappedValues.has(key)?4:0)|
+        (roleMappedValues.has(key)?8:0)|
+        (serverMenusValues.has(key)?16:0);
     }
     if(node.type==='MemberExpression'){
-      const property=node.computed&&node.property.type==='Identifier'&&fieldAliases.has(node.property.name)?
-        fieldAliases.get(node.property.name):memberProperty(node);
+      const propertyKey=node.computed&&node.property.type==='Identifier'?resolveScopedBinding(node.property,node.property.name):null;
+      const property=propertyKey&&fieldAliases.has(propertyKey)?fieldAliases.get(propertyKey):memberProperty(node);
       const objectSignal=signal(node.object,new Set(seen));
       if(authorizationContract.identityFields.has(property))return objectSignal|1;
       if(authorizationContract.serverAuthorityFields.has(property))return objectSignal|16;
@@ -169,16 +292,17 @@ function findClientRoleAuthorityAst(script){
     }
     if(node.type==='CallExpression'){
       const callee=unwrap(node.callee);
-      if(callee?.type==='Identifier'){
-        let result=(roleReturningFunctions.has(callee.name)?1:0)|
-          (mappedReturningFunctions.has(callee.name)?4:0)|
-          (roleMappedReturningFunctions.has(callee.name)?8:0);
-        for(const index of passThroughParameters.get(callee.name)||[])result|=signal(node.arguments[index],new Set(seen));
-        for(const index of returnMapKeyParameters.get(callee.name)||[]){
+      const target=localCallTarget(node);
+      if(target){
+        let result=(roleReturningFunctions.has(target)?1:0)|
+          (mappedReturningFunctions.has(target)?4:0)|
+          (roleMappedReturningFunctions.has(target)?8:0);
+        for(const index of passThroughParameters.get(target)||[])result|=signal(node.arguments[index],new Set(seen));
+        for(const index of returnMapKeyParameters.get(target)||[]){
           result|=4;
           if(signal(node.arguments[index],new Set(seen))&1)result|=8;
         }
-        for(const [mappingIndex,keyIndex] of returnMappingParameterPairs.get(callee.name)||[]){
+        for(const [mappingIndex,keyIndex] of returnMappingParameterPairs.get(target)||[]){
           if(signal(node.arguments[mappingIndex],new Set(seen))&2){
             result|=4;
             if(signal(node.arguments[keyIndex],new Set(seen))&1)result|=8;
@@ -188,7 +312,7 @@ function findClientRoleAuthorityAst(script){
       }
       if(callee?.type==='MemberExpression'&&memberProperty(callee)==='get'&&(signal(callee.object,new Set(seen))&2)){
         const keySignal=signal(node.arguments[0],new Set(seen));
-        const cacheName=unwrap(callee.object)?.type==='Identifier'?callee.object.name:null;
+        const cacheName=unwrap(callee.object)?.type==='Identifier'?resolveScopedBinding(callee.object,callee.object.name):null;
         return 4|((keySignal&1)||roleMappedCaches.has(cacheName)?8:0);
       }
     }
@@ -200,10 +324,11 @@ function findClientRoleAuthorityAst(script){
     changed=false;
     for(const binding of bindings){
       const value=unwrap(binding.value);
-      if(value?.type==='Identifier'&&mappings.has(value.name)&&!mappings.has(binding.name)){mappings.add(binding.name);changed=true}
+      const source=value?.type==='Identifier'?resolveScopedBinding(value,value.name):null;
+      if(source&&mappings.has(source)&&!mappings.has(binding.key)){mappings.add(binding.key);changed=true}
       const valueSignal=signal(value);
       for(const [bit,set] of [[1,roleValues],[4,mappedValues],[8,roleMappedValues],[16,serverMenusValues]])
-        if(valueSignal&bit&&!set.has(binding.name)){set.add(binding.name);changed=true}
+        if(valueSignal&bit&&!set.has(binding.key)){set.add(binding.key);changed=true}
     }
     for(const [name,fn] of functions){
       const params=fn.params.map(param=>param.type==='Identifier'?param.name:null);
@@ -237,7 +362,8 @@ function findClientRoleAuthorityAst(script){
   for(const node of nodes){
     const callee=unwrap(node.type==='CallExpression'?node.callee:null);
     if(callee?.type!=='MemberExpression'||memberProperty(callee)!=='set'||unwrap(callee.object)?.type!=='Identifier')continue;
-    if(mappings.has(callee.object.name)&&node.arguments.some(argument=>signal(argument)&8))roleMappedCaches.add(callee.object.name);
+    const cacheKey=resolveScopedBinding(callee.object,callee.object.name);
+    if(mappings.has(cacheKey)&&node.arguments.some(argument=>signal(argument)&8))roleMappedCaches.add(cacheKey);
   }
   const text=node=>script.slice(node.start,node.end);
   const stringIsAuthorization=value=>typeof value==='string'&&(/(?:^|[./])menu[._/]|\/api\/|\/[^'"]+\.html\b/.test(value));
@@ -245,15 +371,18 @@ function findClientRoleAuthorityAst(script){
     node=unwrap(node);
     if(node?.type==='Literal'&&typeof node.value==='string')return node.value;
     if(node?.type==='TemplateLiteral'&&node.expressions.length===0)return node.quasis[0].value.cooked;
-    if(node?.type==='Identifier'&&fieldAliases.has(node.name))return fieldAliases.get(node.name);
+    if(node?.type==='Identifier'){
+      const key=resolveScopedBinding(node,node.name);
+      if(fieldAliases.has(key))return fieldAliases.get(key);
+    }
     return null;
   };
   const containsDirectRoleSource=root=>{
     const node=unwrap(root);
     if(!node)return false;
     if(node.type==='MemberExpression'){
-      const property=node.computed&&node.property.type==='Identifier'&&fieldAliases.has(node.property.name)?
-        fieldAliases.get(node.property.name):memberProperty(node);
+      const propertyKey=node.computed&&node.property.type==='Identifier'?resolveScopedBinding(node.property,node.property.name):null;
+      const property=propertyKey&&fieldAliases.has(propertyKey)?fieldAliases.get(propertyKey):memberProperty(node);
       if(authorizationContract.identityFields.has(property))return true;
     }
     for(const child of astChildren(node))if(containsDirectRoleSource(child))return true;
@@ -281,13 +410,14 @@ function findClientRoleAuthorityAst(script){
           node.arguments.some(argument=>constantString(argument)==='hidden')){found=true;return}
         if(callee?.type==='MemberExpression'&&authorizationContract.uiGateStyleMethods.has(memberProperty(callee))&&
           node.arguments.some(argument=>new Set(['display','visibility']).has(constantString(argument)))){found=true;return}
-        if((rootObject?.type==='Identifier'&&storageAliases.has(rootObject.name)||isQualifiedStorage(callee?.object))&&
+        if((rootObject?.type==='Identifier'&&storageAliases.has(resolveScopedBinding(rootObject,rootObject.name))||isQualifiedStorage(callee?.object))&&
           node.arguments.some(argument=>authorizationContract.authorizationStateFields.has(constantString(argument)))){found=true;return}
         if(callee?.type==='MemberExpression'&&unwrap(callee.object)?.type==='MemberExpression'&&memberProperty(callee.object)==='classList'&&
           node.arguments.some(argument=>argument.type==='Literal'&&authorizationContract.uiGateClassNames.has(String(argument.value)))){found=true;return}
-        if(callee?.type==='Identifier'&&functions.has(callee.name)&&!seenFunctions.has(callee.name)){
-          const nextSeen=new Set(seenFunctions).add(callee.name);
-          if(hasAuthorizationMaterial(functions.get(callee.name).body,nextSeen)){found=true;return}
+        const target=localCallTarget(node);
+        if(target&&!seenFunctions.has(target)){
+          const nextSeen=new Set(seenFunctions).add(target);
+          if(hasAuthorizationMaterial(functions.get(target).body,nextSeen)){found=true;return}
         }
       }
       for(const child of astChildren(node))inspect(child);
@@ -295,12 +425,13 @@ function findClientRoleAuthorityAst(script){
     inspect(root);
     return found;
   };
-  const mappingDefinition=(name,seen=new Set())=>{
-    if(seen.has(name))return null;
-    seen.add(name);
-    if(mappingBindings.has(name))return mappingBindings.get(name);
-    const alias=bindings.find(binding=>binding.name===name&&binding.value?.type==='Identifier');
-    return alias?mappingDefinition(alias.value.name,seen):null;
+  const mappingDefinition=(identifier,seen=new Set())=>{
+    const key=resolveScopedBinding(identifier,identifier.name);
+    if(seen.has(key))return null;
+    seen.add(key);
+    if(mappingBindings.has(key))return mappingBindings.get(key);
+    const alias=bindings.find(binding=>binding.key===key&&binding.value?.type==='Identifier');
+    return alias?mappingDefinition(alias.value,seen):null;
   };
   const argumentReadsAuthorizationMapping=root=>{
     let found=false;
@@ -308,7 +439,7 @@ function findClientRoleAuthorityAst(script){
       node=unwrap(node);
       if(found||!node)return;
       if(node.type==='MemberExpression'&&node.computed&&unwrap(node.object)?.type==='Identifier'){
-        const definition=mappingDefinition(node.object.name);
+        const definition=mappingDefinition(unwrap(node.object));
         if(definition&&hasAuthorizationMaterial(definition)){found=true;return}
       }
       for(const child of astChildren(node))inspect(child);
@@ -326,7 +457,7 @@ function findClientRoleAuthorityAst(script){
       while(rootObject?.type==='MemberExpression')rootObject=unwrap(rootObject.object);
       if(authorizationContract.uiGateMethods.has(method))return true;
       if(authorizationContract.authorizationActionMethods.has(method))return true;
-      if((rootObject?.type==='Identifier'&&storageAliases.has(rootObject.name)||isQualifiedStorage(callee.object))&&
+      if((rootObject?.type==='Identifier'&&storageAliases.has(resolveScopedBinding(rootObject,rootObject.name))||isQualifiedStorage(callee.object))&&
         node.arguments.some(argument=>authorizationContract.authorizationStateFields.has(constantString(argument))))return true;
     }
     return mappedArguments.some(argumentReadsAuthorizationMapping);
@@ -344,6 +475,132 @@ function findClientRoleAuthorityAst(script){
     inspect(root);
     return found;
   };
+  const patternNames=pattern=>{
+    pattern=unwrap(pattern);
+    if(!pattern)return [];
+    if(pattern.type==='Identifier')return [pattern.name];
+    if(pattern.type==='AssignmentPattern')return patternNames(pattern.left);
+    if(pattern.type==='RestElement')return patternNames(pattern.argument);
+    if(pattern.type==='ObjectPattern')return pattern.properties.flatMap(property=>patternNames(property.value||property.argument));
+    if(pattern.type==='ArrayPattern')return pattern.elements.flatMap(patternNames);
+    return [];
+  };
+  const functionNodes=fn=>{
+    const scoped=[];
+    const collect=(node,root=true)=>{
+      if(!node||typeof node!=='object')return;
+      if(!root&&/Function(?:Declaration|Expression)$/.test(node.type)||!root&&node.type==='ArrowFunctionExpression')return;
+      scoped.push(node);
+      for(const child of astChildren(node))collect(child,false);
+    };
+    collect(fn.body);
+    return scoped;
+  };
+  const parameterSummaries=new Map([...functions].map(([name])=>[name,{returns:new Set(),effects:new Set()}]));
+  const addAll=(target,source)=>{
+    let changed=false;
+    for(const value of source)if(!target.has(value)){target.add(value);changed=true}
+    return changed;
+  };
+  const argumentDependencies=(node,index,summary,dependencies)=>{
+    if(index>=node.arguments.length)return new Set();
+    const parameter=functions.get(localCallTarget(node))?.params[index];
+    if(parameter?.type==='RestElement'){
+      const result=new Set();
+      for(const argument of node.arguments.slice(index))addAll(result,dependencies(argument));
+      return result;
+    }
+    return dependencies(node.arguments[index]);
+  };
+  for(let changed=true;changed;){
+    changed=false;
+    for(const [name,fn] of functions){
+      const scoped=functionNodes(fn).sort((left,right)=>left.start-right.start);
+      const environment=new Map();
+      fn.params.forEach((parameter,index)=>{
+        for(const identifier of patternIdentifiers(parameter))
+          environment.set(resolveScopedBinding(identifier,identifier.name),new Set([index]));
+      });
+      const dependencies=input=>{
+        const node=unwrap(input);
+        if(!node)return new Set();
+        if(node.type==='Identifier')return new Set(environment.get(resolveScopedBinding(node,node.name))||[]);
+        if(node.type==='CallExpression'){
+          const summary=parameterSummaries.get(localCallTarget(node));
+          if(summary){
+            const result=new Set();
+            for(const index of summary.returns)addAll(result,argumentDependencies(node,index,summary,dependencies));
+            return result;
+          }
+        }
+        const result=new Set();
+        for(const child of astChildren(node))addAll(result,dependencies(child));
+        return result;
+      };
+      const nextReturns=new Set();
+      const nextEffects=new Set();
+      for(const node of scoped){
+        if(node.type==='VariableDeclarator'&&node.init){
+          const source=dependencies(node.init);
+          for(const identifier of patternIdentifiers(node.id))
+            environment.set(resolveScopedBinding(identifier,identifier.name),new Set(source));
+        }
+        if(node.type==='AssignmentExpression'&&node.operator==='='){
+          const source=dependencies(node.right);
+          for(const identifier of patternIdentifiers(node.left)){
+            const key=resolveScopedBinding(identifier,identifier.name);
+            let conditional=false;
+            for(let parent=parents.get(node);parent&&parent!==fn;parent=parents.get(parent))
+              if(/^(?:If|Conditional|Switch|For|ForIn|ForOf|While|DoWhile|Try)Statement$/.test(parent.type)){conditional=true;break}
+            if(conditional){
+              const target=environment.get(key)||new Set();
+              addAll(target,source);
+              environment.set(key,target);
+            }else environment.set(key,new Set(source));
+          }
+        }
+        if(node.type==='ReturnStatement')addAll(nextReturns,dependencies(node.argument));
+        if(node.type==='AssignmentExpression'&&node.left.type==='MemberExpression'){
+          const property=memberProperty(node.left);
+          if(authorizationContract.authorizationStateFields.has(property)||authorizationContract.uiGateFields.has(property)||authorizationContract.navigationFields.has(property))
+            addAll(nextEffects,dependencies(node.right));
+        }
+        if(node.type==='IfStatement'||node.type==='ConditionalExpression'){
+          const branches=node.type==='IfStatement'?[node.consequent,node.alternate]:[node.consequent,node.alternate];
+          if(branches.some(branch=>branch&&hasAuthorizationMaterial(branch)))addAll(nextEffects,dependencies(node.test));
+        }
+        if(node.type==='CallExpression'){
+          const summary=parameterSummaries.get(localCallTarget(node));
+          if(summary)for(const index of summary.effects)addAll(nextEffects,argumentDependencies(node,index,summary,dependencies));
+          const callee=unwrap(node.callee);
+          let rootObject=callee?.type==='MemberExpression'?unwrap(callee.object):null;
+          while(rootObject?.type==='MemberExpression')rootObject=unwrap(rootObject.object);
+          const method=callee?.type==='MemberExpression'?memberProperty(callee):null;
+          const directSink=callee?.type==='Identifier'&&callee.name==='fetch'||
+            authorizationContract.uiGateMethods.has(method)||
+            authorizationContract.authorizationActionMethods.has(method)||
+            rootObject?.type==='Identifier'&&authorizationContract.authorityGlobals.has(rootObject.name)||
+            (rootObject?.type==='Identifier'&&storageAliases.has(resolveScopedBinding(rootObject,rootObject.name))||isQualifiedStorage(callee?.object))&&
+              node.arguments.some(argument=>authorizationContract.authorizationStateFields.has(constantString(argument)));
+          if(directSink)for(const argument of node.arguments)addAll(nextEffects,dependencies(argument));
+        }
+      }
+      const summary=parameterSummaries.get(name);
+      if(addAll(summary.returns,nextReturns)||addAll(summary.effects,nextEffects))changed=true;
+    }
+  }
+  for(const [name,summary] of parameterSummaries){
+    const existing=passThroughParameters.get(name)||new Set();
+    if(addAll(existing,summary.returns))passThroughParameters.set(name,existing);
+  }
+  for(let changed=true;changed;){
+    changed=false;
+    for(const {key,value} of bindings){
+      const valueSignal=signal(value);
+      for(const [bit,set] of [[1,roleValues],[4,mappedValues],[8,roleMappedValues],[16,serverMenusValues]])
+        if(valueSignal&bit&&!set.has(key)){set.add(key);changed=true}
+    }
+  }
   for(const node of nodes){
     if(node.type==='IfStatement'||node.type==='ConditionalExpression'){
       const testSignal=signal(node.test);
@@ -363,6 +620,10 @@ function findClientRoleAuthorityAst(script){
     if(node.type==='CallExpression'&&unwrap(node.callee)?.type==='Identifier'&&node.callee.name==='fetch'&&
       node.arguments.some(argument=>(signal(argument)&8)))return text(node);
     if(node.type==='CallExpression'&&isDirectMappedAuthorizationCall(node))return text(node);
+    if(node.type==='CallExpression'){
+      const summary=parameterSummaries.get(localCallTarget(node));
+      if(summary&&[...summary.effects].some(index=>signal(node.arguments[index])&8))return text(node);
+    }
   }
   return null;
 }
@@ -370,6 +631,11 @@ function findClientRoleAuthorityAst(script){
 function assertNoClientRoleAuthority(script,message){
   assert.equal(findClientRoleAuthorityAst(script),null,message);
 }
+
+const task223OriginalMutation=Buffer.from(
+  'Y29uc3QgYWNjZXNzPXtmdXR1cmU6dHJ1ZX07ZnVuY3Rpb24gcmV2ZWFsKGFsbG93ZWQpe2lmKGFsbG93ZWQpcGFnZS5oaWRkZW49ZmFsc2V9cmV2ZWFsKGFjY2Vzc1t1c2VyLnJvbGVdKQo=',
+  'base64'
+).toString('utf8');
 
 const designer={role:'designer',role_code:'designer',menus:[
   {label:'AI素材中心',href:'/ai-assets.html',permission:'menu.ai_assets'},
@@ -703,6 +969,66 @@ test('activated page scripts contain no client role-to-route authority',()=>{
 });
 
 test('client role authority detector rejects authorization mappings but permits display labels',()=>{
+  assert.equal(
+    createHash('sha256').update(task223OriginalMutation).digest('hex'),
+    '5999c5bf96780defeb2b060d82a8781436df4e08c5277e3de995a3fd7471bd27'
+  );
+  assert.notEqual(findClientRoleAuthorityAst(task223OriginalMutation),null,'Task223 original mutation');
+  const parameterEffectPositiveCases=[
+    `const access={future:true};function reveal(allowed){page.hidden=!allowed}reveal(access[user.role])`,
+    `const access={future:true};function reveal(allowed){const alias=allowed;const next=alias;if(next)page.hidden=false}reveal(access[user.role])`,
+    `const access={future:true};function pass(value){return value}page.hidden=!pass(access[user.role])`,
+    `const access={future:true};function pass(value){const alias=value;return alias}const allowed=pass(access[user.role]);if(allowed)page.hidden=false`,
+    `const access={future:true};function pass({value}){const alias=value;return alias}const allowed=pass({value:access[user.role]});if(allowed)page.hidden=false`,
+    `const access={future:true};function pass(value){const alias=value;return alias}function wrap(value){return pass(value)}const allowed=wrap(access[user.role]);if(allowed)page.hidden=false`,
+    `const access={future:true};function finish(value){if(value)page.hidden=false}function forward(value){finish(value)}forward(access[user.role])`,
+    `const access={future:true};function finish(value){if(value)page.hidden=false}function second(value){finish(value)}function first(value){second(value)}first(access[user.role])`,
+    `const access={future:true};function reveal(prefix,allowed,suffix){if(allowed)page.hidden=false}reveal(null,access[user.role],null)`,
+    `const access={future:true};function reveal(prefix,allowed=true){if(allowed)page.hidden=false}reveal(null,access[user.role])`,
+    `const access={future:true};function reveal(...values){if(values[0])page.hidden=false}reveal(access[user.role])`,
+    `const access={future:true};function reveal({allowed}){if(allowed)page.hidden=false}reveal({allowed:access[user.role]})`,
+    `const access={future:true};function reveal([allowed]){if(allowed)page.hidden=false}reveal([access[user.role]])`,
+    `const access={future:true};const reveal=allowed=>{if(allowed)page.hidden=false};reveal(access[user.role])`,
+    `const access={future:true};const reveal=function(allowed){if(allowed)page.hidden=false};reveal(access[user.role])`,
+    `const access={future:true};const gates={reveal(allowed){if(allowed)page.hidden=false}};gates.reveal(access[user.role])`,
+    `const access={future:true};const method='reveal';const gates={reveal(allowed){if(allowed)page.hidden=false}};gates[method](access[user.role])`,
+    `const access={future:true};const gates={reveal(allowed){if(allowed)page.hidden=false}};gates.reveal?.(access[user.role])`,
+    `const access={future:true};class Gate{reveal(allowed){if(allowed)page.hidden=false}}const gate=new Gate;gate.reveal(access[user.role])`,
+    `const access={future:true};function reveal(allowed){if(allowed)page.hidden=false}reveal(condition&&access[user.role])`,
+    `const access={future:true};function reveal(allowed){if(allowed)page.hidden=false}reveal(condition?access[user.role]:false)`,
+    `const access={future:true};function reveal(allowed){if(allowed)page.hidden=false}reveal(false);reveal(access[user.role])`,
+    `const access={future:true};function a(value){b(value)}function b(value){if(value)page.hidden=false;a(value)}a(access[user.role])`,
+    `const access={future:true};function first(){function apply(value){if(value)page.hidden=false}apply(access[user.role])}function second(){function apply(value){console.log(value)}}first()`,
+    `const access={future:true};{function apply(value){if(value)page.hidden=false}apply(access[user.role])}{function apply(value){console.log(value)}}`,
+    `const access={future:true};function first(){function apply(value){if(value)page.hidden=false}const alias=apply;alias(access[user.role])}function second(){function apply(value){console.log(value)}}first()`,
+    `const access={future:true};function first(){const gates={reveal(value){if(value)page.hidden=false}};gates.reveal(access[user.role])}function second(){const gates={reveal(value){console.log(value)}}}first()`,
+    `const access={future:true};function first(){class Gate{reveal(value){if(value)page.hidden=false}}const gate=new Gate;gate.reveal(access[user.role])}function second(){class Gate{reveal(value){console.log(value)}}}first()`,
+    `const access={future:true};function first(){const selected=access[user.role];if(selected)page.hidden=false}function second(){const selected=false;console.log(selected)}first()`,
+    `const access={future:true};function reveal(value){{const selected=value;if(selected)page.hidden=false}{const selected=false;console.log(selected)}}reveal(access[user.role])`,
+    `const access={future:true};function f(){if(condition){var selected=access[user.role]}if(selected)page.hidden=false}f()`
+  ];
+  for(const script of parameterEffectPositiveCases)
+    assert.notEqual(findClientRoleAuthorityAst(script),null,script);
+  const parameterEffectNegativeCases=[
+    `const states={future:'Published'};function format(value){return String(value)}label.textContent=format(states[key])`,
+    `const states={future:true};function translate(value){return labels[value]}label.textContent=translate(states[key])`,
+    `const states={future:true};function log(value){console.log(value)}log(states[key])`,
+    `const states={future:2};function total(value){return value+1}metric.textContent=total(states[key])`,
+    `const states={future:true};function ignore(value){return 'constant'}ignore(states[key])`,
+    `const states={future:'blue'};function color(value){return value}icon.style.color=color(states[key])`,
+    `const states={future:true};function first(){function apply(value){if(value)page.hidden=false}apply(false)}function second(){function apply(value){console.log(value)}apply(states[key])}second()`,
+    `const states={future:true};{function apply(value){if(value)page.hidden=false}apply(false)}{function apply(value){console.log(value)}apply(states[key])}`,
+    `const states={future:true};function first(){function apply(value){if(value)page.hidden=false}apply(false)}function second(){function apply(value){console.log(value)}const alias=apply;alias(states[key])}second()`,
+    `const states={future:true};function first(){const gates={reveal(value){if(value)page.hidden=false}};gates.reveal(false)}function second(){const gates={reveal(value){console.log(value)}};gates.reveal(states[key])}second()`,
+    `const states={future:true};function first(){class Gate{reveal(value){if(value)page.hidden=false}}const gate=new Gate;gate.reveal(false)}function second(){class Gate{reveal(value){console.log(value)}}const gate=new Gate;gate.reveal(states[key])}second()`,
+    `const access={future:true};function first(){const selected=access[user.role];console.log(selected)}function second(){const selected=false;if(selected)page.hidden=false}second()`,
+    `const access={future:true};function reveal(value){{const selected=value;console.log(selected)}{const selected=false;if(selected)page.hidden=false}}reveal(access[user.role])`,
+    `const access={future:true};function reveal(value){let selected=value;selected=false;if(selected)page.hidden=false}reveal(access[user.role])`,
+    `const access={future:true};function reveal(value){{const value=false;if(value)page.hidden=false}}reveal(access[user.role])`,
+    `const selected=access[user.role];try{throw false}catch(selected){if(selected)page.hidden=false}`,
+    `function render(items){items.forEach(draw)}render(user.menus)`
+  ];
+  for(const script of parameterEffectNegativeCases)assertNoClientRoleAuthority(script,script);
   const historicalAuthorizationCases=[
     `const ROLE_ACCESS={admin:['/settings.html']}`,
     `const roleMenus={admin:['menu.settings']}`,
