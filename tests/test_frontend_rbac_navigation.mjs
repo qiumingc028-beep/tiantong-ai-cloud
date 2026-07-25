@@ -20,86 +20,47 @@ const identifierToken=value=>String.raw`(?<![\w$])${escapeRegex(value)}(?![\w$])
 const identifierAlternation=values=>String.raw`(?:${[...values].map(identifierToken).join('|')})`;
 
 function findClientRoleAuthority(script){
-  const maskNonExecutable=(source,maskStrings=true)=>{
-    const output=[...source];
-    let index=0;
-    const blank=position=>{if(output[position]!=='\r'&&output[position]!=='\n')output[position]=' '};
-    const scanQuoted=quote=>{
-      index++;
-      while(index<source.length){
-        if(source[index]==='\\'){
-          if(maskStrings)blank(index);
-          index++;
-          if(index<source.length){if(maskStrings)blank(index);index++}
-          continue;
-        }
-        if(source[index]===quote){index++;return}
-        if(maskStrings)blank(index);
-        index++;
-      }
-    };
-    const scanCode=templateExpression=>{
-      let braces=templateExpression?1:0;
-      while(index<source.length){
-        if(templateExpression&&source[index]==='{' ){braces++;index++;continue}
-        if(templateExpression&&source[index]==='}'&&--braces===0){index++;return}
-        if(source[index]==='/'&&source[index+1]==='/'){
-          blank(index++);blank(index++);
-          while(index<source.length&&source[index]!=='\r'&&source[index]!=='\n')blank(index++);
-          continue;
-        }
-        if(source[index]==='/'&&source[index+1]==='*'){
-          blank(index++);blank(index++);
-          while(index<source.length&&!(source[index]==='*'&&source[index+1]==='/'))blank(index++);
-          if(index<source.length){blank(index++);blank(index++)}
-          continue;
-        }
-        if(source[index]==="'"||source[index]==='"'){scanQuoted(source[index]);continue}
-        if(source[index]==='`'){
-          index++;
-          while(index<source.length&&source[index]!=='`'){
-            if(source[index]==='\\'){
-              if(maskStrings)blank(index);
-              index++;
-              if(index<source.length){if(maskStrings)blank(index);index++}
-              continue;
-            }
-            if(source[index]==='$'&&source[index+1]==='{'){index+=2;scanCode(true);continue}
-            if(maskStrings)blank(index);
-            index++;
-          }
-          if(source[index]==='`')index++;
-          continue;
-        }
-        index++;
-      }
-    };
-    scanCode(false);
-    return output.join('');
+  const compiles=source=>{
+    try{new vm.Script(`(()=>{${source}\n})`);return true}catch{return false}
   };
-  const structuralCode=maskNonExecutable(script);
-  const literalCode=maskNonExecutable(script,false);
-  const direct=structuralCode.match(clientRoleAuthority);
+  const validSource=compiles(script);
+  const isExecutable=(index,length)=>{
+    if(!validSource)return true;
+    const marker='#'.padEnd(Math.max(1,length),' ');
+    return !compiles(`${script.slice(0,index)}${marker}${script.slice(index+length)}`);
+  };
+  const executableMatches=pattern=>[...script.matchAll(new RegExp(pattern.source,pattern.flags.includes('g')?pattern.flags:`${pattern.flags}g`))]
+    .filter(match=>isExecutable(match.index,match[0].length));
+  const executableTest=(pattern,value,offset)=>{
+    for(const match of value.matchAll(new RegExp(pattern.source,pattern.flags.includes('g')?pattern.flags:`${pattern.flags}g`)))
+      if(isExecutable(offset+match.index,match[0].length))return true;
+    return false;
+  };
+  const direct=executableMatches(clientRoleAuthority)[0];
   if(direct)return direct[0];
   const declarations=[];
   const declarationPattern=new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}([^;]+)`,'dg');
-  for(const match of structuralCode.matchAll(declarationPattern))
-    declarations.push({name:match[1],value:script.slice(...match.indices[2]).trim(),codeValue:structuralCode.slice(...match.indices[2]).trim(),literalValue:literalCode.slice(...match.indices[2]).trim()});
+  for(const match of executableMatches(declarationPattern)){
+    const [start,end]=match.indices[2];
+    declarations.push({name:match[1],value:script.slice(start,end).trim(),start});
+  }
   const assignments=[...declarations];
   const assignmentPattern=new RegExp(String.raw`(?:^|[;\r\n])${jsTrivia}(${jsIdentifier})${jsTrivia}=${jsTrivia}([^;]+)`,'dg');
-  for(const match of structuralCode.matchAll(assignmentPattern))
-    assignments.push({name:match[1],value:script.slice(...match.indices[2]).trim(),codeValue:structuralCode.slice(...match.indices[2]).trim(),literalValue:literalCode.slice(...match.indices[2]).trim()});
-  const quotedAuthorizationLiteral=value=>[...value.matchAll(/["'\x60]([^"'\x60]*)["'\x60]/g)]
-    .some(match=>/\/[^'"]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b/i.test(match[1]));
-  const containsAuthorizationLiteral=(literalValue,codeValue)=>quotedAuthorizationLiteral(literalValue)||authorizationName.test(codeValue);
-  const authorizationIdentifiers=new Set(declarations.filter(({name,literalValue,codeValue})=>(authorizationName.test(name)&&!displayName.test(name))||containsAuthorizationLiteral(literalValue,codeValue)).map(({name})=>name));
+  for(const match of executableMatches(assignmentPattern)){
+    const [start,end]=match.indices[2];
+    assignments.push({name:match[1],value:script.slice(start,end).trim(),start});
+  }
+  const quotedAuthorizationLiteral=(value,start)=>[...value.matchAll(/["'\x60]([^"'\x60]*)["'\x60]/g)]
+    .some(match=>isExecutable(start+match.index,match[0].length)&&/\/[^'"]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b/i.test(match[1]));
+  const containsAuthorizationLiteral=(value,start)=>quotedAuthorizationLiteral(value,start)||executableTest(authorizationName,value,start);
+  const authorizationIdentifiers=new Set(declarations.filter(({name,value,start})=>(authorizationName.test(name)&&!displayName.test(name))||containsAuthorizationLiteral(value,start)).map(({name})=>name));
   const roleIdentifiers=new Set(['role','role_code','roleCode']);
   const normalizeExpression=value=>value.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g,'').trim().replace(/^\(([\s\S]*)\)$/,'$1').trim();
   const roleFieldAliases=new Set();
   const destructuringPattern=new RegExp(String.raw`\b(?:const|let|var)${jsTrivia}\{([\s\S]{0,200}?)\}${jsTrivia}=`,'g');
   const destructuredAliasPattern=new RegExp(String.raw`(${jsIdentifier})${jsTrivia}:${jsTrivia}(${jsIdentifier})`,'g');
   const destructuredFieldPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}(role(?:_?code)?)${jsTrivia}(?=,|$)`,'gi');
-  for(const declaration of structuralCode.matchAll(destructuringPattern)){
+  for(const declaration of executableMatches(destructuringPattern)){
     for(const field of declaration[1].matchAll(destructuredAliasPattern))
       if(/role/i.test(field[1]))roleIdentifiers.add(field[2]);
     for(const field of declaration[1].matchAll(destructuredFieldPattern))roleIdentifiers.add(field[1]);
@@ -135,9 +96,9 @@ function findClientRoleAuthority(script){
       }
     }
   }
-  const expressionHasAuthority=(literalValue,codeValue)=>{
-    if(containsAuthorizationLiteral(literalValue,codeValue)||/\bmenu[A-Za-z0-9_$]*\b/i.test(codeValue))return true;
-    return [...authorizationIdentifiers].some(name=>new RegExp(identifierToken(name)).test(codeValue));
+  const expressionHasAuthority=(value,start)=>{
+    if(containsAuthorizationLiteral(value,start)||executableTest(/\bmenu[A-Za-z0-9_$]*\b/i,value,start))return true;
+    return [...authorizationIdentifiers].some(name=>executableTest(new RegExp(identifierToken(name)),value,start));
   };
   const propertyKey=String.raw`(?:${jsIdentifier}|["'\x60][^"'\x60]+["'\x60]|\[[\s\S]+\])`;
   const propertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}`,'g');
@@ -145,20 +106,20 @@ function findClientRoleAuthority(script){
   const serverRoutePropertyPattern=new RegExp(String.raw`(?:^|,)${jsTrivia}["']\/[^"']+\.html["']${jsTrivia}:${jsTrivia}["']menu\.[^"']+["']`,'g');
   const roleExpression=identifierAlternation(roleIdentifiers);
   const simpleDisplayValues=new RegExp(String.raw`^(?:${jsTrivia}${propertyKey}${jsTrivia}:${jsTrivia}["'\x60](?![^"'\x60]*(?:\/[^"'\x60]+\.html|\b[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\b))[^"'\x60]*["'\x60]${jsTrivia},?)+$`);
-  const displayMetadataOnly=(name,body,literalBody,bodyCode)=>{
+  const displayMetadataOnly=(name,body,bodyStart)=>{
     if(simpleDisplayValues.test(body))return !authorizationName.test(name)||displayName.test(name);
     if(!displayName.test(name)&&!/metadata/i.test(name))return false;
-    if(quotedAuthorizationLiteral(literalBody)||/\b(?:true|false)\b/i.test(bodyCode))return false;
+    if(quotedAuthorizationLiteral(body,bodyStart)||executableTest(/\b(?:true|false)\b/i,body,bodyStart))return false;
     if(displayName.test(name))return true;
-    const withoutDisplayFields=bodyCode.replace(/\b(?:menu|permission|route|page|button|feature|capability|grant|access)?(?:label|name|title|text|display)\b/gi,'');
+    const withoutDisplayFields=body.replace(/\b(?:menu|permission|route|page|button|feature|capability|grant|access)?(?:label|name|title|text|display)\b/gi,'');
     return !authorizationName.test(withoutDisplayFields);
   };
-  const roleDecisionHasAuthority=(value,literalValue,codeValue)=>{
+  const roleDecisionHasAuthority=(value,start)=>{
     if(/\breturn\s+(?:null|false|\[\])\b/.test(value))return false;
-    if(/\b(?:textContent|innerText|ariaLabel|roleLabel)\b/i.test(codeValue)&&!quotedAuthorizationLiteral(literalValue))return false;
-    return quotedAuthorizationLiteral(literalValue)||authorizationName.test(codeValue)||/\b(?:privileg|entitl|can[A-Z]|allowed)\w*\b/.test(codeValue);
+    if(executableTest(/\b(?:textContent|innerText|ariaLabel|roleLabel)\b/i,value,start)&&!quotedAuthorizationLiteral(value,start))return false;
+    return quotedAuthorizationLiteral(value,start)||executableTest(authorizationName,value,start)||executableTest(/\b(?:privileg|entitl|can[A-Z]|allowed)\w*\b/,value,start);
   };
-  const directRoleDecision=structuralCode.match(new RegExp(String.raw`\breturn${jsTrivia}(?:${roleExpression})${jsTrivia}(?:===|==|!==|!=)[^;}\r\n]+`));
+  const directRoleDecision=executableMatches(new RegExp(String.raw`\breturn${jsTrivia}(?:${roleExpression})${jsTrivia}(?:===|==|!==|!=)[^;}\r\n]+`))[0];
   if(directRoleDecision)return directRoleDecision[0];
   const roleDecisionPatterns=[
     new RegExp(String.raw`\bswitch${jsTrivia}\([^)]*(?:${roleExpression})[^)]*\)${jsTrivia}\{([\s\S]{0,500})\}`,'g'),
@@ -166,9 +127,9 @@ function findClientRoleAuthority(script){
     new RegExp(String.raw`(?:${roleExpression})${jsTrivia}(?:===|==)[^?:;\n]+[?:]([^;\n]{0,240})`,'g')
   ];
   for(const pattern of roleDecisionPatterns)
-    for(const match of structuralCode.matchAll(pattern))
-      if(roleDecisionHasAuthority(script.slice(match.index,match.index+match[0].length),literalCode.slice(match.index,match.index+match[0].length),match[0]))return match[0];
-  const mappingAliases=new Map(declarations.map(({name,codeValue})=>[name,codeValue.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1]]));
+    for(const match of executableMatches(pattern))
+      if(roleDecisionHasAuthority(match[0],match.index))return match[0];
+  const mappingAliases=new Map(declarations.map(({name,value})=>[name,value.match(new RegExp(String.raw`^${jsTrivia}(${jsIdentifier})${jsTrivia}$`))?.[1]]));
   const aliasesFor=source=>{
     const aliases=new Set([source]);
     for(let changed=true;changed;){
@@ -178,15 +139,12 @@ function findClientRoleAuthority(script){
     }
     return aliases;
   };
-  for(const {name,value,literalValue,codeValue} of declarations){
+  for(const {name,value,start} of declarations){
     const objectBody=value.match(new RegExp(String.raw`^${jsTrivia}(?:Object${jsTrivia}\.${jsTrivia}freeze${jsTrivia}\(${jsTrivia})?\{([\s\S]*)\}${jsTrivia}\)?${jsTrivia}$`));
-    const objectBodyLiteral=literalValue.match(new RegExp(String.raw`^${jsTrivia}(?:Object${jsTrivia}\.${jsTrivia}freeze${jsTrivia}\(${jsTrivia})?\{([\s\S]*)\}${jsTrivia}\)?${jsTrivia}$`));
-    const objectBodyCode=codeValue.match(new RegExp(String.raw`^${jsTrivia}(?:Object${jsTrivia}\.${jsTrivia}freeze${jsTrivia}\(${jsTrivia})?\{([\s\S]*)\}${jsTrivia}\)?${jsTrivia}$`));
     const constructedMapping=new RegExp(String.raw`^${jsTrivia}(?:new${jsTrivia}Map|Object${jsTrivia}\.${jsTrivia}(?:assign|fromEntries))${jsTrivia}\(`).test(value);
     if(!objectBody&&!constructedMapping)continue;
     const body=objectBody?objectBody[1]:value;
-    const bodyLiteral=objectBodyLiteral?objectBodyLiteral[1]:literalValue;
-    const bodyCode=objectBodyCode?objectBodyCode[1]:codeValue;
+    const bodyStart=start+(objectBody?objectBody.index+objectBody[0].indexOf(body):0);
     if(objectBody&&!propertyPattern.test(body)&&!shorthandPropertyPattern.test(body))continue;
     propertyPattern.lastIndex=0;
     shorthandPropertyPattern.lastIndex=0;
@@ -194,22 +152,22 @@ function findClientRoleAuthority(script){
     const authorizationStructured=authorizationName.test(name)&&!displayName.test(name);
     const lookupNames=identifierAlternation(aliasesFor(name));
     const mappingLookupExpression=String.raw`${lookupNames}${jsTrivia}(?:\?\.${jsTrivia})?(?:\[[^\]]+\]|\.${jsTrivia}get${jsTrivia}\([^)]*\))`;
-    const mappingLookup=new RegExp(mappingLookupExpression).test(structuralCode);
-    const lookupResults=assignments.filter(({codeValue})=>new RegExp(String.raw`^${mappingLookupExpression}`).test(codeValue)).map(({name})=>name);
+    const mappingLookup=executableMatches(new RegExp(mappingLookupExpression)).length>0;
+    const lookupResults=assignments.filter(({value})=>new RegExp(String.raw`^${mappingLookupExpression}`).test(value)).map(({name})=>name);
     const lookupFeedsAuthority=lookupResults.some(result=>{
       if(authorizationName.test(result)&&!displayName.test(result))return true;
-      if(declarations.some(({name:target,codeValue:expression})=>authorizationName.test(target)&&!displayName.test(target)&&new RegExp(identifierToken(result)).test(expression)))return true;
-      const conditional=structuralCode.match(new RegExp(String.raw`\bif${jsTrivia}\([^)]*${identifierToken(result)}[^)]*\)${jsTrivia}(?:\{[\s\S]{0,240}?\}|[^\n;]{0,240})`));
-      return Boolean(conditional&&roleDecisionHasAuthority(script.slice(conditional.index,conditional.index+conditional[0].length),literalCode.slice(conditional.index,conditional.index+conditional[0].length),conditional[0]));
-    })||[...structuralCode.matchAll(new RegExp(String.raw`\b(${jsIdentifier})${jsTrivia}\([^;\r\n]{0,240}?${mappingLookupExpression}`,'g'))]
+      if(declarations.some(({name:target,value:expression,start:expressionStart})=>authorizationName.test(target)&&!displayName.test(target)&&executableTest(new RegExp(identifierToken(result)),expression,expressionStart)))return true;
+      const conditional=executableMatches(new RegExp(String.raw`\bif${jsTrivia}\([^)]*${identifierToken(result)}[^)]*\)${jsTrivia}(?:\{[\s\S]{0,240}?\}|[^\n;]{0,240})`))[0];
+      return Boolean(conditional&&roleDecisionHasAuthority(conditional[0],conditional.index));
+    })||executableMatches(new RegExp(String.raw`\b(${jsIdentifier})${jsTrivia}\([^;\r\n]{0,240}?${mappingLookupExpression}`))
       .some(match=>authorizationName.test(match[1])&&!displayName.test(match[1]));
     const properties=objectBody?[...body.matchAll(propertyPattern),...body.matchAll(shorthandPropertyPattern)].length:0;
     propertyPattern.lastIndex=0;
     const serverRouteProperties=objectBody?[...body.matchAll(serverRoutePropertyPattern)].length:0;
     serverRoutePropertyPattern.lastIndex=0;
     if(properties>0&&serverRouteProperties===properties)continue;
-    const authoritativeValue=expressionHasAuthority(bodyLiteral,bodyCode)||((roleStructured||authorizationStructured)&&/\b(?:true|false)\b/.test(bodyCode));
-    if(!displayMetadataOnly(name,body,bodyLiteral,bodyCode)&&((mappingLookup&&(authoritativeValue||lookupFeedsAuthority))||(authoritativeValue&&(roleStructured||authorizationStructured))))return `${name}=${value}`;
+    const authoritativeValue=expressionHasAuthority(body,bodyStart)||((roleStructured||authorizationStructured)&&executableTest(/\b(?:true|false)\b/,body,bodyStart));
+    if(!displayMetadataOnly(name,body,bodyStart)&&((mappingLookup&&(authoritativeValue||lookupFeedsAuthority))||(authoritativeValue&&(roleStructured||authorizationStructured))))return `${name}=${value}`;
   }
   return null;
 }
@@ -749,6 +707,8 @@ test('client role authority detector rejects authorization mappings but permits 
     `const ROUTE_PERMISSIONS={'/settings.html':'menu.settings'};const permissions=new Set(user.menus.map(item=>item.permission));permissions.has(ROUTE_PERMISSIONS[path])`
   ])assertNoClientRoleAuthority(script,'display labels');
   assert.doesNotMatch(`${clientRoleAuthority.source}\n${findClientRoleAuthority}`,/\b(?:owner|admin|designer|regional_manager)\b/i,'detector must not hardcode role names');
+  const removedLexerSymbols=[['mask','NonExecutable'],['scan','Quoted'],['scan','Code']].map(parts=>parts.join(''));
+  assert.ok(removedLexerSymbols.every(symbol=>!`${findClientRoleAuthority}`.includes(symbol)),'detector must use the native parser instead of a handwritten lexer');
   assert.doesNotMatch(`${findClientRoleAuthority}`,/\b(?:functionReturns|functionBodies|nestedBodyRanges|matchingDelimiter|roleReturningFunctions)\b/,'detector must not parse function syntax');
   assert.doesNotMatch(`${findClientRoleAuthority}`,/\b(?:eval|new Function)\b/,'detector must not execute scanned code');
 });
