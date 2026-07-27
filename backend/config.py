@@ -1,5 +1,6 @@
 import os
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
@@ -76,6 +77,20 @@ def _boolean(name: str, default: bool) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     raise ConfigurationError(f"{name} must be a boolean")
+
+
+def _asset_storage_root() -> Path:
+    raw = os.getenv("ASSET_STORAGE_ROOT")
+    if raw is None:
+        raw = "/data/product-assets"
+    value = raw.strip()
+    configured_root = Path(value)
+    if not value or not configured_root.is_absolute():
+        raise ConfigurationError("ASSET_STORAGE_ROOT must be an absolute path")
+    root = Path(os.path.abspath(value))
+    if root == Path("/") or root == Path("/app") or Path("/app") in root.parents:
+        raise ConfigurationError("ASSET_STORAGE_ROOT must be outside /app and filesystem root")
+    return root
 
 
 def _cors_origins(raw: str, *, production: bool) -> list[str]:
@@ -178,6 +193,7 @@ class Settings:
 
         self.DATABASE_URL = _database_url(production=self.IS_PRODUCTION)
         self.REDIS_URL = _redis_url(production=self.IS_PRODUCTION)
+        self.ASSET_STORAGE_ROOT = _asset_storage_root()
 
         self._jwt_secret = None
         self._boss_initial_password = None

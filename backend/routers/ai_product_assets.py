@@ -11,13 +11,13 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user
 from ..auth_data import normalize_role
+from ..config import get_settings
 from ..database import get_db
 from ..models import AiProductAsset, AiProductDraft, Store, User
 
 
 router = APIRouter(prefix="/api/ai-products", tags=["ai-products"])
 CANONICAL_TENANT_ID = "tiantong"
-STORAGE_ROOT = Path("artifacts/product-assets")
 MAX_FILE_SIZE = 10 * 1024 * 1024
 MAX_FILES = 9
 ALLOWED_TYPES = {
@@ -89,6 +89,30 @@ def _asset_dict(asset: AiProductAsset) -> dict:
     }
 
 
+def _storage_directory(shop_id: int) -> Path:
+    root = get_settings().ASSET_STORAGE_ROOT
+    if not root.is_absolute() or root.is_symlink():
+        raise HTTPException(status_code=500, detail="素材存储配置不安全")
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        resolved_root = root.resolve(strict=True)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="素材存储不可用") from exc
+    if resolved_root != root:
+        raise HTTPException(status_code=500, detail="素材存储配置不安全")
+
+    directory = root / CANONICAL_TENANT_ID / str(shop_id)
+    current = root
+    for component in (CANONICAL_TENANT_ID, str(shop_id)):
+        current = current / component
+        if current.is_symlink():
+            raise HTTPException(status_code=500, detail="素材存储配置不安全")
+        current.mkdir(mode=0o750, exist_ok=True)
+        if current.is_symlink() or resolved_root not in current.resolve(strict=True).parents:
+            raise HTTPException(status_code=500, detail="素材存储配置不安全")
+    return directory
+
+
 @router.get("/shops")
 def list_available_shops(request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
@@ -120,26 +144,31 @@ async def upload_assets(
         for upload in files:
             await upload.close()
 
-    draft = AiProductDraft(
-        tenant_id=CANONICAL_TENANT_ID,
-        shop_id=shop_id,
-        created_by=user.id,
-        status="draft",
-    )
-    db.add(draft)
-    db.flush()
-    STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
+    temporary: list[Path] = []
     assets: list[AiProductAsset] = []
     try:
+        draft = AiProductDraft(
+            tenant_id=CANONICAL_TENANT_ID,
+            shop_id=shop_id,
+            created_by=user.id,
+            status="draft",
+        )
+        db.add(draft)
+        db.flush()
+        storage_directory = _storage_directory(shop_id)
         for original_filename, content, mime_type in validated:
             storage_key = secrets.token_hex(32)
-            path = STORAGE_ROOT / storage_key
+            path = storage_directory / storage_key
+            temp_path = storage_directory / f".{storage_key}.{secrets.token_hex(16)}.tmp"
             written.append(path)
-            with path.open("xb") as handle:
+            temporary.append(temp_path)
+            with temp_path.open("xb") as handle:
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+            temporary.remove(temp_path)
             asset = AiProductAsset(
                 draft_id=draft.id,
                 tenant_id=CANONICAL_TENANT_ID,
@@ -157,7 +186,7 @@ async def upload_assets(
         db.commit()
     except Exception:
         db.rollback()
-        for path in written:
+        for path in temporary + written:
             path.unlink(missing_ok=True)
         raise
     return {"draft_id": draft.id, "assets": [_asset_dict(asset) for asset in assets]}

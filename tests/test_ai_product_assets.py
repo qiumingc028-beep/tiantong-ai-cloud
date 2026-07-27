@@ -1,5 +1,6 @@
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import event
@@ -14,7 +15,10 @@ WEBP = b"RIFF" + (24).to_bytes(4, "little") + b"WEBP" + b"\x00" * 20
 
 @pytest.fixture(autouse=True)
 def product_storage(tmp_path, monkeypatch):
-    monkeypatch.setattr("backend.routers.ai_product_assets.STORAGE_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "backend.routers.ai_product_assets.get_settings",
+        lambda: SimpleNamespace(ASSET_STORAGE_ROOT=tmp_path),
+    )
     return tmp_path
 
 
@@ -123,7 +127,11 @@ def test_jpeg_png_and_webp_are_accepted_and_storage_keys_are_opaque(
     with test_db() as db:
         rows = db.query(AiProductAsset).order_by(AiProductAsset.id).all()
         assert all(len(row.storage_key) == 64 and row.original_filename not in row.storage_key for row in rows)
-        assert {path.name for path in product_storage.iterdir()} == {row.storage_key for row in rows}
+        stored = [path for path in product_storage.rglob("*") if path.is_file()]
+        assert {path.name for path in stored} == {row.storage_key for row in rows}
+        assert {path.parent.relative_to(product_storage).as_posix() for path in stored} == {
+            "tiantong/1"
+        }
 
 
 @pytest.mark.parametrize(
@@ -150,7 +158,7 @@ def test_unsafe_or_inconsistent_uploads_are_rejected_without_artifacts(
         files=[("files", (filename, content, mime))],
     )
     assert response.status_code == expected_status
-    assert list(product_storage.iterdir()) == []
+    assert [path for path in product_storage.rglob("*") if path.is_file()] == []
 
 
 def test_upload_limits_are_enforced_without_artifacts(client, owner_headers, product_storage):
@@ -162,7 +170,9 @@ def test_upload_limits_are_enforced_without_artifacts(client, owner_headers, pro
     )
     assert maximum.status_code == 201
     assert len(maximum.json()["assets"]) == 9
-    for path in product_storage.iterdir():
+    for path in product_storage.rglob("*"):
+        if not path.is_file():
+            continue
         path.unlink()
 
     too_many = client.post(
@@ -180,7 +190,7 @@ def test_upload_limits_are_enforced_without_artifacts(client, owner_headers, pro
         files=[("files", ("huge.png", PNG + b"x" * (10 * 1024 * 1024), "image/png"))],
     )
     assert too_large.status_code == 413
-    assert list(product_storage.iterdir()) == []
+    assert [path for path in product_storage.rglob("*") if path.is_file()] == []
 
 
 def test_one_invalid_file_rejects_whole_request_without_partial_artifacts(
@@ -196,7 +206,7 @@ def test_one_invalid_file_rejects_whole_request_without_partial_artifacts(
         ],
     )
     assert response.status_code == 400
-    assert list(product_storage.iterdir()) == []
+    assert [path for path in product_storage.rglob("*") if path.is_file()] == []
     with test_db() as db:
         assert db.query(AiProductDraft).count() == 0
 
@@ -219,7 +229,7 @@ def test_database_failure_removes_written_files_and_metadata(
     finally:
         event.remove(test_db.class_, "before_commit", fail_commit)
 
-    assert list(product_storage.iterdir()) == []
+    assert [path for path in product_storage.rglob("*") if path.is_file()] == []
     with test_db() as db:
         assert db.query(AiProductDraft).count() == 0
         assert db.query(AiProductAsset).count() == 0
@@ -250,7 +260,7 @@ def test_storage_failure_removes_earlier_files_and_metadata(
             ],
         )
 
-    assert list(product_storage.iterdir()) == []
+    assert [path for path in product_storage.rglob("*") if path.is_file()] == []
     with test_db() as db:
         assert db.query(AiProductDraft).count() == 0
         assert db.query(AiProductAsset).count() == 0
