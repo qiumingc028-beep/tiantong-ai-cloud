@@ -23,7 +23,8 @@ RUN pip install --no-cache-dir \
 RUN groupadd --gid 10001 tiantong \
     && useradd --uid 10001 --gid 10001 \
         --no-create-home --home-dir /nonexistent \
-        --shell /usr/sbin/nologin tiantong
+        --shell /usr/sbin/nologin tiantong \
+    && install -d -o 10001 -g 10001 -m 0750 /data/product-assets
 
 COPY --chown=0:0 backend ./backend
 COPY --chown=0:0 device_agents ./device_agents

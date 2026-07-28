@@ -41,6 +41,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      ASSET_STORAGE_ROOT: /data/product-assets
+    volumes:
+      - product_assets:/data/product-assets
     expose:
       - "8000"
     logging:
@@ -101,3 +105,4 @@ volumes:
   postgres_data:
   redis_data:
   nginx_logs:
+  product_assets:
