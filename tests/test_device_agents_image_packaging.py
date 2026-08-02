@@ -11,7 +11,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 COPY_RULE = "COPY --chown=0:0 device_agents ./device_agents"
-PINNED_PYTHON = "FROM python:s12-pinned-8a7e7cc04fd3-amd64"
+PINNED_PYTHON = (
+    "FROM docker.io/library/python:3.12-slim@"
+    "sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b"
+)
 RUNTIME_USER = "USER 10001:10001"
 
 
