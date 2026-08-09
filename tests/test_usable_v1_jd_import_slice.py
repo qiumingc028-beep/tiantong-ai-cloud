@@ -3,7 +3,7 @@ from io import BytesIO
 
 import openpyxl
 
-from backend.models import EmployeeLog, JdDailyMetric, MetricDaily
+from backend.models import EmployeeLog, JdDailyMetric, MetricDaily, Store, User
 
 
 def test_rbac_guard_is_served_to_real_browser(client):
@@ -180,3 +180,26 @@ def test_blank_required_values_do_not_overwrite_existing_metric(client, owner_he
     assert business["summary"]["sales_amount"] == 321.0
     assert business["summary"]["orders_count"] == 3
     assert business["summary"]["ad_spend"] == 32.0
+
+
+def test_owner_cannot_write_store_without_explicit_membership(client, owner_headers, test_db):
+    with test_db() as db:
+        owner = db.query(User).filter(User.username == "owner").one()
+        store = Store(platform="jd", store_code="UNAUTHORIZED", store_name="Unauthorized", tenant_id=owner.tenant_id, company_id=owner.company_id, active=True)
+        db.add(store)
+        db.commit()
+        store_id = store.id
+
+    response = client.post(
+        "/api/metrics/manual",
+        headers=owner_headers,
+        json={
+            "store_id": store_id,
+            "metric_date": "2026-08-10",
+            "sales_amount": 100,
+        },
+    )
+
+    assert response.status_code == 403
+    with test_db() as db:
+        assert db.query(MetricDaily).filter(MetricDaily.store_id == store_id).count() == 0

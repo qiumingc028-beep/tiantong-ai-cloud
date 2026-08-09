@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth import hash_password
 from backend.database import SessionLocal
-from backend.models import User
+from backend.models import Company, Store, Tenant, User, UserStoreMembership
 
 
 PRIVILEGED_ROLES = {"owner", "boss", "admin"}
@@ -69,14 +69,31 @@ def reset_admin_password(
     if not user:
         if not create_missing:
             raise ValueError("admin account does not exist; use --create-missing after confirming the environment")
+        tenant_id, company_id = unique_active_scope(db)
         user = User(
             username=clean_username,
             password_hash=hash_password(new_password),
             role=role or "boss",
             display_name=display_name or clean_username,
+            tenant_id=tenant_id,
+            company_id=company_id,
             active=True,
         )
         db.add(user)
+        db.flush()
+        for store in db.query(Store).filter(
+            Store.tenant_id == tenant_id,
+            Store.company_id == company_id,
+        ):
+            db.add(
+                UserStoreMembership(
+                    user_id=user.id,
+                    store_id=store.id,
+                    can_read=True,
+                    can_write=True,
+                    active=True,
+                )
+            )
     else:
         if user.role not in PRIVILEGED_ROLES and not role:
             raise ValueError("refusing to reset a non-admin account without an explicit privileged --role")
@@ -94,6 +111,18 @@ def reset_admin_password(
         active=bool(user.active),
         password_hash_algorithm=password_hash_algorithm(user.password_hash),
     )
+
+
+def unique_active_scope(db: Session) -> tuple[int, int]:
+    scopes = (
+        db.query(Tenant.id, Company.id)
+        .join(Company, Company.tenant_id == Tenant.id)
+        .filter(Tenant.active.is_(True), Company.active.is_(True))
+        .all()
+    )
+    if len(scopes) != 1:
+        raise ValueError("admin account creation requires exactly one active tenant/company scope")
+    return scopes[0]
 
 
 def ensure_core_admin_accounts(db: Session, new_password: str) -> list[AdminAccountSummary]:

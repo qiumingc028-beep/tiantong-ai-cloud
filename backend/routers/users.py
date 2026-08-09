@@ -59,8 +59,8 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/api/users")
 def list_users(request: Request, db: Session = Depends(get_db)):
-    require_admin_user(request, db)
-    users = db.query(User).order_by(User.id.asc()).all()
+    admin = require_admin_user(request, db)
+    users = scoped_users(db, admin).order_by(User.id.asc()).all()
     return [
         {
             "id": u.id,
@@ -90,7 +90,7 @@ def roles(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/api/users")
 async def create_user(request: Request, db: Session = Depends(get_db)):
-    require_admin_user(request, db)
+    admin = require_admin_user(request, db)
     data = await request.json()
     username = data.get("username", "").strip()
     display_name = data.get("display_name", "").strip()
@@ -106,15 +106,25 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
 
     import secrets
     password = secrets.token_urlsafe(10)
-    db.add(User(username=username, password_hash=hash_password(password), role=role, display_name=display_name, active=True))
+    db.add(
+        User(
+            username=username,
+            password_hash=hash_password(password),
+            role=role,
+            display_name=display_name,
+            tenant_id=admin.tenant_id,
+            company_id=admin.company_id,
+            active=True,
+        )
+    )
     db.commit()
     return {"ok": True, "username": username, "display_name": display_name, "role": role, "password": password}
 
 
 @router.post("/api/users/{user_id}/reset-password")
 def reset_user_password(user_id: int, request: Request, db: Session = Depends(get_db)):
-    require_admin_user(request, db)
-    user = db.get(User, user_id)
+    admin = require_admin_user(request, db)
+    user = scoped_users(db, admin).filter(User.id == user_id).one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
     import secrets
@@ -129,9 +139,16 @@ def toggle_user(user_id: int, request: Request, db: Session = Depends(get_db)):
     admin = require_admin_user(request, db)
     if admin.id == user_id:
         raise HTTPException(status_code=400, detail="不能停用自己")
-    user = db.get(User, user_id)
+    user = scoped_users(db, admin).filter(User.id == user_id).one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
     user.active = not user.active
     db.commit()
     return {"ok": True, "username": user.username, "active": user.active}
+
+
+def scoped_users(db: Session, admin: User):
+    return db.query(User).filter(
+        User.tenant_id == admin.tenant_id,
+        User.company_id == admin.company_id,
+    )

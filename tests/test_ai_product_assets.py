@@ -53,8 +53,8 @@ def test_product_asset_routes_require_login(client):
 def test_available_shops_use_server_side_manager_assignment(client, viewer_headers, test_db):
     with test_db() as db:
         viewer = db.query(User).filter(User.username == "viewer").one()
-        assigned = Store(store_code="JD02", store_name="Assigned", manager_user_id=viewer.id, active=True)
-        unassigned = Store(store_code="JD03", store_name="Unassigned", active=True)
+        assigned = Store(store_code="JD02", store_name="Assigned", manager_user_id=viewer.id, tenant_id=viewer.tenant_id, company_id=viewer.company_id, active=True)
+        unassigned = Store(store_code="JD03", store_name="Unassigned", tenant_id=viewer.tenant_id, company_id=viewer.company_id, active=True)
         db.add_all([assigned, unassigned])
         db.commit()
         assigned_id = assigned.id

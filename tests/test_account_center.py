@@ -2,7 +2,7 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
-from backend.models import Permission, Role, StoreAccountNote
+from backend.models import Company, Permission, Role, Store, StoreAccountNote, User
 
 
 def grant_account_center_access(session_factory):
@@ -152,3 +152,44 @@ def test_low_privilege_user_cannot_access_account_center(client):
     headers = {"Authorization": f"Bearer {viewer.json()['token']}"}
 
     assert client.get("/api/accounts", headers=headers).status_code == 403
+
+
+def test_account_import_fails_closed_on_tenant_wide_store_code_collision(
+    client, test_db
+):
+    grant_account_center_access(test_db)
+    headers = login_owner(client)
+    with test_db() as db:
+        owner = db.query(User).filter(User.username == "owner").one()
+        company = Company(
+            tenant_id=owner.tenant_id,
+            company_code="account-collision",
+            company_name="Account Collision",
+            active=True,
+        )
+        db.add(company)
+        db.flush()
+        db.add(
+            Store(
+                platform="jd",
+                store_code="COLLISION",
+                store_name="Hidden Collision",
+                tenant_id=owner.tenant_id,
+                company_id=company.id,
+                active=True,
+            )
+        )
+        db.commit()
+
+    import_file = make_xlsx(
+        ["店铺编号", "店铺名称"],
+        [["COLLISION", "Attempted Collision"]],
+    )
+    response = client.post(
+        "/api/accounts/import",
+        headers=headers,
+        files={"file": ("accounts.xlsx", import_file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert response.status_code == 403
+    with test_db() as db:
+        assert db.query(Store).filter(Store.store_code == "COLLISION").count() == 1

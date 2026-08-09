@@ -10,7 +10,7 @@ from backend.auth import hash_password
 from backend.database import Base, get_db
 from backend.deploy_models import DeployRecord
 from backend.main import app
-from backend.models import AiEmployee, AiTask, Permission, Role, Store, User
+from backend.models import AiEmployee, AiTask, Company, Permission, Role, Store, Tenant, User, UserStoreMembership
 
 
 class FakeRedis:
@@ -149,12 +149,31 @@ def login_headers(client: TestClient, username: str, password: str):
 def seed_database(session_factory):
     db = session_factory()
     try:
+        tenant = db.query(Tenant).filter(Tenant.tenant_code == "internal-test").one_or_none()
+        if not tenant:
+            tenant = Tenant(tenant_code="internal-test", tenant_name="Internal Test", active=True)
+            db.add(tenant)
+            db.flush()
+        company = db.query(Company).filter(
+            Company.tenant_id == tenant.id,
+            Company.company_code == "internal-test",
+        ).one_or_none()
+        if not company:
+            company = Company(
+                tenant_id=tenant.id,
+                company_code="internal-test",
+                company_name="Internal Test",
+                active=True,
+            )
+            db.add(company)
+            db.flush()
         permissions = [
             Permission(code="menu.dashboard", name="Dashboard"),
             Permission(code="menu.jd_data", name="JD Data"),
             Permission(code="menu.import", name="Import"),
             Permission(code="menu.stores", name="Stores"),
             Permission(code="data.metrics.write", name="Metrics Write"),
+            Permission(code="stores.manage", name="Stores Manage"),
             Permission(code="ai.tasks.manage", name="AI Tasks Manage"),
             Permission(code="ai.tasks.read", name="AI Tasks Read"),
             Permission(code="task_center.read", name="Task Center Read"),
@@ -209,6 +228,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="owner",
                     display_name="Owner",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -216,6 +237,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="admin",
                     display_name="Admin",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -223,6 +246,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="boss",
                     display_name="Boss",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -230,6 +255,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="operator",
                     display_name="Operator",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -237,6 +264,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="customer_service",
                     display_name="Customer Service",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -244,6 +273,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="designer",
                     display_name="Designer",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -251,6 +282,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="editor",
                     display_name="Editor",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -258,11 +291,36 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="viewer",
                     display_name="Viewer",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
             ]
         )
-        db.add(Store(platform="jd", store_code="JD01", store_name="JD Store 01", active=True))
+        db.flush()
+        store = Store(
+            platform="jd",
+            store_code="JD01",
+            store_name="JD Store 01",
+            tenant_id=tenant.id,
+            company_id=company.id,
+            active=True,
+        )
+        db.add(store)
+        db.flush()
+        permitted_users = db.query(User).filter(User.username.in_(["owner", "admin", "boss", "operator"])).all()
+        db.add_all(
+            [
+                UserStoreMembership(
+                    user_id=user.id,
+                    store_id=store.id,
+                    can_read=True,
+                    can_write=True,
+                    active=True,
+                )
+                for user in permitted_users
+            ]
+        )
         db.add(
             DeployRecord(
                 deploy_version="Sprint 3 MVP",

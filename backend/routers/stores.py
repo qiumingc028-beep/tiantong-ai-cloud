@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_role_permissions, normalize_role, require_permission_user, current_user
 from ..database import get_db
-from ..models import JdDailyMetric, MetricDaily, Store, User
+from ..models import JdDailyMetric, MetricDaily, Store, User, UserStoreMembership
+from ..store_authorization import authorized_stores, require_authorized_store
 
 
 router = APIRouter()
@@ -13,29 +14,46 @@ router = APIRouter()
 
 @router.get("/api/store-users")
 def store_users(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "stores.manage")
-    users = db.query(User).filter(User.active.is_(True)).order_by(User.id.asc()).all()
+    user = require_permission_user(request, db, "stores.manage")
+    users = db.query(User).filter(
+        User.tenant_id == user.tenant_id,
+        User.company_id == user.company_id,
+        User.active.is_(True),
+    ).order_by(User.id.asc()).all()
     return [{"id": u.id, "username": u.username, "role": u.role, "display_name": u.display_name, "active": u.active} for u in users]
 
 
 @router.get("/api/stores")
 def list_stores(request: Request, db: Session = Depends(get_db)):
-    require_store_read(request, db)
-    stores = db.query(Store).options(joinedload(Store.manager)).order_by(Store.id.asc()).all()
+    user = require_store_read(request, db)
+    stores = authorized_stores(db, user, active_only=False).options(joinedload(Store.manager)).order_by(Store.id.asc()).all()
     return [store_to_dict(s) for s in stores]
 
 
 @router.get("/api/jd/dashboard")
 def jd_dashboard(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
-    stores = db.query(Store).options(joinedload(Store.manager)).filter(Store.platform == "jd").order_by(Store.id.asc()).all()
+    user = require_permission_user(request, db, "menu.jd_data")
+    stores = (
+        authorized_stores(db, user)
+        .options(joinedload(Store.manager))
+        .filter(Store.platform == "jd")
+        .order_by(Store.id.asc())
+        .all()
+    )
+    store_ids = [store.id for store in stores]
     jd_metrics = {
         m.store_id: m
-        for m in db.query(JdDailyMetric).filter(JdDailyMetric.metric_date == date.today()).all()
+        for m in db.query(JdDailyMetric).filter(
+            JdDailyMetric.metric_date == date.today(),
+            JdDailyMetric.store_id.in_(store_ids),
+        ).all()
     }
     legacy_metrics = {
         m.store_id: m
-        for m in db.query(MetricDaily).filter(MetricDaily.metric_date == date.today()).all()
+        for m in db.query(MetricDaily).filter(
+            MetricDaily.metric_date == date.today(),
+            MetricDaily.store_id.in_(store_ids),
+        ).all()
     }
     rows = []
     for store in stores:
@@ -47,16 +65,26 @@ def jd_dashboard(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/api/stores")
 async def create_store(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "stores.manage")
+    user = require_permission_user(request, db, "stores.manage")
     data = await request.json()
     store_code = data.get("store_code", "").strip()
     store_name = data.get("store_name", "").strip()
     if not store_code or not store_name:
         raise HTTPException(status_code=400, detail="店铺编号和店铺名称不能为空")
-    if db.query(Store).filter(Store.store_code == store_code).first():
+    if db.query(Store).filter(Store.tenant_id == user.tenant_id, Store.store_code == store_code).first():
         raise HTTPException(status_code=400, detail="店铺编号已存在")
-    store = Store(platform=data.get("platform", "jd").strip(), store_code=store_code, store_name=store_name, notes=data.get("notes", "").strip(), active=True)
+    store = Store(
+        platform=data.get("platform", "jd").strip(),
+        store_code=store_code,
+        store_name=store_name,
+        tenant_id=user.tenant_id,
+        company_id=user.company_id,
+        notes=data.get("notes", "").strip(),
+        active=True,
+    )
     db.add(store)
+    db.flush()
+    db.add(UserStoreMembership(user_id=user.id, store_id=store.id, can_read=True, can_write=True, active=True))
     db.commit()
     db.refresh(store)
     return {"ok": True, "id": store.id}
@@ -64,12 +92,22 @@ async def create_store(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/api/stores/seed-jd")
 def seed_jd_stores(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "stores.manage")
+    user = require_permission_user(request, db, "stores.manage")
     created = 0
     for i in range(1, 61):
         code = f"JD{i:02d}"
-        if not db.query(Store).filter(Store.store_code == code).first():
-            db.add(Store(platform="jd", store_code=code, store_name=f"京东店铺{i:02d}", active=True))
+        if not db.query(Store).filter(Store.tenant_id == user.tenant_id, Store.store_code == code).first():
+            store = Store(
+                platform="jd",
+                store_code=code,
+                store_name=f"京东店铺{i:02d}",
+                tenant_id=user.tenant_id,
+                company_id=user.company_id,
+                active=True,
+            )
+            db.add(store)
+            db.flush()
+            db.add(UserStoreMembership(user_id=user.id, store_id=store.id, can_read=True, can_write=True, active=True))
             created += 1
     db.commit()
     return {"ok": True, "created": created, "message": f"已生成 {created} 个京东店铺"}
@@ -77,25 +115,67 @@ def seed_jd_stores(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/api/stores/{store_id}/assign")
 async def assign_store(store_id: int, request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "stores.manage")
+    user = require_permission_user(request, db, "stores.manage")
     data = await request.json()
-    store = db.get(Store, store_id)
-    if not store:
-        raise HTTPException(status_code=404, detail="店铺不存在")
+    store = require_authorized_store(db, user, store_id=store_id, write=True)
     manager_user_id = data.get("manager_user_id")
-    if manager_user_id and not db.query(User).filter(User.id == manager_user_id, User.active.is_(True)).first():
+    manager = None
+    if manager_user_id:
+        manager = db.query(User).filter(
+            User.id == manager_user_id,
+            User.tenant_id == user.tenant_id,
+            User.company_id == user.company_id,
+            User.active.is_(True),
+        ).one_or_none()
+    if manager_user_id and not manager:
         raise HTTPException(status_code=400, detail="负责人不存在或已停用")
+    previous_manager_id = store.manager_user_id
     store.manager_user_id = manager_user_id or None
+    if previous_manager_id and previous_manager_id != manager_user_id:
+        previous_membership = db.query(UserStoreMembership).filter(
+            UserStoreMembership.user_id == previous_manager_id,
+            UserStoreMembership.store_id == store.id,
+            UserStoreMembership.assignment_managed.is_(True),
+        ).one_or_none()
+        if previous_membership:
+            previous_membership.active = bool(previous_membership.assignment_previous_active)
+            previous_membership.can_read = bool(previous_membership.assignment_previous_can_read)
+            previous_membership.can_write = bool(previous_membership.assignment_previous_can_write)
+            previous_membership.assignment_managed = False
+            previous_membership.assignment_previous_active = None
+            previous_membership.assignment_previous_can_read = None
+            previous_membership.assignment_previous_can_write = None
+    if manager:
+        membership = db.query(UserStoreMembership).filter(
+            UserStoreMembership.user_id == manager.id,
+            UserStoreMembership.store_id == store.id,
+        ).one_or_none()
+        if not membership:
+            membership = UserStoreMembership(
+                user_id=manager.id,
+                store_id=store.id,
+                assignment_managed=True,
+                assignment_previous_active=False,
+                assignment_previous_can_read=False,
+                assignment_previous_can_write=False,
+            )
+            db.add(membership)
+        elif not membership.assignment_managed:
+            membership.assignment_managed = True
+            membership.assignment_previous_active = membership.active
+            membership.assignment_previous_can_read = membership.can_read
+            membership.assignment_previous_can_write = membership.can_write
+        membership.can_read = True
+        membership.can_write = True
+        membership.active = True
     db.commit()
     return {"ok": True}
 
 
 @router.post("/api/stores/{store_id}/toggle")
 def toggle_store(store_id: int, request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "stores.manage")
-    store = db.get(Store, store_id)
-    if not store:
-        raise HTTPException(status_code=404, detail="店铺不存在")
+    user = require_permission_user(request, db, "stores.manage")
+    store = require_authorized_store(db, user, store_id=store_id, write=True, active_only=False)
     store.active = not store.active
     db.commit()
     return {"ok": True, "store_name": store.store_name, "active": store.active}

@@ -420,12 +420,15 @@ def test_employee_workspace_home_marks_high_risk_task_for_tian_shen(client, owne
 def test_employee_workspace_home_allows_employee_to_view_only_self(client, test_db):
     db = test_db()
     try:
+        scope_user = db.query(User).filter(User.username == "owner").one()
         db.add(
             User(
                 username="tianshang",
                 password_hash=hash_password("password"),
                 role="viewer",
                 display_name="天商员工账号",
+                tenant_id=scope_user.tenant_id,
+                company_id=scope_user.company_id,
                 active=True,
             )
         )

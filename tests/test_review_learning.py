@@ -65,11 +65,14 @@ def create_employee_login(test_db, username="tianshang", role="operator"):
             db.commit()
         user = db.query(User).filter(User.username == username).first()
         if not user:
+            scope_user = db.query(User).filter(User.username == "owner").one()
             user = User(
                 username=username,
                 password_hash=hash_password("password"),
                 role=role,
                 display_name=username,
+                tenant_id=scope_user.tenant_id,
+                company_id=scope_user.company_id,
                 active=True,
             )
             db.add(user)

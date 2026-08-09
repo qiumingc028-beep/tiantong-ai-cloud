@@ -6,6 +6,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Numeric,
     String,
@@ -49,30 +50,90 @@ class Permission(Base):
     roles: Mapped[list[Role]] = relationship(secondary=role_permissions, back_populates="permissions")
 
 
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    tenant_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class Company(Base):
+    __tablename__ = "companies"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "company_code", name="uq_companies_tenant_company_code"),
+        UniqueConstraint("tenant_id", "id", name="uq_companies_tenant_id_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, index=True)
+    company_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    company_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            name="fk_users_tenant_company",
+            ondelete="RESTRICT",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(String(50), nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Store(Base):
     __tablename__ = "stores"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "store_code", name="uq_stores_tenant_store_code"),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            name="fk_stores_tenant_company",
+            ondelete="RESTRICT",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     platform: Mapped[str] = mapped_column(String(50), default="jd", nullable=False)
-    store_code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    store_code: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     store_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     manager_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     manager: Mapped[User | None] = relationship()
+
+
+class UserStoreMembership(Base):
+    __tablename__ = "user_store_memberships"
+    __table_args__ = (UniqueConstraint("user_id", "store_id", name="uq_user_store_memberships_user_store"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    can_read: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    can_write: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    assignment_managed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    assignment_previous_active: Mapped[bool | None] = mapped_column(Boolean)
+    assignment_previous_can_read: Mapped[bool | None] = mapped_column(Boolean)
+    assignment_previous_can_write: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class AiProductDraft(Base):
@@ -206,6 +267,7 @@ class EmployeeLog(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    store_id: Mapped[int | None] = mapped_column(ForeignKey("stores.id", ondelete="SET NULL"), index=True)
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text)
     ip_address: Mapped[str | None] = mapped_column(String(100))

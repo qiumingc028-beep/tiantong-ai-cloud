@@ -12,18 +12,25 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user, require_permission_user
 from ..database import get_db, get_redis
-from ..models import AiTask, EmployeeLog, JdDailyMetric, MetricDaily, Store
+from ..models import EmployeeLog, JdDailyMetric, MetricDaily, Store
+from ..store_authorization import authorized_store_condition, authorized_stores, require_authorized_store
 
 
 router = APIRouter()
 MAX_IMPORT_FILE_SIZE = 512 * 1024
 IMPORT_LOCK = Lock()
+REQUIRED_IMPORT_FIELDS = (
+    ("日期", ("日期", "metric_date", "date")),
+    ("销售额", ("今日成交", "成交", "sales_amount")),
+    ("订单量", ("订单数", "订单", "orders_count")),
+    ("广告消耗", ("广告花费", "广告费", "ad_spend")),
+)
 
 
 @router.get("/api/jd/metrics/summary")
 def jd_metrics_summary(request: Request, db: Session = Depends(get_db)):
-    current_user(request, db)
-    return metrics_summary(db)
+    user = current_user(request, db)
+    return metrics_summary(db, user)
 
 
 @router.get("/api/owner/dashboard")
@@ -35,7 +42,7 @@ def owner_dashboard(
     db: Session = Depends(get_db),
 ):
     user = require_permission_user(request, db, "menu.dashboard")
-    data = metrics_summary(db, store_id, date_from, date_to)
+    data = metrics_summary(db, user, store_id, date_from, date_to)
     data["user"] = {"id": user.id, "username": user.username, "display_name": user.display_name, "role": user.role}
     data["title"] = "老板驾驶舱"
     return data
@@ -48,21 +55,31 @@ async def save_manual_metrics(request: Request, db: Session = Depends(get_db)):
     store_id = data.get("store_id")
     if not store_id:
         raise HTTPException(status_code=400, detail="请选择店铺")
-    if not db.get(Store, store_id):
-        raise HTTPException(status_code=404, detail="店铺不存在")
+    store = require_authorized_store(db, user, store_id=store_id, write=True)
     metric_date = parse_date(data.get("metric_date")) or date.today()
-    upsert_metric(db, store_id, metric_date, data, "manual", user.id)
-    upsert_jd_daily_from_manual(db, store_id, metric_date, data)
+    upsert_metric(db, store.id, metric_date, data, "manual", user.id)
+    upsert_jd_daily_from_manual(db, store.id, metric_date, data)
     db.commit()
     return {"ok": True, "message": "数据已保存"}
 
 
 @router.get("/api/metrics/today")
 def metrics_today(request: Request, db: Session = Depends(get_db)):
-    current_user(request, db)
-    jd_metrics = {m.store_id: m for m in db.query(JdDailyMetric).filter(JdDailyMetric.metric_date == date.today()).all()}
-    legacy_metrics = {m.store_id: m for m in db.query(MetricDaily).filter(MetricDaily.metric_date == date.today()).all()}
-    stores = db.query(Store).filter(Store.active.is_(True)).order_by(Store.id.asc()).all()
+    user = current_user(request, db)
+    stores = authorized_stores(db, user).order_by(Store.id.asc()).all()
+    store_ids = [store.id for store in stores]
+    jd_metrics = {
+        m.store_id: m
+        for m in db.query(JdDailyMetric)
+        .filter(JdDailyMetric.metric_date == date.today(), JdDailyMetric.store_id.in_(store_ids))
+        .all()
+    }
+    legacy_metrics = {
+        m.store_id: m
+        for m in db.query(MetricDaily)
+        .filter(MetricDaily.metric_date == date.today(), MetricDaily.store_id.in_(store_ids))
+        .all()
+    }
     return [metric_row(store, jd_metrics.get(store.id), legacy_metrics.get(store.id)) for store in stores]
 
 
@@ -74,8 +91,8 @@ def business_center_metrics(
     date_to: date | None = None,
     db: Session = Depends(get_db),
 ):
-    require_permission_user(request, db, "menu.jd_data")
-    rows = business_metric_rows(db, store_id, date_from, date_to)
+    user = require_permission_user(request, db, "menu.jd_data")
+    rows = business_metric_rows(db, user, store_id, date_from, date_to)
     return {"rows": rows, "total": len(rows), "summary": summarize_business_rows(rows)}
 
 
@@ -84,7 +101,12 @@ def import_records(request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "data.metrics.write")
     logs = (
         db.query(EmployeeLog)
-        .filter(EmployeeLog.user_id == user.id, EmployeeLog.action.like("metrics_import:%"))
+        .join(Store, Store.id == EmployeeLog.store_id)
+        .filter(
+            EmployeeLog.user_id == user.id,
+            EmployeeLog.action.like("metrics_import:%"),
+            authorized_store_condition(user, write=True),
+        )
         .order_by(EmployeeLog.id.desc())
         .limit(50)
         .all()
@@ -123,9 +145,8 @@ async def import_metrics_file(
 
 
 def persist_metric_import(db: Session, user, content: bytes, rows: list[dict], store_id: int | None):
-    selected_store = None
     if store_id is not None:
-        selected_store = db.query(Store).filter(Store.id == store_id).with_for_update().one_or_none()
+        selected_store = require_authorized_store(db, user, store_id=store_id, write=True, for_update=True)
     else:
         store_codes = sorted(
             {
@@ -134,12 +155,19 @@ def persist_metric_import(db: Session, user, content: bytes, rows: list[dict], s
                 if get_value(row, "店铺编号", "store_code", "编号")
             }
         )
-        if store_codes:
-            db.query(Store).filter(Store.store_code.in_(store_codes)).order_by(Store.id).with_for_update().all()
-
-    if store_id is not None and (not selected_store or not selected_store.active):
-        raise HTTPException(status_code=404, detail="店铺不存在或已停用")
-    import_key = hashlib.sha256(f"{user.id}:{store_id or 0}:".encode() + content).hexdigest()
+        if len(store_codes) != 1 or any(
+            not str(get_value(row, "店铺编号", "store_code", "编号") or "").strip()
+            for row in rows
+        ):
+            raise HTTPException(status_code=403, detail="没有店铺访问权限")
+        selected_store = require_authorized_store(
+            db,
+            user,
+            store_code=store_codes[0],
+            write=True,
+            for_update=True,
+        )
+    import_key = hashlib.sha256(f"{user.id}:{selected_store.id}:".encode() + content).hexdigest()
     action = f"metrics_import:{import_key}"
     previous = db.query(EmployeeLog).filter(EmployeeLog.user_id == user.id, EmployeeLog.action == action).one_or_none()
     if previous:
@@ -151,13 +179,10 @@ def persist_metric_import(db: Session, user, content: bytes, rows: list[dict], s
     errors = []
     for index, row in enumerate(rows, start=2):
         store_code = str(get_value(row, "店铺编号", "store_code", "编号") or "").strip()
-        if selected_store and store_code and store_code != selected_store.store_code:
+        if store_code and store_code != selected_store.store_code:
             errors.append({"row": index, "reason": "店铺与当前选择不一致"})
             continue
-        store = selected_store or db.query(Store).filter(Store.store_code == store_code).one_or_none()
-        if not store:
-            errors.append({"row": index, "reason": "缺少或找不到店铺编号"})
-            continue
+        store = selected_store
         try:
             validate_required_import_values(row)
             data = parse_import_values(row)
@@ -184,24 +209,36 @@ def persist_metric_import(db: Session, user, content: bytes, rows: list[dict], s
         "errors": errors,
         "duplicate": False,
     }
-    db.add(EmployeeLog(user_id=user.id, action=action, detail=json.dumps(result, ensure_ascii=False)))
+    db.add(
+        EmployeeLog(
+            user_id=user.id,
+            store_id=selected_store.id,
+            action=action,
+            detail=json.dumps(result, ensure_ascii=False),
+        )
+    )
     db.commit()
     return result
 
 
 def business_metric_rows(
     db: Session,
+    user,
     store_id: int | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
 ):
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
-    if store_id and not db.get(Store, store_id):
-        raise HTTPException(status_code=404, detail="店铺不存在")
+    if store_id:
+        require_authorized_store(db, user, store_id=store_id)
     if not date_from and not date_to:
         date_from = date_to = date.today()
-    query = db.query(JdDailyMetric, Store).join(Store, Store.id == JdDailyMetric.store_id)
+    query = (
+        db.query(JdDailyMetric, Store)
+        .join(Store, Store.id == JdDailyMetric.store_id)
+        .filter(authorized_store_condition(user))
+    )
     if store_id:
         query = query.filter(JdDailyMetric.store_id == store_id)
     if date_from:
@@ -239,12 +276,11 @@ def summarize_business_rows(rows):
     }
 
 
-def metrics_summary(db: Session, store_id: int | None = None, date_from: date | None = None, date_to: date | None = None):
-    rows = business_metric_rows(db, store_id, date_from, date_to)
+def metrics_summary(db: Session, user, store_id: int | None = None, date_from: date | None = None, date_to: date | None = None):
+    rows = business_metric_rows(db, user, store_id, date_from, date_to)
     summary = summarize_business_rows(rows)
     gmv = summary["sales_amount"]
     ad = summary["ad_spend"]
-    ai_tasks = db.query(AiTask).order_by(AiTask.id.asc()).all()
     return {
         "today_sales": gmv,
         "today_gmv": gmv,
@@ -255,9 +291,9 @@ def metrics_summary(db: Session, store_id: int | None = None, date_from: date | 
         "visitors": summary["visitors_count"],
         "refunds": sum(row["refunds_count"] for row in rows),
         "after_sales": sum(row["after_sales_count"] for row in rows),
-        "stores": db.query(Store).filter(Store.platform == "jd", Store.active.is_(True)).count(),
-        "ai_employees_online": count_online_employees(),
-        "ai_task_status": [{"name": t.ai_employee_name, "status": t.status} for t in ai_tasks],
+        "stores": authorized_stores(db, user).filter(Store.platform == "jd").count(),
+        "ai_employees_online": 0,
+        "ai_task_status": [],
     }
 
 
@@ -324,25 +360,13 @@ def validate_import_schema(rows):
     if not rows:
         return
     headers = set(rows[0])
-    required = (
-        ("日期", ("日期", "metric_date", "date")),
-        ("销售额", ("今日成交", "成交", "sales_amount")),
-        ("订单量", ("订单数", "订单", "orders_count")),
-        ("广告消耗", ("广告花费", "广告费", "ad_spend")),
-    )
-    missing = [label for label, aliases in required if not headers.intersection(aliases)]
+    missing = [label for label, aliases in REQUIRED_IMPORT_FIELDS if not headers.intersection(aliases)]
     if missing:
         raise HTTPException(status_code=400, detail=f"缺少必要字段：{'、'.join(missing)}")
 
 
 def validate_required_import_values(row):
-    required = (
-        ("日期", ("日期", "metric_date", "date")),
-        ("销售额", ("今日成交", "成交", "sales_amount")),
-        ("订单量", ("订单数", "订单", "orders_count")),
-        ("广告消耗", ("广告花费", "广告费", "ad_spend")),
-    )
-    for label, aliases in required:
+    for label, aliases in REQUIRED_IMPORT_FIELDS:
         if get_value(row, *aliases) in (None, ""):
             raise ValueError(f"{label}不能为空")
 
