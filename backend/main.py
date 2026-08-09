@@ -277,6 +277,11 @@ def index_page():
     return frontend_file("index.html")
 
 
+@app.get("/rbac-navigation.js", include_in_schema=False)
+def rbac_navigation_script():
+    return frontend_file("rbac-navigation.js")
+
+
 @app.get("/dashboard/{page_name}.html", include_in_schema=False)
 def dashboard_html_page(page_name: str):
     filename = f"{page_name}.html"

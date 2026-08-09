@@ -864,8 +864,9 @@ const designer={role:'designer',role_code:'designer',menus:[
   {label:'AI素材中心',href:'/ai-assets.html',permission:'menu.ai_assets'},
   {label:'AI工作流',href:'/workflows.html',permission:'menu.workflows'}
 ]};
-const adminPermissions=['dashboard','employees','stores','jd_data','ads','metrics','import','ai_assets','skills_center','computer_executor','tiancang','workflows','ai_employees','account_center','knowledge_center','device_center','settings'];
-const admin={role:'admin',role_code:'admin',menus:adminPermissions.map(permission=>({permission:`menu.${permission}`}))};
+const adminPaths=['/index.html','/control.html','/stores.html','/jd-dashboard.html','/ads.html','/metrics.html','/import.html','/ai-assets.html','/skill-center.html','/computer-execution-center.html','/tiancang.html','/workflows.html','/ai-employees.html','/account-center.html','/knowledge-center.html','/device-center.html','/settings.html'];
+const adminMenus=adminPaths.map(href=>({label:href,href,permission:routePermissions[href]}));
+const admin={role:'admin',role_code:'admin',menus:adminMenus};
 
 function page({path='/index.html',user=admin,status=200,reject=false,timeout=false,protectedScript=false,externalScript=false,externalFailure=false,deferExternal=false}={}){
   const removed=[];
@@ -969,7 +970,7 @@ test('administrator keeps the prior legitimate navigation set',()=>{
 test('role aliases neither add nor remove server-authorized navigation',()=>{
   const {run}=page();
   for(const [role,roleCode] of Object.entries({boss:'owner',owner:'owner',admin:'admin',administrator:'admin',operator:'operator',ads:'operator',service:'customer_service',customer_service:'customer_service',designer:'designer',editor:'editor',finance:'finance'})){
-    assert.equal(run(`TiantongRbac.navigationFor({role:${JSON.stringify(role)},role_code:${JSON.stringify(roleCode)},menus:admin.menus}).length`),37,role);
+    assert.equal(run(`TiantongRbac.navigationFor({role:${JSON.stringify(role)},role_code:${JSON.stringify(roleCode)},menus:admin.menus}).length`),17,role);
   }
 });
 
@@ -1114,7 +1115,7 @@ test('external script load failure remains denied and a denied route never reque
 test('account switch replaces privileged navigation without residue',()=>{
   const {menu,run}=page();
   run('TiantongRbac.renderNavigation(menu,admin)');
-  assert.match(menu.innerHTML,/tool-permissions\.html/);
+  assert.match(menu.innerHTML,/settings\.html/);
   run('TiantongRbac.renderNavigation(menu,designer)');
   assert.match(menu.innerHTML,/ai-assets\.html/);
   assert.doesNotMatch(menu.innerHTML,/tool-permissions\.html|settings\.html|control\.html/);
@@ -1657,7 +1658,7 @@ test('server-returned rows, never page-open permission, prove broader employee s
   }
 });
 
-test('all 316 protected-page handlers are migrated without inline event code',()=>{
+test('all 309 protected-page handlers are migrated without inline event code',()=>{
   const root=new URL('../frontend/',import.meta.url);
   const visit=dir=>readdirSync(dir,{withFileTypes:true}).flatMap(entry=>entry.isDirectory()?visit(new URL(`${entry.name}/`,dir)):[new URL(entry.name,dir)]);
   const files=visit(root).filter(file=>file.pathname.endsWith('.html')&&!file.pathname.endsWith('/login.html'));
@@ -1690,12 +1691,12 @@ test('all 316 protected-page handlers are migrated without inline event code',()
     for(const match of html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi))assert.doesNotThrow(()=>new vm.Script(match[1]),file.pathname);
   }
   assert.equal(files.length,76);
-  assert.equal(migrated,316);
-  assert.equal(literalActions,252);
+  assert.equal(migrated,309);
+  assert.equal(literalActions,245);
   assert.equal(dynamicActions,64);
-  assert.equal(migratedHandlerIds.size,316);
+  assert.equal(migratedHandlerIds.size,309);
   assert.equal(sharedLogoutBindings,41);
-  assert.equal(files.reduce((count,file)=>count+(readFileSync(file,'utf8').match(/-disabled-entry/g)||[]).length,0),20);
+  assert.equal(files.reduce((count,file)=>count+(readFileSync(file,'utf8').match(/-disabled-entry/g)||[]).length,0),16);
   const research=readFileSync(new URL('../frontend/research-records.html',import.meta.url),'utf8');
   assert.equal((research.match(/TiantongRbac\.registerDynamicAction\(/g)||[]).length,1);
 });

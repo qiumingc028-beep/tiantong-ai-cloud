@@ -152,6 +152,7 @@ def seed_database(session_factory):
         permissions = [
             Permission(code="menu.dashboard", name="Dashboard"),
             Permission(code="menu.jd_data", name="JD Data"),
+            Permission(code="menu.import", name="Import"),
             Permission(code="menu.stores", name="Stores"),
             Permission(code="data.metrics.write", name="Metrics Write"),
             Permission(code="ai.tasks.manage", name="AI Tasks Manage"),

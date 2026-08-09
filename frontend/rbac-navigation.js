@@ -77,7 +77,9 @@
   function navigationFor(user){
     const permissions=permissionsOf(user);
     if(!permissions)return [];
-    return NAVIGATION.filter(([,path])=>permissions.has(ROUTE_PERMISSIONS[path]));
+    return user.menus
+      .filter(item=>item&&permissions.has(item.permission)&&ROUTE_PERMISSIONS[normalize(item.href)]===item.permission)
+      .map(item=>[item.label,normalize(item.href)]);
   }
   function canOpen(user,path){
     const permission=ROUTE_PERMISSIONS[normalize(path)];

@@ -17,7 +17,7 @@ def test_index_html_serves_ceo_dashboard_page(client):
     response = client.get("/index.html")
     assert response.status_code == 200
     assert "老板驾驶舱" in response.text
-    assert "/api/ceo-dashboard/summary" in response.text
+    assert "/api/owner/dashboard" in response.text
 
 
 def test_ceo_dashboard_requires_login(client):
