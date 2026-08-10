@@ -25,12 +25,13 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DataError, IntegrityError, PendingRollbackError
 from sqlalchemy.orm import Session, sessionmaker
+from tests.test_helpers import latest_alembic_head_line
 
 
 ROOT = Path(__file__).resolve().parents[1]
 FIX_COMMIT_ENV = "MIGRATION_CODE_FIX_COMMIT"
 ADMIN_URL_ENV = "V2_ALPHA_POSTGRES_ADMIN_URL"
-DEVELOP_REF = "origin/develop-v2"
+KNOWN_BROKEN_HISTORICAL_BASELINE = "2ca1a2579569324ce3ca82f68332fb7f96be004d"
 FINAL_REVISION = "0042_v2_alpha_workflow_unique_constraints"
 FROZEN_0037_COMMIT = "85586868bad3dd5d0fecba5f840383feccdc1c78"
 EXPECTED_UNIQUES = {
@@ -223,10 +224,9 @@ def test_0042_declares_exact_architecture_constraint_set():
 def test_real_merge_base_0037_boolean_failure_is_reproduced_and_fixed(
     tmp_path, postgres_database_factory, migration_fix_commit
 ):
-    merge_base = git("merge-base", migration_fix_commit, DEVELOP_REF)
     historical_tree = tmp_path / "merge-base"
     historical_tree.mkdir()
-    extract_git_tree(merge_base, historical_tree)
+    extract_git_tree(KNOWN_BROKEN_HISTORICAL_BASELINE, historical_tree)
 
     historical_url = postgres_database_factory("boolean_history")
     assert make_url(historical_url).get_backend_name() == "postgresql"
@@ -239,7 +239,7 @@ def test_real_merge_base_0037_boolean_failure_is_reproduced_and_fixed(
     upgraded = alembic(ROOT, fixed_url, "upgrade", "head")
     assert upgraded.returncode == 0
     current = alembic(ROOT, fixed_url, "current").stdout
-    assert FINAL_REVISION in current
+    assert current.strip() == latest_alembic_head_line()
 
 
 def constraint_columns(connection) -> dict[str, tuple[str, ...]]:
@@ -570,7 +570,7 @@ def test_0005_complete_postgresql_chain_reaches_head(postgres_database_factory, 
     del migration_fix_commit
     database_url = postgres_database_factory("full_0005_chain")
     alembic(ROOT, database_url, "upgrade", "head")
-    assert FINAL_REVISION in alembic(ROOT, database_url, "current").stdout
+    assert alembic(ROOT, database_url, "current").stdout.strip() == latest_alembic_head_line()
 
 
 def make_agent_execution(db: Session):
