@@ -7,17 +7,17 @@ import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from sqlalchemy import String, cast
 from sqlalchemy.orm import Session
 
 from ..auth import current_user
-from ..auth_data import normalize_role
 from ..config import get_settings
 from ..database import get_db
 from ..models import AiProductAsset, AiProductDraft, Store, User
+from ..store_authorization import authorized_stores, require_authorized_store
 
 
 router = APIRouter(prefix="/api/ai-products", tags=["ai-products"])
-CANONICAL_TENANT_ID = "tiantong"
 MAX_FILE_SIZE = 10 * 1024 * 1024
 MAX_FILES = 9
 ALLOWED_TYPES = {
@@ -27,20 +27,6 @@ ALLOWED_TYPES = {
     ".webp": ("image/webp", (b"RIFF",)),
 }
 SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,254}$")
-
-
-def _available_shops(db: Session, user: User):
-    query = db.query(Store).filter(Store.active.is_(True))
-    if normalize_role(user.role) not in {"owner", "admin"}:
-        query = query.filter(Store.manager_user_id == user.id)
-    return query.order_by(Store.id.asc())
-
-
-def _require_shop(db: Session, user: User, shop_id: int) -> Store:
-    shop = _available_shops(db, user).filter(Store.id == shop_id).one_or_none()
-    if shop is None:
-        raise HTTPException(status_code=404, detail="店铺不存在或不可访问")
-    return shop
 
 
 def _validated_filename(filename: str | None) -> tuple[str, str, tuple[bytes, ...]]:
@@ -89,7 +75,7 @@ def _asset_dict(asset: AiProductAsset) -> dict:
     }
 
 
-def _storage_directory(shop_id: int) -> Path:
+def _storage_directory(tenant_key: str, shop_id: int) -> Path:
     root = get_settings().ASSET_STORAGE_ROOT
     if not root.is_absolute() or root.is_symlink():
         raise HTTPException(status_code=500, detail="素材存储配置不安全")
@@ -101,9 +87,9 @@ def _storage_directory(shop_id: int) -> Path:
     if resolved_root != root:
         raise HTTPException(status_code=500, detail="素材存储配置不安全")
 
-    directory = root / CANONICAL_TENANT_ID / str(shop_id)
+    directory = root / tenant_key / str(shop_id)
     current = root
-    for component in (CANONICAL_TENANT_ID, str(shop_id)):
+    for component in (tenant_key, str(shop_id)):
         current = current / component
         if current.is_symlink():
             raise HTTPException(status_code=500, detail="素材存储配置不安全")
@@ -119,7 +105,7 @@ def list_available_shops(request: Request, db: Session = Depends(get_db)):
     return {
         "shops": [
             {"id": shop.id, "store_code": shop.store_code, "store_name": shop.store_name}
-            for shop in _available_shops(db, user).all()
+            for shop in authorized_stores(db, user).order_by(Store.id.asc()).all()
         ]
     }
 
@@ -132,7 +118,8 @@ async def upload_assets(
     db: Session = Depends(get_db),
 ):
     user = current_user(request, db)
-    _require_shop(db, user, shop_id)
+    shop = require_authorized_store(db, user, store_id=shop_id, write=True)
+    tenant_key = str(shop.tenant_id)
     if not files or len(files) > MAX_FILES:
         raise HTTPException(status_code=400, detail="每次必须上传 1 到 9 个文件")
 
@@ -149,14 +136,14 @@ async def upload_assets(
     assets: list[AiProductAsset] = []
     try:
         draft = AiProductDraft(
-            tenant_id=CANONICAL_TENANT_ID,
-            shop_id=shop_id,
+            tenant_id=tenant_key,
+            shop_id=shop.id,
             created_by=user.id,
             status="draft",
         )
         db.add(draft)
         db.flush()
-        storage_directory = _storage_directory(shop_id)
+        storage_directory = _storage_directory(tenant_key, shop.id)
         for original_filename, content, mime_type in validated:
             storage_key = secrets.token_hex(32)
             path = storage_directory / storage_key
@@ -171,8 +158,8 @@ async def upload_assets(
             temporary.remove(temp_path)
             asset = AiProductAsset(
                 draft_id=draft.id,
-                tenant_id=CANONICAL_TENANT_ID,
-                shop_id=shop_id,
+                tenant_id=tenant_key,
+                shop_id=shop.id,
                 created_by=user.id,
                 original_filename=original_filename,
                 storage_key=storage_key,
@@ -195,14 +182,18 @@ async def upload_assets(
 @router.get("/assets")
 def list_assets(request: Request, shop_id: int | None = None, db: Session = Depends(get_db)):
     user = current_user(request, db)
-    allowed_shop_ids = _available_shops(db, user).with_entities(Store.id)
-    query = db.query(AiProductAsset).filter(
-        AiProductAsset.tenant_id == CANONICAL_TENANT_ID,
-        AiProductAsset.shop_id.in_(allowed_shop_ids),
-    )
     if shop_id is not None:
-        _require_shop(db, user, shop_id)
-        query = query.filter(AiProductAsset.shop_id == shop_id)
+        shop = require_authorized_store(db, user, store_id=shop_id)
+        query = db.query(AiProductAsset).filter(
+            AiProductAsset.shop_id == shop.id,
+            AiProductAsset.tenant_id == str(shop.tenant_id),
+        )
+    else:
+        allowed_shop_ids = authorized_stores(db, user).with_entities(Store.id)
+        query = db.query(AiProductAsset).join(Store, Store.id == AiProductAsset.shop_id).filter(
+            Store.id.in_(allowed_shop_ids),
+            AiProductAsset.tenant_id == cast(Store.tenant_id, String),
+        )
     assets = query.order_by(AiProductAsset.id.asc()).all()
     return {"assets": [_asset_dict(asset) for asset in assets]}
 
@@ -210,11 +201,11 @@ def list_assets(request: Request, shop_id: int | None = None, db: Session = Depe
 @router.get("/assets/{asset_id}")
 def read_asset(asset_id: int, request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
-    allowed_shop_ids = _available_shops(db, user).with_entities(Store.id)
-    asset = db.query(AiProductAsset).filter(
+    allowed_shop_ids = authorized_stores(db, user).with_entities(Store.id)
+    asset = db.query(AiProductAsset).join(Store, Store.id == AiProductAsset.shop_id).filter(
         AiProductAsset.id == asset_id,
-        AiProductAsset.tenant_id == CANONICAL_TENANT_ID,
-        AiProductAsset.shop_id.in_(allowed_shop_ids),
+        Store.id.in_(allowed_shop_ids),
+        AiProductAsset.tenant_id == cast(Store.tenant_id, String),
     ).one_or_none()
     if asset is None:
         raise HTTPException(status_code=404, detail="素材不存在")

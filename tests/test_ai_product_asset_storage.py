@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.config import ConfigurationError, Settings
+from backend.models import Store
 
 
 PRODUCTION_ENV = {
@@ -93,7 +94,9 @@ def test_symlink_escape_below_storage_root_is_rejected(
     storage_root.mkdir()
     escaped = tmp_path / "escaped"
     escaped.mkdir()
-    (storage_root / "tiantong").symlink_to(escaped, target_is_directory=True)
+    with test_db() as db:
+        tenant_key = str(db.get(Store, 1).tenant_id)
+    (storage_root / tenant_key).symlink_to(escaped, target_is_directory=True)
     monkeypatch.setattr(
         "backend.routers.ai_product_assets.get_settings",
         lambda: SimpleNamespace(ASSET_STORAGE_ROOT=storage_root),
