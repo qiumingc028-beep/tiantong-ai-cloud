@@ -9,8 +9,6 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from .config import require_service_role
 
-require_service_role("worker")
-
 from .ai_employees import DEFAULT_COLLECTOR_EMPLOYEE, DEFAULT_STRATEGY_EMPLOYEE, FLOW_EMPLOYEE_CODES, FLOW_TASK_TYPES, employee_name, normalize_employee_code
 from .core.orchestrator import handle_event
 from .database import SessionLocal, get_redis
@@ -545,6 +543,7 @@ def write_employee_log(db, task_type: str, status: str, detail: dict, attempt: i
 
 
 def main():
+    require_service_role("worker")
     while True:
         update_worker_heartbeat()
         run_daily_scheduler()

@@ -169,12 +169,12 @@ def test_backend_main_import_fails_with_worker_role(monkeypatch):
         importlib.import_module("backend.main")
 
 
-def test_backend_worker_import_fails_with_backend_role(monkeypatch):
+def test_backend_worker_import_is_safe_but_start_fails_with_backend_role(monkeypatch):
     reset_env(monkeypatch, SERVICE_ROLE=BACKEND_SERVICE_ROLE)
     get_settings.cache_clear()
-    sys.modules.pop("backend.worker", None)
+    module = reload_module("backend.worker")
     with pytest.raises(ConfigurationError, match=f"{SERVICE_ROLE_FIELD_NAME} must be worker"):
-        importlib.import_module("backend.worker")
+        module.main()
 
 
 def test_backend_main_import_passes_with_backend_role(monkeypatch):
@@ -184,7 +184,7 @@ def test_backend_main_import_passes_with_backend_role(monkeypatch):
     assert module.app.title == "天统AI云中台"
 
 
-def test_worker_import_passes_without_backend_secrets(monkeypatch):
+def test_worker_start_passes_role_check_without_backend_secrets(monkeypatch):
     reset_env(
         monkeypatch,
         SERVICE_ROLE=WORKER_SERVICE_ROLE,
@@ -193,7 +193,13 @@ def test_worker_import_passes_without_backend_secrets(monkeypatch):
     )
     get_settings.cache_clear()
     module = reload_module("backend.worker")
-    assert module.WORKER_HEARTBEAT_KEY == "tiantong:worker:heartbeat"
+
+    def stop_worker_loop():
+        raise RuntimeError("worker loop entered")
+
+    monkeypatch.setattr(module, "update_worker_heartbeat", stop_worker_loop)
+    with pytest.raises(RuntimeError, match="worker loop entered"):
+        module.main()
 
 
 def test_database_split_and_redis_split_behavior_unchanged_for_worker(monkeypatch):
