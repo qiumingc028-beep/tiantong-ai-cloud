@@ -1,5 +1,6 @@
-import importlib
+import importlib.util
 import os
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -194,13 +195,19 @@ def test_backend_database_import_works_with_split_config(monkeypatch):
         REDIS_USERNAME=REDIS_EDGE_USERNAME,
         REDIS_PASSWORD=REDIS_EDGE_PASSWORD,
     )
-    module = importlib.import_module("backend.database")
-    module = importlib.reload(module)
-    assert str(module.engine.url) == "postgresql+psycopg2://user:***@db:5432/name"
-    assert module.engine.url.password == DATABASE_EDGE_PASSWORD
-    kwargs = module.get_redis().connection_pool.connection_kwargs
-    assert kwargs["username"] == REDIS_EDGE_USERNAME
-    assert kwargs["password"] == REDIS_EDGE_PASSWORD
+    path = Path(__file__).resolve().parents[1] / "backend/database.py"
+    spec = importlib.util.spec_from_file_location("backend._split_config_database", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        assert str(module.engine.url) == "postgresql+psycopg2://user:***@db:5432/name"
+        assert module.engine.url.password == DATABASE_EDGE_PASSWORD
+        kwargs = module.get_redis().connection_pool.connection_kwargs
+        assert kwargs["username"] == REDIS_EDGE_USERNAME
+        assert kwargs["password"] == REDIS_EDGE_PASSWORD
+    finally:
+        module.engine.dispose()
 
 
 def test_flags_remain_false_when_bound_false(monkeypatch):
