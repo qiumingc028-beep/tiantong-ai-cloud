@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -242,20 +243,27 @@ def ensure_tiancai_employee(db: Session) -> AiEmployee:
     employee = db.query(AiEmployee).filter(AiEmployee.employee_code == TIANCAI_DATA).one_or_none()
     if employee:
         return employee
-    employee = AiEmployee(
-        employee_code=TIANCAI_DATA,
-        employee_name=employee_name(TIANCAI_DATA) or "天采：数据采集平台",
-        legion="数据资产军团",
-        duty="公开研究与知识沉淀",
-        status="active",
-        task_types='["research", "knowledge"]',
-        default_permissions='["task_center.manage", "task_center.execute"]',
-        is_legacy=False,
-        sort_order=20,
-    )
+    values = {
+        "employee_code": TIANCAI_DATA,
+        "employee_name": employee_name(TIANCAI_DATA) or "天采：数据采集平台",
+        "legion": "数据资产军团",
+        "duty": "公开研究与知识沉淀",
+        "status": "active",
+        "task_types": '["research", "knowledge"]',
+        "default_permissions": '["task_center.manage", "task_center.execute"]',
+        "is_legacy": False,
+        "sort_order": 20,
+    }
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            postgresql_insert(AiEmployee)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=[AiEmployee.employee_code])
+        )
+        return db.query(AiEmployee).filter(AiEmployee.employee_code == TIANCAI_DATA).one()
+    employee = AiEmployee(**values)
     db.add(employee)
-    db.commit()
-    db.refresh(employee)
+    db.flush()
     return employee
 
 

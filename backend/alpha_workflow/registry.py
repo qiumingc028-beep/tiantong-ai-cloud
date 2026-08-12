@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from json import dumps
 from uuid import uuid4
 
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
 from .constants import (
@@ -32,22 +34,28 @@ def default_workflow_template() -> dict[str, object]:
 def ensure_default_scenarios(db: Session, *, created_by_id: int | None = None) -> list[AlphaWorkflowScenario]:
     scenario = db.query(AlphaWorkflowScenario).filter(AlphaWorkflowScenario.scenario_code == DEFAULT_ALPHA_SCENARIO_CODE).one_or_none()
     if not scenario:
-        scenario = AlphaWorkflowScenario(
-            scenario_id=str(uuid4()),
-            scenario_code=DEFAULT_ALPHA_SCENARIO_CODE,
-            title=DEFAULT_ALPHA_SCENARIO_TITLE,
-            description=DEFAULT_ALPHA_SCENARIO_DESCRIPTION,
-            input_hint=DEFAULT_ALPHA_SCENARIO_INPUT_HINT,
-            default_input_text=DEFAULT_ALPHA_SCENARIO_INPUT,
-            workflow_template_json=None,
-            enabled=True,
-            created_by_id=created_by_id,
-        )
-        db.add(scenario)
-        db.flush()
-        from json import dumps
-
-        scenario.workflow_template_json = dumps(default_workflow_template(), ensure_ascii=False)
+        values = {
+            "scenario_id": str(uuid4()),
+            "scenario_code": DEFAULT_ALPHA_SCENARIO_CODE,
+            "title": DEFAULT_ALPHA_SCENARIO_TITLE,
+            "description": DEFAULT_ALPHA_SCENARIO_DESCRIPTION,
+            "input_hint": DEFAULT_ALPHA_SCENARIO_INPUT_HINT,
+            "default_input_text": DEFAULT_ALPHA_SCENARIO_INPUT,
+            "workflow_template_json": dumps(default_workflow_template(), ensure_ascii=False),
+            "enabled": True,
+            "created_by_id": created_by_id,
+        }
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(
+                postgresql_insert(AlphaWorkflowScenario)
+                .values(**values)
+                .on_conflict_do_nothing(constraint="uq_alpha_workflow_scenarios_code")
+            )
+            scenario = db.query(AlphaWorkflowScenario).filter(AlphaWorkflowScenario.scenario_code == DEFAULT_ALPHA_SCENARIO_CODE).one()
+        else:
+            scenario = AlphaWorkflowScenario(**values)
+            db.add(scenario)
+            db.flush()
         db.commit()
         db.refresh(scenario)
     return [scenario]
