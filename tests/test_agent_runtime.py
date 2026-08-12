@@ -2,9 +2,29 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from backend.agent_runtime.constants import DEFAULT_CAPABILITIES
 from backend.models import AiEmployee, TaskCenterTask
-from backend.config import get_settings
+from backend.config import Settings, get_settings
+
+
+@pytest.fixture(autouse=True)
+def enable_agent_runtime(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_ENABLED", "true")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def test_agent_runtime_defaults_to_disabled_when_unset(monkeypatch):
+    monkeypatch.delenv("AGENT_RUNTIME_ENABLED", raising=False)
+    assert Settings().AGENT_RUNTIME_ENABLED is False
+
+
+def test_agent_runtime_can_be_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_ENABLED", "true")
+    assert Settings().AGENT_RUNTIME_ENABLED is True
 
 
 def get_employee_id(test_db, employee_code: str) -> int:

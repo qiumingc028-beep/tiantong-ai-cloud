@@ -14,7 +14,7 @@
   - `ALPHA_SCENARIO_ENABLED=false`
   - `ALPHA_WORKFLOW_DASHBOARD_ENABLED=false`
   - `ALPHA_DASHBOARD_ENABLED=false`
-- `AGENT_RUNTIME_ENABLED` 默认值为 `true`，因此上述四项 Alpha Flag 的状态不代表整个 V2 的全部开关状态。
+- 历史行为：本交接基线固定的 Sprint 11.1 Head 中，`AGENT_RUNTIME_ENABLED` 默认值为 `true`。当前安全合同已调整为默认 `false`：缺少配置或显式设置为 `false` 时保持关闭，只有显式设置为 `true` 才启用。生产环境缺少该配置时必须 fail closed；需要 Runtime 的测试必须仅在测试或测试进程范围内显式启用。
 - V2 当前未部署内部或生产环境，未执行生产 Migration，未合并 `main`。
 
 ## Sprint 11.1 合并记录

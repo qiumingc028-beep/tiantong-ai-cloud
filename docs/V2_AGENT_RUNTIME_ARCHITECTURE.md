@@ -90,12 +90,14 @@ Agent Runtime 是 V2 的统一执行底座，负责把“AI 员工提出的能�
 
 默认安全边界：
 
-- `AGENT_RUNTIME_ENABLED=true`
+- `AGENT_RUNTIME_ENABLED=false`
 - `REAL_EXECUTOR_ENABLED=false`
 - `COMPUTER_CONTROL_ENABLED=false`
 - `MOBILE_CONTROL_ENABLED=false`
 - `BROWSER_CONTROL_ENABLED=false`
 - `SHELL_EXECUTION_ENABLED=false`
+
+未配置 `AGENT_RUNTIME_ENABLED` 或显式设置为 `false` 时，Agent Runtime 保持关闭；需要启用的环境必须显式设置 `AGENT_RUNTIME_ENABLED=true`。生产环境缺少该配置时必须 fail closed。需要 Runtime 的测试必须仅在测试或测试进程范围内显式启用，不得依赖全局 Shell 环境。
 
 高风险能力默认拒绝。真实执行器必须显式开启，并且要经过权限、审批与审计校验。
 

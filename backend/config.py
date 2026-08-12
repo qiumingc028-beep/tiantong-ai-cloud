@@ -219,7 +219,7 @@ class Settings:
         self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
         self.DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
         self.AI_PROVIDER = os.getenv("AI_PROVIDER", "mock").lower()
-        self.AGENT_RUNTIME_ENABLED = _boolean("AGENT_RUNTIME_ENABLED", True)
+        self.AGENT_RUNTIME_ENABLED = _boolean("AGENT_RUNTIME_ENABLED", False)
         self.REAL_EXECUTOR_ENABLED = _boolean("REAL_EXECUTOR_ENABLED", False)
         self.COMPUTER_CONTROL_ENABLED = _boolean("COMPUTER_CONTROL_ENABLED", False)
         self.OPENCLAW_ADAPTER_ENABLED = _boolean("OPENCLAW_ADAPTER_ENABLED", False)

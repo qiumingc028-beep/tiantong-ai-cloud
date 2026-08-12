@@ -14,6 +14,7 @@ PRODUCTION_KEYS = (
     "CORS_ALLOWED_ORIGINS",
     "CORS_ALLOW_CREDENTIALS",
     "DEBUG",
+    "AGENT_RUNTIME_ENABLED",
 )
 
 
@@ -46,6 +47,7 @@ def test_valid_production_origins_and_credentials(monkeypatch):
     assert settings.CORS_ALLOWED_ORIGINS == ["https://app.example.com", "https://admin.example.com"]
     assert settings.CORS_ALLOW_CREDENTIALS is True
     assert settings.DEBUG is False
+    assert settings.AGENT_RUNTIME_ENABLED is False
 
 
 def test_production_requires_cors_origins(monkeypatch):
