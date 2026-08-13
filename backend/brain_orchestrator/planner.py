@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
 from ..tool_center.gateway import clean_text
@@ -111,22 +112,36 @@ def check_graph_tools(db: Session, graph: TaskGraph, boss_confirmed: bool, secur
 
 
 def persist_plan(db: Session, graph: TaskGraph, plan: dict, created_by: str | None = None) -> None:
-    existing_graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.graph_id == graph.graph_id).first()
-    if not existing_graph:
-        db.add(
-            BrainTaskGraph(
-                graph_id=graph.graph_id,
-                user_request=graph.goal,
-                goal=graph.goal,
-                task_type=graph.task_type,
-                risk_level=graph.risk_level,
-                approval_required=graph.approval_required,
-                estimated_cost_level=graph.estimated_cost_level,
-                status=plan["status"],
-                dry_run=True,
-                created_by=clean_text(created_by)[:100],
-            )
-        )
+    graph_values = {
+        "graph_id": graph.graph_id,
+        "user_request": graph.goal,
+        "goal": graph.goal,
+        "task_type": graph.task_type,
+        "risk_level": graph.risk_level,
+        "approval_required": graph.approval_required,
+        "estimated_cost_level": graph.estimated_cost_level,
+        "status": plan["status"],
+        "dry_run": True,
+        "created_by": clean_text(created_by)[:100],
+    }
+    if db.get_bind().dialect.name == "postgresql":
+        inserted_graph_id = db.execute(
+            postgresql_insert(BrainTaskGraph)
+            .values(**graph_values)
+            .on_conflict_do_nothing(index_elements=[BrainTaskGraph.graph_id])
+            .returning(BrainTaskGraph.id)
+        ).scalar_one_or_none()
+        graph_created = inserted_graph_id is not None
+        if not graph_created:
+            canonical_graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.graph_id == graph.graph_id).one_or_none()
+            if canonical_graph is None:
+                raise RuntimeError("并发创建的 BrainTaskGraph 无法回读")
+    else:
+        canonical_graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.graph_id == graph.graph_id).one_or_none()
+        graph_created = canonical_graph is None
+        if graph_created:
+            db.add(BrainTaskGraph(**graph_values))
+    if graph_created:
         for node in graph.nodes:
             db.add(
                 BrainTaskNode(
@@ -266,4 +281,3 @@ def parse_json(value: str | None) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return clean_text(value)
-
