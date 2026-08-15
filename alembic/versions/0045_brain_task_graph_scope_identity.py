@@ -151,7 +151,6 @@ def downgrade():
             "semantic_hash",
             "tenant_id",
             "company_id",
-            "store_scope_key",
             "requester_id",
             "canonical_run_id",
         )
