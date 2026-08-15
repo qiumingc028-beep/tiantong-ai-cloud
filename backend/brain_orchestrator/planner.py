@@ -1,16 +1,80 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 
+from ..models import Store, User, UserStoreMembership
 from ..tool_center.gateway import clean_text
 from ..tool_router.router_engine import check_route_permission
 from .models import BrainOrchestratorLog, BrainTaskEdge, BrainTaskGraph, BrainTaskNode
 from .schemas import TaskGraph
 from .task_graph import build_task_graph
+
+
+class BrainGraphIdentityConflict(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class GraphOwnershipScope:
+    tenant_id: int
+    company_id: int
+    requester_id: int
+    store_scope_key: str
+    ownership_scope_key: str
+
+
+def resolve_graph_ownership(db: Session, user: User) -> GraphOwnershipScope:
+    store_ids = [
+        row[0]
+        for row in (
+            db.query(UserStoreMembership.store_id)
+            .join(Store, Store.id == UserStoreMembership.store_id)
+            .filter(
+                UserStoreMembership.user_id == user.id,
+                UserStoreMembership.active.is_(True),
+                UserStoreMembership.can_read.is_(True),
+                Store.active.is_(True),
+                Store.tenant_id == user.tenant_id,
+                Store.company_id == user.company_id,
+            )
+            .order_by(UserStoreMembership.store_id.asc())
+        )
+    ]
+    store_scope_key = json.dumps(
+        {"store_ids": store_ids} if store_ids else {"unassigned_user_id": user.id},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    ownership_scope_key = hashlib.sha256(
+        json.dumps(
+            {
+                "tenant_id": user.tenant_id,
+                "company_id": user.company_id,
+                "requester_id": user.id,
+                "store_scope": json.loads(store_scope_key),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return GraphOwnershipScope(
+        tenant_id=user.tenant_id,
+        company_id=user.company_id,
+        requester_id=user.id,
+        store_scope_key=store_scope_key,
+        ownership_scope_key=ownership_scope_key,
+    )
+
+
+def _semantic_hash(payload_json: str) -> str:
+    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
 
 def analyze_request(request_text: str) -> dict:
@@ -28,7 +92,15 @@ def analyze_request(request_text: str) -> dict:
     }
 
 
-def generate_plan(db: Session, request_text: str, created_by: str | None = None, boss_confirmed: bool = False, security_audited: bool = False) -> dict:
+def generate_plan(
+    db: Session,
+    request_text: str,
+    *,
+    user: User,
+    execution_identity: str | None = None,
+    boss_confirmed: bool = False,
+    security_audited: bool = False,
+) -> dict:
     graph = build_task_graph(request_text)
     approval = approval_summary(graph, boss_confirmed, security_audited)
     tool_results = check_graph_tools(db, graph, boss_confirmed=boss_confirmed, security_audited=security_audited)
@@ -48,12 +120,48 @@ def generate_plan(db: Session, request_text: str, created_by: str | None = None,
         "dry_run": True,
         "mode": "simulation",
     }
-    persist_plan(db, graph, plan, created_by=created_by)
+    scope = resolve_graph_ownership(db, user)
+    semantic_payload_json = json.dumps(
+        {
+            "goal": graph.goal,
+            "task_type": graph.task_type,
+            "nodes": plan["nodes"],
+            "edges": plan["edges"],
+            "tool_router_results": plan["tool_router_results"],
+            "approval_nodes": plan["approval_nodes"],
+            "risk_level": plan["risk_level"],
+            "approval_required": plan["approval_required"],
+            "estimated_cost_level": plan["estimated_cost_level"],
+            "status": plan["status"],
+            "requester_id": user.id,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    semantic_hash = _semantic_hash(semantic_payload_json)
+    normalized_execution_identity = clean_text(execution_identity)
+    execution_scope_key = f"trace:{normalized_execution_identity}" if normalized_execution_identity else f"plan:{semantic_hash}"
+    canonical_graph = persist_plan(
+        db,
+        graph,
+        plan,
+        scope=scope,
+        execution_scope_key=execution_scope_key,
+        semantic_hash=semantic_hash,
+        semantic_payload_json=semantic_payload_json,
+        created_by=user.username,
+    )
+    plan["graph_id"] = canonical_graph.graph_id
     return plan
 
 
-def get_task_graph(db: Session, graph_id: str) -> dict | None:
-    graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.graph_id == graph_id).first()
+def get_task_graph(db: Session, graph_id: str, *, user: User) -> dict | None:
+    scope = resolve_graph_ownership(db, user)
+    graph = db.query(BrainTaskGraph).filter(
+        BrainTaskGraph.graph_id == graph_id,
+        *_ownership_filters(scope),
+    ).one_or_none()
     if not graph:
         return None
     nodes = (
@@ -71,8 +179,16 @@ def get_task_graph(db: Session, graph_id: str) -> dict | None:
     }
 
 
-def list_logs(db: Session) -> list[dict]:
-    rows = db.query(BrainOrchestratorLog).order_by(BrainOrchestratorLog.created_at.desc(), BrainOrchestratorLog.id.desc()).limit(100).all()
+def list_logs(db: Session, *, user: User) -> list[dict]:
+    scope = resolve_graph_ownership(db, user)
+    rows = (
+        db.query(BrainOrchestratorLog)
+        .join(BrainTaskGraph, BrainTaskGraph.graph_id == BrainOrchestratorLog.graph_id)
+        .filter(*_ownership_filters(scope))
+        .order_by(BrainOrchestratorLog.created_at.desc(), BrainOrchestratorLog.id.desc())
+        .limit(100)
+        .all()
+    )
     return [log_to_dict(row) for row in rows]
 
 
@@ -111,9 +227,29 @@ def check_graph_tools(db: Session, graph: TaskGraph, boss_confirmed: bool, secur
     return results
 
 
-def persist_plan(db: Session, graph: TaskGraph, plan: dict, created_by: str | None = None) -> None:
+def persist_plan(
+    db: Session,
+    graph: TaskGraph,
+    plan: dict,
+    *,
+    scope: GraphOwnershipScope,
+    execution_scope_key: str,
+    semantic_hash: str,
+    semantic_payload_json: str,
+    created_by: str | None = None,
+) -> BrainTaskGraph:
+    graph.graph_id = f"graph-{uuid4().hex}"
+    canonical_graph: BrainTaskGraph | None = None
     graph_values = {
         "graph_id": graph.graph_id,
+        "ownership_scope_key": scope.ownership_scope_key,
+        "execution_scope_key": execution_scope_key,
+        "semantic_hash": semantic_hash,
+        "semantic_payload_json": semantic_payload_json,
+        "tenant_id": scope.tenant_id,
+        "company_id": scope.company_id,
+        "store_scope_key": scope.store_scope_key,
+        "requester_id": scope.requester_id,
         "user_request": graph.goal,
         "goal": graph.goal,
         "task_type": graph.task_type,
@@ -128,19 +264,17 @@ def persist_plan(db: Session, graph: TaskGraph, plan: dict, created_by: str | No
         inserted_graph_id = db.execute(
             postgresql_insert(BrainTaskGraph)
             .values(**graph_values)
-            .on_conflict_do_nothing(index_elements=[BrainTaskGraph.graph_id])
+            .on_conflict_do_nothing(constraint="uq_brain_task_graph_scope_execution_semantic")
             .returning(BrainTaskGraph.id)
         ).scalar_one_or_none()
         graph_created = inserted_graph_id is not None
-        if not graph_created:
-            canonical_graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.graph_id == graph.graph_id).one_or_none()
-            if canonical_graph is None:
-                raise RuntimeError("并发创建的 BrainTaskGraph 无法回读")
     else:
-        canonical_graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.graph_id == graph.graph_id).one_or_none()
-        graph_created = canonical_graph is None
+        graph_created = not _canonical_graph_query(
+            db, scope, execution_scope_key, semantic_hash
+        ).with_entities(BrainTaskGraph.id).first()
         if graph_created:
-            db.add(BrainTaskGraph(**graph_values))
+            canonical_graph = BrainTaskGraph(**graph_values)
+            db.add(canonical_graph)
     if graph_created:
         for node in graph.nodes:
             db.add(
@@ -171,9 +305,17 @@ def persist_plan(db: Session, graph: TaskGraph, plan: dict, created_by: str | No
                     description=edge.description,
                 )
             )
+    if canonical_graph is None:
+        canonical_graph = _canonical_graph_query(
+            db, scope, execution_scope_key, semantic_hash
+        ).one_or_none()
+    if canonical_graph is None:
+        raise RuntimeError("并发创建的 BrainTaskGraph 无法回读")
+    if canonical_graph.semantic_payload_json != semantic_payload_json:
+        raise BrainGraphIdentityConflict("BrainTaskGraph 完整语义身份冲突")
     db.add(
         BrainOrchestratorLog(
-            graph_id=graph.graph_id,
+            graph_id=canonical_graph.graph_id,
             user_request=graph.goal,
             brain_analysis=to_json(analyze_request(graph.goal)),
             task_graph=to_json({"nodes": [node.model_dump() for node in graph.nodes], "edges": [edge.model_dump() for edge in graph.edges]}),
@@ -185,6 +327,45 @@ def persist_plan(db: Session, graph: TaskGraph, plan: dict, created_by: str | No
         )
     )
     db.commit()
+    db.refresh(canonical_graph)
+    return canonical_graph
+
+
+def _canonical_graph_query(
+    db: Session,
+    scope: GraphOwnershipScope,
+    execution_scope_key: str,
+    semantic_hash: str,
+):
+    return db.query(BrainTaskGraph).filter(
+        *_ownership_filters(scope),
+        BrainTaskGraph.execution_scope_key == execution_scope_key,
+        BrainTaskGraph.semantic_hash == semantic_hash,
+    )
+
+
+def _ownership_filters(scope: GraphOwnershipScope):
+    return (
+        BrainTaskGraph.ownership_scope_key == scope.ownership_scope_key,
+        BrainTaskGraph.tenant_id == scope.tenant_id,
+        BrainTaskGraph.company_id == scope.company_id,
+        BrainTaskGraph.requester_id == scope.requester_id,
+        BrainTaskGraph.store_scope_key == scope.store_scope_key,
+    )
+
+
+def bind_graph_to_run(db: Session, *, graph_id: str, run_id: str, user: User) -> BrainTaskGraph:
+    scope = resolve_graph_ownership(db, user)
+    graph = db.query(BrainTaskGraph).filter(
+        BrainTaskGraph.graph_id == graph_id,
+        *_ownership_filters(scope),
+    ).one_or_none()
+    if graph is None:
+        raise BrainGraphIdentityConflict("BrainTaskGraph 所有权范围不匹配")
+    if graph.canonical_run_id not in {None, run_id}:
+        raise BrainGraphIdentityConflict("BrainTaskGraph 已绑定其他 canonical Run")
+    graph.canonical_run_id = run_id
+    return graph
 
 
 def unique_employees(graph: TaskGraph) -> list[dict]:

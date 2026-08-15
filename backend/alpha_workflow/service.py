@@ -13,6 +13,7 @@ from ..agent_runtime.audit import write_audit_event
 from ..agent_runtime.models import AgentExecution, AgentExecutionAudit, AgentCapability
 from ..agent_runtime.registry import seed_builtin_capabilities
 from ..ai_employees.registry import TIANCAI_DATA, employee_name
+from ..brain_orchestrator.planner import bind_graph_to_run
 from ..config import get_settings
 from ..knowledge_center.models import KnowledgeAsset, KnowledgeCitation, KnowledgeChunk, KnowledgeReview, KnowledgeSourceLink, KnowledgeTagRelation, KnowledgeVersion
 from ..knowledge_center.service import record_use, submit_research_report
@@ -531,6 +532,8 @@ def start_alpha_workflow(
     )
     db.add(run)
     try:
+        db.flush()
+        bind_graph_to_run(db, graph_id=str(orchestrator_plan["graph_id"]), run_id=run.run_id, user=user)
         db.commit()
     except IntegrityError as exc:
         db.rollback()

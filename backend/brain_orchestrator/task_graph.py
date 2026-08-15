@@ -132,4 +132,3 @@ def infer_cost_level(nodes: list[TaskGraphNode]) -> str:
 def build_graph_id(goal: str) -> str:
     digest = hashlib.sha256(goal.encode("utf-8")).hexdigest()[:12]
     return f"graph-{digest}"
-

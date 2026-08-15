@@ -406,6 +406,7 @@ def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_eff
 ):
     from backend.agent_runtime.models import AgentExecution
     from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
+    from backend.brain_orchestrator.models import BrainTaskGraph
     from backend.knowledge_center.models import KnowledgeAsset, KnowledgeVersion
     from backend.models import TaskCenterTask
     from backend.research_runtime.models import ResearchExecution
@@ -426,6 +427,9 @@ def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_eff
     with test_db() as db:
         run = db.query(AlphaWorkflowRun).filter(AlphaWorkflowRun.trace_id == payload["trace_id"]).one()
         assert run.run_id in run_ids
+        graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.graph_id == run.orchestrator_run_id).one()
+        assert graph.canonical_run_id == run.run_id
+        assert graph.requester_id == run.user_id
         assert db.query(TaskCenterTask).filter(TaskCenterTask.id == run.task_id).count() == 1
         assert db.query(AgentExecution).filter(AgentExecution.trace_id == payload["trace_id"]).count() == 1
         assert db.query(ResearchExecution).filter(ResearchExecution.trace_id == payload["trace_id"]).count() == 1
@@ -434,6 +438,190 @@ def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_eff
         assert db.query(SkillInvocation).filter(SkillInvocation.trace_id == payload["trace_id"]).count() == 1
         event_ids = [row.event_id for row in db.query(AlphaWorkflowEvent).filter(AlphaWorkflowEvent.run_id == run.run_id)]
         assert len(event_ids) == len(set(event_ids))
+
+
+def test_same_trace_with_different_request_returns_409(postgres_alpha_runtime):
+    client, boss_headers, _test_db = postgres_alpha_runtime
+    trace_id = f"pg-different-request-{uuid.uuid4()}"
+    first = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "验证相同Trace的第一个请求", "trace_id": trace_id},
+    )
+    second = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "验证相同Trace的不同请求", "trace_id": trace_id},
+    )
+    assert first.status_code == 200
+    assert second.status_code == 409
+
+
+def test_graph_scope_and_full_semantic_identity_are_fail_closed(postgres_alpha_runtime, monkeypatch):
+    from backend.auth import hash_password
+    from backend.models import Company, Store, Tenant, User, UserStoreMembership
+
+    client, _boss_headers, test_db = postgres_alpha_runtime
+
+    def create_identity(
+        label: str,
+        *,
+        tenant_id: int | None = None,
+        company_id: int | None = None,
+    ):
+        with test_db() as db:
+            if tenant_id is None:
+                tenant = Tenant(tenant_code=f"tenant-{label}", tenant_name=label, active=True)
+                db.add(tenant)
+                db.flush()
+                tenant_id = tenant.id
+            if company_id is None:
+                company = Company(
+                    tenant_id=tenant_id,
+                    company_code=f"company-{label}",
+                    company_name=label,
+                    active=True,
+                )
+                db.add(company)
+                db.flush()
+                company_id = company.id
+            user = User(
+                username=f"scope-{label}",
+                password_hash=hash_password("password"),
+                role="owner",
+                display_name=label,
+                tenant_id=tenant_id,
+                company_id=company_id,
+                active=True,
+            )
+            db.add(user)
+            db.flush()
+            store = Store(
+                platform="jd",
+                store_code=f"store-{label}",
+                store_name=label,
+                tenant_id=tenant_id,
+                company_id=company_id,
+                active=True,
+            )
+            db.add(store)
+            db.flush()
+            db.add(UserStoreMembership(user_id=user.id, store_id=store.id, active=True, can_read=True, can_write=True))
+            db.commit()
+            return user.id, tenant_id, company_id, store.id
+
+    first_user = create_identity("tenant-a")
+    second_user = create_identity("tenant-b")
+    with test_db() as db:
+        second_company = Company(
+            tenant_id=first_user[1],
+            company_code="company-other",
+            company_name="Other Company",
+            active=True,
+        )
+        db.add(second_company)
+        db.flush()
+        second_company_id = second_company.id
+        db.commit()
+    create_identity("company-other", tenant_id=first_user[1], company_id=second_company_id)
+
+    def headers(label: str):
+        login = client.post("/api/login", json={"username": f"scope-{label}", "password": "password"})
+        assert login.status_code == 200
+        return {"Authorization": f"Bearer {login.json()['token']}"}
+
+    goal = "相同范围安全测试目标"
+    tenant_a = client.post("/api/orchestrator/plan", headers=headers("tenant-a"), json={"request_text": goal})
+    tenant_b = client.post("/api/orchestrator/plan", headers=headers("tenant-b"), json={"request_text": goal})
+    company_b = client.post("/api/orchestrator/plan", headers=headers("company-other"), json={"request_text": goal})
+    assert {tenant_a.status_code, tenant_b.status_code, company_b.status_code} == {200}
+    assert len({tenant_a.json()["graph_id"], tenant_b.json()["graph_id"], company_b.json()["graph_id"]}) == 3
+    assert client.get(
+        f"/api/orchestrator/tasks/{tenant_a.json()['graph_id']}",
+        headers=headers("tenant-b"),
+    ).status_code == 404
+
+    with test_db() as db:
+        membership = db.query(UserStoreMembership).filter(UserStoreMembership.user_id == first_user[0]).one()
+        membership.active = False
+        replacement = Store(
+            platform="jd",
+            store_code="store-tenant-a-replacement",
+            store_name="Replacement",
+            tenant_id=first_user[1],
+            company_id=first_user[2],
+            active=True,
+        )
+        db.add(replacement)
+        db.flush()
+        db.add(UserStoreMembership(user_id=first_user[0], store_id=replacement.id, active=True, can_read=True, can_write=True))
+        db.commit()
+    changed_shop = client.post("/api/orchestrator/plan", headers=headers("tenant-a"), json={"request_text": goal})
+    assert changed_shop.status_code == 200
+    assert changed_shop.json()["graph_id"] != tenant_a.json()["graph_id"]
+
+    short_prefix_hashes = iter(("a" * 12 + "b" * 52, "a" * 12 + "c" * 52))
+    monkeypatch.setattr("backend.brain_orchestrator.planner._semantic_hash", lambda _payload: next(short_prefix_hashes))
+    semantic_a = client.post("/api/orchestrator/plan", headers=headers("tenant-a"), json={"request_text": "语义输入A"})
+    semantic_b = client.post("/api/orchestrator/plan", headers=headers("tenant-a"), json={"request_text": "语义输入B"})
+    assert semantic_a.status_code == semantic_b.status_code == 200
+    assert semantic_a.json()["graph_id"] != semantic_b.json()["graph_id"]
+
+    monkeypatch.setattr("backend.brain_orchestrator.planner._semantic_hash", lambda _payload: "f" * 64)
+    collision_a = client.post("/api/orchestrator/plan", headers=headers("tenant-a"), json={"request_text": "完整载荷碰撞A"})
+    collision_b = client.post("/api/orchestrator/plan", headers=headers("tenant-a"), json={"request_text": "完整载荷碰撞B"})
+    assert collision_a.status_code == 200
+    assert collision_b.status_code == 409
+
+
+def test_non_target_graph_unique_error_is_not_swallowed(postgres_alpha_runtime, monkeypatch):
+    client, boss_headers, _test_db = postgres_alpha_runtime
+    monkeypatch.setattr("backend.brain_orchestrator.planner.uuid4", lambda: uuid.UUID(int=0))
+    first = client.post(
+        "/api/orchestrator/plan",
+        headers=boss_headers,
+        json={"request_text": "非目标唯一约束测试A"},
+    )
+    assert first.status_code == 200
+    with pytest.raises(IntegrityError):
+        client.post(
+            "/api/orchestrator/plan",
+            headers=boss_headers,
+            json={"request_text": "非目标唯一约束测试B"},
+        )
+
+
+def test_0044_to_0045_isolates_non_empty_legacy_graph(postgres_database_factory):
+    database_url = postgres_database_factory("legacy_graph_scope")
+    alembic(ROOT, database_url, "upgrade", "0044_tenant_company_store_authorization_scope")
+    dsn = make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)
+    with psycopg2.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO brain_task_graphs (graph_id, user_request, goal, task_type, risk_level, "
+                "approval_required, estimated_cost_level, status, dry_run, created_by) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                ("graph-legacy-ownerless", "legacy", "legacy", "business_analysis", "low", False, "low", "planned", True, "legacy"),
+            )
+            legacy_id = cursor.fetchone()[0]
+        connection.commit()
+    alembic(ROOT, database_url, "upgrade", "head")
+    with psycopg2.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT ownership_scope_key, execution_scope_key, semantic_hash, semantic_payload_json, "
+                "tenant_id, company_id, requester_id, store_scope_key FROM brain_task_graphs WHERE id=%s",
+                (legacy_id,),
+            )
+            row = cursor.fetchone()
+    assert row is not None
+    assert row[0].startswith(f"legacy:{legacy_id}:")
+    assert row[1] == f"legacy:{legacy_id}"
+    assert len(row[2]) == 64 and row[3]
+    assert row[4:7] == (None, None, None)
+    assert row[7] == f"legacy:{legacy_id}"
+    migration_source = (ROOT / "alembic/versions/0045_brain_task_graph_scope_identity.py").read_text()
+    assert "cannot downgrade: BrainTaskGraph ownership identity data would be lost" in migration_source
 
 
 @pytest.mark.parametrize("constraint_name", sorted(EXPECTED_UNIQUES))

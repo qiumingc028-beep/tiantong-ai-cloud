@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from ..auth import require_permission_user
 from ..models import User
 from .orchestrator import analyze_goal, plan_dry_run, read_logs, read_task_graph
+from .planner import BrainGraphIdentityConflict
 from .schemas import AnalyzePayload, PlanPayload
 
 
@@ -16,28 +17,30 @@ def analyze(payload: AnalyzePayload, request: Request, db: Session) -> dict:
 
 def plan(payload: PlanPayload, request: Request, db: Session) -> dict:
     user = require_brain_orchestrator_user(request, db)
-    return plan_dry_run(
-        db,
-        payload.request_text,
-        created_by=user.username,
-        boss_confirmed=payload.boss_confirmed,
-        security_audited=payload.security_audited,
-    )
+    try:
+        return plan_dry_run(
+            db,
+            payload.request_text,
+            user=user,
+            boss_confirmed=payload.boss_confirmed,
+            security_audited=payload.security_audited,
+        )
+    except BrainGraphIdentityConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def get_task(graph_id: str, request: Request, db: Session) -> dict:
-    require_brain_orchestrator_user(request, db)
-    row = read_task_graph(db, graph_id)
+    user = require_brain_orchestrator_user(request, db)
+    row = read_task_graph(db, graph_id, user=user)
     if not row:
         raise HTTPException(status_code=404, detail="任务链不存在")
     return row
 
 
 def logs(request: Request, db: Session) -> dict:
-    require_brain_orchestrator_user(request, db)
-    return {"logs": read_logs(db)}
+    user = require_brain_orchestrator_user(request, db)
+    return {"logs": read_logs(db, user=user)}
 
 
 def require_brain_orchestrator_user(request: Request, db: Session) -> User:
     return require_permission_user(request, db, "orchestrator.analyze")
-
