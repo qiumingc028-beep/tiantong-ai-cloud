@@ -381,24 +381,61 @@ def test_model_allows_knowledge_asset_reuse_across_runs():
     assert ("knowledge_asset_id",) not in unique_columns
 
 
+def _alpha_state_counts(db):
+    from backend.agent_runtime.models import AgentExecution
+    from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun, AlphaWorkflowScenario
+    from backend.brain_orchestrator.models import BrainOrchestratorLog, BrainTaskEdge, BrainTaskGraph, BrainTaskNode
+    from backend.knowledge_center.models import KnowledgeAsset, KnowledgeVersion
+    from backend.models import AiEmployee, TaskCenterResult, TaskCenterTask
+    from backend.research_runtime.models import ResearchExecution
+    from backend.skills_engine.models import SkillInvocation
+
+    models = {
+        "runs": AlphaWorkflowRun,
+        "graphs": BrainTaskGraph,
+        "nodes": BrainTaskNode,
+        "edges": BrainTaskEdge,
+        "logs": BrainOrchestratorLog,
+        "events": AlphaWorkflowEvent,
+        "employees": AiEmployee,
+        "scenarios": AlphaWorkflowScenario,
+        "tasks": TaskCenterTask,
+        "task_results": TaskCenterResult,
+        "agent_executions": AgentExecution,
+        "research_executions": ResearchExecution,
+        "knowledge_assets": KnowledgeAsset,
+        "knowledge_versions": KnowledgeVersion,
+        "skill_invocations": SkillInvocation,
+    }
+    return {name: db.query(model).count() for name, model in models.items()}
+
+
+def _assert_one_canonical_graph(db, run_id: str):
+    from backend.brain_orchestrator.models import BrainOrchestratorLog, BrainTaskEdge, BrainTaskGraph, BrainTaskNode
+
+    graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.canonical_run_id == run_id).one()
+    assert db.query(BrainOrchestratorLog).filter(BrainOrchestratorLog.graph_id == graph.graph_id).count() == 1
+    assert db.query(BrainTaskNode).filter(BrainTaskNode.graph_id == graph.graph_id).count() > 0
+    assert db.query(BrainTaskEdge).filter(BrainTaskEdge.graph_id == graph.graph_id).count() > 0
+    assert db.query(BrainTaskGraph).filter(BrainTaskGraph.canonical_run_id.is_(None)).count() == 0
+    return graph
+
+
 def test_same_idempotency_key_returns_existing_run_without_new_rows(
     postgres_alpha_runtime,
 ):
-    from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
-
     client, boss_headers, test_db = postgres_alpha_runtime
     payload = {"input_text": "验证409幂等语义", "trace_id": f"pg-contract-{uuid.uuid4()}"}
     first = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
     with test_db() as db:
-        run_count = db.query(AlphaWorkflowRun).count()
-        event_count = db.query(AlphaWorkflowEvent).count()
+        before_replay = _alpha_state_counts(db)
     second = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json()["run"]["run_id"] == first.json()["run"]["run_id"]
     with test_db() as db:
-        assert db.query(AlphaWorkflowRun).count() == run_count
-        assert db.query(AlphaWorkflowEvent).count() == event_count
+        assert _alpha_state_counts(db) == before_replay
+        _assert_one_canonical_graph(db, first.json()["run"]["run_id"])
 
 
 def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_effects(
@@ -414,6 +451,8 @@ def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_eff
 
     client, boss_headers, test_db = postgres_alpha_runtime
     payload = {"input_text": "验证并发幂等语义", "trace_id": f"pg-concurrent-{uuid.uuid4()}"}
+    with test_db() as db:
+        before = _alpha_state_counts(db)
     with ThreadPoolExecutor(max_workers=4) as executor:
         responses = list(
             executor.map(
@@ -430,6 +469,11 @@ def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_eff
         graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.graph_id == run.orchestrator_run_id).one()
         assert graph.canonical_run_id == run.run_id
         assert graph.requester_id == run.user_id
+        after = _alpha_state_counts(db)
+        assert after["runs"] - before["runs"] == 1
+        assert after["graphs"] - before["graphs"] == 1
+        assert after["logs"] - before["logs"] == 1
+        _assert_one_canonical_graph(db, run.run_id)
         assert db.query(TaskCenterTask).filter(TaskCenterTask.id == run.task_id).count() == 1
         assert db.query(AgentExecution).filter(AgentExecution.trace_id == payload["trace_id"]).count() == 1
         assert db.query(ResearchExecution).filter(ResearchExecution.trace_id == payload["trace_id"]).count() == 1
@@ -441,13 +485,15 @@ def test_concurrent_same_trace_replay_returns_one_run_without_duplicate_side_eff
 
 
 def test_same_trace_with_different_request_returns_409(postgres_alpha_runtime):
-    client, boss_headers, _test_db = postgres_alpha_runtime
+    client, boss_headers, test_db = postgres_alpha_runtime
     trace_id = f"pg-different-request-{uuid.uuid4()}"
     first = client.post(
         "/api/v2/alpha-workflows/demo",
         headers=boss_headers,
         json={"input_text": "验证相同Trace的第一个请求", "trace_id": trace_id},
     )
+    with test_db() as db:
+        before_conflict = _alpha_state_counts(db)
     second = client.post(
         "/api/v2/alpha-workflows/demo",
         headers=boss_headers,
@@ -455,6 +501,134 @@ def test_same_trace_with_different_request_returns_409(postgres_alpha_runtime):
     )
     assert first.status_code == 200
     assert second.status_code == 409
+    with test_db() as db:
+        assert _alpha_state_counts(db) == before_conflict
+        _assert_one_canonical_graph(db, first.json()["run"]["run_id"])
+
+
+def test_concurrent_mixed_payloads_persist_only_the_winner(postgres_alpha_runtime):
+    from backend.alpha_workflow.models import AlphaWorkflowRun
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    trace_id = f"pg-mixed-{uuid.uuid4()}"
+    payloads = [
+        {"input_text": "混合并发请求A", "trace_id": trace_id},
+        {"input_text": "混合并发请求B", "trace_id": trace_id},
+        {"input_text": "混合并发请求C", "trace_id": trace_id},
+        {"input_text": "混合并发请求D", "trace_id": trace_id},
+    ]
+    with test_db() as db:
+        before = _alpha_state_counts(db)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        responses = list(executor.map(lambda payload: client.post(
+            "/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload
+        ), payloads))
+    assert [response.status_code for response in responses].count(200) == 1
+    assert [response.status_code for response in responses].count(409) == 3
+    winner = next(response for response in responses if response.status_code == 200)
+    with test_db() as db:
+        after = _alpha_state_counts(db)
+        assert after["runs"] - before["runs"] == 1
+        assert after["graphs"] - before["graphs"] == 1
+        assert after["logs"] - before["logs"] == 1
+        run = db.query(AlphaWorkflowRun).filter(AlphaWorkflowRun.trace_id == trace_id).one()
+        assert run.run_id == winner.json()["run"]["run_id"]
+        _assert_one_canonical_graph(db, run.run_id)
+
+
+def test_atomic_planning_failure_rolls_back_graph_and_run(postgres_alpha_runtime):
+    from backend.alpha_workflow.registry import ensure_default_scenarios
+    from backend.database import get_db
+    from backend.main import app
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    with test_db() as db:
+        ensure_default_scenarios(db)
+        before = _alpha_state_counts(db)
+    request_db = test_db()
+    previous_override = app.dependency_overrides[get_db]
+    fired = 0
+    flushed_deltas = {}
+
+    def override_request_db():
+        yield request_db
+
+    def fail_atomic_commit(session):
+        nonlocal fired, flushed_deltas
+        if fired:
+            return
+        assert session is request_db
+        current = _alpha_state_counts(session)
+        flushed_deltas = {name: current[name] - before[name] for name in before}
+        assert flushed_deltas["runs"] == 1
+        assert flushed_deltas["graphs"] == 1
+        assert flushed_deltas["nodes"] > 0
+        assert flushed_deltas["edges"] > 0
+        assert flushed_deltas["logs"] == 1
+        fired += 1
+        raise RuntimeError("injected atomic persistence failure")
+
+    app.dependency_overrides[get_db] = override_request_db
+    event.listen(request_db, "before_commit", fail_atomic_commit)
+    try:
+        with pytest.raises(RuntimeError, match="injected atomic persistence failure"):
+            client.post(
+                "/api/v2/alpha-workflows/demo",
+                headers=boss_headers,
+                json={"input_text": "原子事务失败注入", "trace_id": f"pg-rollback-{uuid.uuid4()}"},
+            )
+        assert not request_db.in_transaction()
+        assert request_db.is_active
+    finally:
+        event.remove(request_db, "before_commit", fail_atomic_commit)
+        app.dependency_overrides[get_db] = previous_override
+        request_db.close()
+    assert not event.contains(request_db, "before_commit", fail_atomic_commit)
+    assert fired == 1
+    assert flushed_deltas["runs"] == 1
+    assert flushed_deltas["graphs"] == 1
+    with test_db() as db:
+        assert _alpha_state_counts(db) == before
+
+
+def test_trace_id_114_succeeds_and_115_is_zero_write_400(postgres_alpha_runtime):
+    from backend.alpha_workflow.schemas import TRACE_ID_MAX_LENGTH
+    from backend.brain_orchestrator.models import BrainTaskGraph
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    assert TRACE_ID_MAX_LENGTH == 114
+    valid_trace = "t" * TRACE_ID_MAX_LENGTH
+    accepted = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "验证Trace边界", "trace_id": valid_trace},
+    )
+    assert accepted.status_code == 200
+    run = accepted.json()["run"]
+    assert run["trace_id"] == valid_trace
+    assert run["workflow_id"] == f"alpha-{valid_trace}"
+    assert run["root_span_id"] == f"{valid_trace}:root"
+    assert len(run["workflow_id"]) == 120
+    assert len(run["root_span_id"]) == 119
+    with test_db() as db:
+        graph = db.query(BrainTaskGraph).filter(BrainTaskGraph.canonical_run_id == run["run_id"]).one()
+        assert graph.execution_scope_key == f"trace:{valid_trace}"
+        assert len(graph.execution_scope_key) == 120
+        before_rejected = _alpha_state_counts(db)
+    rejected = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "验证Trace超限", "trace_id": "t" * (TRACE_ID_MAX_LENGTH + 1)},
+    )
+    blank = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "验证Trace空白", "trace_id": "   "},
+    )
+    assert rejected.status_code == 400
+    assert blank.status_code == 400
+    with test_db() as db:
+        assert _alpha_state_counts(db) == before_rejected
 
 
 def test_graph_scope_and_full_semantic_identity_are_fail_closed(postgres_alpha_runtime, monkeypatch):

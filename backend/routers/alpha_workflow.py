@@ -21,9 +21,8 @@ from ..alpha_workflow.service import (
     list_runs,
     list_scenarios,
     recover_alpha_workflow,
-    start_alpha_workflow,
+    start_alpha_workflow_request,
 )
-from ..brain_orchestrator.orchestrator import plan_dry_run
 from ..brain_orchestrator.planner import BrainGraphIdentityConflict
 
 
@@ -123,21 +122,12 @@ def api_run_demo(payload: AlphaWorkflowStartRequest, request: Request, db: Sessi
     require_alpha_workflow_enabled()
     user = require_alpha_workflow_user(request, db)
     try:
-        orchestrator_plan = plan_dry_run(
-            db,
-            payload.input_text,
-            user=user,
-            execution_identity=payload.trace_id,
-            boss_confirmed=True,
-            security_audited=True,
-        )
-        run = start_alpha_workflow(
+        run = start_alpha_workflow_request(
             db,
             user=user,
             input_text=payload.input_text,
-            trace_id=payload.trace_id or orchestrator_plan.get("graph_id"),
+            trace_id=payload.trace_id,
             scenario_code=payload.scenario_code,
-            orchestrator_plan=orchestrator_plan,
         )
     except (AlphaWorkflowConflictError, BrainGraphIdentityConflict) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -100,6 +100,7 @@ def generate_plan(
     execution_identity: str | None = None,
     boss_confirmed: bool = False,
     security_audited: bool = False,
+    commit: bool = True,
 ) -> dict:
     graph = build_task_graph(request_text)
     approval = approval_summary(graph, boss_confirmed, security_audited)
@@ -151,6 +152,7 @@ def generate_plan(
         semantic_hash=semantic_hash,
         semantic_payload_json=semantic_payload_json,
         created_by=user.username,
+        commit=commit,
     )
     plan["graph_id"] = canonical_graph.graph_id
     return plan
@@ -237,6 +239,7 @@ def persist_plan(
     semantic_hash: str,
     semantic_payload_json: str,
     created_by: str | None = None,
+    commit: bool = True,
 ) -> BrainTaskGraph:
     graph.graph_id = f"graph-{uuid4().hex}"
     canonical_graph: BrainTaskGraph | None = None
@@ -326,8 +329,11 @@ def persist_plan(
             execution_result="blocked_dry_run" if plan["status"] == "blocked" else "dry_run_plan_generated",
         )
     )
-    db.commit()
-    db.refresh(canonical_graph)
+    if commit:
+        db.commit()
+        db.refresh(canonical_graph)
+    else:
+        db.flush()
     return canonical_graph
 
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
+from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -13,7 +15,8 @@ from ..agent_runtime.audit import write_audit_event
 from ..agent_runtime.models import AgentExecution, AgentExecutionAudit, AgentCapability
 from ..agent_runtime.registry import seed_builtin_capabilities
 from ..ai_employees.registry import TIANCAI_DATA, employee_name
-from ..brain_orchestrator.planner import bind_graph_to_run
+from ..brain_orchestrator.models import BrainTaskGraph
+from ..brain_orchestrator.planner import bind_graph_to_run, resolve_graph_ownership
 from ..config import get_settings
 from ..knowledge_center.models import KnowledgeAsset, KnowledgeCitation, KnowledgeChunk, KnowledgeReview, KnowledgeSourceLink, KnowledgeTagRelation, KnowledgeVersion
 from ..knowledge_center.service import record_use, submit_research_report
@@ -41,6 +44,7 @@ from .exceptions import AlphaWorkflowConflictError, AlphaWorkflowDependencyError
 from .models import AlphaWorkflowEvent, AlphaWorkflowRun, AlphaWorkflowScenario
 from .planner import build_alpha_workflow_plan
 from .registry import ensure_default_scenarios, scenario_to_dict
+from .schemas import TRACE_ID_MAX_LENGTH
 
 
 def _utc_now() -> datetime:
@@ -189,6 +193,7 @@ def _compensate_alpha_workflow_failure(
             status="失败",
             message=reason,
             payload={"reason": reason},
+            span_id=f"span-{uuid4().hex}",
             parent_span_id=run.root_span_id,
         )
     if task:
@@ -387,6 +392,7 @@ def _create_agent_execution(db: Session, *, task: TaskCenterTask, employee: AiEm
 
 def _append_span(context: AlphaWorkflowContext, *, stage: str, status: str, message: str | None = None, metadata: dict[str, object] | None = None) -> AlphaWorkflowTraceSpan:
     span = context.set_stage(stage, status, message=message, metadata=metadata or {})
+    span.span_id = f"span-{uuid4().hex}"
     return span
 
 
@@ -469,6 +475,133 @@ def _score_risk(context: AlphaWorkflowContext) -> tuple[int, str, dict[str, obje
     return score, level, detail
 
 
+def _normalize_trace_id(trace_id: str | None) -> str:
+    if trace_id is None:
+        return uuid4().hex
+    normalized = trace_id.strip()
+    if not normalized:
+        raise AlphaWorkflowValidationError("trace_id 不能为空")
+    if len(normalized) > TRACE_ID_MAX_LENGTH:
+        raise AlphaWorkflowValidationError(f"trace_id 长度不能超过 {TRACE_ID_MAX_LENGTH} 个字符")
+    return normalized
+
+
+def _request_identity(input_text: str, scenario_code: str | None) -> dict[str, str]:
+    return {
+        "input_text": input_text.strip(),
+        "scenario_code": (scenario_code or DEFAULT_ALPHA_SCENARIO_CODE).strip(),
+    }
+
+
+def _request_identity_hash(identity: dict[str, str]) -> str:
+    payload = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _advisory_lock_key(ownership_scope_key: str, trace_id: str) -> int:
+    digest = hashlib.sha256(f"{ownership_scope_key}\0{trace_id}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+def _canonical_run_for_scope_trace(db: Session, *, user: User, trace_id: str) -> AlphaWorkflowRun | None:
+    run = db.query(AlphaWorkflowRun).filter(AlphaWorkflowRun.trace_id == trace_id).one_or_none()
+    if run is None:
+        return None
+    scope = resolve_graph_ownership(db, user)
+    graph = db.query(BrainTaskGraph).filter(
+        BrainTaskGraph.canonical_run_id == run.run_id,
+        BrainTaskGraph.execution_scope_key == f"trace:{trace_id}",
+        BrainTaskGraph.ownership_scope_key == scope.ownership_scope_key,
+        BrainTaskGraph.tenant_id == scope.tenant_id,
+        BrainTaskGraph.company_id == scope.company_id,
+        BrainTaskGraph.requester_id == scope.requester_id,
+        BrainTaskGraph.store_scope_key == scope.store_scope_key,
+    ).one_or_none()
+    if graph is None:
+        raise AlphaWorkflowConflictError("Alpha Workflow 已存在相同Trace但所有权范围不匹配")
+    return run
+
+
+def _run_matches_request(run: AlphaWorkflowRun, identity: dict[str, str]) -> bool:
+    context = _parse_context(run.workflow_context_json)
+    if context is None:
+        return False
+    stored_identity = context.linked_ids.get("request_identity")
+    if not isinstance(stored_identity, dict):
+        stored_identity = _request_identity(context.input_text or "", context.scenario_code)
+    stored_hash = context.linked_ids.get("request_hash")
+    return stored_identity == identity and (stored_hash in {None, _request_identity_hash(identity)})
+
+
+def start_alpha_workflow_request(
+    db: Session,
+    *,
+    user: User,
+    input_text: str,
+    trace_id: str | None = None,
+    scenario_code: str | None = None,
+) -> dict[str, object]:
+    settings = get_settings()
+    if not settings.ALPHA_WORKFLOW_ENABLED:
+        raise AlphaWorkflowDependencyError("Alpha 工作流未启用")
+    if not (settings.ALPHA_SCENARIO_ENABLED or settings.ALPHA_WORKFLOW_ENABLED):
+        raise AlphaWorkflowDependencyError("Alpha 场景未启用")
+    _ensure_dependency_flags(settings)
+    if not input_text.strip():
+        raise AlphaWorkflowValidationError("输入内容不能为空")
+    normalized_trace_id = _normalize_trace_id(trace_id)
+    identity = _request_identity(input_text, scenario_code)
+
+    ensure_default_scenarios(db, created_by_id=user.id)
+    scenario = db.query(AlphaWorkflowScenario).filter(
+        AlphaWorkflowScenario.scenario_code == identity["scenario_code"]
+    ).one_or_none()
+    if scenario is None:
+        raise AlphaWorkflowNotFoundError("场景不存在")
+    if not scenario.enabled:
+        raise AlphaWorkflowValidationError("场景已停用")
+
+    scope = resolve_graph_ownership(db, user)
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": _advisory_lock_key(scope.ownership_scope_key, normalized_trace_id)},
+        )
+    existing_run = _canonical_run_for_scope_trace(db, user=user, trace_id=normalized_trace_id)
+    if existing_run is not None:
+        if not _run_matches_request(existing_run, identity):
+            db.rollback()
+            raise AlphaWorkflowConflictError("Alpha Workflow 已存在相同Trace但请求内容不同")
+        result = _run_to_dict(db, existing_run, include_events=True)
+        db.rollback()
+        return result
+
+    try:
+        from ..brain_orchestrator.orchestrator import plan_dry_run
+
+        orchestrator_plan = plan_dry_run(
+            db,
+            identity["input_text"],
+            user=user,
+            execution_identity=normalized_trace_id,
+            boss_confirmed=True,
+            security_audited=True,
+            commit=False,
+        )
+        return start_alpha_workflow(
+            db,
+            user=user,
+            input_text=identity["input_text"],
+            trace_id=normalized_trace_id,
+            scenario_code=identity["scenario_code"],
+            orchestrator_plan=orchestrator_plan,
+            request_identity=identity,
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+
 def start_alpha_workflow(
     db: Session,
     *,
@@ -477,6 +610,7 @@ def start_alpha_workflow(
     trace_id: str | None = None,
     scenario_code: str | None = None,
     orchestrator_plan: dict[str, object] | None = None,
+    request_identity: dict[str, str] | None = None,
 ) -> dict[str, object]:
     settings = get_settings()
     if not settings.ALPHA_WORKFLOW_ENABLED:
@@ -496,7 +630,7 @@ def start_alpha_workflow(
     if not scenario.enabled:
         raise AlphaWorkflowValidationError("场景已停用")
 
-    trace_id = trace_id or str(orchestrator_plan["graph_id"])
+    trace_id = _normalize_trace_id(trace_id or str(orchestrator_plan["graph_id"]))
     workflow_id = f"alpha-{trace_id}"
     root_span_id = f"{trace_id}:root"
     existing_run, existing_run_conflict = _resolve_alpha_workflow_run_by_identities(
@@ -513,6 +647,49 @@ def start_alpha_workflow(
     plan = build_alpha_workflow_plan(input_text, scenario_code=scenario.scenario_code, trace_id=trace_id)
     plan.root_span_id = root_span_id
     employee = ensure_tiancai_employee(db)
+    started_at = _utc_now()
+    identity = request_identity or _request_identity(input_text, scenario.scenario_code)
+    context = AlphaWorkflowContext(
+        workflow_id=workflow_id,
+        tenant_id="tiantong",
+        user_id=user.id,
+        task_id=None,
+        orchestrator_run_id=orchestrator_plan["graph_id"],
+        research_execution_id=None,
+        research_report_id=None,
+        knowledge_asset_id=None,
+        knowledge_version_id=None,
+        skill_id=None,
+        skill_version_id=None,
+        skill_invocation_id=None,
+        agent_execution_id=None,
+        verification_id=None,
+        trace_id=trace_id,
+        root_span_id=root_span_id,
+        approval_ids=[],
+        risk_score=None,
+        quality_score=None,
+        current_stage="orchestrator",
+        status="运行中",
+        created_at=started_at,
+        updated_at=started_at,
+        scenario_code=scenario.scenario_code,
+        scenario_title=scenario.title,
+        input_text=input_text,
+        task_title=None,
+        task_status=None,
+        report_title=None,
+        report_hash=None,
+        report_content=None,
+        dashboard_status="运行中",
+        step_trace=[],
+        stage_history=[],
+        linked_ids={
+            "orchestrator_run_id": orchestrator_plan["graph_id"],
+            "request_hash": _request_identity_hash(identity),
+            "request_identity": identity,
+        },
+    )
     run = AlphaWorkflowRun(
         run_id=str(uuid4()),
         scenario_id=scenario.scenario_id,
@@ -525,10 +702,10 @@ def start_alpha_workflow(
         trace_id=trace_id,
         root_span_id=plan.root_span_id or f"{trace_id}:root",
         current_stage="orchestrator",
-        workflow_context_json=None,
+        workflow_context_json=context.model_dump_json(),
         plan_json=json.dumps(plan.model_dump(mode="json"), ensure_ascii=False),
         created_by_id=user.id,
-        started_at=_utc_now(),
+        started_at=started_at,
     )
     db.add(run)
     try:
@@ -553,43 +730,6 @@ def start_alpha_workflow(
             raise AlphaWorkflowConflictError(conflict_message) from exc
         raise
     db.refresh(run)
-    context = AlphaWorkflowContext(
-        workflow_id=run.workflow_id or f"alpha-{trace_id}",
-        tenant_id="tiantong",
-        user_id=user.id,
-        task_id=None,
-        orchestrator_run_id=orchestrator_plan["graph_id"],
-        research_execution_id=None,
-        research_report_id=None,
-        knowledge_asset_id=None,
-        knowledge_version_id=None,
-        skill_id=None,
-        skill_version_id=None,
-        skill_invocation_id=None,
-        agent_execution_id=None,
-        verification_id=None,
-        trace_id=trace_id,
-        root_span_id=run.root_span_id or f"{trace_id}:root",
-        approval_ids=[],
-        risk_score=None,
-        quality_score=None,
-        current_stage="orchestrator",
-        status="运行中",
-        created_at=run.started_at,
-        updated_at=_utc_now(),
-        scenario_code=scenario.scenario_code,
-        scenario_title=scenario.title,
-        input_text=input_text,
-        task_title=None,
-        task_status=None,
-        report_title=None,
-        report_hash=None,
-        report_content=None,
-        dashboard_status="运行中",
-        step_trace=[],
-        stage_history=[],
-        linked_ids={"orchestrator_run_id": orchestrator_plan["graph_id"]},
-    )
     task: TaskCenterTask | None = None
     agent_execution: AgentExecution | None = None
     result_row: TaskCenterResult | None = None
@@ -650,6 +790,7 @@ def start_alpha_workflow(
             status="成功",
             message="任务中心已创建任务",
             payload={"task_id": task.id, "task_title": task.title},
+            span_id=f"span-{uuid4().hex}",
             parent_span_id=run.root_span_id,
         )
         agent_execution = _create_agent_execution(db, task=task, employee=employee, trace_id=trace_id, input_text=input_text)
@@ -786,7 +927,8 @@ def start_alpha_workflow(
         context.skill_version_id = str(installation.skill_version_id)
         context.skill_invocation_id = invocation["invocation_id"]
         context.agent_execution_id = agent_execution.execution_id
-        context.verification_id = f"{trace_id}:verification"
+        verification_id = f"verify-{uuid4().hex}"
+        context.verification_id = verification_id
         context.approval_ids = [f"{trace_id}:boss-confirmed"]
         context.report_title = research_output.get("report_title") or "公开信息研究报告"
         context.report_hash = research_output.get("report_hash")
@@ -804,7 +946,7 @@ def start_alpha_workflow(
             "skill_version_id": str(installation.skill_version_id),
             "skill_invocation_id": invocation["invocation_id"],
             "agent_execution_id": agent_execution.execution_id,
-            "verification_id": f"{trace_id}:verification",
+            "verification_id": verification_id,
         }
         _emit_stage_event(
             context,
@@ -814,7 +956,7 @@ def start_alpha_workflow(
             stage="verification",
             status="成功",
             message="结果已完成验证",
-            payload={"verification_id": f"{trace_id}:verification"},
+            payload={"verification_id": verification_id},
         )
         quality_score, quality_grade, quality_detail = _score_quality(context)
         risk_score, risk_level, risk_detail = _score_risk(context)
@@ -883,7 +1025,7 @@ def start_alpha_workflow(
         )
         run.finished_at = _utc_now()
         run.updated_at = _utc_now()
-        append_event(db, run, event_code="workflow_completed", stage="workflow", status="成功", message="Alpha Workflow 全链路完成", payload={"quality_score": quality_score, "risk_score": risk_score}, parent_span_id=run.root_span_id)
+        append_event(db, run, event_code="workflow_completed", stage="workflow", status="成功", message="Alpha Workflow 全链路完成", payload={"quality_score": quality_score, "risk_score": risk_score}, span_id=f"span-{uuid4().hex}", parent_span_id=run.root_span_id)
         db.commit()
         db.refresh(run)
         db.refresh(task)
@@ -1271,7 +1413,7 @@ def cancel_alpha_workflow(db: Session, *, user: User, run_id: str, reason: str |
     run.failure_reason = reason or "Alpha Workflow 已取消"
     run.finished_at = _utc_now()
     run.updated_at = _utc_now()
-    append_event(db, run, event_code="workflow_failed", stage="workflow", status="失败", message=run.failure_reason, payload={"reason": reason or "user_cancelled"}, parent_span_id=run.root_span_id, span_kind="child")
+    append_event(db, run, event_code="workflow_failed", stage="workflow", status="失败", message=run.failure_reason, payload={"reason": reason or "user_cancelled"}, span_id=f"span-{uuid4().hex}", parent_span_id=run.root_span_id, span_kind="child")
     db.commit()
     db.refresh(run)
     if task:

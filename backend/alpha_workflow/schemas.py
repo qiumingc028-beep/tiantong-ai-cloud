@@ -6,6 +6,9 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+TRACE_ID_MAX_LENGTH = 114
+
+
 class AlphaWorkflowScenarioCreate(BaseModel):
     scenario_code: str = Field(min_length=2, max_length=120)
     title: str = Field(min_length=1, max_length=200)

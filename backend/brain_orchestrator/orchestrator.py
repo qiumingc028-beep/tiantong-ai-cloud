@@ -18,6 +18,7 @@ def plan_dry_run(
     execution_identity: str | None = None,
     boss_confirmed: bool = False,
     security_audited: bool = False,
+    commit: bool = True,
 ) -> dict:
     return generate_plan(
         db,
@@ -26,6 +27,7 @@ def plan_dry_run(
         execution_identity=execution_identity,
         boss_confirmed=boss_confirmed,
         security_audited=security_audited,
+        commit=commit,
     )
 
 
