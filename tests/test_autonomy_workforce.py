@@ -64,19 +64,29 @@ def test_self_healing_worker_detects_transient_error():
     assert healing["plan"]["category"] == "transient_queue_error"
 
 
-def test_queue_worker_records_self_healing_on_failure(test_db):
+def test_queue_worker_records_self_healing_on_failure(test_db, monkeypatch):
+    from backend.models import JdSyncLog
+
+    monkeypatch.setattr("backend.worker.SessionLocal", test_db)
+    task_id = "bad-1"
     queued = push_queue(
         {
             "source": "api",
             "target": "worker.task",
             "action": "process_worker_task",
-            "payload": {"task_id": "bad-1", "task_type": "unknown_type", "payload": {}, "attempt": 0, "max_retries": 0},
+            "payload": {"task_id": task_id, "task_type": "unknown_type", "payload": {}, "attempt": 0, "max_retries": 0},
         },
         {"handler": "worker.process_task"},
         max_retries=0,
     )
 
     assert process_next_event(timeout=1) is False
+
+    with test_db() as db:
+        matching_logs = db.query(JdSyncLog).filter(JdSyncLog.task_id == task_id).all()
+        assert len(matching_logs) == 1
+        assert matching_logs[0].task_id == task_id
+        assert matching_logs[0].status == "failed"
 
     redis_client = __import__("backend.database", fromlist=["get_redis"]).get_redis()
     raw = redis_client.get(f"{ORCHESTRATOR_STATUS_PREFIX}{queued['event_id']}")
