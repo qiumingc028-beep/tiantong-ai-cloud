@@ -6,8 +6,10 @@ SQLite and never permit a drift-skip environment variable.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -410,6 +412,68 @@ def _alpha_state_counts(db):
     return {name: db.query(model).count() for name, model in models.items()}
 
 
+def _r49_alpha_object_state(db):
+    from backend.agent_runtime.models import AgentExecution
+    from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun, AlphaWorkflowScenario
+    from backend.brain_orchestrator.models import BrainOrchestratorLog, BrainTaskEdge, BrainTaskGraph, BrainTaskNode
+    from backend.knowledge_center.models import KnowledgeAsset, KnowledgeVersion
+    from backend.models import AiEmployee, TaskCenterResult, TaskCenterTask
+    from backend.research_runtime.models import ResearchExecution
+    from backend.skills_engine.models import SkillInvocation
+
+    models = {
+        "runs": AlphaWorkflowRun,
+        "graphs": BrainTaskGraph,
+        "nodes": BrainTaskNode,
+        "edges": BrainTaskEdge,
+        "logs": BrainOrchestratorLog,
+        "events": AlphaWorkflowEvent,
+        "employees": AiEmployee,
+        "scenarios": AlphaWorkflowScenario,
+        "tasks": TaskCenterTask,
+        "task_results": TaskCenterResult,
+        "agent_executions": AgentExecution,
+        "research_executions": ResearchExecution,
+        "knowledge_assets": KnowledgeAsset,
+        "knowledge_versions": KnowledgeVersion,
+        "skill_invocations": SkillInvocation,
+    }
+
+    def canonical(value):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+    state = {}
+    for name, model in models.items():
+        primary_key = tuple(model.__table__.primary_key.columns)
+        rows = db.query(model).order_by(*primary_key).all()
+        objects = {}
+        payloads = []
+        for row in rows:
+            identity = canonical([getattr(row, column.name) for column in primary_key])
+            payload = {column.name: getattr(row, column.name) for column in model.__table__.columns}
+            serialized = canonical(payload)
+            objects[identity] = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+            payloads.append(payload)
+        state[name] = {
+            "primary_keys": tuple(objects),
+            "objects": objects,
+            "content_sha256": hashlib.sha256(canonical(payloads).encode("utf-8")).hexdigest(),
+        }
+    return state
+
+
+def _assert_r49_existing_objects_unchanged(before, after):
+    for name, previous in before.items():
+        assert set(previous["primary_keys"]) <= set(after[name]["primary_keys"]), name
+        for identity, digest in previous["objects"].items():
+            assert after[name]["objects"][identity] == digest, (name, identity)
+
+
+def _r49_request_hash(identity):
+    payload = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _assert_one_canonical_graph(db, run_id: str):
     from backend.brain_orchestrator.models import BrainOrchestratorLog, BrainTaskEdge, BrainTaskGraph, BrainTaskNode
 
@@ -419,6 +483,657 @@ def _assert_one_canonical_graph(db, run_id: str):
     assert db.query(BrainTaskEdge).filter(BrainTaskEdge.graph_id == graph.graph_id).count() > 0
     assert db.query(BrainTaskGraph).filter(BrainTaskGraph.canonical_run_id.is_(None)).count() == 0
     return graph
+
+
+def _create_scoped_owner(client, test_db, label, *, tenant_id=None, company_id=None, store_id=None):
+    from backend.auth import hash_password
+    from backend.models import Company, Store, Tenant, User, UserStoreMembership
+
+    with test_db() as db:
+        if tenant_id is None:
+            tenant = Tenant(tenant_code=f"r48-{label}", tenant_name=label, active=True)
+            db.add(tenant)
+            db.flush()
+            tenant_id = tenant.id
+        if company_id is None:
+            company = Company(
+                tenant_id=tenant_id,
+                company_code=f"r48-{label}",
+                company_name=label,
+                active=True,
+            )
+            db.add(company)
+            db.flush()
+            company_id = company.id
+        if store_id is None:
+            store = Store(
+                platform="jd",
+                store_code=f"r48-{label}",
+                store_name=label,
+                tenant_id=tenant_id,
+                company_id=company_id,
+                active=True,
+            )
+            db.add(store)
+            db.flush()
+            store_id = store.id
+        user = User(
+            username=f"r48-{label}",
+            password_hash=hash_password("password"),
+            role="owner",
+            display_name=label,
+            tenant_id=tenant_id,
+            company_id=company_id,
+            active=True,
+        )
+        db.add(user)
+        db.flush()
+        db.add(UserStoreMembership(user_id=user.id, store_id=store_id, active=True, can_read=True, can_write=True))
+        db.commit()
+        user_id = user.id
+    login = client.post("/api/login", json={"username": f"r48-{label}", "password": "password"})
+    assert login.status_code == 200
+    return {"Authorization": f"Bearer {login.json()['token']}"}, (user_id, tenant_id, company_id, store_id)
+
+
+def test_r48_run_routes_fail_closed_for_foreign_ownership(postgres_alpha_runtime):
+    from backend.alpha_workflow.models import AlphaWorkflowRun
+    from backend.models import User, UserStoreMembership
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    created = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "R48 ownership source", "trace_id": f"r48-owner-{uuid.uuid4()}"},
+    )
+    assert created.status_code == 200
+    run_id = created.json()["run"]["run_id"]
+    with test_db() as db:
+        boss = db.query(User).filter(User.username == "boss").one()
+        boss_store_id = db.query(UserStoreMembership.store_id).filter(
+            UserStoreMembership.user_id == boss.id,
+            UserStoreMembership.active.is_(True),
+            UserStoreMembership.can_read.is_(True),
+        ).one()[0]
+        boss_scope = (boss.tenant_id, boss.company_id, boss_store_id)
+        run = db.get(AlphaWorkflowRun, run_id)
+        run.status = "已失败"
+        run.recovery_status = "待恢复"
+        db.commit()
+
+    tenant_headers, _ = _create_scoped_owner(client, test_db, "foreign-tenant")
+    company_headers, _ = _create_scoped_owner(
+        client, test_db, "foreign-company", tenant_id=boss_scope[0]
+    )
+    shop_headers, _ = _create_scoped_owner(
+        client,
+        test_db,
+        "foreign-shop",
+        tenant_id=boss_scope[0],
+        company_id=boss_scope[1],
+    )
+    requester_headers, _ = _create_scoped_owner(
+        client,
+        test_db,
+        "foreign-requester",
+        tenant_id=boss_scope[0],
+        company_id=boss_scope[1],
+        store_id=boss_scope[2],
+    )
+    foreign_headers = [tenant_headers, company_headers, shop_headers, requester_headers]
+    with test_db() as db:
+        before = _alpha_state_counts(db)
+        original_status = db.get(AlphaWorkflowRun, run_id).status
+
+    read_suffixes = ("", "/trace", "/audit", "/report", "/stages")
+    for headers in foreign_headers:
+        listed = client.get("/api/v2/alpha-workflows/runs", headers=headers)
+        assert listed.status_code == 200
+        assert run_id not in {item["run_id"] for item in listed.json()["items"]}
+        health = client.get("/api/v2/alpha-workflows/health", headers=headers)
+        dashboard = client.get("/api/v2/alpha-workflows/dashboard", headers=headers)
+        assert health.status_code == dashboard.status_code == 200
+        assert health.json()["latest_run"] is None and health.json()["run_count"] == 0
+        assert dashboard.json()["latest_run"] is None and dashboard.json()["run_count"] == 0
+        for suffix in read_suffixes:
+            missing = client.get(f"/api/v2/alpha-workflows/runs/missing-r48{suffix}", headers=headers)
+            foreign = client.get(f"/api/v2/alpha-workflows/runs/{run_id}{suffix}", headers=headers)
+            assert (foreign.status_code, foreign.json()) == (missing.status_code, missing.json()) == (
+                404,
+                {"detail": "Alpha Workflow 运行记录不存在"},
+            )
+        for action in ("recover", "cancel"):
+            missing = client.post(
+                f"/api/v2/alpha-workflows/runs/missing-r48/{action}",
+                headers=headers,
+                json={"reason": "foreign request"},
+            )
+            foreign = client.post(
+                f"/api/v2/alpha-workflows/runs/{run_id}/{action}",
+                headers=headers,
+                json={"reason": "foreign request"},
+            )
+            assert (foreign.status_code, foreign.json()) == (missing.status_code, missing.json()) == (
+                404,
+                {"detail": "Alpha Workflow 运行记录不存在"},
+            )
+
+    with test_db() as db:
+        assert _alpha_state_counts(db) == before
+        assert db.get(AlphaWorkflowRun, run_id).status == original_status
+
+
+def test_r48_missing_trace_is_stable_scoped_and_concurrent(postgres_alpha_runtime):
+    from backend.alpha_workflow.models import AlphaWorkflowRun
+    from backend.brain_orchestrator.models import BrainTaskGraph
+    from backend.brain_orchestrator.planner import resolve_graph_ownership
+    from backend.models import User, UserStoreMembership
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    payload = {"input_text": "R48 stable missing trace"}
+    first = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
+    assert first.status_code == 200
+    effective_trace = first.json()["run"]["trace_id"]
+    assert re.fullmatch(r"auto-[0-9a-f]{64}", effective_trace)
+    assert len(effective_trace) == 69 <= 120
+    with test_db() as db:
+        before_replay = _alpha_state_counts(db)
+        boss = db.query(User).filter(User.username == "boss").one()
+        scope = resolve_graph_ownership(db, boss)
+        store_id = db.query(UserStoreMembership.store_id).filter(
+            UserStoreMembership.user_id == boss.id,
+            UserStoreMembership.active.is_(True),
+            UserStoreMembership.can_read.is_(True),
+        ).one()[0]
+        boss_scope = (boss.tenant_id, boss.company_id, store_id)
+    replay = client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload)
+    assert replay.status_code == 200
+    assert replay.json()["run"]["run_id"] == first.json()["run"]["run_id"]
+    with test_db() as db:
+        assert _alpha_state_counts(db) == before_replay
+
+    identity = {"input_text": payload["input_text"], "scenario_code": "apple_latest_ai_strategy"}
+    expected_payload = {
+        "domain": "alpha-workflow-auto-trace:v1",
+        "ownership_scope_key": scope.ownership_scope_key,
+        "request_identity": identity,
+    }
+    script = (
+        "import hashlib,json,sys;"
+        "p=json.loads(sys.argv[1]);"
+        "print('auto-'+hashlib.sha256(json.dumps(p,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest())"
+    )
+    derived = subprocess.run(
+        [sys.executable, "-c", script, json.dumps(expected_payload, ensure_ascii=False)],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    assert effective_trace == derived
+
+    concurrent_payload = {"input_text": "R48 four-way missing trace"}
+    with test_db() as db:
+        before_concurrent = _alpha_state_counts(db)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        responses = list(
+            executor.map(
+                lambda _index: client.post(
+                    "/api/v2/alpha-workflows/demo", headers=boss_headers, json=concurrent_payload
+                ),
+                range(4),
+            )
+        )
+    assert {response.status_code for response in responses} == {200}
+    assert len({response.json()["run"]["run_id"] for response in responses}) == 1
+    with test_db() as db:
+        after_concurrent = _alpha_state_counts(db)
+        assert after_concurrent["runs"] - before_concurrent["runs"] == 1
+        assert after_concurrent["graphs"] - before_concurrent["graphs"] == 1
+        assert after_concurrent["logs"] - before_concurrent["logs"] == 1
+        assert after_concurrent["tasks"] - before_concurrent["tasks"] == 1
+        assert after_concurrent["research_executions"] - before_concurrent["research_executions"] == 1
+        assert after_concurrent["knowledge_assets"] - before_concurrent["knowledge_assets"] == 1
+        assert after_concurrent["skill_invocations"] - before_concurrent["skill_invocations"] == 1
+        concurrent_run = db.query(AlphaWorkflowRun).filter(
+            AlphaWorkflowRun.trace_id == responses[0].json()["run"]["trace_id"]
+        ).one()
+        assert db.query(BrainTaskGraph).filter(BrainTaskGraph.canonical_run_id == concurrent_run.run_id).count() == 1
+
+    different = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "R48 different normalized payload"},
+    )
+    assert different.status_code == 200
+    assert different.json()["run"]["trace_id"] != effective_trace
+    requester_headers, _ = _create_scoped_owner(
+        client,
+        test_db,
+        "missing-trace-requester",
+        tenant_id=boss_scope[0],
+        company_id=boss_scope[1],
+        store_id=boss_scope[2],
+    )
+    other_scope = client.post("/api/v2/alpha-workflows/demo", headers=requester_headers, json=payload)
+    assert other_scope.status_code == 200
+    assert other_scope.json()["run"]["trace_id"] != effective_trace
+
+
+def test_r48_default_scenario_is_inside_canonical_transaction(postgres_alpha_runtime, monkeypatch):
+    client, boss_headers, test_db = postgres_alpha_runtime
+    with test_db() as db:
+        before_failure = _alpha_state_counts(db)
+
+    def fail_planning(*_args, **_kwargs):
+        raise RuntimeError("r48 injected planning failure")
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr("backend.brain_orchestrator.orchestrator.plan_dry_run", fail_planning)
+        with pytest.raises(RuntimeError, match="r48 injected planning failure"):
+            client.post(
+                "/api/v2/alpha-workflows/demo",
+                headers=boss_headers,
+                json={"input_text": "R48 scenario rollback"},
+            )
+    with test_db() as db:
+        assert _alpha_state_counts(db) == before_failure
+
+    payload = {"input_text": "R48 concurrent default scenario"}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        responses = list(
+            executor.map(
+                lambda _index: client.post("/api/v2/alpha-workflows/demo", headers=boss_headers, json=payload),
+                range(4),
+            )
+        )
+    assert {response.status_code for response in responses} == {200}
+    assert len({response.json()["run"]["run_id"] for response in responses}) == 1
+    with test_db() as db:
+        after_default = _alpha_state_counts(db)
+        assert after_default["scenarios"] - before_failure["scenarios"] == 1
+
+    explicit_trace = f"r48-scenario-conflict-{uuid.uuid4()}"
+    first = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "R48 scenario first", "trace_id": explicit_trace},
+    )
+    assert first.status_code == 200
+    with test_db() as db:
+        before_conflict = _alpha_state_counts(db)
+    conflict = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "R48 scenario different", "trace_id": explicit_trace},
+    )
+    assert conflict.status_code == 409
+    with test_db() as db:
+        assert _alpha_state_counts(db) == before_conflict
+
+
+def test_r48_recovery_trace_is_stable_bounded_and_owned(postgres_alpha_runtime):
+    from backend.alpha_workflow.models import AlphaWorkflowEvent, AlphaWorkflowRun
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    original_trace = "r" * 114
+    created = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "R48 recovery trace boundary", "trace_id": original_trace},
+    )
+    assert created.status_code == 200
+    run_id = created.json()["run"]["run_id"]
+    with test_db() as db:
+        run = db.get(AlphaWorkflowRun, run_id)
+        run.status = "已失败"
+        run.recovery_status = "待恢复"
+        db.commit()
+
+    payload = {"reason": "stable recovery request"}
+    first = client.post(
+        f"/api/v2/alpha-workflows/runs/{run_id}/recover", headers=boss_headers, json=payload
+    )
+    assert first.status_code == 200
+    recovered = first.json()["run"]
+    assert re.fullmatch(r"recovery-[0-9a-f]{64}", recovered["trace_id"])
+    assert len(recovered["trace_id"]) == 73 <= 120
+    assert recovered["recovered_from_run_id"] == run_id
+    assert recovered["workflow_context"]["recovery_from_run_id"] == run_id
+    with test_db() as db:
+        stored = db.get(AlphaWorkflowRun, run_id)
+        assert stored.trace_id == original_trace
+        assert stored.root_span_id == f"{original_trace}:root"
+        assert db.query(AlphaWorkflowEvent).filter(
+            AlphaWorkflowEvent.run_id == run_id,
+            AlphaWorkflowEvent.trace_id == recovered["trace_id"],
+            AlphaWorkflowEvent.event_code == "workflow_recovered",
+        ).count() == 1
+        before_replay = _alpha_state_counts(db)
+
+    replay = client.post(
+        f"/api/v2/alpha-workflows/runs/{run_id}/recover", headers=boss_headers, json=payload
+    )
+    assert replay.status_code == 200
+    assert replay.json()["run"]["trace_id"] == recovered["trace_id"]
+    with test_db() as db:
+        assert _alpha_state_counts(db) == before_replay
+
+    different = client.post(
+        f"/api/v2/alpha-workflows/runs/{run_id}/recover",
+        headers=boss_headers,
+        json={"reason": "different recovery request"},
+    )
+    assert different.status_code == 409
+    tenant_headers, _ = _create_scoped_owner(client, test_db, "recovery-foreign-tenant")
+    with test_db() as db:
+        before_foreign = _alpha_state_counts(db)
+    missing = client.post(
+        "/api/v2/alpha-workflows/runs/missing-r48/recover", headers=tenant_headers, json=payload
+    )
+    foreign = client.post(
+        f"/api/v2/alpha-workflows/runs/{run_id}/recover", headers=tenant_headers, json=payload
+    )
+    assert (foreign.status_code, foreign.json()) == (missing.status_code, missing.json()) == (
+        404,
+        {"detail": "Alpha Workflow 运行记录不存在"},
+    )
+    with test_db() as db:
+        assert _alpha_state_counts(db) == before_foreign
+        assert db.get(AlphaWorkflowRun, run_id).trace_id == original_trace
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "identity_missing",
+        "identity_empty",
+        "identity_unparseable",
+        "identity_incomplete",
+        "identity_not_normalized",
+        "hash_missing",
+        "hash_empty",
+        "hash_wrong_length",
+        "hash_not_hex",
+        "identity_hash_mismatch",
+        "incoming_hash_mismatch",
+        "incoming_identity_mismatch",
+    ),
+)
+def test_r49_corrupt_replay_identity_metadata_fails_closed(
+    postgres_alpha_runtime,
+    corruption,
+):
+    from backend.alpha_workflow.models import AlphaWorkflowRun
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    trace_id = f"r49-replay-{uuid.uuid4()}"
+    original_input = f"R49 strict replay metadata {corruption}"
+    created = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": original_input, "trace_id": trace_id},
+    )
+    assert created.status_code == 200
+    run_id = created.json()["run"]["run_id"]
+    incoming_input = original_input
+
+    with test_db() as db:
+        run = db.get(AlphaWorkflowRun, run_id)
+        context = json.loads(run.workflow_context_json)
+        linked_ids = context["linked_ids"]
+        valid_identity = linked_ids["request_identity"]
+        if corruption == "identity_missing":
+            linked_ids.pop("request_identity")
+        elif corruption == "identity_empty":
+            linked_ids["request_identity"] = {}
+        elif corruption == "identity_unparseable":
+            linked_ids["request_identity"] = ["not", "an", "identity"]
+        elif corruption == "identity_incomplete":
+            linked_ids["request_identity"] = {"input_text": original_input}
+        elif corruption == "identity_not_normalized":
+            damaged = {**valid_identity, "input_text": f" {original_input} "}
+            linked_ids["request_identity"] = damaged
+            linked_ids["request_hash"] = _r49_request_hash(damaged)
+        elif corruption == "hash_missing":
+            linked_ids.pop("request_hash")
+        elif corruption == "hash_empty":
+            linked_ids["request_hash"] = ""
+        elif corruption == "hash_wrong_length":
+            linked_ids["request_hash"] = "0" * 63
+        elif corruption == "hash_not_hex":
+            linked_ids["request_hash"] = "g" * 64
+        elif corruption == "identity_hash_mismatch":
+            linked_ids["request_identity"] = {**valid_identity, "input_text": "damaged identity"}
+        elif corruption == "incoming_hash_mismatch":
+            linked_ids["request_hash"] = "0" * 64
+        elif corruption == "incoming_identity_mismatch":
+            incoming_input = f"{original_input} changed"
+        run.workflow_context_json = json.dumps(context, ensure_ascii=False)
+        db.commit()
+        before = _r49_alpha_object_state(db)
+
+    conflict = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": incoming_input, "trace_id": trace_id},
+    )
+    assert (conflict.status_code, conflict.json()) == (
+        409,
+        {"detail": "Alpha Workflow 已存在相同Trace但请求内容不同"},
+    )
+    with test_db() as db:
+        assert _r49_alpha_object_state(db) == before
+
+
+def test_r49_missing_trace_ownership_scope_matrix(postgres_alpha_runtime):
+    from backend.alpha_workflow.models import AlphaWorkflowRun
+    from backend.brain_orchestrator.models import BrainTaskGraph
+    from backend.brain_orchestrator.planner import resolve_graph_ownership
+    from backend.models import TaskCenterResult, User, UserStoreMembership
+    from backend.skills_engine.models import SkillInvocation
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    with test_db() as db:
+        boss = db.query(User).filter(User.username == "boss").one()
+        boss_store_id = db.query(UserStoreMembership.store_id).filter(
+            UserStoreMembership.user_id == boss.id,
+            UserStoreMembership.active.is_(True),
+            UserStoreMembership.can_read.is_(True),
+        ).one()[0]
+        boss_ids = (boss.id, boss.tenant_id, boss.company_id, boss_store_id)
+
+    tenant_headers, tenant_ids = _create_scoped_owner(client, test_db, "r49-trace-tenant")
+    company_headers, company_ids = _create_scoped_owner(
+        client, test_db, "r49-trace-company", tenant_id=boss_ids[1]
+    )
+    shop_headers, shop_ids = _create_scoped_owner(
+        client,
+        test_db,
+        "r49-trace-shop",
+        tenant_id=boss_ids[1],
+        company_id=boss_ids[2],
+    )
+    requester_headers, requester_ids = _create_scoped_owner(
+        client,
+        test_db,
+        "r49-trace-requester",
+        tenant_id=boss_ids[1],
+        company_id=boss_ids[2],
+        store_id=boss_ids[3],
+    )
+    client.cookies.clear()
+    scopes = (
+        ("baseline", boss_headers, boss_ids),
+        ("tenant", tenant_headers, tenant_ids),
+        ("company", company_headers, company_ids),
+        ("shop", shop_headers, shop_ids),
+        ("requester", requester_headers, requester_ids),
+    )
+    request = {
+        "input_text": "R49 identical missing trace ownership matrix",
+        "tenant_id": boss_ids[1],
+        "company_id": boss_ids[2],
+        "store_ids": [boss_ids[3]],
+        "requester_id": boss_ids[0],
+    }
+    with test_db() as db:
+        initial = _r49_alpha_object_state(db)
+
+    identities = {}
+    for dimension, headers, scope_ids in scopes:
+        response = client.post("/api/v2/alpha-workflows/demo", headers=headers, json=request)
+        assert response.status_code == 200, (dimension, response.text)
+        run = response.json()["run"]
+        assert re.fullmatch(r"auto-[0-9a-f]{64}", run["trace_id"])
+        assert len(run["trace_id"]) == 69 <= 120
+        with test_db() as db:
+            stored_run = db.get(AlphaWorkflowRun, run["run_id"])
+            graph = db.query(BrainTaskGraph).filter(
+                BrainTaskGraph.canonical_run_id == run["run_id"]
+            ).one()
+            owner = db.get(User, scope_ids[0])
+            resolved = resolve_graph_ownership(db, owner)
+            assert stored_run.user_id == scope_ids[0]
+            assert graph.graph_id == stored_run.orchestrator_run_id
+            assert graph.ownership_scope_key == resolved.ownership_scope_key
+            assert graph.tenant_id == resolved.tenant_id == scope_ids[1]
+            assert graph.company_id == resolved.company_id == scope_ids[2]
+            assert graph.requester_id == resolved.requester_id == scope_ids[0]
+            assert graph.store_scope_key == resolved.store_scope_key
+            effective_trace_payload = {
+                "domain": "alpha-workflow-auto-trace:v1",
+                "ownership_scope_key": resolved.ownership_scope_key,
+                "request_identity": {
+                    "input_text": request["input_text"],
+                    "scenario_code": "apple_latest_ai_strategy",
+                },
+            }
+            expected_trace = "auto-" + hashlib.sha256(
+                json.dumps(
+                    effective_trace_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            assert run["trace_id"] == expected_trace
+            before_replay = _r49_alpha_object_state(db)
+        replay = client.post("/api/v2/alpha-workflows/demo", headers=headers, json=request)
+        assert replay.status_code == 200
+        assert replay.json()["run"]["run_id"] == run["run_id"]
+        assert replay.json()["run"]["trace_id"] == run["trace_id"]
+        with test_db() as db:
+            assert _r49_alpha_object_state(db) == before_replay
+        identities[dimension] = (run["run_id"], run["orchestrator_run_id"], run["trace_id"])
+
+    assert len({identity[0] for identity in identities.values()}) == len(scopes)
+    assert len({identity[1] for identity in identities.values()}) == len(scopes)
+    assert len({identity[2] for identity in identities.values()}) == len(scopes)
+
+    with test_db() as db:
+        after_creation = _r49_alpha_object_state(db)
+        _assert_r49_existing_objects_unchanged(initial, after_creation)
+        for name in (
+            "runs",
+            "graphs",
+            "logs",
+            "tasks",
+            "agent_executions",
+            "research_executions",
+            "knowledge_assets",
+            "knowledge_versions",
+            "skill_invocations",
+        ):
+            assert len(after_creation[name]["primary_keys"]) - len(initial[name]["primary_keys"]) == len(scopes), name
+        new_runs = db.query(AlphaWorkflowRun).filter(
+            AlphaWorkflowRun.run_id.in_([identity[0] for identity in identities.values()])
+        ).all()
+        assert len(new_runs) == len(scopes)
+        runs_by_task_id = {run.task_id: run for run in new_runs}
+        assert None not in runs_by_task_id
+        assert len(runs_by_task_id) == len(scopes)
+
+        results_by_task_id = {task_id: [] for task_id in runs_by_task_id}
+        new_results = db.query(TaskCenterResult).filter(
+            TaskCenterResult.task_id.in_(runs_by_task_id)
+        ).all()
+        for result in new_results:
+            results_by_task_id[result.task_id].append(result)
+
+        result_ids = set()
+        semantic_identities = set()
+        for task_id, results in results_by_task_id.items():
+            run = runs_by_task_id[task_id]
+            assert len(results) == 2
+            assert len({result.id for result in results}) == 2
+            assert len(
+                {
+                    hashlib.sha256(result.result_content.encode("utf-8")).hexdigest()
+                    for result in results
+                }
+            ) == 2
+
+            invocation = db.get(SkillInvocation, run.skill_invocation_id)
+            assert invocation is not None
+            assert invocation.task_id == task_id
+            assert invocation.output_summary
+            context = json.loads(run.workflow_context_json)
+            assert context["report_content"]
+            assert context["report_hash"] == hashlib.sha256(
+                context["report_content"].encode("utf-8")
+            ).hexdigest()
+
+            skill_results = [
+                result
+                for result in results
+                if result.result_content == invocation.output_summary
+                and result.submitted_by_id is None
+                and json.loads(result.attachments_json) == []
+            ]
+            report_results = [
+                result
+                for result in results
+                if result.result_content == context["report_content"]
+                and result.submitted_by_id == run.user_id
+                and json.loads(result.attachments_json) == [context["report_hash"]]
+            ]
+            assert len(skill_results) == 1
+            assert len(report_results) == 1
+            assert skill_results[0].id != report_results[0].id
+
+            result_ids.update(result.id for result in results)
+            semantic_identities.update(
+                {
+                    ("skill_invocation_output", run.skill_invocation_id),
+                    ("alpha_final_research_report", run.research_report_id),
+                }
+            )
+
+        assert len(new_results) == 2 * len(scopes)
+        assert len(result_ids) == 2 * len(scopes)
+        assert len(semantic_identities) == 2 * len(scopes)
+        assert len(after_creation["scenarios"]["primary_keys"]) - len(initial["scenarios"]["primary_keys"]) == 1
+        before_rejected_reads = after_creation
+
+    read_suffixes = ("", "/trace", "/report", "/stages")
+    for dimension, headers, _scope_ids in scopes:
+        own_run_id = identities[dimension][0]
+        for foreign_dimension, (foreign_run_id, _graph_id, _trace_id) in identities.items():
+            if foreign_run_id == own_run_id:
+                continue
+            for suffix in read_suffixes:
+                missing = client.get(
+                    f"/api/v2/alpha-workflows/runs/missing-r49{suffix}", headers=headers
+                )
+                foreign = client.get(
+                    f"/api/v2/alpha-workflows/runs/{foreign_run_id}{suffix}", headers=headers
+                )
+                assert (foreign.status_code, foreign.json()) == (missing.status_code, missing.json()) == (
+                    404,
+                    {"detail": "Alpha Workflow 运行记录不存在"},
+                ), (dimension, foreign_dimension, suffix)
+    with test_db() as db:
+        assert _r49_alpha_object_state(db) == before_rejected_reads
 
 
 def test_same_idempotency_key_returns_existing_run_without_new_rows(

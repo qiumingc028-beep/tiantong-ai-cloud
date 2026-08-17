@@ -211,6 +211,7 @@ def _compensate_alpha_workflow_failure(
 def _resolve_alpha_workflow_run_by_identities(
     db: Session,
     *,
+    user: User,
     trace_id: str | None,
     workflow_id: str | None,
     root_span_id: str | None,
@@ -228,7 +229,9 @@ def _resolve_alpha_workflow_run_by_identities(
     }.items():
         if not value:
             continue
-        run = db.query(AlphaWorkflowRun).filter(getattr(AlphaWorkflowRun, field_name) == value).one_or_none()
+        run = _owned_runs_query(db, user=user).filter(
+            getattr(AlphaWorkflowRun, field_name) == value
+        ).one_or_none()
         if run:
             runs_by_id[run.run_id] = run
     if not runs_by_id:
@@ -238,7 +241,9 @@ def _resolve_alpha_workflow_run_by_identities(
         for field_name, value in provided_identities.items():
             if not value:
                 continue
-            run = db.query(AlphaWorkflowRun).filter(getattr(AlphaWorkflowRun, field_name) == value).one_or_none()
+            run = _owned_runs_query(db, user=user).filter(
+                getattr(AlphaWorkflowRun, field_name) == value
+            ).one_or_none()
             if run is None or run.run_id != resolved_run.run_id:
                 return None, True
         return resolved_run, False
@@ -477,7 +482,7 @@ def _score_risk(context: AlphaWorkflowContext) -> tuple[int, str, dict[str, obje
 
 def _normalize_trace_id(trace_id: str | None) -> str:
     if trace_id is None:
-        return uuid4().hex
+        raise AlphaWorkflowValidationError("trace_id 缺少有效身份输入")
     normalized = trace_id.strip()
     if not normalized:
         raise AlphaWorkflowValidationError("trace_id 不能为空")
@@ -498,28 +503,76 @@ def _request_identity_hash(identity: dict[str, str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _stable_effective_trace(prefix: str, domain: str, payload: dict[str, object]) -> str:
+    canonical = json.dumps(
+        {"domain": domain, **payload},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"{prefix}{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _effective_trace_id(
+    trace_id: str | None,
+    *,
+    ownership_scope_key: str,
+    identity: dict[str, str],
+) -> str:
+    if trace_id is not None:
+        return _normalize_trace_id(trace_id)
+    return _stable_effective_trace(
+        "auto-",
+        "alpha-workflow-auto-trace:v1",
+        {
+            "ownership_scope_key": ownership_scope_key,
+            "request_identity": identity,
+        },
+    )
+
+
 def _advisory_lock_key(ownership_scope_key: str, trace_id: str) -> int:
     digest = hashlib.sha256(f"{ownership_scope_key}\0{trace_id}".encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
-def _canonical_run_for_scope_trace(db: Session, *, user: User, trace_id: str) -> AlphaWorkflowRun | None:
-    run = db.query(AlphaWorkflowRun).filter(AlphaWorkflowRun.trace_id == trace_id).one_or_none()
-    if run is None:
-        return None
-    scope = resolve_graph_ownership(db, user)
-    graph = db.query(BrainTaskGraph).filter(
-        BrainTaskGraph.canonical_run_id == run.run_id,
-        BrainTaskGraph.execution_scope_key == f"trace:{trace_id}",
+def _owned_runs_query(db: Session, *, user: User, scope=None):
+    scope = scope or resolve_graph_ownership(db, user)
+    return db.query(AlphaWorkflowRun).join(
+        BrainTaskGraph,
+        BrainTaskGraph.canonical_run_id == AlphaWorkflowRun.run_id,
+    ).filter(
+        BrainTaskGraph.graph_id == AlphaWorkflowRun.orchestrator_run_id,
+        BrainTaskGraph.execution_scope_key == "trace:" + AlphaWorkflowRun.trace_id,
         BrainTaskGraph.ownership_scope_key == scope.ownership_scope_key,
         BrainTaskGraph.tenant_id == scope.tenant_id,
         BrainTaskGraph.company_id == scope.company_id,
         BrainTaskGraph.requester_id == scope.requester_id,
         BrainTaskGraph.store_scope_key == scope.store_scope_key,
+        AlphaWorkflowRun.user_id == scope.requester_id,
+    )
+
+
+def _owned_run_or_404(db: Session, *, user: User, run_id: str, scope=None) -> AlphaWorkflowRun:
+    run = _owned_runs_query(db, user=user, scope=scope).filter(
+        AlphaWorkflowRun.run_id == run_id
     ).one_or_none()
-    if graph is None:
-        raise AlphaWorkflowConflictError("Alpha Workflow 已存在相同Trace但所有权范围不匹配")
+    if run is None:
+        raise AlphaWorkflowNotFoundError("Alpha Workflow 运行记录不存在")
     return run
+
+
+def _canonical_run_for_scope_trace(
+    db: Session,
+    *,
+    user: User,
+    trace_id: str,
+    scope=None,
+) -> AlphaWorkflowRun | None:
+    return _owned_runs_query(db, user=user, scope=scope).filter(
+        AlphaWorkflowRun.trace_id == trace_id,
+        BrainTaskGraph.execution_scope_key == f"trace:{trace_id}",
+    ).one_or_none()
 
 
 def _run_matches_request(run: AlphaWorkflowRun, identity: dict[str, str]) -> bool:
@@ -527,10 +580,25 @@ def _run_matches_request(run: AlphaWorkflowRun, identity: dict[str, str]) -> boo
     if context is None:
         return False
     stored_identity = context.linked_ids.get("request_identity")
-    if not isinstance(stored_identity, dict):
-        stored_identity = _request_identity(context.input_text or "", context.scenario_code)
     stored_hash = context.linked_ids.get("request_hash")
-    return stored_identity == identity and (stored_hash in {None, _request_identity_hash(identity)})
+    if (
+        not isinstance(stored_identity, dict)
+        or set(stored_identity) != {"input_text", "scenario_code"}
+        or not all(isinstance(value, str) and value for value in stored_identity.values())
+        or stored_identity
+        != _request_identity(stored_identity["input_text"], stored_identity["scenario_code"])
+        or not isinstance(stored_hash, str)
+        or len(stored_hash) != 64
+        or any(character not in "0123456789abcdef" for character in stored_hash)
+    ):
+        return False
+    stored_identity_hash = _request_identity_hash(stored_identity)
+    incoming_identity_hash = _request_identity_hash(identity)
+    return (
+        stored_identity_hash == stored_hash
+        and stored_identity == identity
+        and incoming_identity_hash == stored_hash
+    )
 
 
 def start_alpha_workflow_request(
@@ -549,25 +617,24 @@ def start_alpha_workflow_request(
     _ensure_dependency_flags(settings)
     if not input_text.strip():
         raise AlphaWorkflowValidationError("输入内容不能为空")
-    normalized_trace_id = _normalize_trace_id(trace_id)
     identity = _request_identity(input_text, scenario_code)
-
-    ensure_default_scenarios(db, created_by_id=user.id)
-    scenario = db.query(AlphaWorkflowScenario).filter(
-        AlphaWorkflowScenario.scenario_code == identity["scenario_code"]
-    ).one_or_none()
-    if scenario is None:
-        raise AlphaWorkflowNotFoundError("场景不存在")
-    if not scenario.enabled:
-        raise AlphaWorkflowValidationError("场景已停用")
-
     scope = resolve_graph_ownership(db, user)
+    normalized_trace_id = _effective_trace_id(
+        trace_id,
+        ownership_scope_key=scope.ownership_scope_key,
+        identity=identity,
+    )
     if db.get_bind().dialect.name == "postgresql":
         db.execute(
             text("SELECT pg_advisory_xact_lock(:lock_key)"),
             {"lock_key": _advisory_lock_key(scope.ownership_scope_key, normalized_trace_id)},
         )
-    existing_run = _canonical_run_for_scope_trace(db, user=user, trace_id=normalized_trace_id)
+    existing_run = _canonical_run_for_scope_trace(
+        db,
+        user=user,
+        trace_id=normalized_trace_id,
+        scope=scope,
+    )
     if existing_run is not None:
         if not _run_matches_request(existing_run, identity):
             db.rollback()
@@ -575,6 +642,15 @@ def start_alpha_workflow_request(
         result = _run_to_dict(db, existing_run, include_events=True)
         db.rollback()
         return result
+
+    ensure_default_scenarios(db, created_by_id=user.id, commit=False)
+    scenario = db.query(AlphaWorkflowScenario).filter(
+        AlphaWorkflowScenario.scenario_code == identity["scenario_code"]
+    ).one_or_none()
+    if scenario is None:
+        raise AlphaWorkflowNotFoundError("场景不存在")
+    if not scenario.enabled:
+        raise AlphaWorkflowValidationError("场景已停用")
 
     try:
         from ..brain_orchestrator.orchestrator import plan_dry_run
@@ -623,7 +699,6 @@ def start_alpha_workflow(
     if not orchestrator_plan or not orchestrator_plan.get("graph_id"):
         raise AlphaWorkflowValidationError("Alpha Workflow 只能由 Orchestrator 启动")
 
-    ensure_default_scenarios(db, created_by_id=user.id)
     scenario = db.query(AlphaWorkflowScenario).filter(AlphaWorkflowScenario.scenario_code == (scenario_code or DEFAULT_ALPHA_SCENARIO_CODE)).one_or_none()
     if not scenario:
         raise AlphaWorkflowNotFoundError("场景不存在")
@@ -631,10 +706,12 @@ def start_alpha_workflow(
         raise AlphaWorkflowValidationError("场景已停用")
 
     trace_id = _normalize_trace_id(trace_id or str(orchestrator_plan["graph_id"]))
+    scope = resolve_graph_ownership(db, user)
     workflow_id = f"alpha-{trace_id}"
     root_span_id = f"{trace_id}:root"
     existing_run, existing_run_conflict = _resolve_alpha_workflow_run_by_identities(
         db,
+        user=user,
         trace_id=trace_id,
         workflow_id=workflow_id,
         root_span_id=root_span_id,
@@ -651,7 +728,7 @@ def start_alpha_workflow(
     identity = request_identity or _request_identity(input_text, scenario.scenario_code)
     context = AlphaWorkflowContext(
         workflow_id=workflow_id,
-        tenant_id="tiantong",
+        tenant_id=str(scope.tenant_id),
         user_id=user.id,
         task_id=None,
         orchestrator_run_id=orchestrator_plan["graph_id"],
@@ -694,7 +771,7 @@ def start_alpha_workflow(
         run_id=str(uuid4()),
         scenario_id=scenario.scenario_id,
         workflow_id=workflow_id,
-        tenant_id="tiantong",
+        tenant_id=str(scope.tenant_id),
         user_id=user.id,
         task_id=None,
         orchestrator_run_id=orchestrator_plan["graph_id"],
@@ -716,6 +793,7 @@ def start_alpha_workflow(
         db.rollback()
         existing_run, existing_run_conflict = _resolve_alpha_workflow_run_by_identities(
             db,
+            user=user,
             trace_id=trace_id,
             workflow_id=workflow_id,
             root_span_id=root_span_id,
@@ -938,6 +1016,8 @@ def start_alpha_workflow(
         context.linked_ids = {
             "task_id": task.id,
             "orchestrator_run_id": orchestrator_plan["graph_id"],
+            "request_hash": _request_identity_hash(identity),
+            "request_identity": identity,
             "research_execution_id": agent_execution.execution_id,
             "research_report_id": agent_execution.execution_id,
             "knowledge_asset_id": knowledge_id,
@@ -1036,6 +1116,7 @@ def start_alpha_workflow(
         constraint_name = _alpha_workflow_constraint_name(exc)
         existing_run, existing_run_conflict = _resolve_alpha_workflow_run_by_identities(
             db,
+            user=user,
             trace_id=trace_id,
             workflow_id=workflow_id,
             root_span_id=root_span_id,
@@ -1085,16 +1166,56 @@ def start_alpha_workflow(
         return _run_to_dict(db, compensated_run)
 
 
+def _recovery_result(
+    db: Session,
+    run: AlphaWorkflowRun,
+    context: AlphaWorkflowContext,
+    recovery_trace_id: str,
+) -> dict[str, object]:
+    result = _run_to_dict(db, run, include_events=True)
+    result["trace_id"] = recovery_trace_id
+    result["root_span_id"] = context.root_span_id
+    result["workflow_context"] = context.model_dump(mode="json")
+    return result
+
+
 def recover_alpha_workflow(db: Session, *, user: User, run_id: str, reason: str | None = None) -> dict[str, object]:
-    run = db.get(AlphaWorkflowRun, run_id)
-    if not run:
-        raise AlphaWorkflowNotFoundError("Alpha Workflow 运行记录不存在")
+    scope = resolve_graph_ownership(db, user)
+    run = _owned_run_or_404(db, user=user, run_id=run_id, scope=scope)
+    recovery_identity = {"action": "recover", "reason": (reason or "").strip()}
+    recovery_hash = _request_identity_hash(recovery_identity)
+    recovery_trace_id = _stable_effective_trace(
+        "recovery-",
+        "alpha-workflow-recovery-trace:v1",
+        {
+            "ownership_scope_key": scope.ownership_scope_key,
+            "original_run_id": run.run_id,
+            "original_trace_identity": run.trace_id,
+            "recovery_request_identity": recovery_identity,
+        },
+    )
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": _advisory_lock_key(scope.ownership_scope_key, f"recovery:{run.run_id}")},
+        )
+    run = _owned_run_or_404(db, user=user, run_id=run_id, scope=scope)
+    context = _parse_context(run.workflow_context_json)
+    if run.recovery_status == "已恢复":
+        if (
+            context is not None
+            and context.linked_ids.get("recovery_request_identity") == recovery_identity
+            and context.linked_ids.get("recovery_request_hash") == recovery_hash
+            and context.linked_ids.get("recovery_effective_trace") == recovery_trace_id
+        ):
+            result = _recovery_result(db, run, context, recovery_trace_id)
+            db.rollback()
+            return result
+        db.rollback()
+        raise AlphaWorkflowConflictError("Alpha Workflow 已使用不同恢复请求完成恢复")
     if run.status not in {"已失败", "已暂停"}:
         raise AlphaWorkflowValidationError("仅失败或暂停的 Alpha Workflow 可以恢复")
     _ensure_dependency_flags(get_settings())
-    if run.recovery_status == "已恢复":
-        return _run_to_dict(db, run, include_events=True)
-    context = _parse_context(run.workflow_context_json)
     if not context:
         context = AlphaWorkflowContext(
             workflow_id=run.workflow_id or f"alpha-{run.trace_id}",
@@ -1134,38 +1255,43 @@ def recover_alpha_workflow(db: Session, *, user: User, run_id: str, reason: str 
             linked_ids={},
             recovery_from_run_id=run.run_id,
         )
-    recovery_trace_id = f"{run.trace_id}-recovery-{uuid4().hex[:12]}"
     recovery_root_span_id = f"{recovery_trace_id}:root"
     context.recovery_from_run_id = run.run_id
     context.trace_id = recovery_trace_id
     context.root_span_id = recovery_root_span_id
     context.status = "已恢复"
     context.dashboard_status = "已恢复"
-    recovery_span = _append_span(context, stage="recovery", status="成功", message=reason or "从安全检查点恢复", metadata={"recovered_from_run_id": run.run_id})
+    context.linked_ids["recovery_request_identity"] = recovery_identity
+    context.linked_ids["recovery_request_hash"] = recovery_hash
+    context.linked_ids["recovery_effective_trace"] = recovery_trace_id
+    recovery_message = recovery_identity["reason"] or "从安全检查点恢复"
+    recovery_span = _append_span(context, stage="recovery", status="成功", message=recovery_message, metadata={"recovered_from_run_id": run.run_id})
     run.recovery_status = "已恢复"
     run.recovered_from_run_id = run.run_id
     run.status = "已完成" if run.status != "已完成" else run.status
     run.current_stage = "recovery"
     run.finished_at = run.finished_at or _utc_now()
     run.updated_at = _utc_now()
-    run.trace_id = recovery_trace_id
-    run.root_span_id = recovery_root_span_id
     run.workflow_context_json = context.model_dump_json()
-    append_event(
-        db,
-        run,
+    db.add(AlphaWorkflowEvent(
+        event_id=str(uuid4()),
+        run_id=run.run_id,
         event_code="workflow_recovered",
         stage="recovery",
         status="成功",
-        message=reason or "从安全检查点恢复",
-        payload={"run_id": run.run_id, "recovered_from_run_id": run.run_id, "recovery_span_id": recovery_span.span_id},
+        message=recovery_message,
+        payload_json=json.dumps(
+            {"run_id": run.run_id, "recovered_from_run_id": run.run_id, "recovery_span_id": recovery_span.span_id},
+            ensure_ascii=False,
+        ),
         span_id=recovery_span.span_id,
         parent_span_id=recovery_span.parent_span_id,
         span_kind=recovery_span.span_kind,
-    )
+        trace_id=recovery_trace_id,
+    ))
     db.commit()
     db.refresh(run)
-    return _run_to_dict(db, run, include_events=True)
+    return _recovery_result(db, run, context, recovery_trace_id)
 
 
 def list_scenarios(db: Session) -> list[dict[str, object]]:
@@ -1174,15 +1300,13 @@ def list_scenarios(db: Session) -> list[dict[str, object]]:
     return [scenario_to_dict(row) for row in rows]
 
 
-def list_runs(db: Session, *, limit: int = 20) -> list[dict[str, object]]:
-    rows = db.query(AlphaWorkflowRun).order_by(AlphaWorkflowRun.created_at.desc()).limit(limit).all()
+def list_runs(db: Session, *, user: User, limit: int = 20) -> list[dict[str, object]]:
+    rows = _owned_runs_query(db, user=user).order_by(AlphaWorkflowRun.created_at.desc()).limit(limit).all()
     return [_run_to_dict(db, row) for row in rows]
 
 
-def get_run(db: Session, run_id: str) -> dict[str, object]:
-    run = db.get(AlphaWorkflowRun, run_id)
-    if not run:
-        raise AlphaWorkflowNotFoundError("Alpha Workflow 运行记录不存在")
+def get_run(db: Session, run_id: str, *, user: User) -> dict[str, object]:
+    run = _owned_run_or_404(db, user=user, run_id=run_id)
     return _run_to_dict(db, run, include_events=True)
 
 
@@ -1211,16 +1335,18 @@ def create_scenario(db: Session, *, created_by_id: int | None, payload: dict[str
     return scenario_to_dict(scenario)
 
 
-def build_dashboard(db: Session) -> dict[str, object]:
-    runs = db.query(AlphaWorkflowRun).order_by(AlphaWorkflowRun.created_at.desc()).limit(5).all()
+def build_dashboard(db: Session, *, user: User) -> dict[str, object]:
+    scope = resolve_graph_ownership(db, user)
+    owned_runs = _owned_runs_query(db, user=user, scope=scope)
+    runs = owned_runs.order_by(AlphaWorkflowRun.created_at.desc()).limit(5).all()
     scenarios = db.query(AlphaWorkflowScenario).count()
-    completed = db.query(AlphaWorkflowRun).filter(AlphaWorkflowRun.status == "已完成").count()
-    failed = db.query(AlphaWorkflowRun).filter(AlphaWorkflowRun.status == "已失败").count()
+    completed = owned_runs.filter(AlphaWorkflowRun.status == "已完成").count()
+    failed = owned_runs.filter(AlphaWorkflowRun.status == "已失败").count()
     latest = runs[0] if runs else None
     return {
         "title": "Alpha Workflow 页面",
         "scenario_count": scenarios,
-        "run_count": db.query(AlphaWorkflowRun).count(),
+        "run_count": owned_runs.count(),
         "completed_count": completed,
         "failed_count": failed,
         "latest_run": _run_to_dict(db, latest) if latest else None,
@@ -1234,7 +1360,9 @@ def build_dashboard(db: Session) -> dict[str, object]:
     }
 
 
-def health_view(db: Session) -> dict[str, object]:
+def health_view(db: Session, *, user: User) -> dict[str, object]:
+    owned_runs = _owned_runs_query(db, user=user)
+    run_count = owned_runs.count()
     return {
         "ok": True,
         "status": "healthy",
@@ -1245,8 +1373,8 @@ def health_view(db: Session) -> dict[str, object]:
             "ALPHA_DASHBOARD_ENABLED": get_settings().ALPHA_DASHBOARD_ENABLED,
         },
         "scenario_count": db.query(AlphaWorkflowScenario).count(),
-        "run_count": db.query(AlphaWorkflowRun).count(),
-        "latest_run": _run_to_dict(db, db.query(AlphaWorkflowRun).order_by(AlphaWorkflowRun.created_at.desc()).first()) if db.query(AlphaWorkflowRun).count() else None,
+        "run_count": run_count,
+        "latest_run": _run_to_dict(db, owned_runs.order_by(AlphaWorkflowRun.created_at.desc()).first()) if run_count else None,
     }
 
 
@@ -1320,10 +1448,8 @@ def _run_to_dict(db: Session, run: AlphaWorkflowRun | None, *, include_events: b
     return payload
 
 
-def get_trace(db: Session, run_id: str) -> dict[str, object]:
-    run = db.get(AlphaWorkflowRun, run_id)
-    if not run:
-        raise AlphaWorkflowNotFoundError("Alpha Workflow 运行记录不存在")
+def get_trace(db: Session, run_id: str, *, user: User) -> dict[str, object]:
+    run = _owned_run_or_404(db, user=user, run_id=run_id)
     context = _parse_context(run.workflow_context_json)
     events = db.query(AlphaWorkflowEvent).filter(AlphaWorkflowEvent.run_id == run.run_id).order_by(AlphaWorkflowEvent.created_at.asc()).all()
     spans = []
@@ -1372,14 +1498,12 @@ def get_trace(db: Session, run_id: str) -> dict[str, object]:
     }
 
 
-def get_audit_timeline(db: Session, run_id: str) -> dict[str, object]:
-    return {"timeline": get_trace(db, run_id)["events"]}
+def get_audit_timeline(db: Session, run_id: str, *, user: User) -> dict[str, object]:
+    return {"timeline": get_trace(db, run_id, user=user)["events"]}
 
 
-def get_final_report(db: Session, run_id: str) -> dict[str, object]:
-    run = db.get(AlphaWorkflowRun, run_id)
-    if not run:
-        raise AlphaWorkflowNotFoundError("Alpha Workflow 运行记录不存在")
+def get_final_report(db: Session, run_id: str, *, user: User) -> dict[str, object]:
+    run = _owned_run_or_404(db, user=user, run_id=run_id)
     report_summary = _parse_json(run.report_summary_json)
     dashboard_summary = _parse_json(run.dashboard_summary_json)
     context = _parse_context(run.workflow_context_json)
@@ -1402,9 +1526,7 @@ def get_final_report(db: Session, run_id: str) -> dict[str, object]:
 
 
 def cancel_alpha_workflow(db: Session, *, user: User, run_id: str, reason: str | None = None) -> dict[str, object]:
-    run = db.get(AlphaWorkflowRun, run_id)
-    if not run:
-        raise AlphaWorkflowNotFoundError("Alpha Workflow 运行记录不存在")
+    run = _owned_run_or_404(db, user=user, run_id=run_id)
     if run.status in {"已完成", "已失败", "已取消", "已终止"}:
         return _run_to_dict(db, run, include_events=True)
     task = db.get(TaskCenterTask, run.task_id) if run.task_id else None
@@ -1421,8 +1543,8 @@ def cancel_alpha_workflow(db: Session, *, user: User, run_id: str, reason: str |
     return _run_to_dict(db, run, include_events=True)
 
 
-def get_stage_detail(db: Session, run_id: str) -> dict[str, object]:
-    return get_trace(db, run_id)
+def get_stage_detail(db: Session, run_id: str, *, user: User) -> dict[str, object]:
+    return get_trace(db, run_id, user=user)
 
 
 def _parse_context(raw: str | None) -> AlphaWorkflowContext | None:

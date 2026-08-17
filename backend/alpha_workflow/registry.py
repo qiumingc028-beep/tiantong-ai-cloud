@@ -31,7 +31,12 @@ def default_workflow_template() -> dict[str, object]:
     }
 
 
-def ensure_default_scenarios(db: Session, *, created_by_id: int | None = None) -> list[AlphaWorkflowScenario]:
+def ensure_default_scenarios(
+    db: Session,
+    *,
+    created_by_id: int | None = None,
+    commit: bool = True,
+) -> list[AlphaWorkflowScenario]:
     scenario = db.query(AlphaWorkflowScenario).filter(AlphaWorkflowScenario.scenario_code == DEFAULT_ALPHA_SCENARIO_CODE).one_or_none()
     if not scenario:
         values = {
@@ -56,8 +61,9 @@ def ensure_default_scenarios(db: Session, *, created_by_id: int | None = None) -
             scenario = AlphaWorkflowScenario(**values)
             db.add(scenario)
             db.flush()
-        db.commit()
-        db.refresh(scenario)
+        if commit:
+            db.commit()
+            db.refresh(scenario)
     return [scenario]
 
 
