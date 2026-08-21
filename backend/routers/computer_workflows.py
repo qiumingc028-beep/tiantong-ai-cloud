@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from ..auth import current_user
 from ..config import get_settings
 from ..database import get_db
 from ..skills_engine.permissions import require_feature_enabled, require_skills_manage_user, require_skills_user
@@ -15,6 +14,8 @@ from ..agent_runtime.workflows.computer.runner import (
     create_workflow,
     execute_step,
     get_workflow,
+    owned_workflow_or_404,
+    owned_workflows_query,
     pause_workflow,
     preview_workflow,
     reject_workflow,
@@ -58,12 +59,18 @@ def _workflow_to_dict_from_model(workflow: ComputerWorkflow) -> dict:
     }
 
 
+def _bind_owner_scope(request: Request, db: Session, *, manage: bool = False):
+    user = (require_skills_manage_user if manage else require_skills_user)(request, db)
+    bind_session_task_ownership(db, user=user)
+    return user
+
+
 @router.get("/workflows")
 def list_workflows(request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_user(request, db)
-    workflows = db.query(ComputerWorkflow).order_by(ComputerWorkflow.created_at.desc()).all()
+    _bind_owner_scope(request, db)
+    workflows = owned_workflows_query(db).order_by(ComputerWorkflow.created_at.desc()).all()
     return {"items": [_workflow_to_dict_from_model(row) for row in workflows]}
 
 
@@ -71,7 +78,7 @@ def list_workflows(request: Request, db: Session = Depends(get_db)):
 def create_workflow_api(payload: ComputerWorkflowCreatePayload, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_manage_user(request, db)
+    _bind_owner_scope(request, db, manage=True)
     return {"ok": True, **create_workflow(db, payload)}
 
 
@@ -79,7 +86,7 @@ def create_workflow_api(payload: ComputerWorkflowCreatePayload, request: Request
 def get_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_user(request, db)
+    _bind_owner_scope(request, db)
     return get_workflow(db, workflow_id)
 
 
@@ -87,7 +94,7 @@ def get_workflow_api(workflow_id: str, request: Request, db: Session = Depends(g
 def preview_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_user(request, db)
+    _bind_owner_scope(request, db)
     return preview_workflow(db, workflow_id)
 
 
@@ -95,7 +102,7 @@ def preview_workflow_api(workflow_id: str, request: Request, db: Session = Depen
 def approve_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    user = require_skills_manage_user(request, db)
+    user = _bind_owner_scope(request, db, manage=True)
     return approve_workflow(db, workflow_id, approved_by=user.id, trace_id=request.query_params.get("trace_id"))
 
 
@@ -103,7 +110,7 @@ def approve_workflow_api(workflow_id: str, request: Request, db: Session = Depen
 def reject_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    user = require_skills_manage_user(request, db)
+    user = _bind_owner_scope(request, db, manage=True)
     return reject_workflow(db, workflow_id, approved_by=user.id, reason=request.query_params.get("reason"), trace_id=request.query_params.get("trace_id"))
 
 
@@ -111,8 +118,7 @@ def reject_workflow_api(workflow_id: str, request: Request, db: Session = Depend
 def start_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    user = require_skills_manage_user(request, db)
-    bind_session_task_ownership(db, user=user)
+    _bind_owner_scope(request, db, manage=True)
     return start_workflow(
         db,
         workflow_id,
@@ -127,7 +133,7 @@ def start_workflow_api(workflow_id: str, request: Request, db: Session = Depends
 def pause_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_manage_user(request, db)
+    _bind_owner_scope(request, db, manage=True)
     return pause_workflow(db, workflow_id, reason=request.query_params.get("reason"))
 
 
@@ -135,8 +141,7 @@ def pause_workflow_api(workflow_id: str, request: Request, db: Session = Depends
 def resume_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    user = require_skills_manage_user(request, db)
-    bind_session_task_ownership(db, user=user)
+    _bind_owner_scope(request, db, manage=True)
     return resume_workflow(
         db,
         workflow_id,
@@ -151,7 +156,7 @@ def resume_workflow_api(workflow_id: str, request: Request, db: Session = Depend
 def cancel_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_manage_user(request, db)
+    _bind_owner_scope(request, db, manage=True)
     return cancel_workflow(db, workflow_id, reason=request.query_params.get("reason"), trace_id=request.query_params.get("trace_id"))
 
 
@@ -159,10 +164,8 @@ def cancel_workflow_api(workflow_id: str, request: Request, db: Session = Depend
 def list_steps(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_user(request, db)
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    _bind_owner_scope(request, db)
+    owned_workflow_or_404(db, workflow_id)
     steps = db.query(ComputerWorkflowStep).filter(ComputerWorkflowStep.workflow_id == workflow_id).order_by(ComputerWorkflowStep.sequence_number.asc()).all()
     return {"workflow_id": workflow_id, "items": [step.__dict__ for step in steps]}
 
@@ -171,10 +174,8 @@ def list_steps(workflow_id: str, request: Request, db: Session = Depends(get_db)
 def list_checkpoints(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_user(request, db)
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    _bind_owner_scope(request, db)
+    owned_workflow_or_404(db, workflow_id)
     checkpoints = db.query(ComputerWorkflowCheckpoint).filter(ComputerWorkflowCheckpoint.workflow_id == workflow_id).order_by(ComputerWorkflowCheckpoint.created_at.asc()).all()
     return {"workflow_id": workflow_id, "items": [row.__dict__ for row in checkpoints]}
 
@@ -183,7 +184,7 @@ def list_checkpoints(workflow_id: str, request: Request, db: Session = Depends(g
 def approve_checkpoint_api(checkpoint_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    user = require_skills_manage_user(request, db)
+    user = _bind_owner_scope(request, db, manage=True)
     return approve_workflow_checkpoint(db, checkpoint_id, approved_by=user.id, trace_id=request.query_params.get("trace_id"))
 
 
@@ -191,7 +192,7 @@ def approve_checkpoint_api(checkpoint_id: str, request: Request, db: Session = D
 def reject_checkpoint_api(checkpoint_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    user = require_skills_manage_user(request, db)
+    user = _bind_owner_scope(request, db, manage=True)
     return reject_workflow_checkpoint(db, checkpoint_id, approved_by=user.id, reason=request.query_params.get("reason"), trace_id=request.query_params.get("trace_id"))
 
 
@@ -199,7 +200,7 @@ def reject_checkpoint_api(checkpoint_id: str, request: Request, db: Session = De
 def workflow_audit_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_user(request, db)
+    _bind_owner_scope(request, db)
     return workflow_audit(db, workflow_id)
 
 

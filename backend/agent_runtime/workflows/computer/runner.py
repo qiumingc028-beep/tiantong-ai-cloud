@@ -13,7 +13,7 @@ from backend.agent_runtime.executors.computer.schemas import ComputerSessionCrea
 from backend.agent_runtime.executors.computer.runtime import ComputerRuntime
 from backend.config import get_settings
 from backend.models import AiEmployee, TaskCenterResult, TaskCenterTask, User
-from backend.task_center_ownership import owned_task_or_none
+from backend.task_center_ownership import owned_task_or_none, owned_tasks_query
 
 from .approval import approve_checkpoint, approve_scope_approval, create_checkpoint_approval, create_scope_approval, reject_checkpoint, reject_scope_approval, utcnow
 from .audit import summarize_workflow_audit
@@ -150,6 +150,34 @@ def _get_task(db: Session, task_id: int | None) -> TaskCenterTask | None:
     return owned_task_or_none(db, task_id=task_id) if task_id else None
 
 
+def owned_workflows_query(db: Session):
+    return (
+        owned_tasks_query(db)
+        .join(ComputerWorkflow, ComputerWorkflow.task_id == TaskCenterTask.id)
+        .with_entities(ComputerWorkflow)
+    )
+
+
+def owned_workflow_or_404(db: Session, workflow_id: str) -> ComputerWorkflow:
+    workflow = owned_workflows_query(db).filter(ComputerWorkflow.workflow_id == workflow_id).one_or_none()
+    if not workflow:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    return workflow
+
+
+def owned_checkpoint_or_404(db: Session, checkpoint_id: str) -> ComputerWorkflowCheckpoint:
+    checkpoint = (
+        owned_workflows_query(db)
+        .join(ComputerWorkflowCheckpoint, ComputerWorkflowCheckpoint.workflow_id == ComputerWorkflow.workflow_id)
+        .with_entities(ComputerWorkflowCheckpoint)
+        .filter(ComputerWorkflowCheckpoint.checkpoint_id == checkpoint_id)
+        .one_or_none()
+    )
+    if not checkpoint:
+        raise HTTPException(status_code=404, detail="关键节点不存在")
+    return checkpoint
+
+
 def _ensure_task_result(db: Session, workflow: ComputerWorkflow, result_content: str) -> None:
     if workflow.task_id is None:
         return
@@ -171,6 +199,8 @@ def _ensure_task_result(db: Session, workflow: ComputerWorkflow, result_content:
 
 
 def create_workflow(db: Session, payload: ComputerWorkflowCreatePayload):
+    if payload.task_id is None or owned_task_or_none(db, task_id=payload.task_id) is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
     workflow, steps = build_workflow_plan(db, payload)
     session_id = workflow.session_id
     if not session_id:
@@ -204,9 +234,7 @@ def create_workflow(db: Session, payload: ComputerWorkflowCreatePayload):
 
 
 def get_workflow(db: Session, workflow_id: str) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     return {
         "workflow": _workflow_to_dict(workflow),
         "steps": [_step_to_dict(step) for step in db.query(ComputerWorkflowStep).filter(ComputerWorkflowStep.workflow_id == workflow_id).order_by(ComputerWorkflowStep.sequence_number.asc()).all()],
@@ -218,9 +246,7 @@ def get_workflow(db: Session, workflow_id: str) -> dict:
 
 
 def preview_workflow(db: Session, workflow_id: str) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     steps = db.query(ComputerWorkflowStep).filter(ComputerWorkflowStep.workflow_id == workflow.workflow_id).order_by(ComputerWorkflowStep.sequence_number.asc()).all()
     approval = db.query(ComputerWorkflowApproval).filter(ComputerWorkflowApproval.workflow_id == workflow.workflow_id).order_by(ComputerWorkflowApproval.created_at.desc()).first()
     checkpoints = db.query(ComputerWorkflowCheckpoint).filter(ComputerWorkflowCheckpoint.workflow_id == workflow.workflow_id).order_by(ComputerWorkflowCheckpoint.created_at.asc()).all()
@@ -240,9 +266,7 @@ def preview_workflow(db: Session, workflow_id: str) -> dict:
 
 
 def approve_workflow(db: Session, workflow_id: str, *, approved_by: int | None, trace_id: str | None) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     approval = db.query(ComputerWorkflowApproval).filter(ComputerWorkflowApproval.workflow_id == workflow_id).order_by(ComputerWorkflowApproval.created_at.desc()).first()
     if not approval:
         approval = create_scope_approval(db, workflow, approved_by=approved_by, approval_scope=workflow.goal, trace_id=trace_id)
@@ -256,9 +280,7 @@ def approve_workflow(db: Session, workflow_id: str, *, approved_by: int | None, 
 
 
 def reject_workflow(db: Session, workflow_id: str, *, approved_by: int | None, reason: str | None, trace_id: str | None) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     approval = db.query(ComputerWorkflowApproval).filter(ComputerWorkflowApproval.workflow_id == workflow_id).order_by(ComputerWorkflowApproval.created_at.desc()).first()
     if not approval:
         approval = create_scope_approval(db, workflow, approved_by=approved_by, approval_scope=workflow.goal, trace_id=trace_id)
@@ -328,17 +350,7 @@ def _pause_workflow(db: Session, workflow: ComputerWorkflow, reason: str | None 
 
 
 def start_workflow(db: Session, workflow_id: str, *, current_application: str | None = None, current_window: str | None = None, current_screenshot_hash: str | None = None, trace_id: str | None = None) -> dict:
-    from backend.task_center_ownership import owned_tasks_query
-
-    workflow = (
-        owned_tasks_query(db)
-        .join(ComputerWorkflow, ComputerWorkflow.task_id == TaskCenterTask.id)
-        .with_entities(ComputerWorkflow)
-        .filter(ComputerWorkflow.workflow_id == workflow_id)
-        .one_or_none()
-    )
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     if workflow.approval_status != "已批准":
         raise HTTPException(status_code=403, detail="工作流尚未批准")
     if workflow.status not in {"已批准", "已暂停", "等待关键节点确认", "执行中"}:
@@ -354,9 +366,7 @@ def start_workflow(db: Session, workflow_id: str, *, current_application: str | 
 
 
 def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current_application: str | None = None, current_window: str | None = None, current_screenshot_hash: str | None = None, trace_id: str | None = None) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     if workflow.status in {"已取消", "已终止", "已失败", "已超时"}:
         raise HTTPException(status_code=409, detail="工作流已结束")
     step = (
@@ -471,9 +481,7 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
 
 
 def pause_workflow(db: Session, workflow_id: str, reason: str | None = None) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     workflow.status = "已暂停"
     if reason:
         workflow.stop_reason = reason
@@ -483,17 +491,7 @@ def pause_workflow(db: Session, workflow_id: str, reason: str | None = None) -> 
 
 
 def resume_workflow(db: Session, workflow_id: str, *, current_application: str | None = None, current_window: str | None = None, current_screenshot_hash: str | None = None, trace_id: str | None = None) -> dict:
-    from backend.task_center_ownership import owned_tasks_query
-
-    workflow = (
-        owned_tasks_query(db)
-        .join(ComputerWorkflow, ComputerWorkflow.task_id == TaskCenterTask.id)
-        .with_entities(ComputerWorkflow)
-        .filter(ComputerWorkflow.workflow_id == workflow_id)
-        .one_or_none()
-    )
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     next_step = _next_step(db, workflow)
     if not next_step:
         workflow.status = "已完成"
@@ -505,9 +503,7 @@ def resume_workflow(db: Session, workflow_id: str, *, current_application: str |
 
 
 def cancel_workflow(db: Session, workflow_id: str, reason: str | None = None, trace_id: str | None = None) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     workflow.status = "已取消"
     workflow.stop_reason = reason or "工作流已取消"
     workflow.finished_at = utcnow()
@@ -517,11 +513,9 @@ def cancel_workflow(db: Session, workflow_id: str, reason: str | None = None, tr
 
 
 def approve_workflow_checkpoint(db: Session, checkpoint_id: str, *, approved_by: int | None, trace_id: str | None) -> dict:
-    checkpoint = db.get(ComputerWorkflowCheckpoint, checkpoint_id)
-    if not checkpoint:
-        raise HTTPException(status_code=404, detail="关键节点不存在")
+    checkpoint = owned_checkpoint_or_404(db, checkpoint_id)
     checkpoint = approve_checkpoint(db, checkpoint, approved_by=approved_by, trace_id=trace_id)
-    workflow = db.get(ComputerWorkflow, checkpoint.workflow_id)
+    workflow = owned_workflow_or_404(db, checkpoint.workflow_id)
     if workflow and workflow.status == "等待关键节点确认":
         workflow.status = "已批准"
     step = db.get(ComputerWorkflowStep, checkpoint.step_id) if checkpoint.step_id else None
@@ -537,18 +531,15 @@ def approve_workflow_checkpoint(db: Session, checkpoint_id: str, *, approved_by:
 
 
 def reject_workflow_checkpoint(db: Session, checkpoint_id: str, *, approved_by: int | None, reason: str | None, trace_id: str | None) -> dict:
-    checkpoint = db.get(ComputerWorkflowCheckpoint, checkpoint_id)
-    if not checkpoint:
-        raise HTTPException(status_code=404, detail="关键节点不存在")
+    checkpoint = owned_checkpoint_or_404(db, checkpoint_id)
     checkpoint = reject_checkpoint(db, checkpoint, approved_by=approved_by, reason=reason, trace_id=trace_id)
-    workflow = db.get(ComputerWorkflow, checkpoint.workflow_id)
-    if workflow:
-        workflow.status = "已终止"
-        workflow.stop_reason = reason or "关键节点被拒绝"
-        workflow.finished_at = utcnow()
-        step = db.get(ComputerWorkflowStep, checkpoint.step_id) if checkpoint.step_id else None
-        if step:
-            step.status = "已取消"
+    workflow = owned_workflow_or_404(db, checkpoint.workflow_id)
+    workflow.status = "已终止"
+    workflow.stop_reason = reason or "关键节点被拒绝"
+    workflow.finished_at = utcnow()
+    step = db.get(ComputerWorkflowStep, checkpoint.step_id) if checkpoint.step_id else None
+    if step:
+        step.status = "已取消"
     db.commit()
     db.refresh(checkpoint)
     if workflow:
@@ -557,9 +548,7 @@ def reject_workflow_checkpoint(db: Session, checkpoint_id: str, *, approved_by: 
 
 
 def workflow_audit(db: Session, workflow_id: str) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
-    if not workflow:
-        raise HTTPException(status_code=404, detail="工作流不存在")
+    workflow = owned_workflow_or_404(db, workflow_id)
     steps = db.query(ComputerWorkflowStep).filter(ComputerWorkflowStep.workflow_id == workflow_id).order_by(ComputerWorkflowStep.sequence_number.asc()).all()
     approvals = db.query(ComputerWorkflowApproval).filter(ComputerWorkflowApproval.workflow_id == workflow_id).order_by(ComputerWorkflowApproval.created_at.asc()).all()
     checkpoints = db.query(ComputerWorkflowCheckpoint).filter(ComputerWorkflowCheckpoint.workflow_id == workflow_id).order_by(ComputerWorkflowCheckpoint.created_at.asc()).all()

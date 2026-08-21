@@ -1051,6 +1051,12 @@ def _run_list_case(case, client, boss_headers, test_db):
             ("keyed", "freshness", "data_key", "audit_center", "last_updated"),
         },
     }
+    volatile_integer_paths = {
+        "PUB-045": (
+            ("ai_employee_organization_board", "organization_permissions", 0, "permission_change_gate", "tian_brain", "historical_blocks"),
+            ("ai_employee_organization_board", "organization_permissions", 1, "permission_change_gate", "tian_brain", "historical_blocks"),
+        ),
+    }
 
     def pop_metadata(payload, spec):
         kind = spec[0]
@@ -1089,6 +1095,17 @@ def _run_list_case(case, client, boss_headers, test_db):
             parsed_values.append(parsed)
         return parsed_values
 
+    def pop_exact_path(payload, path):
+        target = payload
+        for key in path[:-1]:
+            if isinstance(key, int):
+                assert isinstance(target, list) and 0 <= key < len(target)
+            else:
+                assert isinstance(target, dict) and key in target
+            target = target[key]
+        assert isinstance(target, dict) and path[-1] in target
+        return target.pop(path[-1])
+
     graph = _create_owner_graph(client, boss_headers, test_db)
     before_started_at = datetime.now(timezone.utc)
     before_response = _http(client, case, boss_headers, graph)
@@ -1121,6 +1138,11 @@ def _run_list_case(case, client, boss_headers, test_db):
             or (before[0] is not None and after[0] is not None and before[0] != after[0])
             for before, after in zip(before_values, after_values)
         )
+    for path in volatile_integer_paths.get(case["public_entrypoint_id"], ()):
+        before_value = pop_exact_path(before_payload, path)
+        after_value = pop_exact_path(after_payload, path)
+        assert type(before_value) is int and before_value >= 0
+        assert type(after_value) is int and after_value >= before_value
     assert after_payload == before_payload
 
 
