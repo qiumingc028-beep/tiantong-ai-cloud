@@ -15,6 +15,14 @@ from ..auth import require_permission_user
 from ..database import get_db
 from ..models import TaskCenterResult, TaskCenterTask, User
 from ..queue import enqueue_task
+from ..task_center_ownership import (
+    bind_session_task_ownership,
+    bind_task_ownership,
+    owned_results_query,
+    owned_task_or_none,
+    owned_tasks_query,
+    task_ownership_context,
+)
 
 
 router = APIRouter()
@@ -79,7 +87,7 @@ def create_task(payload: AutomationTaskCreate, request: Request, db: Session = D
 def list_tasks(request: Request, db: Session = Depends(get_db)):
     require_automation_read(request, db)
     rows = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.source == "sprint17_ai_execution")
         .order_by(TaskCenterTask.id.desc())
         .all()
@@ -127,11 +135,7 @@ def webhook_create_task(
     db: Session = Depends(get_db),
     x_webhook_secret: str | None = Header(default=None),
 ):
-    expected_secret = os.getenv("WEBHOOK_SECRET", "").strip()
-    if expected_secret and constant_time_equal(x_webhook_secret or "", expected_secret):
-        system_user = first_system_user(db)
-    else:
-        system_user = require_automation_user(request, db, "task_center.manage")
+    system_user = require_automation_user(request, db, "task_center.manage")
 
     if payload.flow == "tiancai-tianshu-tiance-tianbo":
         return create_flow_task(db, system_user, FlowCreate(input=payload.input, type="webhook_business_flow"))
@@ -221,8 +225,7 @@ def create_flow_task(db: Session, user: User, payload: FlowCreate) -> dict:
 def list_results(request: Request, db: Session = Depends(get_db)):
     require_automation_read(request, db)
     rows = (
-        db.query(TaskCenterResult)
-        .join(TaskCenterTask, TaskCenterResult.task_id == TaskCenterTask.id)
+        owned_results_query(db)
         .filter(TaskCenterTask.source == "sprint17_ai_execution")
         .order_by(TaskCenterResult.id.desc())
         .all()
@@ -260,6 +263,7 @@ def create_automation_task(
         created_by_id=user.id,
         updated_by_id=user.id,
     )
+    bind_task_ownership(db, task, user=user)
     db.add(task)
     db.flush()
     return task
@@ -272,6 +276,7 @@ def enqueue_automation_task(task: TaskCenterTask) -> None:
             "task_center_id": task.id,
             "assigned_to": task.assigned_ai_employee_code,
             "metadata": task_metadata(task),
+            "ownership": task_ownership_context(task),
         },
         max_retries=1,
         delay_note="Sprint 17 automation task queued",
@@ -293,7 +298,7 @@ def write_task_result(db: Session, task: TaskCenterTask, result, submitted_by_id
 
 
 def get_automation_task_or_404(db: Session, task_id: int) -> TaskCenterTask:
-    task = db.get(TaskCenterTask, task_id)
+    task = owned_task_or_none(db, task_id=task_id)
     if not task or task.source != "sprint17_ai_execution":
         raise HTTPException(status_code=404, detail="task not found")
     return task
@@ -309,9 +314,9 @@ def require_automation_read(request: Request, db: Session) -> User:
 
 
 def require_automation_user(request: Request, db: Session, permission_code: str) -> User:
-    if has_valid_api_key(request) or has_valid_internal_bypass(request):
-        return first_system_user(db)
-    return require_permission_user(request, db, permission_code)
+    user = require_permission_user(request, db, permission_code)
+    bind_session_task_ownership(db, user=user)
+    return user
 
 
 def has_valid_api_key(request: Request) -> bool:
@@ -348,7 +353,7 @@ def first_system_user(db: Session) -> User:
 
 def latest_task_result(db: Session, task_id: int) -> TaskCenterResult | None:
     return (
-        db.query(TaskCenterResult)
+        owned_results_query(db)
         .filter(TaskCenterResult.task_id == task_id)
         .order_by(TaskCenterResult.id.desc())
         .first()

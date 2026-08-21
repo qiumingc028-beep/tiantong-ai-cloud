@@ -10,6 +10,7 @@ from ..auth_data import normalize_role
 from ..database import get_db
 from ..deploy_models import DeployRecord
 from ..models import AiEmployee, TaskCenterReview, TaskCenterTask
+from ..task_center_ownership import bind_session_task_ownership, owned_tasks_query
 
 
 router = APIRouter()
@@ -465,7 +466,7 @@ DEFAULT_PROFILE = {
 
 @router.get("/overview")
 def get_employee_capabilities_overview(request: Request, db: Session = Depends(get_db)):
-    require_capabilities_user(request, db)
+    bind_session_task_ownership(db, user=require_capabilities_user(request, db))
     employees = build_capability_rows(db)
     missing = build_missing_capabilities(employees)
     return {
@@ -478,37 +479,43 @@ def get_employee_capabilities_overview(request: Request, db: Session = Depends(g
 
 @router.get("/employees")
 def get_employee_capabilities(request: Request, db: Session = Depends(get_db)):
-    require_capabilities_user(request, db)
+    bind_session_task_ownership(db, user=require_capabilities_user(request, db))
     return {"employees": build_capability_rows(db)}
 
 
 @router.get("/employees/{employee_code}")
 def get_employee_capability(employee_code: str, request: Request, db: Session = Depends(get_db)):
-    require_capabilities_user(request, db)
+    bind_session_task_ownership(db, user=require_capabilities_user(request, db))
+    if not (
+        owned_tasks_query(db)
+        .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
+        .first()
+    ):
+        return build_capability_row(db, None, "")
     rows = build_capability_rows(db)
     for row in rows:
         if row["employee_code"] == employee_code:
             return row
-    return build_capability_row(db, None, employee_code)
+    return build_capability_row(db, None, "")
 
 
 @router.get("/models")
 def get_employee_capability_models(request: Request, db: Session = Depends(get_db)):
-    require_capabilities_user(request, db)
+    bind_session_task_ownership(db, user=require_capabilities_user(request, db))
     employees = build_capability_rows(db)
     return {"models": build_model_catalog(employees)}
 
 
 @router.get("/tools")
 def get_employee_capability_tools(request: Request, db: Session = Depends(get_db)):
-    require_capabilities_user(request, db)
+    bind_session_task_ownership(db, user=require_capabilities_user(request, db))
     employees = build_capability_rows(db)
     return {"tools": build_tool_catalog(employees)}
 
 
 @router.get("/risks")
 def get_employee_capability_risks(request: Request, db: Session = Depends(get_db)):
-    require_capabilities_user(request, db)
+    bind_session_task_ownership(db, user=require_capabilities_user(request, db))
     employees = build_capability_rows(db)
     tools = build_tool_catalog(employees)
     models = build_model_catalog(employees)
@@ -525,7 +532,7 @@ def get_employee_capability_risks(request: Request, db: Session = Depends(get_db
 
 @router.get("/missing-capabilities")
 def get_employee_missing_capabilities(request: Request, db: Session = Depends(get_db)):
-    require_capabilities_user(request, db)
+    bind_session_task_ownership(db, user=require_capabilities_user(request, db))
     return {"missing_capabilities": build_missing_capabilities(build_capability_rows(db))}
 
 
@@ -621,10 +628,11 @@ def merged_profile(employee: AiEmployee | None, code: str) -> dict:
 
 
 def aggregate_employee_metrics(db: Session, code: str) -> dict:
-    tasks = db.query(TaskCenterTask).filter(TaskCenterTask.assigned_ai_employee_code == code).all()
+    tasks = owned_tasks_query(db).filter(TaskCenterTask.assigned_ai_employee_code == code).all()
     reviews = (
-        db.query(TaskCenterReview)
-        .join(TaskCenterTask, TaskCenterReview.task_id == TaskCenterTask.id)
+        owned_tasks_query(db)
+        .join(TaskCenterReview, TaskCenterReview.task_id == TaskCenterTask.id)
+        .with_entities(TaskCenterReview)
         .filter(TaskCenterTask.assigned_ai_employee_code == code)
         .all()
     )

@@ -3,8 +3,9 @@ import sys
 
 from tests.test_helpers import latest_alembic_head_line
 
-from backend.models import TaskCenterTask
+from backend.models import TaskCenterTask, User
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
+from backend.task_center_ownership import bind_task_ownership
 
 
 def auth_headers(client, username: str):
@@ -201,7 +202,9 @@ def create_analysis(
 def create_task(test_db, status: str = "created"):
     db = test_db()
     try:
+        owner = db.query(User).filter(User.username == "owner").one()
         task = TaskCenterTask(title="existing task", status=status, source="boss")
+        bind_task_ownership(db, task, user=owner)
         db.add(task)
         db.commit()
         return task.id

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..agent_runtime.models import AgentExecution
 from ..models import TaskCenterTask
+from ..task_center_ownership import owned_task_or_none
 from .deduplicator import canonicalize_url
 from .identity import stable_research_id
 from .models import ResearchClaim, ResearchEvidence, ResearchExecution, ResearchQuery, ResearchSource
@@ -312,7 +313,7 @@ def persist_research_result(db: Session, execution: AgentExecution, input_payloa
         evidence_row.execution_id = execution.execution_id
     db.flush()
 
-    task = db.get(TaskCenterTask, execution.task_id) if execution.task_id else None
+    task = owned_task_or_none(db, task_id=execution.task_id) if execution.task_id else None
     if task and output_payload.get("report_content"):
         note = f"[V2 Research] {record.report_title or '公开信息研究报告'}: {output_payload['report_hash']}"
         if note not in (task.summary or ""):

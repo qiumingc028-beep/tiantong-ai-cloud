@@ -6,10 +6,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import and_, false, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ..auth import current_user
 from ..models import AiEmployee, TaskCenterTask, User
+from ..task_center_ownership import SESSION_USER_KEY, owned_task_or_none, owned_tasks_query
 from .audit import employee_actor, execution_actor, payload_summary, redact_text, sanitize_payload, write_audit_event
 from .constants import APPROVAL_STATUS_LABELS, AUDIT_EVENT_LABELS, CAPABILITY_TYPES, EXECUTION_STATUS_LABELS, EXECUTOR_TYPES, RISK_LEVELS
 from .exceptions import (
@@ -176,9 +178,22 @@ def enable_capability(db: Session, capability_id: str, enabled: bool = True) -> 
     return serialize_capability(capability)
 
 
+def _owned_executions_query(db: Session, *, user: User | None = None):
+    user = user or db.info.get(SESSION_USER_KEY)
+    if user is None:
+        return db.query(AgentExecution).filter(false())
+    owned_task_ids = owned_tasks_query(db, user=user).with_entities(TaskCenterTask.id)
+    return db.query(AgentExecution).filter(
+        or_(
+            and_(AgentExecution.task_id.is_not(None), AgentExecution.task_id.in_(owned_task_ids)),
+            and_(AgentExecution.task_id.is_(None), AgentExecution.created_by_id == user.id),
+        )
+    )
+
+
 def list_executions(db: Session, task_id: int | None = None, employee_id: int | None = None) -> list[dict[str, Any]]:
     ensure_agent_runtime_enabled()
-    query = db.query(AgentExecution).options(joinedload(AgentExecution.capability)).order_by(AgentExecution.created_at.desc())
+    query = _owned_executions_query(db).options(joinedload(AgentExecution.capability)).order_by(AgentExecution.created_at.desc())
     if task_id is not None:
         query = query.filter(AgentExecution.task_id == task_id)
     if employee_id is not None:
@@ -189,7 +204,7 @@ def list_executions(db: Session, task_id: int | None = None, employee_id: int | 
 
 def get_execution(db: Session, execution_id: str) -> dict[str, Any]:
     ensure_agent_runtime_enabled()
-    execution = db.get(AgentExecution, execution_id)
+    execution = _owned_executions_query(db).filter(AgentExecution.execution_id == execution_id).one_or_none()
     if not execution:
         raise ExecutionNotFoundError("执行记录不存在")
     return serialize_execution(execution, db)
@@ -198,7 +213,7 @@ def get_execution(db: Session, execution_id: str) -> dict[str, Any]:
 def _ensure_task_link(db: Session, task_id: int | None) -> TaskCenterTask | None:
     if task_id is None:
         return None
-    task = db.get(TaskCenterTask, task_id)
+    task = owned_task_or_none(db, task_id=task_id)
     if not task:
         raise InputValidationError("任务不存在")
     return task
@@ -271,7 +286,7 @@ def create_execution(user: User, db: Session, payload: dict[str, Any]) -> dict[s
 
 def approve_execution(db: Session, execution_id: str, user: User, boss_confirmed: bool = True, security_audited: bool = True) -> dict[str, Any]:
     ensure_agent_runtime_enabled()
-    execution = db.get(AgentExecution, execution_id)
+    execution = _owned_executions_query(db, user=user).filter(AgentExecution.execution_id == execution_id).one_or_none()
     if not execution:
         raise ExecutionNotFoundError("执行记录不存在")
     if execution.status not in {"waiting_approval", "pending_validation"}:
@@ -292,13 +307,13 @@ def approve_execution(db: Session, execution_id: str, user: User, boss_confirmed
     )
     db.commit()
     db.refresh(execution)
-    task = db.get(TaskCenterTask, execution.task_id) if execution.task_id else None
+    task = owned_task_or_none(db, task_id=execution.task_id) if execution.task_id else None
     return run_execution_flow(db, execution, user=user, task=task, approval_bypass=True, approve_after=True)
 
 
 def reject_execution(db: Session, execution_id: str, user: User, reason: str | None = None) -> dict[str, Any]:
     ensure_agent_runtime_enabled()
-    execution = db.get(AgentExecution, execution_id)
+    execution = _owned_executions_query(db, user=user).filter(AgentExecution.execution_id == execution_id).one_or_none()
     if not execution:
         raise ExecutionNotFoundError("执行记录不存在")
     execution.approval_status = "rejected"
@@ -326,7 +341,7 @@ def reject_execution(db: Session, execution_id: str, user: User, reason: str | N
 
 def cancel_execution(db: Session, execution_id: str, user: User, reason: str | None = None) -> dict[str, Any]:
     ensure_agent_runtime_enabled()
-    execution = db.get(AgentExecution, execution_id)
+    execution = _owned_executions_query(db, user=user).filter(AgentExecution.execution_id == execution_id).one_or_none()
     if not execution:
         raise ExecutionNotFoundError("执行记录不存在")
     if execution.status in {"success", "failed", "cancelled", "timeout"}:
@@ -356,7 +371,7 @@ def cancel_execution(db: Session, execution_id: str, user: User, reason: str | N
 
 def get_execution_audit(db: Session, execution_id: str) -> list[dict[str, Any]]:
     ensure_agent_runtime_enabled()
-    execution = db.get(AgentExecution, execution_id)
+    execution = _owned_executions_query(db).filter(AgentExecution.execution_id == execution_id).one_or_none()
     if not execution:
         raise ExecutionNotFoundError("执行记录不存在")
     audits = db.query(AgentExecutionAudit).filter(AgentExecutionAudit.execution_id == execution_id).order_by(AgentExecutionAudit.created_at.asc(), AgentExecutionAudit.id.asc()).all()

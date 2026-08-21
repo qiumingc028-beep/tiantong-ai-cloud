@@ -5,10 +5,14 @@ from sqlalchemy import event
 from backend.employee_command_dashboard import build_employee_command_dashboard, build_employee_detail
 from backend.models import AiEmployee, TaskCenterTask
 from backend.task_queue import ORCHESTRATOR_QUEUE_NAME
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def seed_command_dashboard_data(test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add_all(
             [
@@ -68,6 +72,7 @@ def seed_command_dashboard_data(test_db):
                 ),
             ]
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -75,7 +80,7 @@ def seed_command_dashboard_data(test_db):
 
 def test_employee_command_dashboard_overview_counts_online_running_success_risk_and_approval(test_db):
     seed_command_dashboard_data(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         dashboard = build_employee_command_dashboard(db)
     finally:
@@ -95,7 +100,7 @@ def test_employee_command_dashboard_overview_counts_online_running_success_risk_
 
 def test_employee_command_dashboard_organization_view_contains_core_tree_and_capability_tags(test_db):
     seed_command_dashboard_data(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         dashboard = build_employee_command_dashboard(db)
     finally:
@@ -113,7 +118,7 @@ def test_employee_command_dashboard_organization_view_contains_core_tree_and_cap
 
 def test_employee_command_dashboard_detail_shows_identity_skill_tasks_learning_and_level(test_db):
     seed_command_dashboard_data(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         detail = build_employee_detail(db, "tianshang")
     finally:
@@ -175,7 +180,7 @@ def test_ceo_dashboard_summary_includes_employee_command_dashboard(client, owner
 
 def test_employee_command_dashboard_is_readonly_and_does_not_queue_or_write(client, owner_headers, test_db):
     seed_command_dashboard_data(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     engine = db.get_bind()
     statements = []
 

@@ -1,4 +1,9 @@
-from backend.models import TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
+from backend.models import TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask, User
+from backend.task_center_ownership import SESSION_USER_KEY, TASK_OWNERSHIP_FIELDS, owned_task_or_none
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 from pathlib import Path
 
 
@@ -10,7 +15,7 @@ def read_detail_page() -> str:
 
 
 def test_ai_employee_detail_returns_aggregated_readonly_profile(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         task = TaskCenterTask(
             title="Employee detail aggregation task",
@@ -22,8 +27,14 @@ def test_ai_employee_detail_returns_aggregated_readonly_profile(client, owner_he
             assigned_ai_employee_name="天王：后端开发中心",
         )
         db.add(task)
+        _bind_pending_tasks(db)
         db.commit()
         db.refresh(task)
+        owner = db.info[SESSION_USER_KEY]
+        assert all(getattr(task, field) not in (None, "") for field in TASK_OWNERSHIP_FIELDS)
+        assert owned_task_or_none(db, task_id=task.id, user=owner) is task
+        foreign_user = db.query(User).filter(User.username == "admin").one()
+        assert owned_task_or_none(db, task_id=task.id, user=foreign_user) is None
         db.add(
             TaskCenterResult(
                 task_id=task.id,
@@ -49,6 +60,7 @@ def test_ai_employee_detail_returns_aggregated_readonly_profile(client, owner_he
                 detail="contains token and password and must be redacted",
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
         task_id = task.id
     finally:
@@ -96,7 +108,7 @@ def test_ai_employee_detail_returns_aggregated_readonly_profile(client, owner_he
 
 
 def test_ai_employee_detail_exposes_current_task_and_recent_error(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         running_task = TaskCenterTask(
             title="Current running task",
@@ -115,6 +127,7 @@ def test_ai_employee_detail_exposes_current_task_and_recent_error(client, owner_
             assigned_ai_employee_name="天王：后端开发中心",
         )
         db.add_all([running_task, failed_task])
+        _bind_pending_tasks(db)
         db.commit()
         running_id = running_task.id
         failed_id = failed_task.id

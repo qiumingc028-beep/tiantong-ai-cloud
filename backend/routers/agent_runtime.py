@@ -8,6 +8,7 @@ from ..auth_data import normalize_role
 from ..config import get_settings
 from ..database import get_db
 from ..models import AiEmployee, User
+from ..task_center_ownership import bind_session_task_ownership
 from ..agent_runtime.exceptions import (
     ApprovalRequiredError,
     CapabilityNotFoundError,
@@ -188,6 +189,7 @@ def require_agent_runtime_user(request: Request, db: Session) -> User:
     user = current_user(request, db)
     if normalize_role(user.role) not in OWNER_ROLES and user.username != "boss":
         raise HTTPException(status_code=403, detail="无 Agent Runtime 访问权限")
+    bind_session_task_ownership(db, user=user)
     return user
 
 

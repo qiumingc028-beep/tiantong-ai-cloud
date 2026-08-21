@@ -12,6 +12,7 @@ from ..auth import current_user
 from ..auth_data import normalize_role
 from ..database import get_db
 from ..release_models import ReleaseVersion
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/release")
@@ -111,6 +112,7 @@ def require_release_user(request: Request, db: Session):
     user = current_user(request, db)
     role = normalize_role(user.role)
     if role in PRIVILEGED_ROLES:
+        bind_session_task_ownership(db, user=user)
         return user
     raise HTTPException(status_code=403, detail="无 Release Center 访问权限")
 

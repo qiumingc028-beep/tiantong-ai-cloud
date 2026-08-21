@@ -24,6 +24,7 @@ from ..agent_runtime.workflows.computer.runner import (
     workflow_audit,
 )
 from ..agent_runtime.workflows.computer.models import ComputerWorkflow, ComputerWorkflowCheckpoint, ComputerWorkflowStep
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/v2/computer")
@@ -110,7 +111,8 @@ def reject_workflow_api(workflow_id: str, request: Request, db: Session = Depend
 def start_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_manage_user(request, db)
+    user = require_skills_manage_user(request, db)
+    bind_session_task_ownership(db, user=user)
     return start_workflow(
         db,
         workflow_id,
@@ -133,7 +135,8 @@ def pause_workflow_api(workflow_id: str, request: Request, db: Session = Depends
 def resume_workflow_api(workflow_id: str, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
-    require_skills_manage_user(request, db)
+    user = require_skills_manage_user(request, db)
+    bind_session_task_ownership(db, user=user)
     return resume_workflow(
         db,
         workflow_id,

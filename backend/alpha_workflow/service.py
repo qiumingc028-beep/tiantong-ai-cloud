@@ -29,6 +29,7 @@ from ..skills_engine.models import Skill, SkillInstallation, SkillInvocation
 from ..skills_engine.registry import ensure_default_skills
 from ..skills_engine.schemas import SkillInvokePayload
 from ..skills_engine.service import get_skill_by_code_or_404, invoke_skill
+from ..task_center_ownership import bind_task_ownership, owned_task_or_none
 from ..routers.task_center import set_task_status, task_to_dict, write_audit_log
 
 from .audit import append_event, utcnow
@@ -106,7 +107,9 @@ def _cleanup_alpha_workflow_artifacts(
     skill_invocation_id: int | None,
 ) -> None:
     if task_id is not None:
-        db.query(TaskCenterResult).filter(TaskCenterResult.task_id == task_id).delete(synchronize_session=False)
+        task = owned_task_or_none(db, task_id=task_id)
+        if task is not None:
+            db.query(TaskCenterResult).filter(TaskCenterResult.task_id == task.id).delete(synchronize_session=False)
     if research_execution_id:
         db.query(ResearchEvidence).filter(ResearchEvidence.execution_id == research_execution_id).delete(synchronize_session=False)
         db.query(ResearchClaim).filter(ResearchClaim.execution_id == research_execution_id).delete(synchronize_session=False)
@@ -146,7 +149,7 @@ def _compensate_alpha_workflow_failure(
         skill_invocation_id=skill_invocation_id,
     )
     run = db.get(AlphaWorkflowRun, run_id)
-    task = db.get(TaskCenterTask, task_id) if task_id else None
+    task = owned_task_or_none(db, task_id=task_id, user=user) if task_id else None
     agent_execution = db.get(AgentExecution, agent_execution_id) if agent_execution_id else None
     if agent_execution:
         agent_execution.status = "failed"
@@ -334,7 +337,14 @@ def ensure_skill_installed(db: Session, skill: Skill, employee: AiEmployee, *, u
     return installation
 
 
-def _create_task(db: Session, *, user: User, input_text: str, trace_id: str) -> TaskCenterTask:
+def _create_task(
+    db: Session,
+    *,
+    user: User,
+    input_text: str,
+    trace_id: str,
+    canonical_run_id: str,
+) -> TaskCenterTask:
     task = TaskCenterTask(
         title="研究 Apple 最新 AI 战略",
         description=input_text,
@@ -345,6 +355,7 @@ def _create_task(db: Session, *, user: User, input_text: str, trace_id: str) -> 
         updated_by_id=user.id,
         split_plan=json.dumps({"alpha": True, "trace_id": trace_id, "workflow_channel": "orchestrator"}, ensure_ascii=False),
     )
+    bind_task_ownership(db, task, user=user, canonical_run_id=canonical_run_id)
     db.add(task)
     db.flush()
     write_audit_log(db, task, user, "alpha_task_created", None, task.status, "Alpha Workflow 入口创建任务")
@@ -833,7 +844,13 @@ def start_alpha_workflow(
         run.workflow_context_json = context.model_dump_json()
         db.commit()
         db.refresh(run)
-        task = _create_task(db, user=user, input_text=input_text, trace_id=trace_id)
+        task = _create_task(
+            db,
+            user=user,
+            input_text=input_text,
+            trace_id=trace_id,
+            canonical_run_id=run.run_id,
+        )
         cached_task_id = task.id
         set_task_status(db, task, "assigned", user, "alpha_assigned", "自动派给天采")
         task.assigned_ai_employee_code = employee.employee_code
@@ -1529,7 +1546,7 @@ def cancel_alpha_workflow(db: Session, *, user: User, run_id: str, reason: str |
     run = _owned_run_or_404(db, user=user, run_id=run_id)
     if run.status in {"已完成", "已失败", "已取消", "已终止"}:
         return _run_to_dict(db, run, include_events=True)
-    task = db.get(TaskCenterTask, run.task_id) if run.task_id else None
+    task = owned_task_or_none(db, user=user, task_id=run.task_id) if run.task_id else None
     run.status = "已取消"
     run.recovery_status = "已取消"
     run.failure_reason = reason or "Alpha Workflow 已取消"

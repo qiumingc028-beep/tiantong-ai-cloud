@@ -16,7 +16,8 @@ from backend.execution_engine import (
 )
 from backend.dispatch_models import EmployeeExecutionLog
 from backend.main import app
-from backend.models import TaskCenterTask
+from backend.models import TaskCenterTask, User
+from backend.task_center_ownership import bind_task_ownership, task_ownership_context
 
 
 def create_assigned_task(test_db, title="分析近期爆款手表趋势", description="分析京东男表市场趋势"):
@@ -31,6 +32,7 @@ def create_assigned_task(test_db, title="分析近期爆款手表趋势", descri
             assigned_ai_employee_code="tianshang",
             assigned_ai_employee_name="天商：商品中心",
         )
+        bind_task_ownership(db, task, user=db.query(User).filter(User.username == "owner").one())
         db.add(task)
         db.commit()
         db.refresh(task)
@@ -180,6 +182,7 @@ def test_high_risk_start_requires_boss_confirmation_and_security_audit(client, o
 
 def test_worker_rechecks_high_risk_approval_before_running(test_db):
     task_id = create_assigned_task(test_db, title="部署生产环境", description="docker deploy production")
+    ownership = task_ownership_context(get_task(test_db, task_id))
     execution_engine.get_redis().rpush(
         EXECUTION_QUEUE_NAME,
         json.dumps(
@@ -187,6 +190,7 @@ def test_worker_rechecks_high_risk_approval_before_running(test_db):
                 "queue_item_id": "unsafe-fixture",
                 "task_id": task_id,
                 "employee_code": "tianshang",
+                "ownership": ownership,
                 "risk_level": "critical",
                 "boss_confirmed": False,
                 "security_audited": False,

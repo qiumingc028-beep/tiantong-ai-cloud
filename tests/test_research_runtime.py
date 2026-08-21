@@ -7,6 +7,10 @@ import pytest
 from backend.config import get_settings
 from backend.models import AiEmployee, TaskCenterTask
 from backend.agent_runtime.executors.browser.schemas import FetchedDocument
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def enable_research_runtime(monkeypatch):
@@ -61,7 +65,7 @@ def test_research_capability_seed_and_default_flags(client, owner_headers):
 def test_research_workflow_records_evidence_and_task_center(client, owner_headers, test_db, monkeypatch):
     enable_research_runtime(monkeypatch)
     client.cookies.clear()
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         employee = AiEmployee(
             employee_code="tiancai_data",
@@ -76,6 +80,7 @@ def test_research_workflow_records_evidence_and_task_center(client, owner_header
         )
         task = TaskCenterTask(title="公开信息研究任务", status="created", priority="normal", source="boss")
         db.add_all([employee, task])
+        _bind_pending_tasks(db)
         db.commit()
         db.refresh(employee)
         db.refresh(task)
@@ -149,7 +154,7 @@ def test_research_workflow_records_evidence_and_task_center(client, owner_header
     assert data["output_payload"]["core_conclusions"]
     assert data["output_payload"]["browser_reads"]
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         stored_task = db.get(TaskCenterTask, task_id)
         assert stored_task.summary
@@ -185,7 +190,7 @@ def test_research_workflow_records_evidence_and_task_center(client, owner_header
 def test_research_workflow_detects_prompt_injection_markers(client, owner_headers, test_db, monkeypatch):
     enable_research_runtime(monkeypatch)
     client.cookies.clear()
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         employee = AiEmployee(
             employee_code="tiancai_data",
@@ -199,6 +204,7 @@ def test_research_workflow_detects_prompt_injection_markers(client, owner_header
             sort_order=25,
         )
         db.add(employee)
+        _bind_pending_tasks(db)
         db.commit()
         db.refresh(employee)
         employee_id = employee.id

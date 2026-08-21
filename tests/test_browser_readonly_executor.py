@@ -11,6 +11,10 @@ from backend.agent_runtime.executors.browser.policy import normalize_url
 from backend.agent_runtime.executors.browser.schemas import FetchedDocument
 from backend.config import get_settings
 from backend.models import AiEmployee, TaskCenterTask
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def enable_browser_readonly(monkeypatch):
@@ -95,7 +99,7 @@ def test_browser_policy_rejects_private_dns_resolution(monkeypatch):
 def test_readonly_browser_executor_extracts_public_page_and_writes_back(client, owner_headers, test_db, monkeypatch):
     enable_browser_readonly(monkeypatch)
     client.cookies.clear()
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         employee = AiEmployee(
             employee_code="tiancai_data",
@@ -110,6 +114,7 @@ def test_readonly_browser_executor_extracts_public_page_and_writes_back(client, 
         )
         task = TaskCenterTask(title="浏览器只读采集任务", status="created", priority="normal", source="boss")
         db.add_all([employee, task])
+        _bind_pending_tasks(db)
         db.commit()
         db.refresh(employee)
         db.refresh(task)
@@ -190,7 +195,7 @@ def test_readonly_browser_executor_extracts_public_page_and_writes_back(client, 
     assert data["output_payload"]["content_hash"]
     assert data["output_payload"]["sources"][0]["url"] == "https://news.example.com/article?q=1&token=[已脱敏]"
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         stored_task = db.get(TaskCenterTask, task_id)
         assert stored_task.summary
@@ -211,7 +216,7 @@ def test_readonly_browser_executor_extracts_public_page_and_writes_back(client, 
 def test_browser_executor_rejects_unwhitelisted_employee(client, owner_headers, test_db, monkeypatch):
     enable_browser_readonly(monkeypatch)
     client.cookies.clear()
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         employee = AiEmployee(
             employee_code="other_employee",
@@ -225,6 +230,7 @@ def test_browser_executor_rejects_unwhitelisted_employee(client, owner_headers, 
             sort_order=99,
         )
         db.add(employee)
+        _bind_pending_tasks(db)
         db.commit()
         db.refresh(employee)
         employee_id = employee.id

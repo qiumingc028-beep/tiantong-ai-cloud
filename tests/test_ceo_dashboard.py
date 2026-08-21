@@ -5,6 +5,10 @@ from sqlalchemy import event, text
 from backend.deploy_models import DeployHealthCheck, DeployRecord, HealthCheckRecord
 from backend.models import AiEmployee, TaskCenterTask
 from tests.test_helpers import latest_alembic_head
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def auth_headers(client, username: str):
@@ -54,10 +58,11 @@ def test_ceo_dashboard_response_shape(client, owner_headers):
 
 
 def test_ceo_dashboard_task_summary_matches_task_center_data(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         for status in ["created", "split", "assigned", "running", "result_submitted", "accepted", "rejected", "audited", "summarized"]:
             db.add(TaskCenterTask(title=f"{status} task", status=status))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -73,9 +78,10 @@ def test_ceo_dashboard_task_summary_matches_task_center_data(client, owner_heade
 
 
 def test_ceo_dashboard_employee_summary_matches_registry_data(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.query(AiEmployee).filter(AiEmployee.employee_code == "tianwang").one().status = "inactive"
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -91,12 +97,13 @@ def test_ceo_dashboard_employee_summary_matches_registry_data(client, owner_head
 
 
 def test_ceo_dashboard_deploy_summary_returns_alembic_version(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(128) NOT NULL)"))
         db.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0027_v1_schema_alignment')"))
         db.add(DeployRecord(deploy_version="Sprint 4", status="success"))
         db.add(DeployHealthCheck(check_type="database", target="database", status="healthy"))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -111,7 +118,7 @@ def test_ceo_dashboard_deploy_summary_returns_alembic_version(client, owner_head
 
 
 def test_ceo_dashboard_sprint16_deploy_loop_fields(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             DeployRecord(
@@ -125,6 +132,7 @@ def test_ceo_dashboard_sprint16_deploy_loop_fields(client, owner_headers, test_d
         db.add(HealthCheckRecord(service="backend", status="healthy", latency=15))
         db.add(HealthCheckRecord(service="redis", status="healthy", latency=6))
         db.add(HealthCheckRecord(service="worker", status="unhealthy", latency=120))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -149,7 +157,7 @@ def test_ceo_dashboard_deployment_history_api_auth_and_data(client, owner_header
     assert client.get("/api/ceo-dashboard/deployment-history").status_code == 401
     assert client.get("/api/ceo-dashboard/deployment-history", headers=viewer_headers).status_code == 403
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             DeployRecord(
@@ -160,6 +168,7 @@ def test_ceo_dashboard_deployment_history_api_auth_and_data(client, owner_header
                 operator="tiandun",
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -177,7 +186,7 @@ def test_ceo_dashboard_latest_deploy_api_auth_and_data(client, owner_headers, vi
     assert client.get("/api/ceo-dashboard/latest-deploy").status_code == 401
     assert client.get("/api/ceo-dashboard/latest-deploy", headers=viewer_headers).status_code == 403
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             DeployRecord(
@@ -188,6 +197,7 @@ def test_ceo_dashboard_latest_deploy_api_auth_and_data(client, owner_headers, vi
                 operator="tiandun",
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -205,10 +215,11 @@ def test_ceo_dashboard_health_check_history_api_auth_and_data(client, owner_head
     assert client.get("/api/ceo-dashboard/health-check-history").status_code == 401
     assert client.get("/api/ceo-dashboard/health-check-history", headers=viewer_headers).status_code == 403
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(HealthCheckRecord(service="backend", status="healthy", latency=11))
         db.add(HealthCheckRecord(service="worker", status="warning", latency=82))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -223,10 +234,11 @@ def test_ceo_dashboard_health_check_history_api_auth_and_data(client, owner_head
 
 
 def test_ceo_dashboard_pending_actions_detect_task_states(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         for status in ["created", "split", "result_submitted", "accepted", "audited", "rejected"]:
             db.add(TaskCenterTask(title=f"{status} task", status=status))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -240,10 +252,11 @@ def test_ceo_dashboard_pending_actions_detect_task_states(client, owner_headers,
 
 
 def test_ceo_dashboard_alerts_detect_health_and_task_warnings(client, owner_headers, test_db, monkeypatch):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(TaskCenterTask(title="rejected task", status="rejected"))
         db.add(TaskCenterTask(title="submitted task", status="result_submitted"))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -260,7 +273,7 @@ def test_ceo_dashboard_alerts_detect_health_and_task_warnings(client, owner_head
 
 
 def test_ceo_dashboard_does_not_write_database(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     engine = db.get_bind()
     statements = []
 

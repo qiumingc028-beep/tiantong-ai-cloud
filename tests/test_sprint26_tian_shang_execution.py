@@ -7,7 +7,7 @@ from alembic.script import ScriptDirectory
 
 from backend.employee_execution.models import EmployeeExecutionContract
 from backend.main import app
-from backend.models import TaskCenterResult, TaskCenterTask
+from backend.models import TaskCenterResult, TaskCenterTask, User
 from backend.workers.tian_shang_worker import create_tian_shang_task, process_next_tian_shang_execution
 from tests.test_helpers import latest_alembic_head
 
@@ -23,7 +23,8 @@ def test_sprint26_routes_registered():
 def test_tian_shang_execution_contract_lifecycle(test_db):
     db = test_db()
     try:
-        created = create_tian_shang_task(db, "帮我找未来30天最值得开发的男士机械表", enqueue=True)
+        user = db.query(User).filter(User.username == "boss").one()
+        created = create_tian_shang_task(db, "帮我找未来30天最值得开发的男士机械表", user=user, enqueue=True)
         contract_id = created["contract"]["id"]
         contract = db.get(EmployeeExecutionContract, contract_id)
         assert contract.status == "CREATED"

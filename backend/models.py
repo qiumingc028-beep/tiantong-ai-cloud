@@ -309,6 +309,14 @@ class AiEmployee(Base):
 
 class TaskCenterTask(Base):
     __tablename__ = "task_center_tasks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            name="fk_task_center_tasks_tenant_company",
+            ondelete="RESTRICT",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -321,6 +329,14 @@ class TaskCenterTask(Base):
     assigned_ai_employee_name: Mapped[str | None] = mapped_column(String(100))
     split_plan: Mapped[str | None] = mapped_column(Text)
     summary: Mapped[str | None] = mapped_column(Text)
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id", ondelete="RESTRICT"), index=True)
+    company_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    requester_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    store_scope_key: Mapped[str | None] = mapped_column(Text)
+    ownership_scope_key: Mapped[str | None] = mapped_column(String(64), index=True)
+    canonical_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("alpha_workflow_runs.run_id", ondelete="SET NULL"), index=True
+    )
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

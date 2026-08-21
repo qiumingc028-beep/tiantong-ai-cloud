@@ -11,19 +11,25 @@ from backend.evolution_models import EmployeeGrowth, ReviewAnalysis, RiskEvent, 
 from backend.models import Role, TaskCenterTask, User
 from backend.review_models import EmployeeScore, TaskReview
 from tests.test_helpers import latest_alembic_head
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def create_user(test_db, username: str, role: str):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         if not db.query(Role).filter(Role.code == role).first():
             db.add(Role(code=role, name=role, permissions=[]))
+            _bind_pending_tasks(db)
             db.commit()
         user = db.query(User).filter(User.username == username).first()
         if not user:
             scope_user = db.query(User).filter(User.username == "owner").one()
             user = User(username=username, password_hash=hash_password("password"), role=role, display_name=username, tenant_id=scope_user.tenant_id, company_id=scope_user.company_id, active=True)
             db.add(user)
+            _bind_pending_tasks(db)
             db.commit()
     finally:
         db.close()
@@ -36,7 +42,7 @@ def login_headers(client, username: str):
 
 
 def create_review_fixture(test_db, employee_code="tianshang", task_status="completed", review_success=True, high_risk=False):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         task = TaskCenterTask(
             title="部署生产环境" if high_risk else "分析手表市场趋势",
@@ -48,6 +54,7 @@ def create_review_fixture(test_db, employee_code="tianshang", task_status="compl
             assigned_ai_employee_name=employee_code,
         )
         db.add(task)
+        _bind_pending_tasks(db)
         db.commit()
         db.refresh(task)
         db.add(
@@ -82,6 +89,7 @@ def create_review_fixture(test_db, employee_code="tianshang", task_status="compl
                 skill_growth=85 if review_success else 20,
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
         return task.id
     finally:
@@ -175,10 +183,11 @@ def test_risk_events_and_audit_user_access(client, owner_headers, test_db):
 
 def test_employee_evolution_does_not_modify_task_status_or_leak_sensitive_fields(client, owner_headers, test_db):
     task_id = create_review_fixture(test_db, employee_code="tianshang", task_status="completed", review_success=False)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         log = db.query(EmployeeExecutionLog).filter(EmployeeExecutionLog.task_id == task_id).first()
         log.error_message = "token leaked in upstream payload"
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -190,7 +199,7 @@ def test_employee_evolution_does_not_modify_task_status_or_leak_sensitive_fields
     assert "password_hash" not in str(payload)
     assert "secret" not in str(payload).lower()
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         task = db.get(TaskCenterTask, task_id)
         assert task.status == "completed"

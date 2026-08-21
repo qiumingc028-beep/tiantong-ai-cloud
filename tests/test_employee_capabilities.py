@@ -4,6 +4,10 @@ import json
 
 from backend.main import app
 from backend.models import AiEmployee, TaskCenterTask
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 BASE = "/api/employee-capabilities"
@@ -24,6 +28,8 @@ SENSITIVE_KEYS = {
     "refresh_token",
     "private_key",
 }
+
+
 EMPLOYEE_FIELDS = {
     "employee_code",
     "employee_name",
@@ -199,7 +205,7 @@ def test_employee_capabilities_no_write_routes():
 
 
 def test_employee_capabilities_does_not_modify_task_status(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         task = TaskCenterTask(
             title="Capability read only task",
@@ -209,6 +215,7 @@ def test_employee_capabilities_does_not_modify_task_status(client, owner_headers
             assigned_ai_employee_name="天王：后端开发中心",
         )
         db.add(task)
+        _bind_pending_tasks(db)
         db.commit()
         task_id = task.id
     finally:
@@ -217,7 +224,7 @@ def test_employee_capabilities_does_not_modify_task_status(client, owner_headers
     response = client.get(f"{BASE}/employees/tianwang", headers=owner_headers)
     assert response.status_code == 200
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         assert db.get(TaskCenterTask, task_id).status == "created"
     finally:
@@ -225,7 +232,7 @@ def test_employee_capabilities_does_not_modify_task_status(client, owner_headers
 
 
 def test_employee_capabilities_safe_defaults(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             AiEmployee(
@@ -240,6 +247,7 @@ def test_employee_capabilities_safe_defaults(client, owner_headers, test_db):
                 sort_order=999,
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()

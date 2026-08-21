@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models import AiEmployee, EmployeeLog, User
+from ..task_center_ownership import owned_task_or_none
 from .constants import DEFAULT_SKILL_ENGINE_FEATURES, SKILL_RISK_LEVELS, SKILL_STATUSES
 from .models import (
     Skill,
@@ -346,6 +347,8 @@ def find_installation(db: Session, skill: Skill, employee_code: str, installatio
 
 def invoke_skill(db: Session, skill: Skill, payload, user: User):
     require_skills_manage_user_from_user(user)
+    if payload.task_id is not None and owned_task_or_none(db, user=user, task_id=payload.task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
     employee, permission = require_employee_permission(db, skill, payload.employee_code, version_id=skill.current_version_id)
     installation = find_installation(db, skill, payload.employee_code, payload.installation_id)
     if installation.status not in {"已安装", "已启用"}:

@@ -2,6 +2,10 @@ from pathlib import Path
 
 from backend.evolution_models import RiskEvent
 from backend.models import AiEmployee, KnowledgeArticle, PromptLibrary, SopLibrary, TaskCenterTask
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 PAGE = Path("frontend/ai-workforce.html")
@@ -130,7 +134,7 @@ def test_ai_workforce_api_returns_readonly_structure(client, owner_headers):
 
 
 def test_ai_workforce_api_aggregates_existing_readonly_data(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add_all(
             [
@@ -159,6 +163,7 @@ def test_ai_workforce_api_aggregates_existing_readonly_data(client, owner_header
                 ),
             ]
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -196,7 +201,7 @@ def test_ai_workforce_api_aggregates_existing_readonly_data(client, owner_header
 
 
 def test_ai_workforce_api_handles_empty_employee_fields(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             AiEmployee(
@@ -211,6 +216,7 @@ def test_ai_workforce_api_handles_empty_employee_fields(client, owner_headers, t
                 sort_order=80,
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()

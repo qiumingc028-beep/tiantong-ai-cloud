@@ -11,6 +11,10 @@ from backend.deploy_models import DeployRecord
 from backend.models import AiEmployee, TaskCenterAuditLog, TaskCenterTask, User
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
 from backend.task_queue import ORCHESTRATOR_QUEUE_NAME
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 API_PATH = "/api/employee-workspace/overview"
@@ -94,7 +98,7 @@ def test_employee_workspace_employee_without_task_is_standby(client, owner_heade
 
 
 def test_employee_workspace_maps_task_and_orchestrator_data(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         task = TaskCenterTask(
             title="Implement workspace API",
@@ -104,6 +108,7 @@ def test_employee_workspace_maps_task_and_orchestrator_data(client, owner_header
             assigned_ai_employee_name="天王：后端开发中心",
         )
         db.add(task)
+        _bind_pending_tasks(db)
         db.flush()
         db.add(
             OrchestratorAnalysisRecord(
@@ -121,6 +126,7 @@ def test_employee_workspace_maps_task_and_orchestrator_data(client, owner_header
             )
         )
         db.add(TaskCenterAuditLog(task_id=task.id, action="result_submitted", to_status="result_submitted"))
+        _bind_pending_tasks(db)
         db.commit()
         task_id = task.id
     finally:
@@ -174,7 +180,7 @@ def test_employee_workspace_maps_task_statuses_without_mutating_tasks(
     next_suggestion,
 ):
     employee_code = f"status_{task_status}"
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             AiEmployee(
@@ -196,6 +202,7 @@ def test_employee_workspace_maps_task_statuses_without_mutating_tasks(
             assigned_ai_employee_name=f"Status {task_status}",
         )
         db.add(task)
+        _bind_pending_tasks(db)
         db.commit()
         task_id = task.id
     finally:
@@ -211,7 +218,7 @@ def test_employee_workspace_maps_task_statuses_without_mutating_tasks(
     assert row["blocker_reason"] == blocker_reason
     assert row["next_suggestion"] == next_suggestion
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         assert db.get(TaskCenterTask, task_id).status == task_status
     finally:
@@ -219,7 +226,7 @@ def test_employee_workspace_maps_task_statuses_without_mutating_tasks(
 
 
 def test_employee_workspace_handles_empty_sources(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.query(OrchestratorTaskLink).delete()
         db.query(OrchestratorAnalysisRecord).delete()
@@ -227,6 +234,7 @@ def test_employee_workspace_handles_empty_sources(client, owner_headers, test_db
         db.query(TaskCenterTask).delete()
         db.query(DeployRecord).delete()
         db.query(AiEmployee).delete()
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -244,7 +252,7 @@ def test_employee_workspace_handles_empty_sources(client, owner_headers, test_db
 
 
 def test_employee_workspace_reports_blockers_audits_and_deploys(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         rejected = TaskCenterTask(
             title="Needs fix",
@@ -255,6 +263,7 @@ def test_employee_workspace_reports_blockers_audits_and_deploys(client, owner_he
         accepted = TaskCenterTask(title="Wait audit", status="accepted")
         db.add_all([rejected, accepted])
         db.add(DeployRecord(deploy_version="Sprint 7", operator="tiandun", status="pending"))
+        _bind_pending_tasks(db)
         db.commit()
         rejected_id = rejected.id
         accepted_id = accepted.id
@@ -273,7 +282,7 @@ def test_employee_workspace_reports_blockers_audits_and_deploys(client, owner_he
 
 
 def test_employee_workspace_does_not_return_sensitive_fields(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             OrchestratorAnalysisRecord(
@@ -285,6 +294,7 @@ def test_employee_workspace_does_not_return_sensitive_fields(client, owner_heade
                 recommended_codex="tianwang",
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -295,7 +305,7 @@ def test_employee_workspace_does_not_return_sensitive_fields(client, owner_heade
 
 
 def test_employee_workspace_is_read_only(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     engine = db.get_bind()
     statements = []
 
@@ -321,7 +331,7 @@ def test_employee_workspace_does_not_add_alembic_migration():
 
 
 def test_employee_workspace_home_shows_identity_capabilities_tasks_and_growth(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             AiEmployee(
@@ -358,6 +368,7 @@ def test_employee_workspace_home_shows_identity_capabilities_tasks_and_growth(cl
                 ),
             ]
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -380,7 +391,7 @@ def test_employee_workspace_home_shows_identity_capabilities_tasks_and_growth(cl
 
 
 def test_employee_workspace_home_marks_high_risk_task_for_tian_shen(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             AiEmployee(
@@ -404,6 +415,7 @@ def test_employee_workspace_home_marks_high_risk_task_for_tian_shen(client, owne
                 assigned_ai_employee_name="天投：广告投放中心",
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -418,7 +430,7 @@ def test_employee_workspace_home_marks_high_risk_task_for_tian_shen(client, owne
 
 
 def test_employee_workspace_home_allows_employee_to_view_only_self(client, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         scope_user = db.query(User).filter(User.username == "owner").one()
         db.add(
@@ -432,6 +444,7 @@ def test_employee_workspace_home_allows_employee_to_view_only_self(client, test_
                 active=True,
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()

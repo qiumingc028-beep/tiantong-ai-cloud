@@ -1,4 +1,8 @@
 from backend.models import TaskCenterTask
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def test_approval_center_pending_requires_login(client):
@@ -22,7 +26,7 @@ def test_approval_center_pending_allows_owner_and_admin(client, owner_headers, a
 
 
 def test_approval_center_pending_response_shape_and_recommendations(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             TaskCenterTask(
@@ -43,6 +47,7 @@ def test_approval_center_pending_response_shape_and_recommendations(client, owne
             )
         )
         db.add(TaskCenterTask(title="Completed task", status="summarized"))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -71,7 +76,7 @@ def test_approval_center_pending_response_shape_and_recommendations(client, owne
 
 
 def test_approval_center_pending_is_readonly(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         before_tasks = db.query(TaskCenterTask).count()
     finally:
@@ -80,7 +85,7 @@ def test_approval_center_pending_is_readonly(client, owner_headers, test_db):
     response = client.get("/api/approval-center/pending", headers=owner_headers)
     assert response.status_code == 200
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         assert db.query(TaskCenterTask).count() == before_tasks
     finally:

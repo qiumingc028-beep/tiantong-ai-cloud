@@ -21,6 +21,7 @@ from ..models import (
     TaskCenterAuditLog,
     TaskCenterTask,
 )
+from ..task_center_ownership import bind_session_task_ownership, owned_task_rows_query, owned_tasks_query
 
 
 router = APIRouter(prefix="/api/enterprise-brain-console")
@@ -44,6 +45,7 @@ def require_enterprise_brain_console_user(request: Request, db: Session):
     role = normalize_role(user.role)
     if role not in ALLOWED_ROLES:
         raise HTTPException(status_code=403, detail="no enterprise brain console permission")
+    bind_session_task_ownership(db, user=user)
     return user
 
 
@@ -78,7 +80,7 @@ def build_enterprise_brain_console_overview(db: Session, user) -> dict:
         },
         "system_health": system_health,
         "centers": center_entries(db),
-        "recent_activities": build_recent_activities(db),
+        "recent_activities": build_recent_activities(db, user),
         "empty_state": {
             "title": "未接入真实业务数据" if no_business_data(employee_summary, task_summary) else "已接入本地系统只读数据",
             "message": "未接入真实业务数据；当前仅聚合本地AI员工、Task Center和系统健康状态。" if no_business_data(employee_summary, task_summary) else "当前展示本地系统只读聚合数据，不接外部真实业务平台。",
@@ -113,7 +115,7 @@ def build_employee_summary(db: Session) -> dict:
     active_tasks = []
     if active_employee_codes:
         active_tasks = (
-            db.query(TaskCenterTask)
+            owned_tasks_query(db)
             .filter(TaskCenterTask.assigned_ai_employee_code.in_(active_employee_codes))
             .filter(TaskCenterTask.status.in_(ACTIVE_TASK_STATUSES))
             .all()
@@ -125,7 +127,7 @@ def build_employee_summary(db: Session) -> dict:
         department_rows[department] = department_rows.get(department, 0) + 1
     risk_employee_codes = {
         row.assigned_ai_employee_code
-        for row in db.query(TaskCenterTask.assigned_ai_employee_code)
+        for row in owned_tasks_query(db).with_entities(TaskCenterTask.assigned_ai_employee_code)
         .filter(TaskCenterTask.assigned_ai_employee_code.isnot(None))
         .filter(TaskCenterTask.status.in_(BLOCKED_TASK_STATUSES))
         .all()
@@ -150,7 +152,7 @@ def build_employee_summary(db: Session) -> dict:
 
 
 def build_task_summary(db: Session) -> dict:
-    rows = db.query(TaskCenterTask.status, func.count(TaskCenterTask.id)).group_by(TaskCenterTask.status).all()
+    rows = owned_tasks_query(db).with_entities(TaskCenterTask.status, func.count(TaskCenterTask.id)).group_by(TaskCenterTask.status).all()
     status_counts = {status: int(count) for status, count in rows}
     total = sum(status_counts.values())
     return summary(
@@ -171,7 +173,7 @@ def build_task_summary(db: Session) -> dict:
 
 def build_risk_summary(db: Session, employee_summary: dict, task_summary: dict) -> dict:
     blocked_tasks = task_summary["metrics"].get("blocked_count", 0)
-    risk_tasks = db.query(TaskCenterTask).filter(TaskCenterTask.status.in_(RISK_TASK_STATUSES)).order_by(TaskCenterTask.id.desc()).limit(5).all()
+    risk_tasks = owned_tasks_query(db).filter(TaskCenterTask.status.in_(RISK_TASK_STATUSES)).order_by(TaskCenterTask.id.desc()).limit(5).all()
     total_risks = blocked_tasks + employee_summary["metrics"].get("risk_employee_count", 0)
     return summary(
         "风险概况",
@@ -190,7 +192,7 @@ def build_risk_summary(db: Session, employee_summary: dict, task_summary: dict) 
 
 def build_pending_confirmations(db: Session) -> dict:
     rows = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.status.in_(["created", "split", "result_submitted", "accepted", "rejected", "blocked"]))
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .limit(10)
@@ -253,11 +255,17 @@ def check_deploy_status(db: Session) -> dict:
     return health_item("Deploy", row.status or "unknown", f"version={row.deploy_version or 'unknown'}")
 
 
-def build_recent_activities(db: Session) -> list[dict]:
+def build_recent_activities(db: Session, user) -> list[dict]:
     activities: list[dict] = []
-    task_audits = db.query(TaskCenterAuditLog).order_by(TaskCenterAuditLog.id.desc()).limit(8).all()
+    task_audits = owned_task_rows_query(db, TaskCenterAuditLog, TaskCenterAuditLog.task_id).order_by(TaskCenterAuditLog.id.desc()).limit(8).all()
     deploy_records = db.query(DeployRecord).order_by(DeployRecord.id.desc()).limit(6).all()
-    employee_logs = db.query(EmployeeLog).order_by(EmployeeLog.id.desc()).limit(8).all()
+    employee_logs = (
+        db.query(EmployeeLog)
+        .filter(EmployeeLog.user_id == user.id)
+        .order_by(EmployeeLog.id.desc())
+        .limit(8)
+        .all()
+    )
     for row in task_audits:
         activities.append(
             activity(
@@ -324,7 +332,11 @@ def no_business_data(employee_summary: dict, task_summary: dict) -> bool:
 
 def center_entries(db: Session) -> list[dict]:
     employee_count, employee_updated_at = count_and_latest(db, AiEmployee, AiEmployee.updated_at, AiEmployee.is_legacy.is_(False))
-    task_count, task_updated_at = count_and_latest(db, TaskCenterTask, TaskCenterTask.updated_at)
+    task_count, task_updated_at = (
+        owned_tasks_query(db)
+        .with_entities(func.count(TaskCenterTask.id), func.max(TaskCenterTask.updated_at))
+        .one()
+    )
     deploy_count, deploy_updated_at = count_and_latest(db, DeployRecord, DeployRecord.updated_at)
     knowledge_count = sum(
         count_rows(db, model)
@@ -339,6 +351,11 @@ def center_entries(db: Session) -> list[dict]:
         ]
     )
     skill_count = count_rows(db, SopLibrary) + count_rows(db, PromptLibrary)
+    audit_count, audit_updated_at = (
+        owned_task_rows_query(db, TaskCenterAuditLog, TaskCenterAuditLog.task_id)
+        .with_entities(func.count(TaskCenterAuditLog.id), func.max(TaskCenterAuditLog.created_at))
+        .one()
+    )
     return [
         center("AI员工工作台", "查看AI员工状态、任务、成长和风险", "/employee-workspace.html", "partial", "medium", employee_count, employee_updated_at),
         center("AI会议室", "多AI员工协作讨论、观点汇总和方案生成", "#", "designing", "medium", 0, None),
@@ -346,7 +363,7 @@ def center_entries(db: Session) -> list[dict]:
         center("Skill Center", "技能资产、SOP和插件能力入口", "/sop-skill-center.html", "partial", "medium", skill_count, knowledge_updated_at),
         center("天藏 Knowledge OS", "知识、SOP、Prompt和案例资产", "/tiancang.html", "partial", "medium", knowledge_count, knowledge_updated_at),
         center("Organization", "组织、部门、岗位和权限边界", "/dashboard/organization.html", "partial", "medium", employee_count, employee_updated_at),
-        center("Audit Center", "审计、安全报告和风险事件中心", "#", "designing", "high", count_rows(db, TaskCenterAuditLog), latest_value(db, TaskCenterAuditLog.created_at)),
+        center("Audit Center", "审计、安全报告和风险事件中心", "#", "designing", "high", int(audit_count or 0), audit_updated_at),
         center("AI运营驾驶舱", "京东60店经营状态与分析入口", "/jd-dashboard.html", "partial", "medium", 0, None),
         center("Deploy Center", "部署健康、版本和迁移状态检查", "/deploy-center.html", "connected", "high", deploy_count, deploy_updated_at),
     ]

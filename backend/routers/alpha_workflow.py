@@ -24,6 +24,7 @@ from ..alpha_workflow.service import (
     start_alpha_workflow_request,
 )
 from ..brain_orchestrator.planner import BrainGraphIdentityConflict
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/v2/alpha-workflows")
@@ -121,6 +122,7 @@ def api_get_run_stages(run_id: str, request: Request, db: Session = Depends(get_
 def api_run_demo(payload: AlphaWorkflowStartRequest, request: Request, db: Session = Depends(get_db)):
     require_alpha_workflow_enabled()
     user = require_alpha_workflow_user(request, db)
+    bind_session_task_ownership(db, user=user)
     try:
         run = start_alpha_workflow_request(
             db,

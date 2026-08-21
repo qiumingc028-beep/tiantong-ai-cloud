@@ -13,6 +13,7 @@ from ..services.ai_employee_growth_system import (
     build_task_growth_impact,
     build_waiting_confirm_growth_items,
 )
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/ai-employee-growth-system")
@@ -22,19 +23,19 @@ ALLOWED_ROLES = {"owner", "admin", "boss"}
 
 @router.get("/overview")
 def get_growth_system_overview(request: Request, db: Session = Depends(get_db)):
-    require_growth_system_user(request, db)
+    bind_session_task_ownership(db, user=require_growth_system_user(request, db))
     return build_growth_system_overview(db)
 
 
 @router.get("/employees/{employee_id}/profile")
 def get_employee_growth_profile(employee_id: str, request: Request, db: Session = Depends(get_db)):
-    require_growth_system_user(request, db)
+    bind_session_task_ownership(db, user=require_growth_system_user(request, db))
     return build_employee_growth_profile(db, employee_id)
 
 
 @router.get("/tasks/{task_id}/impact")
 def get_task_growth_impact(task_id: int, request: Request, db: Session = Depends(get_db)):
-    require_growth_system_user(request, db)
+    bind_session_task_ownership(db, user=require_growth_system_user(request, db))
     impact = build_task_growth_impact(db, task_id)
     if impact is None:
         raise HTTPException(status_code=404, detail="task not found")
@@ -43,13 +44,13 @@ def get_task_growth_impact(task_id: int, request: Request, db: Session = Depends
 
 @router.get("/waiting-confirm")
 def get_waiting_confirm_growth_items(request: Request, db: Session = Depends(get_db)):
-    require_growth_system_user(request, db)
+    bind_session_task_ownership(db, user=require_growth_system_user(request, db))
     return build_waiting_confirm_growth_items(db)
 
 
 @router.get("/employees/{employee_id}/skill-suggestions")
 def get_employee_skill_suggestions(employee_id: str, request: Request, db: Session = Depends(get_db)):
-    require_growth_system_user(request, db)
+    bind_session_task_ownership(db, user=require_growth_system_user(request, db))
     return build_employee_skill_suggestions(db, employee_id)
 
 

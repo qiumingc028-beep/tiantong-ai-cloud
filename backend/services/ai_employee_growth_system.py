@@ -11,6 +11,7 @@ from ..services.ai_workforce_task_flow import (
     map_task_lifecycle_status,
     risk_level_for_task,
 )
+from ..task_center_ownership import owned_task_or_none, owned_tasks_query
 
 
 SUCCESS_STATUSES = {"accepted", "audited", "summarized", "completed"}
@@ -58,7 +59,7 @@ def build_employee_growth_profile(db: Session, employee_id: str) -> dict:
 
 
 def build_task_growth_impact(db: Session, task_id: int) -> dict | None:
-    task = db.get(TaskCenterTask, task_id)
+    task = owned_task_or_none(db, task_id=task_id)
     if task is None:
         return None
     audit_logs = audit_logs_for_tasks(db, [task.id])
@@ -170,7 +171,7 @@ def find_employee(db: Session, employee_id: str) -> AiEmployee | None:
 
 def tasks_for_employee(db: Session, employee_id: str) -> list[TaskCenterTask]:
     return (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.assigned_ai_employee_code == employee_id)
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .all()
@@ -379,7 +380,7 @@ def suggestion_payload(employee_id: str, suggestion_type: str, title: str, reaso
 
 def waiting_confirm_items(db: Session) -> list[dict]:
     tasks = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.status.in_(WAITING_CONFIRM_STATUSES))
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .all()
@@ -399,7 +400,7 @@ def waiting_confirm_items(db: Session) -> list[dict]:
 
 
 def memory_overview(db: Session) -> dict:
-    tasks = db.query(TaskCenterTask).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all()
+    tasks = owned_tasks_query(db).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all()
     return {
         "success_cases": sum(1 for task in tasks if task.status in SUCCESS_STATUSES),
         "failure_cases": sum(1 for task in tasks if task.status in FAILURE_STATUSES),
@@ -408,9 +409,15 @@ def memory_overview(db: Session) -> dict:
 
 
 def audit_overview(db: Session, waiting: list[dict]) -> dict:
-    tasks = db.query(TaskCenterTask).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all()
+    tasks = owned_tasks_query(db).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all()
+    audit_events = (
+        owned_tasks_query(db)
+        .join(TaskCenterAuditLog, TaskCenterAuditLog.task_id == TaskCenterTask.id)
+        .with_entities(TaskCenterAuditLog)
+        .count()
+    )
     return {
-        "events": db.query(TaskCenterAuditLog).count(),
+        "events": audit_events,
         "high_risk": sum(1 for task in tasks if risk_level_for_task(task) == "high"),
         "waiting_boss_confirm": len(waiting),
     }

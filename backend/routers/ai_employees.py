@@ -10,6 +10,7 @@ from ..auth import get_role_permissions, normalize_role, require_permission_user
 from ..database import get_db, get_redis
 from ..models import AiEmployee, AiTask, EmployeeLog, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
 from ..skills_engine.registry import list_employee_skill_cards
+from ..task_center_ownership import bind_session_task_ownership, owned_results_query, owned_task_rows_query, owned_tasks_query
 from ..tool_router.router_engine import list_routes
 
 
@@ -323,7 +324,7 @@ def load_current_tasks(db: Session, employee_codes: list[str]) -> dict[str, Task
     if not employee_codes:
         return {}
     rows = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(
             TaskCenterTask.assigned_ai_employee_code.in_(employee_codes),
             TaskCenterTask.status.in_(("assigned", "running")),
@@ -342,7 +343,7 @@ def load_today_completed_counts(db: Session, employee_codes: list[str], today_st
     if not employee_codes:
         return {}
     rows = (
-        db.query(TaskCenterTask.assigned_ai_employee_code, func.count(TaskCenterTask.id))
+        owned_tasks_query(db).with_entities(TaskCenterTask.assigned_ai_employee_code, func.count(TaskCenterTask.id))
         .filter(
             TaskCenterTask.assigned_ai_employee_code.in_(employee_codes),
             TaskCenterTask.status.in_(("accepted", "audited", "summarized", "completed")),
@@ -358,7 +359,7 @@ def load_recent_errors(db: Session, employee_codes: list[str]) -> dict[str, Task
     if not employee_codes:
         return {}
     rows = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(
             TaskCenterTask.assigned_ai_employee_code.in_(employee_codes),
             TaskCenterTask.status.in_(("failed", "rejected")),
@@ -463,7 +464,7 @@ def employee_permission_scope(db: Session, employee: AiEmployee):
 
 def load_employee_recent_tasks(db: Session, employee_code: str, limit: int = 10):
     return (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .limit(limit)
@@ -473,7 +474,7 @@ def load_employee_recent_tasks(db: Session, employee_code: str, limit: int = 10)
 
 def load_employee_success_stats(db: Session, employee_code: str):
     total = (
-        db.query(func.count(TaskCenterTask.id))
+        owned_tasks_query(db).with_entities(func.count(TaskCenterTask.id))
         .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
         .scalar()
         or 0
@@ -481,13 +482,13 @@ def load_employee_success_stats(db: Session, employee_code: str):
     success_statuses = ("accepted", "audited", "summarized", "completed", "success")
     failed_statuses = ("failed", "rejected", "timeout")
     success_count = (
-        db.query(func.count(TaskCenterTask.id))
+        owned_tasks_query(db).with_entities(func.count(TaskCenterTask.id))
         .filter(TaskCenterTask.assigned_ai_employee_code == employee_code, TaskCenterTask.status.in_(success_statuses))
         .scalar()
         or 0
     )
     failed_count = (
-        db.query(func.count(TaskCenterTask.id))
+        owned_tasks_query(db).with_entities(func.count(TaskCenterTask.id))
         .filter(TaskCenterTask.assigned_ai_employee_code == employee_code, TaskCenterTask.status.in_(failed_statuses))
         .scalar()
         or 0
@@ -531,7 +532,7 @@ def load_employee_recent_logs(db: Session, employee_code: str, recent_tasks: lis
     rows = []
     if task_ids:
         audit_rows = (
-            db.query(TaskCenterAuditLog)
+            owned_task_rows_query(db, TaskCenterAuditLog, TaskCenterAuditLog.task_id)
             .filter(TaskCenterAuditLog.task_id.in_(task_ids))
             .order_by(TaskCenterAuditLog.created_at.desc(), TaskCenterAuditLog.id.desc())
             .limit(limit)
@@ -575,13 +576,15 @@ def attach_task_metadata(db: Session, tasks: list[TaskCenterTask]):
         return tasks
     task_ids = [task.id for task in tasks]
     result_counts = dict(
-        db.query(TaskCenterResult.task_id, func.count(TaskCenterResult.id))
+        owned_results_query(db).with_entities(TaskCenterResult.task_id, func.count(TaskCenterResult.id))
         .filter(TaskCenterResult.task_id.in_(task_ids))
         .group_by(TaskCenterResult.task_id)
         .all()
     )
     review_counts = dict(
-        db.query(TaskCenterReview.task_id, func.count(TaskCenterReview.id))
+        owned_tasks_query(db)
+        .join(TaskCenterReview, TaskCenterReview.task_id == TaskCenterTask.id)
+        .with_entities(TaskCenterReview.task_id, func.count(TaskCenterReview.id))
         .filter(TaskCenterReview.task_id.in_(task_ids))
         .group_by(TaskCenterReview.task_id)
         .all()
@@ -607,6 +610,7 @@ def require_ai_employee_read(request: Request, db: Session):
     permissions = get_role_permissions(db, normalize_role(user.role))
     if not permissions.intersection({"ai_employees.read", "ai_employees.manage"}):
         raise HTTPException(status_code=403, detail="no AI employee registry permission")
+    bind_session_task_ownership(db, user=user)
     return user
 
 
@@ -645,4 +649,5 @@ def require_ai_task_read(request: Request, db: Session):
     permissions = get_role_permissions(db, normalize_role(user.role))
     if not permissions.intersection({"ai.tasks.read", "ai.tasks.manage", "menu.ai_employees", "menu.workflows"}):
         raise HTTPException(status_code=403, detail="没有AI员工任务访问权限")
+    bind_session_task_ownership(db, user=user)
     return user

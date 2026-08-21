@@ -21,7 +21,6 @@ from pathlib import Path
 
 import psycopg2
 import pytest
-from fastapi.testclient import TestClient
 from psycopg2 import sql
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import make_url
@@ -32,7 +31,6 @@ from tests.test_helpers import latest_alembic_head_line
 
 ROOT = Path(__file__).resolve().parents[1]
 FIX_COMMIT_ENV = "MIGRATION_CODE_FIX_COMMIT"
-ADMIN_URL_ENV = "V2_ALPHA_POSTGRES_ADMIN_URL"
 KNOWN_BROKEN_HISTORICAL_BASELINE = "2ca1a2579569324ce3ca82f68332fb7f96be004d"
 FINAL_REVISION = "0042_v2_alpha_workflow_unique_constraints"
 FROZEN_0037_COMMIT = "85586868bad3dd5d0fecba5f840383feccdc1c78"
@@ -50,21 +48,6 @@ EXPECTED_0042_COLUMNS = {
     "research_report_id",
     "skill_invocation_id",
 }
-ALPHA_FLAGS = {
-    "ALPHA_WORKFLOW_ENABLED": "true",
-    "ALPHA_WORKFLOW_DASHBOARD_ENABLED": "true",
-    "PUBLIC_RESEARCH_ENABLED": "true",
-    "PUBLIC_SEARCH_ENABLED": "true",
-    "PUBLIC_SEARCH_PROVIDER": "mock",
-    "KNOWLEDGE_CENTER_ENABLED": "true",
-    "KNOWLEDGE_SUBMISSION_ENABLED": "true",
-    "KNOWLEDGE_LOCAL_SEARCH_ENABLED": "true",
-    "SKILLS_ENGINE_ENABLED": "true",
-    "SKILL_INSTALLATION_ENABLED": "true",
-    "SKILL_INVOCATION_ENABLED": "true",
-}
-
-
 def git(*args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=ROOT, check=True, text=True, capture_output=True
@@ -97,43 +80,6 @@ def alembic(cwd: Path, database_url: str, *args: str, check: bool = True):
 
 
 @pytest.fixture(scope="module")
-def postgres_database_factory():
-    raw_admin_url = os.getenv(ADMIN_URL_ENV)
-    assert raw_admin_url, f"真实PostgreSQL专项要求设置 {ADMIN_URL_ENV}"
-    admin_url = make_url(raw_admin_url)
-    assert admin_url.get_backend_name() == "postgresql", "Migration专项禁止SQLite或其它数据库"
-    admin_dsn = admin_url.set(drivername="postgresql").render_as_string(hide_password=False)
-    created: list[str] = []
-
-    def create_database(label: str) -> str:
-        name = f"alpha_s11_{label}_{uuid.uuid4().hex[:12]}"
-        connection = psycopg2.connect(admin_dsn)
-        connection.autocommit = True
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
-        finally:
-            connection.close()
-        created.append(name)
-        return admin_url.set(database=name).render_as_string(hide_password=False)
-
-    yield create_database
-
-    connection = psycopg2.connect(admin_dsn)
-    connection.autocommit = True
-    try:
-        with connection.cursor() as cursor:
-            for name in created:
-                cursor.execute(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
-                    (name,),
-                )
-                cursor.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
-    finally:
-        connection.close()
-
-
-@pytest.fixture(scope="module")
 def migration_fix_commit():
     commit = os.getenv(FIX_COMMIT_ENV)
     assert commit, f"收到修复后必须设置 {FIX_COMMIT_ENV}"
@@ -142,64 +88,6 @@ def migration_fix_commit():
         ["git", "merge-base", "--is-ancestor", commit, "HEAD"], cwd=ROOT
     ).returncode == 0, "MIGRATION_CODE_FIX_COMMIT尚未合并到测试分支"
     return commit
-
-
-@pytest.fixture()
-def alpha_enabled(monkeypatch):
-    from backend.config import get_settings
-
-    for key, value in ALPHA_FLAGS.items():
-        monkeypatch.setenv(key, value)
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
-@pytest.fixture()
-def postgres_alpha_runtime(postgres_database_factory, alpha_enabled, monkeypatch):
-    """Run the HTTP workflow against an isolated migrated PostgreSQL database."""
-    from conftest import FakeRedis, seed_database
-    from backend.database import get_db
-    from backend.main import app
-
-    database_url = postgres_database_factory("alpha_api")
-    alembic(ROOT, database_url, "upgrade", "head")
-    engine = create_engine(database_url)
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    previous_overrides = app.dependency_overrides.copy()
-
-    def override_db():
-        db = session_factory()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[get_db] = override_db
-    fake_redis = FakeRedis()
-    for target in (
-        "backend.database.get_redis",
-        "backend.auth.get_redis",
-        "backend.queue.get_redis",
-        "backend.task_queue.get_redis",
-        "backend.brain_execution.queue.get_redis",
-        "backend.execution_engine.get_redis",
-        "backend.command_center.orchestration_view.get_redis",
-        "backend.routers.metrics.get_redis",
-        "backend.routers.ai_employees.get_redis",
-        "backend.routers.deploy_center.get_redis",
-        "backend.main.get_redis",
-    ):
-        monkeypatch.setattr(target, lambda: fake_redis)
-    seed_database(session_factory)
-    client = TestClient(app)
-    login = client.post("/api/login", json={"username": "boss", "password": "password"})
-    assert login.status_code == 200
-    headers = {"Authorization": f"Bearer {login.json()['token']}"}
-    yield client, headers, session_factory
-    app.dependency_overrides.clear()
-    app.dependency_overrides.update(previous_overrides)
-    engine.dispose()
 
 
 def extract_git_tree(commit: str, destination: Path) -> None:
@@ -467,6 +355,34 @@ def _assert_r49_existing_objects_unchanged(before, after):
         assert set(previous["primary_keys"]) <= set(after[name]["primary_keys"]), name
         for identity, digest in previous["objects"].items():
             assert after[name]["objects"][identity] == digest, (name, identity)
+
+
+def _r70_taskcenter_state(db):
+    from backend.models import TaskCenterAuditLog, TaskCenterReview
+
+    state = _r49_alpha_object_state(db)
+
+    def canonical(value):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+    for name, model in (
+        ("task_reviews", TaskCenterReview),
+        ("task_audit_logs", TaskCenterAuditLog),
+    ):
+        rows = db.query(model).order_by(model.id.asc()).all()
+        payloads = [
+            {column.name: getattr(row, column.name) for column in model.__table__.columns}
+            for row in rows
+        ]
+        state[name] = {
+            "primary_keys": tuple(canonical([row.id]) for row in rows),
+            "objects": {
+                canonical([row.id]): hashlib.sha256(canonical(payload).encode("utf-8")).hexdigest()
+                for row, payload in zip(rows, payloads)
+            },
+            "content_sha256": hashlib.sha256(canonical(payloads).encode("utf-8")).hexdigest(),
+        }
+    return state
 
 
 def _r49_request_hash(identity):
@@ -1136,6 +1052,236 @@ def test_r49_missing_trace_ownership_scope_matrix(postgres_alpha_runtime):
         assert _r49_alpha_object_state(db) == before_rejected_reads
 
 
+def test_r70_task_center_scope_is_sql_filtered_and_non_enumerating(postgres_alpha_runtime):
+    from backend.alpha_workflow.models import AlphaWorkflowRun
+    from backend.models import TaskCenterResult, User, UserStoreMembership
+    from backend.skills_engine.models import SkillInvocation
+
+    client, boss_headers, test_db = postgres_alpha_runtime
+    created = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "R70 TaskCenter ownership source"},
+    )
+    assert created.status_code == 200
+    run = created.json()["run"]
+    task_id = run["task_id"]
+
+    own_list = client.get("/api/task-center/tasks", headers=boss_headers)
+    own_detail = client.get(f"/api/task-center/tasks/{task_id}", headers=boss_headers)
+    own_results = client.get(f"/api/task-center/tasks/{task_id}/results", headers=boss_headers)
+    assert own_list.status_code == own_detail.status_code == own_results.status_code == 200
+    assert task_id in {item["id"] for item in own_list.json()}
+    assert len(own_detail.json()["results"]) == len(own_results.json()) == 2
+
+    with test_db() as db:
+        stored_run = db.get(AlphaWorkflowRun, run["run_id"])
+        context = json.loads(stored_run.workflow_context_json)
+        invocation = db.get(SkillInvocation, stored_run.skill_invocation_id)
+        result_rows = (
+            db.query(TaskCenterResult)
+            .filter(TaskCenterResult.task_id == task_id)
+            .order_by(TaskCenterResult.id.asc())
+            .all()
+        )
+        expected_result_ids = {row.id for row in result_rows}
+        assert len(result_rows) == 2
+        assert {row.result_content for row in result_rows} == {
+            invocation.output_summary,
+            context["report_content"],
+        }
+        boss = db.query(User).filter(User.username == "boss").one()
+        boss_store_id = db.query(UserStoreMembership.store_id).filter(
+            UserStoreMembership.user_id == boss.id,
+            UserStoreMembership.active.is_(True),
+            UserStoreMembership.can_read.is_(True),
+        ).one()[0]
+        boss_scope = (boss.id, boss.tenant_id, boss.company_id, boss_store_id)
+
+    for result_id in expected_result_ids:
+        result_detail = client.get(
+            f"/api/task-center/tasks/{task_id}/results/{result_id}", headers=boss_headers
+        )
+        assert result_detail.status_code == 200
+        assert result_detail.json()["id"] == result_id
+
+    replay = client.post(
+        "/api/v2/alpha-workflows/demo",
+        headers=boss_headers,
+        json={"input_text": "R70 TaskCenter ownership source"},
+    )
+    assert replay.status_code == 200
+    assert replay.json()["run"]["run_id"] == run["run_id"]
+    replay_results = client.get(f"/api/task-center/tasks/{task_id}/results", headers=boss_headers)
+    assert {row["id"] for row in replay_results.json()} == expected_result_ids
+
+    non_alpha = client.post(
+        "/api/task-center/tasks",
+        headers=boss_headers,
+        json={"title": "R70 owned non-Alpha task", "description": "private task input"},
+    )
+    assert non_alpha.status_code == 200
+    non_alpha_task_id = non_alpha.json()["task"]["id"]
+
+    tenant_headers, tenant_scope = _create_scoped_owner(client, test_db, "r70-task-tenant")
+    company_headers, company_scope = _create_scoped_owner(
+        client, test_db, "r70-task-company", tenant_id=boss_scope[1]
+    )
+    shop_headers, shop_scope = _create_scoped_owner(
+        client,
+        test_db,
+        "r70-task-shop",
+        tenant_id=boss_scope[1],
+        company_id=boss_scope[2],
+    )
+    requester_headers, requester_scope = _create_scoped_owner(
+        client,
+        test_db,
+        "r70-task-requester",
+        tenant_id=boss_scope[1],
+        company_id=boss_scope[2],
+        store_id=boss_scope[3],
+    )
+    client.cookies.clear()
+    foreign_scopes = (
+        ("tenant", tenant_headers, tenant_scope),
+        ("company", company_headers, company_scope),
+        ("shop", shop_headers, shop_scope),
+        ("requester", requester_headers, requester_scope),
+    )
+
+    with test_db() as db:
+        before_rejections = _r70_taskcenter_state(db)
+
+    mutation_requests = (
+        ("patch", "status", {"status": "summarized", "detail": "foreign"}),
+        ("post", "assign", {"ai_employee_code": "tianwang"}),
+        ("post", "start", None),
+        ("post", "results", {"result_content": "foreign result"}),
+        ("post", "reviews", {"review_status": "accepted", "comment": "foreign"}),
+        ("post", "audits", {"review_status": "audited", "comment": "foreign"}),
+        ("post", "summary", {"summary": "foreign summary"}),
+    )
+    missing_task_id = 2_147_483_647
+    missing_result_id = 2_147_483_647
+    for dimension, headers, _scope in foreign_scopes:
+        listed = client.get("/api/task-center/tasks", headers=headers)
+        assert listed.status_code == 200
+        assert {task_id, non_alpha_task_id}.isdisjoint({item["id"] for item in listed.json()})
+
+        foreign_detail = client.get(f"/api/task-center/tasks/{task_id}", headers=headers)
+        missing_detail = client.get(f"/api/task-center/tasks/{missing_task_id}", headers=headers)
+        assert (foreign_detail.status_code, foreign_detail.json()) == (
+            missing_detail.status_code,
+            missing_detail.json(),
+        ) == (404, {"detail": "task not found"}), dimension
+
+        foreign_results = client.get(f"/api/task-center/tasks/{task_id}/results", headers=headers)
+        missing_results = client.get(
+            f"/api/task-center/tasks/{missing_task_id}/results", headers=headers
+        )
+        assert (foreign_results.status_code, foreign_results.json()) == (
+            missing_results.status_code,
+            missing_results.json(),
+        ) == (404, {"detail": "task not found"}), dimension
+
+        foreign_result = client.get(
+            f"/api/task-center/tasks/{task_id}/results/{next(iter(expected_result_ids))}",
+            headers=headers,
+        )
+        missing_result = client.get(
+            f"/api/task-center/tasks/{task_id}/results/{missing_result_id}", headers=headers
+        )
+        assert (foreign_result.status_code, foreign_result.json()) == (
+            missing_result.status_code,
+            missing_result.json(),
+        ) == (404, {"detail": "result not found"}), dimension
+
+        for method, suffix, payload in mutation_requests:
+            foreign_response = getattr(client, method)(
+                f"/api/task-center/tasks/{task_id}/{suffix}", headers=headers, json=payload
+            )
+            missing_response = getattr(client, method)(
+                f"/api/task-center/tasks/{missing_task_id}/{suffix}", headers=headers, json=payload
+            )
+            assert (foreign_response.status_code, foreign_response.json()) == (
+                missing_response.status_code,
+                missing_response.json(),
+            ) == (404, {"detail": "task not found"}), (dimension, suffix)
+
+        foreign_parent = client.post(
+            "/api/task-center/tasks",
+            headers=headers,
+            json={"title": "foreign child", "parent_task_id": non_alpha_task_id},
+        )
+        missing_parent = client.post(
+            "/api/task-center/tasks",
+            headers=headers,
+            json={"title": "missing child", "parent_task_id": missing_task_id},
+        )
+        assert (foreign_parent.status_code, foreign_parent.json()) == (
+            missing_parent.status_code,
+            missing_parent.json(),
+        ) == (404, {"detail": "parent task not found"}), dimension
+
+    with test_db() as db:
+        assert _r70_taskcenter_state(db) == before_rejections
+
+
+def test_0045_to_0046_task_ownership_legacy_fail_closed_roundtrip(postgres_database_factory):
+    database_url = postgres_database_factory("legacy_task_ownership")
+    alembic(ROOT, database_url, "upgrade", "0045_brain_task_graph_scope_identity")
+    dsn = make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)
+    with psycopg2.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO task_center_tasks (title, status, priority, source) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                ("legacy ownerless task", "created", "normal", "legacy"),
+            )
+            task_id = cursor.fetchone()[0]
+            cursor.execute(
+                "INSERT INTO task_center_results "
+                "(task_id, ai_employee_code, result_content, attachments_json) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (task_id, "legacy", "legacy private result", "[]"),
+            )
+            result_id = cursor.fetchone()[0]
+        connection.commit()
+
+    alembic(ROOT, database_url, "upgrade", "head")
+    with psycopg2.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT tenant_id, company_id, requester_id, store_scope_key, "
+                "ownership_scope_key, canonical_run_id FROM task_center_tasks WHERE id=%s",
+                (task_id,),
+            )
+            assert cursor.fetchone() == (None, None, None, None, None, None)
+            cursor.execute("SELECT task_id, result_content FROM task_center_results WHERE id=%s", (result_id,))
+            assert cursor.fetchone() == (task_id, "legacy private result")
+
+    alembic(ROOT, database_url, "downgrade", "0045_brain_task_graph_scope_identity")
+    with psycopg2.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT title FROM task_center_tasks WHERE id=%s", (task_id,))
+            assert cursor.fetchone() == ("legacy ownerless task",)
+            cursor.execute("SELECT result_content FROM task_center_results WHERE id=%s", (result_id,))
+            assert cursor.fetchone() == ("legacy private result",)
+
+    alembic(ROOT, database_url, "upgrade", "head")
+    with psycopg2.connect(dsn) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT tenant_id, company_id, requester_id, store_scope_key, "
+                "ownership_scope_key, canonical_run_id FROM task_center_tasks WHERE id=%s",
+                (task_id,),
+            )
+            assert cursor.fetchone() == (None, None, None, None, None, None)
+            cursor.execute("SELECT count(*) FROM task_center_results WHERE id=%s", (result_id,))
+            assert cursor.fetchone()[0] == 1
+
+
 def test_same_idempotency_key_returns_existing_run_without_new_rows(
     postgres_alpha_runtime,
 ):
@@ -1650,9 +1796,10 @@ def test_0005_complete_postgresql_chain_reaches_head(postgres_database_factory, 
     assert alembic(ROOT, database_url, "current").stdout.strip() == latest_alembic_head_line()
 
 
-def make_agent_execution(db: Session):
+def make_agent_execution(db: Session, *, owner=None):
     from backend.agent_runtime.models import AgentCapability, AgentExecution
     from backend.models import TaskCenterTask
+    from backend.task_center_ownership import bind_session_task_ownership, bind_task_ownership
 
     task = TaskCenterTask(
         title="Research persistence regression",
@@ -1679,7 +1826,11 @@ def make_agent_execution(db: Session):
         approval_status="not_required",
         executor_type="research",
         trace_id=f"research-trace-{uuid.uuid4()}",
+        created_by_id=owner.id if owner is not None else None,
     )
+    if owner is not None:
+        bind_session_task_ownership(db, user=owner)
+        bind_task_ownership(db, task, user=owner)
     db.add_all([task, capability])
     db.flush()
     execution.task_id = task.id
@@ -1858,38 +2009,86 @@ def test_research_upsert_never_rebinds_rows_across_executions(
     postgres_database_factory, migration_fix_commit, monkeypatch
 ):
     from backend.agent_runtime.models import AgentExecution
-    from backend.models import TaskCenterTask
-    from backend.research_runtime.models import ResearchQuery, ResearchSource
+    from backend.brain_orchestrator.planner import resolve_graph_ownership
+    from backend.models import Company, TaskCenterAuditLog, TaskCenterResult, TaskCenterTask, Tenant, User
     from backend.research_runtime.exceptions import ResearchPersistenceError
+    from backend.research_runtime.models import ResearchExecution, ResearchQuery, ResearchSource
     from backend.research_runtime import service as research_service
     from backend.research_runtime.service import persist_research_result
+    from backend.task_center_ownership import bind_session_task_ownership, owned_task_or_none
 
     del migration_fix_commit
     database_url = postgres_database_factory("research_execution_scope")
     alembic(ROOT, database_url, "upgrade", "head")
     engine = create_engine(database_url)
     SessionLocal = sessionmaker(bind=engine)
+
+    def assert_owner_bound_task(db, task_id, owner):
+        scope = resolve_graph_ownership(db, owner)
+        task = owned_task_or_none(db, task_id=task_id, user=owner)
+        assert task is not None
+        assert task.tenant_id == scope.tenant_id == owner.tenant_id
+        assert task.company_id == scope.company_id == owner.company_id
+        assert task.requester_id == scope.requester_id == owner.id
+        assert task.store_scope_key == scope.store_scope_key
+        assert task.ownership_scope_key == scope.ownership_scope_key
+        return task
+
     with SessionLocal() as db:
-        first_execution, first_task_id = make_agent_execution(db)
+        tenant = db.query(Tenant).filter(Tenant.tenant_code == "default").one()
+        company = db.query(Company).filter(
+            Company.tenant_id == tenant.id,
+            Company.company_code == "default",
+        ).one()
+        owner = User(
+            username="research-persistence-owner",
+            password_hash="not-used",
+            role="owner",
+            display_name="Research Persistence Owner",
+            tenant_id=tenant.id,
+            company_id=company.id,
+            active=True,
+        )
+        db.add(owner)
+        db.flush()
+        owner_id = int(owner.id)
+        first_execution, first_task_id = make_agent_execution(db, owner=owner)
+        first_task_id = int(first_task_id)
         first_execution_id = first_execution.execution_id
+        assert first_execution.created_by_id == owner_id
+        assert_owner_bound_task(db, first_task_id, owner)
         input_payload, output_payload = research_payload(first_execution_id)
         output_payload["evidence"] = []
         persist_research_result(db, first_execution, input_payload, output_payload)
         db.commit()
 
     with SessionLocal() as db:
+        owner = db.get(User, owner_id)
+        assert owner is not None
+        bind_session_task_ownership(db, user=owner)
         first_execution = db.get(AgentExecution, first_execution_id)
+        assert first_execution.created_by_id == owner_id
+        assert_owner_bound_task(db, first_task_id, owner)
         persist_research_result(db, first_execution, input_payload, output_payload)
         db.commit()
-        second_execution, _second_task_id = make_agent_execution(db)
+        second_execution, second_task_id = make_agent_execution(db, owner=owner)
+        second_task_id = int(second_task_id)
         second_execution_id = second_execution.execution_id
+        assert second_execution.created_by_id == owner_id
+        assert_owner_bound_task(db, second_task_id, owner)
         persist_research_result(db, second_execution, input_payload, output_payload)
         db.commit()
 
     with SessionLocal() as db:
+        owner = db.get(User, owner_id)
+        assert owner is not None
+        bind_session_task_ownership(db, user=owner)
         forced_query_id = db.query(ResearchQuery.query_id).filter(ResearchQuery.execution_id == first_execution_id).order_by(ResearchQuery.query_id).first()[0]
-        third_execution, _third_task_id = make_agent_execution(db)
+        third_execution, third_task_id = make_agent_execution(db, owner=owner)
+        third_task_id = int(third_task_id)
         third_execution_id = third_execution.execution_id
+        assert third_execution.created_by_id == owner_id
+        assert_owner_bound_task(db, third_task_id, owner)
         original_stable_id = research_service.stable_research_id
 
         def collide_with_first_execution(execution_id, resource_type, *components):
@@ -1904,6 +2103,22 @@ def test_research_upsert_never_rebinds_rows_across_executions(
 
     violations = []
     with SessionLocal() as db:
+        owner = db.get(User, owner_id)
+        assert owner is not None
+        bind_session_task_ownership(db, user=owner)
+        task_ids = {row.id for row in db.query(TaskCenterTask)}
+        execution_rows = db.query(AgentExecution).order_by(AgentExecution.execution_id).all()
+        research_rows = db.query(ResearchExecution).order_by(ResearchExecution.execution_id).all()
+        assert task_ids == {first_task_id, second_task_id, third_task_id}
+        assert len(execution_rows) == 3
+        assert {row.task_id for row in execution_rows} == task_ids
+        assert {row.created_by_id for row in execution_rows} == {owner_id}
+        assert len(research_rows) == 2
+        assert {row.execution_id for row in research_rows} == {first_execution_id, second_execution_id}
+        assert {row.task_id for row in research_rows} == {first_task_id, second_task_id}
+        assert {row.created_by_id for row in research_rows} == {owner_id}
+        for task_id in task_ids:
+            assert_owner_bound_task(db, task_id, owner)
         first_ids = {row.query_id for row in db.query(ResearchQuery).filter(ResearchQuery.execution_id == first_execution_id)}
         second_ids = {row.query_id for row in db.query(ResearchQuery).filter(ResearchQuery.execution_id == second_execution_id)}
         if not first_ids or not second_ids or first_ids & second_ids:
@@ -1912,13 +2127,24 @@ def test_research_upsert_never_rebinds_rows_across_executions(
             violations.append("跨Execution冲突改绑了既有Query")
         if db.query(ResearchQuery).filter(ResearchQuery.execution_id == third_execution_id).count() != 0:
             violations.append("跨Execution Upsert拒绝后仍产生第三套Query")
+        if db.query(ResearchExecution).filter(ResearchExecution.execution_id == third_execution_id).count() != 0:
+            violations.append("跨Execution Upsert拒绝后仍产生第三套ResearchExecution")
         for source in db.query(ResearchSource):
             query = db.get(ResearchQuery, source.query_id) if source.query_id else None
             if query is None or query.execution_id != source.execution_id:
                 violations.append(f"Source未引用同Execution真实Query：{source.source_id}")
         summary = db.get(TaskCenterTask, first_task_id).summary or ""
+        expected_marker = f"[V2 Research] {output_payload['report_title']}: {output_payload['report_hash']}"
+        if summary.count(expected_marker) != 1:
+            violations.append(f"Task summary缺少精确Research marker：{summary.count(expected_marker)}次")
         if summary.count("[V2 Research]") != 1:
             violations.append(f"重复persist导致Task summary重复：{summary.count('[V2 Research]')}次")
+        first_research = db.get(ResearchExecution, first_execution_id)
+        assert first_research.report_title == output_payload["report_title"]
+        assert first_research.report_content == output_payload["report_content"]
+        assert first_research.report_hash == output_payload["report_hash"]
+        assert db.query(TaskCenterResult).count() == 0
+        assert db.query(TaskCenterAuditLog).count() == 0
     engine.dispose()
     assert not violations, "；".join(violations)
 

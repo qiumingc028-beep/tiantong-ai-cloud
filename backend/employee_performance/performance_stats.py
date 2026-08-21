@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.employee_capability import get_employee_profile
 from backend.models import AiEmployee, TaskCenterTask
+from backend.task_center_ownership import owned_tasks_query
 
 
 COMPLETED_STATUSES = {"accepted", "audited", "completed", "summarized"}
@@ -23,7 +24,7 @@ def build_employee_performance_stats(db: Session) -> list[dict[str, Any]]:
         .order_by(AiEmployee.sort_order.asc(), AiEmployee.id.asc())
         .all()
     )
-    tasks = db.query(TaskCenterTask).order_by(TaskCenterTask.id.desc()).limit(500).all()
+    tasks = owned_tasks_query(db).order_by(TaskCenterTask.id.desc()).limit(500).all()
     return [build_single_employee_stats(employee, tasks) for employee in employees]
 
 

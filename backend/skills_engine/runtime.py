@@ -14,6 +14,7 @@ from ..agent_runtime.executors.computer.schemas import ComputerActionPayload, Co
 from ..knowledge_center.knowledge_search import search_knowledge
 from .models import Skill, SkillInvocation
 from .registry import audit_employee_log, json_text, skill_to_dict, utcnow
+from ..task_center_ownership import owned_task_or_none
 
 
 @dataclass
@@ -260,6 +261,10 @@ def finalize_invocation(db: Session, invocation: SkillInvocation, result: Runtim
     )
     if task_id is not None:
         from ..models import TaskCenterResult
+
+        task = owned_task_or_none(db, task_id=task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
 
         db.add(
             TaskCenterResult(

@@ -31,6 +31,7 @@ from ..skills_engine.service import (
     update_skill,
     reject_skill,
 )
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/v2/skills")
@@ -177,6 +178,7 @@ def api_disable_skill(skill_id: int, payload: SkillInstallPayload, request: Requ
 def api_invoke_skill(skill_id: int, payload: SkillInvokePayload, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("SKILLS_ENGINE_ENABLED")
     user = require_skills_manage_user(request, db)
+    bind_session_task_ownership(db, user=user)
     skill = get_skill_or_404(db, skill_id)
     return {"ok": True, "invocation": invoke_skill(db, skill, payload, user)}
 

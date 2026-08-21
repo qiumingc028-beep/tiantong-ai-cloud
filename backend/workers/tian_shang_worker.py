@@ -12,7 +12,8 @@ from ..database import get_redis
 from ..employee_execution.ai_executor import execute_tian_shang_plan
 from ..employee_execution.ai_planner import build_tian_shang_plan
 from ..employee_execution.models import EmployeeExecutionContract
-from ..models import TaskCenterResult, TaskCenterTask
+from ..models import TaskCenterResult, TaskCenterTask, User
+from ..task_center_ownership import bind_task_ownership, owned_task_from_context_or_none, task_ownership_context
 
 
 logger = logging.getLogger("tiantong.tian_shang_worker")
@@ -23,7 +24,7 @@ TIAN_SHANG_EMPLOYEE_NAME = "天商：商品中心"
 CONTRACT_STATUSES = {"CREATED", "PLANNING", "EXECUTING", "WAITING_TOOL", "COMPLETED", "REVIEWED", "FAILED"}
 
 
-def create_tian_shang_task(db: Session, goal: str, created_by_id: int | None = None, enqueue: bool = True) -> dict:
+def create_tian_shang_task(db: Session, goal: str, user: User, enqueue: bool = True) -> dict:
     plan = build_tian_shang_plan(goal)
     task = TaskCenterTask(
         title=f"Sprint26 天商真实执行 MVP：{plan['goal']}",
@@ -34,14 +35,15 @@ def create_tian_shang_task(db: Session, goal: str, created_by_id: int | None = N
         assigned_ai_employee_code=TIAN_SHANG_EMPLOYEE_ID,
         assigned_ai_employee_name=TIAN_SHANG_EMPLOYEE_NAME,
         split_plan=json.dumps(plan, ensure_ascii=False),
-        created_by_id=created_by_id,
+        created_by_id=user.id,
     )
+    bind_task_ownership(db, task, user=user)
     db.add(task)
     db.commit()
     db.refresh(task)
     contract = create_contract_for_task(db, task, plan)
     if enqueue:
-        enqueue_tian_shang_contract(contract.id)
+        enqueue_tian_shang_contract(contract.id, task)
     return {"task": task_to_dict(task), "contract": contract_to_dict(contract), "queued": enqueue}
 
 
@@ -64,8 +66,13 @@ def create_contract_for_task(db: Session, task: TaskCenterTask, plan: dict | Non
     return contract
 
 
-def enqueue_tian_shang_contract(contract_id: int) -> dict:
-    item = {"contract_id": int(contract_id), "employee_id": TIAN_SHANG_EMPLOYEE_ID, "queued_at": utc_now()}
+def enqueue_tian_shang_contract(contract_id: int, task: TaskCenterTask) -> dict:
+    item = {
+        "contract_id": int(contract_id),
+        "employee_id": TIAN_SHANG_EMPLOYEE_ID,
+        "queued_at": utc_now(),
+        "ownership": task_ownership_context(task),
+    }
     get_redis().rpush(TIAN_SHANG_QUEUE, json.dumps(item, ensure_ascii=False))
     return item
 
@@ -89,8 +96,15 @@ def process_next_tian_shang_execution(db: Session, timeout: int = 1) -> bool:
     contract = db.get(EmployeeExecutionContract, int(item["contract_id"]))
     if not contract or contract.status not in {"CREATED", "PLANNING"}:
         return False
+    task = (
+        owned_task_from_context_or_none(db, task_id=int(contract.task_id), ownership=item.get("ownership"))
+        if str(contract.task_id).isdigit()
+        else None
+    )
+    if task is None:
+        return False
     try:
-        execute_contract(db, contract)
+        execute_contract(db, contract, task=task)
         return True
     except Exception as exc:
         contract.status = "FAILED"
@@ -101,7 +115,7 @@ def process_next_tian_shang_execution(db: Session, timeout: int = 1) -> bool:
         return False
 
 
-def execute_contract(db: Session, contract: EmployeeExecutionContract) -> EmployeeExecutionContract:
+def execute_contract(db: Session, contract: EmployeeExecutionContract, task: TaskCenterTask) -> EmployeeExecutionContract:
     payload = parse_json(contract.input_data)
     goal = payload.get("goal") or payload.get("task_title") or "分析男士机械表市场"
 
@@ -130,13 +144,12 @@ def execute_contract(db: Session, contract: EmployeeExecutionContract) -> Employ
     contract.review_status = "pending_review"
     db.commit()
 
-    write_task_result(db, contract, result)
+    write_task_result(db, contract, result, task=task)
     db.refresh(contract)
     return contract
 
 
-def write_task_result(db: Session, contract: EmployeeExecutionContract, result: dict) -> None:
-    task = db.get(TaskCenterTask, int(contract.task_id)) if str(contract.task_id).isdigit() else None
+def write_task_result(db: Session, contract: EmployeeExecutionContract, result: dict, task: TaskCenterTask) -> None:
     if task:
         task.status = "completed"
         db.add(

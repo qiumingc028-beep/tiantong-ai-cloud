@@ -1,4 +1,6 @@
 from backend import queue, worker
+from backend.models import TaskCenterResult, TaskCenterTask, User
+from backend.task_center_ownership import bind_task_ownership, owned_task_or_none, task_ownership_context
 
 
 def patch_worker_session(monkeypatch, test_db):
@@ -36,7 +38,7 @@ def test_create_assign_execute_and_list_results(client, owner_headers, test_db, 
     assert any(row["task_id"] == task["id"] and row["assigned_to"] == "tiantong" for row in results)
 
 
-def test_api_key_can_create_and_read_tasks(client, monkeypatch):
+def test_api_key_cannot_create_or_read_without_authenticated_scope(client, monkeypatch):
     monkeypatch.setenv("AUTOMATION_API_KEY", "test-api-key")
     headers = {"X-API-Key": "test-api-key"}
 
@@ -45,15 +47,13 @@ def test_api_key_can_create_and_read_tasks(client, monkeypatch):
         headers=headers,
         json={"type": "external_business_task", "input": {"source": "partner"}, "assigned_to": "tiancai_data"},
     )
-    assert create_response.status_code == 200
-    assert create_response.json()["task"]["assigned_to"] == "tiancai_data"
+    assert create_response.status_code == 401
 
     list_response = client.get("/api/tasks", headers=headers)
-    assert list_response.status_code == 200
-    assert any(row["type"] == "external_business_task" for row in list_response.json()["tasks"])
+    assert list_response.status_code == 401
 
 
-def test_api_key_can_trigger_flow_and_read_results(client, monkeypatch):
+def test_api_key_cannot_trigger_flow_or_read_results_without_authenticated_scope(client, monkeypatch):
     monkeypatch.setenv("AUTOMATION_API_KEY", "test-api-key")
     headers = {"X-API-Key": "test-api-key"}
 
@@ -62,29 +62,25 @@ def test_api_key_can_trigger_flow_and_read_results(client, monkeypatch):
         headers=headers,
         json={"input": {"seed": "api-key-flow"}},
     )
-    assert flow_response.status_code == 200
-    assert flow_response.json()["chain"] == ["tiancai_data", "tianshu", "tiance_strategy", "tianbo"]
+    assert flow_response.status_code == 401
 
     results_response = client.get("/api/results", headers=headers)
-    assert results_response.status_code == 200
-    assert "results" in results_response.json()
+    assert results_response.status_code == 401
 
 
-def test_internal_bypass_can_read_results(client, monkeypatch):
+def test_internal_bypass_cannot_read_results_without_authenticated_scope(client, monkeypatch):
     response = client.get("/api/results", headers={"X-Internal-Bypass": "true"})
-    assert response.status_code == 200
-    assert "results" in response.json()
+    assert response.status_code == 401
 
 
-def test_webhook_secret_triggers_task_without_login(client, monkeypatch):
+def test_webhook_secret_cannot_trigger_task_without_authenticated_scope(client, monkeypatch):
     monkeypatch.setenv("WEBHOOK_SECRET", "webhook-secret")
     response = client.post(
         "/api/webhooks/tasks",
         headers={"X-Webhook-Secret": "webhook-secret"},
         json={"type": "webhook_external_task", "input": {"sku": "A1"}, "assigned_to": "tiancai_data"},
     )
-    assert response.status_code == 200
-    assert response.json()["trigger"] == "webhook"
+    assert response.status_code == 401
 
 
 def test_webhook_requires_auth_when_secret_mismatch(client, monkeypatch):
@@ -171,13 +167,13 @@ def test_tiancai_tianshu_tiance_tianbo_flow(client, owner_headers, test_db, monk
     assert ordered[3]["input"]["assigned_to"] == "tiance_strategy"
 
 
-def test_webhook_can_trigger_business_flow(client, test_db, monkeypatch):
+def test_webhook_can_trigger_business_flow(client, owner_headers, test_db, monkeypatch):
     patch_worker_session(monkeypatch, test_db)
     monkeypatch.setenv("AUTOMATION_API_KEY", "test-api-key")
 
     response = client.post(
         "/api/webhooks/tasks",
-        headers={"X-API-Key": "test-api-key"},
+        headers={**owner_headers, "X-API-Key": "test-api-key"},
         json={"flow": "tiancai-tianshu-tiance-tianbo", "input": {"trigger": "webhook"}},
     )
     assert response.status_code == 200
@@ -223,14 +219,86 @@ def test_feedback_loop_reuses_result_as_next_input(client, owner_headers, test_d
 def test_daily_scheduler_creates_one_business_flow(test_db, monkeypatch):
     patch_worker_session(monkeypatch, test_db)
 
-    worker.run_daily_scheduler()
-    worker.run_daily_scheduler()
-
     db = test_db()
     try:
-        rows = db.query(worker.TaskCenterTask).filter(worker.TaskCenterTask.source == "sprint17_ai_execution").all()
+        owner = db.query(User).filter(User.username == "owner").one()
+        admin = db.query(User).filter(User.username == "admin").one()
+
+        def create_source(user, *, tampered=False):
+            source = TaskCenterTask(
+                title=f"Daily scheduler ownership source for {user.username}",
+                status="completed",
+                source=worker.DAILY_SCHEDULER_OWNERSHIP_SOURCE,
+            )
+            scope = bind_task_ownership(db, source, user=user)
+            if tampered:
+                source.ownership_scope_key = "0" * 64
+            db.add(source)
+            db.commit()
+            db.refresh(source)
+            return source, scope
+
+        def scheduled_tasks():
+            return (
+                db.query(TaskCenterTask)
+                .filter(TaskCenterTask.source == "sprint17_ai_execution")
+                .order_by(TaskCenterTask.id.asc())
+                .all()
+            )
+
+        worker.run_daily_scheduler()
+        assert scheduled_tasks() == []
+        assert queue.get_redis().lists.get(queue.QUEUE_NAME, []) == []
+
+        create_source(owner, tampered=True)
+        worker.run_daily_scheduler()
+        assert scheduled_tasks() == []
+        assert queue.get_redis().lists.get(queue.QUEUE_NAME, []) == []
+
+        owner_source, owner_scope = create_source(owner)
+        assert task_ownership_context(owner_source) == {
+            "tenant_id": owner_scope.tenant_id,
+            "company_id": owner_scope.company_id,
+            "requester_id": owner_scope.requester_id,
+            "store_scope_key": owner_scope.store_scope_key,
+            "ownership_scope_key": owner_scope.ownership_scope_key,
+            "canonical_run_id": None,
+        }
+
+        worker.run_daily_scheduler()
+        worker.run_daily_scheduler()
+
+        rows = scheduled_tasks()
         assert len(rows) == 1
-        assert rows[0].assigned_ai_employee_code == "tiancai_data"
+        task = rows[0]
+        assert task.assigned_ai_employee_code == "tiancai_data"
+        assert task.parent_task_id == owner_source.id
+        assert task_ownership_context(task) == task_ownership_context(owner_source)
+        assert owned_task_or_none(db, task_id=task.id, user=owner).id == task.id
+        assert owned_task_or_none(db, task_id=task.id, user=admin) is None
+        assert len(queue.get_redis().lists[queue.QUEUE_NAME]) == 1
+
+        admin_source, admin_scope = create_source(admin)
+        worker.run_daily_scheduler()
+        worker.run_daily_scheduler()
+
+        rows = scheduled_tasks()
+        assert len(rows) == 2
+        tasks_by_scope = {row.ownership_scope_key: row for row in rows}
+        assert set(tasks_by_scope) == {owner_scope.ownership_scope_key, admin_scope.ownership_scope_key}
+        assert tasks_by_scope[owner_scope.ownership_scope_key].parent_task_id == owner_source.id
+        assert tasks_by_scope[admin_scope.ownership_scope_key].parent_task_id == admin_source.id
+        assert owned_task_or_none(db, task_id=tasks_by_scope[owner_scope.ownership_scope_key].id, user=admin) is None
+        assert owned_task_or_none(db, task_id=tasks_by_scope[admin_scope.ownership_scope_key].id, user=owner) is None
+        scheduler_keys = {
+            key for key in queue.get_redis().values if key.startswith(worker.DAILY_SCHEDULER_PREFIX)
+        }
+        assert scheduler_keys == {
+            f"{worker.DAILY_SCHEDULER_PREFIX}{worker.date.today().isoformat()}:{owner_scope.ownership_scope_key}",
+            f"{worker.DAILY_SCHEDULER_PREFIX}{worker.date.today().isoformat()}:{admin_scope.ownership_scope_key}",
+        }
+        assert len(queue.get_redis().lists[queue.QUEUE_NAME]) == 2
+        assert db.query(TaskCenterResult).count() == 0
     finally:
         db.close()
 

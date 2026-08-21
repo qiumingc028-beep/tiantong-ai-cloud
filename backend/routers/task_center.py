@@ -10,6 +10,13 @@ from sqlalchemy.orm import Session
 from ..auth import current_user, require_permission_user
 from ..database import get_db
 from ..models import AiEmployee, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask, User
+from ..task_center_ownership import (
+    bind_task_ownership,
+    owned_result_or_none,
+    owned_results_query,
+    owned_task_or_none,
+    owned_tasks_query,
+)
 
 
 router = APIRouter(prefix="/api/task-center")
@@ -67,7 +74,7 @@ def create_task(payload: TaskCreate, request: Request, db: Session = Depends(get
     title = payload.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="task title is required")
-    if payload.parent_task_id and not db.get(TaskCenterTask, payload.parent_task_id):
+    if payload.parent_task_id and not owned_task_or_none(db, user=user, task_id=payload.parent_task_id):
         raise HTTPException(status_code=404, detail="parent task not found")
 
     task = TaskCenterTask(
@@ -80,6 +87,7 @@ def create_task(payload: TaskCreate, request: Request, db: Session = Depends(get
         created_by_id=user.id,
         updated_by_id=user.id,
     )
+    bind_task_ownership(db, task, user=user)
     db.add(task)
     db.flush()
     write_audit_log(db, task, user, "task_created", None, task.status, "boss created task")
@@ -90,8 +98,8 @@ def create_task(payload: TaskCreate, request: Request, db: Session = Depends(get
 
 @router.get("/tasks")
 def list_tasks(request: Request, status: str | None = None, db: Session = Depends(get_db)):
-    require_task_read(request, db)
-    query = db.query(TaskCenterTask)
+    user = require_task_read(request, db)
+    query = owned_tasks_query(db, user=user)
     if status:
         query = query.filter(TaskCenterTask.status == status)
     tasks = query.order_by(TaskCenterTask.id.desc()).all()
@@ -100,11 +108,17 @@ def list_tasks(request: Request, status: str | None = None, db: Session = Depend
 
 @router.get("/tasks/{task_id}")
 def get_task(task_id: int, request: Request, db: Session = Depends(get_db)):
-    require_task_read(request, db)
-    task = get_task_or_404(db, task_id)
+    user = require_task_read(request, db)
+    task = get_task_or_404(db, task_id, user=user)
     return {
         **task_to_dict(task),
-        "results": [result_to_dict(row) for row in db.query(TaskCenterResult).filter(TaskCenterResult.task_id == task_id).order_by(TaskCenterResult.id.asc()).all()],
+        "results": [
+            result_to_dict(row)
+            for row in owned_results_query(db, user=user)
+            .filter(TaskCenterResult.task_id == task_id)
+            .order_by(TaskCenterResult.id.asc())
+            .all()
+        ],
         "reviews": [review_to_dict(row) for row in db.query(TaskCenterReview).filter(TaskCenterReview.task_id == task_id).order_by(TaskCenterReview.id.asc()).all()],
     }
 
@@ -113,7 +127,7 @@ def get_task(task_id: int, request: Request, db: Session = Depends(get_db)):
 def update_task_status(task_id: int, payload: TaskStatusUpdate, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "task_center.manage")
     status = normalize_status(payload.status)
-    task = get_task_or_404(db, task_id)
+    task = get_task_or_404(db, task_id, user=user)
     set_task_status(db, task, status, user, "status_updated", payload.detail)
     db.commit()
     db.refresh(task)
@@ -123,7 +137,7 @@ def update_task_status(task_id: int, payload: TaskStatusUpdate, request: Request
 @router.post("/tasks/{task_id}/assign")
 def assign_ai_employee(task_id: int, payload: TaskAssign, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "task_center.manage")
-    task = get_task_or_404(db, task_id)
+    task = get_task_or_404(db, task_id, user=user)
     employee_code = payload.ai_employee_code.strip()
     ai_employee = db.query(AiEmployee).filter(AiEmployee.employee_code == employee_code).one_or_none()
     if not ai_employee:
@@ -144,7 +158,7 @@ def assign_ai_employee(task_id: int, payload: TaskAssign, request: Request, db: 
 @router.post("/tasks/{task_id}/start")
 def start_task(task_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "task_center.execute")
-    task = get_task_or_404(db, task_id)
+    task = get_task_or_404(db, task_id, user=user)
     if not task.assigned_ai_employee_code:
         raise HTTPException(status_code=400, detail="task is not assigned")
     set_task_status(db, task, "running", user, "task_started", task.assigned_ai_employee_code)
@@ -156,7 +170,7 @@ def start_task(task_id: int, request: Request, db: Session = Depends(get_db)):
 @router.post("/tasks/{task_id}/results")
 def submit_result(task_id: int, payload: TaskResultSubmit, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "task_center.execute")
-    task = get_task_or_404(db, task_id)
+    task = get_task_or_404(db, task_id, user=user)
     if not task.assigned_ai_employee_code:
         raise HTTPException(status_code=400, detail="task is not assigned")
     result_content = payload.result_content.strip()
@@ -179,10 +193,32 @@ def submit_result(task_id: int, payload: TaskResultSubmit, request: Request, db:
     return {"ok": True, "task": task_to_dict(task), "result": result_to_dict(result)}
 
 
+@router.get("/tasks/{task_id}/results")
+def list_task_results(task_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_task_read(request, db)
+    get_task_or_404(db, task_id, user=user)
+    rows = (
+        owned_results_query(db, user=user)
+        .filter(TaskCenterResult.task_id == task_id)
+        .order_by(TaskCenterResult.id.asc())
+        .all()
+    )
+    return [result_to_dict(row) for row in rows]
+
+
+@router.get("/tasks/{task_id}/results/{result_id}")
+def get_task_result(task_id: int, result_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_task_read(request, db)
+    result = owned_result_or_none(db, user=user, task_id=task_id, result_id=result_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="result not found")
+    return result_to_dict(result)
+
+
 @router.post("/tasks/{task_id}/reviews")
 def submit_acceptance_review(task_id: int, payload: TaskReviewSubmit, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "task_center.review")
-    task = get_task_or_404(db, task_id)
+    task = get_task_or_404(db, task_id, user=user)
     review_status = normalize_acceptance_review_status(payload.review_status)
     review = TaskCenterReview(
         task_id=task.id,
@@ -204,7 +240,7 @@ def submit_acceptance_review(task_id: int, payload: TaskReviewSubmit, request: R
 @router.post("/tasks/{task_id}/audits")
 def submit_audit_review(task_id: int, payload: TaskReviewSubmit, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "task_center.audit")
-    task = get_task_or_404(db, task_id)
+    task = get_task_or_404(db, task_id, user=user)
     review = TaskCenterReview(
         task_id=task.id,
         review_type="audit",
@@ -224,7 +260,7 @@ def submit_audit_review(task_id: int, payload: TaskReviewSubmit, request: Reques
 @router.post("/tasks/{task_id}/summary")
 def summarize_task(task_id: int, payload: TaskSummarySubmit, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "task_center.manage")
-    task = get_task_or_404(db, task_id)
+    task = get_task_or_404(db, task_id, user=user)
     summary = payload.summary.strip()
     if not summary:
         raise HTTPException(status_code=400, detail="summary is required")
@@ -237,8 +273,8 @@ def summarize_task(task_id: int, payload: TaskSummarySubmit, request: Request, d
 
 @router.get("/tasks/{task_id}/audit-logs")
 def list_task_audit_logs(task_id: int, request: Request, db: Session = Depends(get_db)):
-    require_task_read(request, db)
-    get_task_or_404(db, task_id)
+    user = require_task_read(request, db)
+    get_task_or_404(db, task_id, user=user)
     rows = db.query(TaskCenterAuditLog).filter(TaskCenterAuditLog.task_id == task_id).order_by(TaskCenterAuditLog.id.asc()).all()
     return [audit_log_to_dict(row) for row in rows]
 
@@ -252,8 +288,8 @@ def require_task_read(request: Request, db: Session) -> User:
         raise
 
 
-def get_task_or_404(db: Session, task_id: int) -> TaskCenterTask:
-    task = db.get(TaskCenterTask, task_id)
+def get_task_or_404(db: Session, task_id: int, *, user: User) -> TaskCenterTask:
+    task = owned_task_or_none(db, user=user, task_id=task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
     return task

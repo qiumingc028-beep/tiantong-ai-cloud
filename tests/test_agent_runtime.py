@@ -5,8 +5,10 @@ import json
 import pytest
 
 from backend.agent_runtime.constants import DEFAULT_CAPABILITIES
-from backend.models import AiEmployee, TaskCenterTask
+from backend.brain_orchestrator.planner import resolve_graph_ownership
+from backend.models import AiEmployee, TaskCenterTask, User
 from backend.config import Settings, get_settings
+from backend.task_center_ownership import TASK_OWNERSHIP_FIELDS, bind_task_ownership, owned_task_or_none
 
 
 @pytest.fixture(autouse=True)
@@ -123,10 +125,22 @@ def test_agent_runtime_execution_modes_and_audit(client, owner_headers, boss_hea
     client.cookies.clear()
     db = test_db()
     try:
+        owner = db.query(User).filter(User.username == "owner").one()
+        foreign_user = db.query(User).filter(User.username == "admin").one()
         task = TaskCenterTask(title="V2 runtime linkage task", status="created", priority="normal", source="boss")
         db.add(task)
+        bind_task_ownership(db, task, user=owner)
         db.commit()
         db.refresh(task)
+        expected_scope = resolve_graph_ownership(db, owner)
+        assert all(getattr(task, field) not in (None, "") for field in TASK_OWNERSHIP_FIELDS)
+        assert task.requester_id == owner.id
+        assert task.tenant_id == owner.tenant_id == expected_scope.tenant_id
+        assert task.company_id == owner.company_id == expected_scope.company_id
+        assert task.store_scope_key == expected_scope.store_scope_key
+        assert task.ownership_scope_key == expected_scope.ownership_scope_key
+        assert owned_task_or_none(db, task_id=task.id, user=owner) is task
+        assert owned_task_or_none(db, task_id=task.id, user=foreign_user) is None
         task_id = task.id
     finally:
         db.close()

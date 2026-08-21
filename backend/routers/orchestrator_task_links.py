@@ -10,6 +10,7 @@ from ..auth import require_permission_user
 from ..database import get_db
 from ..models import AiEmployee, TaskCenterTask
 from ..orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
+from ..task_center_ownership import bind_task_ownership, owned_task_or_none
 from .orchestrator import redact_sensitive_text
 from .task_center import write_audit_log
 
@@ -46,7 +47,7 @@ class ConfirmCreateTask(BaseModel):
 def create_task_link(payload: TaskLinkCreate, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "orchestrator.confirm")
     analysis = get_analysis_or_404(db, payload.analysis_record_id)
-    task = get_task_or_404(db, payload.task_id)
+    task = get_task_or_404(db, payload.task_id, user=user)
     link_type = normalize_link_type(payload.link_type)
     if link_type != "existing_task":
         raise HTTPException(status_code=400, detail="link_type must be existing_task")
@@ -90,7 +91,7 @@ def confirm_create_task(payload: ConfirmCreateTask, request: Request, db: Sessio
     title = payload.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="task title is required")
-    if payload.parent_task_id and not db.get(TaskCenterTask, payload.parent_task_id):
+    if payload.parent_task_id and not owned_task_or_none(db, user=user, task_id=payload.parent_task_id):
         raise HTTPException(status_code=404, detail="parent task not found")
 
     task = TaskCenterTask(
@@ -104,6 +105,7 @@ def confirm_create_task(payload: ConfirmCreateTask, request: Request, db: Sessio
         created_by_id=user.id,
         updated_by_id=user.id,
     )
+    bind_task_ownership(db, task, user=user)
     db.add(task)
     db.flush()
     write_audit_log(db, task, user, "orchestrator_task_created", None, "created", "created from orchestrator confirmed draft")
@@ -132,8 +134,8 @@ def confirm_create_task(payload: ConfirmCreateTask, request: Request, db: Sessio
 
 @router.get("/api/task-center/tasks/{task_id}/orchestrator-links")
 def list_task_orchestrator_links(task_id: int, request: Request, db: Session = Depends(get_db)):
-    require_task_center_read(request, db)
-    get_task_or_404(db, task_id)
+    user = require_task_center_read(request, db)
+    get_task_or_404(db, task_id, user=user)
     rows = (
         db.query(OrchestratorTaskLink)
         .filter(OrchestratorTaskLink.task_id == task_id)
@@ -159,8 +161,8 @@ def get_analysis_or_404(db: Session, analysis_record_id: int) -> OrchestratorAna
     return analysis
 
 
-def get_task_or_404(db: Session, task_id: int) -> TaskCenterTask:
-    task = db.get(TaskCenterTask, task_id)
+def get_task_or_404(db: Session, task_id: int, *, user) -> TaskCenterTask:
+    task = owned_task_or_none(db, user=user, task_id=task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
     return task

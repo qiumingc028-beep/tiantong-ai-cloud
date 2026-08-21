@@ -23,6 +23,7 @@ from ..services.ai_workforce_task_flow import (
     build_task_lifecycle,
     build_waiting_confirm_tasks,
 )
+from ..task_center_ownership import bind_session_task_ownership, owned_tasks_query
 
 
 router = APIRouter(prefix="/api/ai-workforce")
@@ -36,7 +37,7 @@ FROZEN_EMPLOYEE_STATUSES = {"inactive", "frozen"}
 
 @router.get("/overview")
 def get_ai_workforce_overview(request: Request, db: Session = Depends(get_db)):
-    require_ai_workforce_user(request, db)
+    bind_session_task_ownership(db, user=require_ai_workforce_user(request, db))
     employees = (
         db.query(AiEmployee)
         .filter(AiEmployee.is_legacy.is_(False))
@@ -76,19 +77,19 @@ def get_ai_workforce_overview(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/employees/{employee_id}/task-flow")
 def get_employee_task_flow(employee_id: str, request: Request, db: Session = Depends(get_db)):
-    require_ai_workforce_user(request, db)
+    bind_session_task_ownership(db, user=require_ai_workforce_user(request, db))
     return build_employee_task_flow(db, employee_id)
 
 
 @router.get("/tasks/waiting-confirm")
 def get_waiting_confirm_task_flow(request: Request, db: Session = Depends(get_db)):
-    require_ai_workforce_user(request, db)
+    bind_session_task_ownership(db, user=require_ai_workforce_user(request, db))
     return build_waiting_confirm_tasks(db)
 
 
 @router.get("/tasks/{task_id}/lifecycle")
 def get_ai_workforce_task_lifecycle(task_id: int, request: Request, db: Session = Depends(get_db)):
-    require_ai_workforce_user(request, db)
+    bind_session_task_ownership(db, user=require_ai_workforce_user(request, db))
     lifecycle = build_task_lifecycle(db, task_id)
     if lifecycle is None:
         raise HTTPException(status_code=404, detail="task not found")
@@ -107,7 +108,7 @@ def employee_summary(db: Session, employees: list[AiEmployee]) -> dict:
     working_codes: set[str] = set()
     if active_codes:
         rows = (
-            db.query(TaskCenterTask.assigned_ai_employee_code)
+            owned_tasks_query(db).with_entities(TaskCenterTask.assigned_ai_employee_code)
             .filter(TaskCenterTask.assigned_ai_employee_code.in_(active_codes))
             .filter(TaskCenterTask.status.in_(WORKING_TASK_STATUSES))
             .all()
@@ -131,7 +132,7 @@ def build_employee_cards(db: Session, employees: list[AiEmployee]) -> list[dict]
 
 
 def latest_task_by_employee(db: Session) -> dict[str, TaskCenterTask]:
-    rows = db.query(TaskCenterTask).order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc()).limit(500).all()
+    rows = owned_tasks_query(db).order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc()).limit(500).all()
     latest: dict[str, TaskCenterTask] = {}
     for task in rows:
         code = task.assigned_ai_employee_code
@@ -142,7 +143,7 @@ def latest_task_by_employee(db: Session) -> dict[str, TaskCenterTask]:
 
 def risk_level_by_employee(db: Session) -> dict[str, str]:
     levels: dict[str, str] = {}
-    for task in db.query(TaskCenterTask).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all():
+    for task in owned_tasks_query(db).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all():
         code = task.assigned_ai_employee_code
         if not code:
             continue
@@ -227,7 +228,7 @@ def department_summary(employees: list[AiEmployee]) -> list[dict]:
 
 
 def task_status_counts(db: Session) -> dict:
-    rows = db.query(TaskCenterTask.status, func.count(TaskCenterTask.id)).group_by(TaskCenterTask.status).all()
+    rows = owned_tasks_query(db).with_entities(TaskCenterTask.status, func.count(TaskCenterTask.id)).group_by(TaskCenterTask.status).all()
     status_counts = {status: int(count) for status, count in rows}
     return {
         "total": sum(status_counts.values()),

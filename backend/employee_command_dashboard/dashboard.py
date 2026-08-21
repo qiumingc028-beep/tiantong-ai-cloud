@@ -13,6 +13,7 @@ from backend.employee_performance import build_ai_employee_business_board, build
 from backend.employee_workspace.task_linkage import build_task_linkage
 from backend.models import AiEmployee, TaskCenterTask
 from backend.security.tian_brain.risk_predictor import predict_risk
+from backend.task_center_ownership import owned_tasks_query
 
 
 CORE_ORG_CHILDREN = [
@@ -31,7 +32,7 @@ def build_employee_command_dashboard(db: Session) -> dict[str, Any]:
     stats = build_employee_performance_stats(db)
     organization = build_employee_organization_center(db)
     performance_board = build_ai_employee_business_board(db)
-    task_rows = db.query(TaskCenterTask).order_by(TaskCenterTask.id.desc()).limit(500).all()
+    task_rows = owned_tasks_query(db).order_by(TaskCenterTask.id.desc()).limit(500).all()
     summary = build_overview_summary(stats, task_rows)
     organization_view = build_organization_view(db, organization)
     details = [build_employee_detail(db, row["employee_code"], raise_missing=False) for row in stats]

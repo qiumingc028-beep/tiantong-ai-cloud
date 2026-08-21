@@ -18,6 +18,7 @@ from ..execution_engine import (
     start_task_execution,
 )
 from ..models import TaskCenterTask
+from ..task_center_ownership import owned_task_or_none, owned_task_rows_query
 from .ai_execution import require_automation_read, require_automation_user
 
 
@@ -116,12 +117,12 @@ def fail_task(task_id: int, payload: FailPayload, request: Request, db: Session 
 @router.get("/logs")
 def list_execution_logs(request: Request, db: Session = Depends(get_db)):
     require_automation_read(request, db)
-    rows = db.query(EmployeeExecutionLog).order_by(EmployeeExecutionLog.id.desc()).limit(200).all()
+    rows = owned_task_rows_query(db, EmployeeExecutionLog, EmployeeExecutionLog.task_id).order_by(EmployeeExecutionLog.id.desc()).limit(200).all()
     return {"logs": [execution_log_to_dict(row) for row in rows]}
 
 
 def get_task_or_404(db: Session, task_id: int) -> TaskCenterTask:
-    task = db.get(TaskCenterTask, task_id)
+    task = owned_task_or_none(db, task_id=task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
     return task

@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
+from sqlalchemy.exc import SQLAlchemyError
 
 from .config import require_service_role
 
@@ -13,9 +14,15 @@ from .ai_employees import DEFAULT_COLLECTOR_EMPLOYEE, DEFAULT_STRATEGY_EMPLOYEE,
 from .core.orchestrator import handle_event
 from .database import SessionLocal, get_redis
 from .brain_execution.worker import process_next_execution as process_next_brain_execution
+from .brain_orchestrator.planner import resolve_graph_ownership
 from .execution_engine import process_next_execution_task
 from .logging_config import configure_json_logging
-from .models import EmployeeLog, JdSyncLog, TaskCenterResult, TaskCenterTask
+from .models import EmployeeLog, JdSyncLog, TaskCenterResult, TaskCenterTask, User
+from .task_center_ownership import (
+    bind_task_ownership_from_task,
+    owned_task_from_context_or_none,
+    task_ownership_context,
+)
 from .queue_worker import process_next_event
 from .queue import dequeue_task, enqueue_task, requeue_task, update_task_status
 from .services.ai_store_manager import analyze_store_health
@@ -32,6 +39,7 @@ from .workers.tian_shang_worker import process_next_tian_shang_execution
 WORKER_HEARTBEAT_KEY = "tiantong:worker:heartbeat"
 WORKER_HEARTBEAT_TTL_SECONDS = 120
 DAILY_SCHEDULER_PREFIX = "tiantong:scheduler:daily:"
+DAILY_SCHEDULER_OWNERSHIP_SOURCE = "daily_scheduler_ownership_source"
 configure_json_logging()
 logger = logging.getLogger("tiantong.worker")
 
@@ -59,46 +67,133 @@ def run_daily_scheduler():
     if os.getenv("ENABLE_DAILY_BUSINESS_FLOW", "1") != "1":
         return
     today = date.today().isoformat()
-    redis_client = get_redis()
-    key = f"{DAILY_SCHEDULER_PREFIX}{today}"
-    if redis_client.get(key):
-        return
-    redis_client.setex(key, 36 * 3600, "created")
-
     db = SessionLocal()
     try:
-        first_employee = DEFAULT_COLLECTOR_EMPLOYEE
-        flow_id = f"daily-business-{today}"
-        metadata = {
-            "sprint17": True,
-            "business_loop": True,
-            "scheduler": "daily",
-            "type": FLOW_TASK_TYPES[first_employee],
-            "input": {"source": "daily_scheduler", "date": today, "channels": ["ecommerce", "stock", "content"]},
-            "flow_id": flow_id,
-            "flow_steps": list(FLOW_EMPLOYEE_CODES),
-            "flow_index": 0,
-        }
-        task = TaskCenterTask(
-            title=f"Sprint 17 daily business loop {today}",
-            description=json.dumps({"input": metadata["input"]}, ensure_ascii=False),
-            status="assigned",
-            priority="normal",
-            source="sprint17_ai_execution",
-            assigned_ai_employee_code=first_employee,
-            assigned_ai_employee_name=employee_name(first_employee),
-            split_plan=json.dumps(metadata, ensure_ascii=False),
+        sources = (
+            db.query(TaskCenterTask)
+            .filter(
+                TaskCenterTask.source == DAILY_SCHEDULER_OWNERSHIP_SOURCE,
+                TaskCenterTask.status == "completed",
+            )
+            .order_by(TaskCenterTask.id.asc())
+            .all()
         )
-        db.add(task)
-        db.commit()
-        db.refresh(task)
-        enqueue_task(
-            SPRINT17_QUEUE_TYPE,
-            {"task_center_id": task.id, "assigned_to": first_employee, "metadata": metadata},
-            max_retries=1,
-            delay_note="Sprint 17 daily business flow queued",
-        )
-        logger.info("daily_business_flow_created flow_id=%s task_id=%s", flow_id, task.id)
+        requester_ids = {source.requester_id for source in sources if source.requester_id is not None}
+        users = {
+            user.id: user
+            for user in db.query(User).filter(User.id.in_(requester_ids), User.active.is_(True)).all()
+        } if requester_ids else {}
+        valid_sources: dict[str, TaskCenterTask] = {}
+        invalid_scopes: set[str] = set()
+        for source in sources:
+            try:
+                context = task_ownership_context(source)
+            except ValueError:
+                logger.warning("daily_business_flow_source_rejected: incomplete ownership")
+                continue
+            user = users.get(source.requester_id)
+            if user is None:
+                logger.warning("daily_business_flow_source_rejected: inactive or missing requester")
+                invalid_scopes.add(context["ownership_scope_key"])
+                continue
+            scope = resolve_graph_ownership(db, user)
+            expected = {
+                "tenant_id": scope.tenant_id,
+                "company_id": scope.company_id,
+                "requester_id": scope.requester_id,
+                "store_scope_key": scope.store_scope_key,
+                "ownership_scope_key": scope.ownership_scope_key,
+            }
+            if any(context[field] != value for field, value in expected.items()):
+                logger.warning("daily_business_flow_source_rejected: ownership mismatch")
+                invalid_scopes.add(context["ownership_scope_key"])
+                continue
+            existing_source = valid_sources.get(scope.ownership_scope_key)
+            if existing_source is not None and task_ownership_context(existing_source) != context:
+                invalid_scopes.add(scope.ownership_scope_key)
+                continue
+            valid_sources.setdefault(scope.ownership_scope_key, source)
+
+        for invalid_scope in invalid_scopes:
+            valid_sources.pop(invalid_scope, None)
+        if not valid_sources:
+            logger.warning("daily_business_flow_skipped: no persisted ownership source")
+            return
+
+        redis_client = get_redis()
+        for ownership_scope_key, source in sorted(valid_sources.items()):
+            key = f"{DAILY_SCHEDULER_PREFIX}{today}:{ownership_scope_key}"
+            try:
+                acquired = redis_client.set(key, "pending", nx=True, ex=36 * 3600)
+            except (RedisTimeoutError, RedisConnectionError):
+                logger.warning("daily_business_flow_skipped: redis unavailable")
+                return
+            if not acquired:
+                continue
+            try:
+                title = f"Sprint 17 daily business loop {today}"
+                existing = (
+                    db.query(TaskCenterTask)
+                    .filter(
+                        TaskCenterTask.source == "sprint17_ai_execution",
+                        TaskCenterTask.title == title,
+                        TaskCenterTask.ownership_scope_key == ownership_scope_key,
+                    )
+                    .order_by(TaskCenterTask.id.asc())
+                    .all()
+                )
+                if existing:
+                    redis_client.setex(key, 36 * 3600, "created")
+                    continue
+
+                first_employee = DEFAULT_COLLECTOR_EMPLOYEE
+                flow_id = f"daily-business-{today}-{ownership_scope_key}"
+                metadata = {
+                    "sprint17": True,
+                    "business_loop": True,
+                    "scheduler": "daily",
+                    "type": FLOW_TASK_TYPES[first_employee],
+                    "input": {"source": "daily_scheduler", "date": today, "channels": ["ecommerce", "stock", "content"]},
+                    "flow_id": flow_id,
+                    "flow_steps": list(FLOW_EMPLOYEE_CODES),
+                    "flow_index": 0,
+                }
+                task = TaskCenterTask(
+                    title=title,
+                    description=json.dumps({"input": metadata["input"]}, ensure_ascii=False),
+                    status="assigned",
+                    priority="normal",
+                    source="sprint17_ai_execution",
+                    parent_task_id=source.id,
+                    assigned_ai_employee_code=first_employee,
+                    assigned_ai_employee_name=employee_name(first_employee),
+                    split_plan=json.dumps(metadata, ensure_ascii=False),
+                )
+                bind_task_ownership_from_task(task, parent=source)
+                db.add(task)
+                db.flush()
+                enqueue_task(
+                    SPRINT17_QUEUE_TYPE,
+                    {
+                        "task_center_id": task.id,
+                        "assigned_to": first_employee,
+                        "metadata": metadata,
+                        "ownership": task_ownership_context(task),
+                    },
+                    max_retries=1,
+                    delay_note="Sprint 17 daily business flow queued",
+                )
+                redis_client.setex(key, 36 * 3600, "created")
+                db.commit()
+                logger.info("daily_business_flow_created flow_id=%s task_id=%s", flow_id, task.id)
+            except (RedisTimeoutError, RedisConnectionError, SQLAlchemyError):
+                db.rollback()
+                try:
+                    redis_client.delete(key)
+                except (RedisTimeoutError, RedisConnectionError):
+                    logger.warning("daily_business_flow_lock_cleanup_failed")
+                logger.warning("daily_business_flow_skipped: persistence unavailable")
+                return
     finally:
         db.close()
 
@@ -123,6 +218,11 @@ def _handle_task_direct(task):
     attempt = int(task.get("attempt", 0))
     max_retries = int(task.get("max_retries", 3))
     db = SessionLocal()
+    if task_type in {SPRINT17_QUEUE_TYPE, SPRINT18_QUEUE_TYPE}:
+        center_id = int(payload["task_center_id"])
+        if owned_task_from_context_or_none(db, task_id=center_id, ownership=payload.get("ownership")) is None:
+            db.close()
+            raise RuntimeError("task ownership is missing or inconsistent")
     log = JdSyncLog(
         store_id=payload.get("store_id"),
         task_id=task_id,
@@ -178,7 +278,7 @@ def _handle_task_direct(task):
 def execute_sprint17_task(db, queued_task: dict) -> dict:
     payload = queued_task.get("payload", {})
     task_id = int(payload["task_center_id"])
-    task = db.get(TaskCenterTask, task_id)
+    task = owned_task_from_context_or_none(db, task_id=task_id, ownership=payload.get("ownership"))
     if not task:
         raise RuntimeError(f"Sprint 17 task not found: {task_id}")
 
@@ -219,7 +319,7 @@ def execute_sprint17_task(db, queued_task: dict) -> dict:
 def execute_sprint18_business_loop(db, queued_task: dict) -> dict:
     payload = queued_task.get("payload", {})
     task_id = int(payload["task_center_id"])
-    task = db.get(TaskCenterTask, task_id)
+    task = owned_task_from_context_or_none(db, task_id=task_id, ownership=payload.get("ownership"))
     if not task:
         raise RuntimeError(f"Sprint 18 task not found: {task_id}")
 
@@ -455,12 +555,17 @@ def create_sprint18_feedback_task_if_needed(db, task: TaskCenterTask, metadata: 
         assigned_ai_employee_name=employee_name(DEFAULT_STRATEGY_EMPLOYEE),
         split_plan=json.dumps(next_metadata, ensure_ascii=False),
     )
+    bind_task_ownership_from_task(next_task, parent=task)
     db.add(next_task)
     db.commit()
     db.refresh(next_task)
     enqueue_task(
         SPRINT18_QUEUE_TYPE,
-        {"task_center_id": next_task.id, "metadata": next_metadata},
+        {
+            "task_center_id": next_task.id,
+            "metadata": next_metadata,
+            "ownership": task_ownership_context(next_task),
+        },
         max_retries=1,
         delay_note="Sprint 18 feedback loop queued",
     )
@@ -502,6 +607,7 @@ def create_next_flow_task_if_needed(db, task: TaskCenterTask, metadata: dict, pr
         assigned_ai_employee_name=employee_name(next_employee) or next_employee,
         split_plan=json.dumps(next_metadata, ensure_ascii=False),
     )
+    bind_task_ownership_from_task(next_task, parent=task)
     db.add(next_task)
     db.commit()
     db.refresh(next_task)
@@ -511,6 +617,7 @@ def create_next_flow_task_if_needed(db, task: TaskCenterTask, metadata: dict, pr
             "task_center_id": next_task.id,
             "assigned_to": next_employee,
             "metadata": next_metadata,
+            "ownership": task_ownership_context(next_task),
         },
         max_retries=1,
         delay_note="Sprint 17 flow next step queued",

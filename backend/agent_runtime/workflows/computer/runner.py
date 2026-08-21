@@ -13,6 +13,7 @@ from backend.agent_runtime.executors.computer.schemas import ComputerSessionCrea
 from backend.agent_runtime.executors.computer.runtime import ComputerRuntime
 from backend.config import get_settings
 from backend.models import AiEmployee, TaskCenterResult, TaskCenterTask, User
+from backend.task_center_ownership import owned_task_or_none
 
 from .approval import approve_checkpoint, approve_scope_approval, create_checkpoint_approval, create_scope_approval, reject_checkpoint, reject_scope_approval, utcnow
 from .audit import summarize_workflow_audit
@@ -146,13 +147,13 @@ def _recovery_to_dict(recovery: ComputerWorkflowRecovery) -> dict:
 
 
 def _get_task(db: Session, task_id: int | None) -> TaskCenterTask | None:
-    return db.get(TaskCenterTask, task_id) if task_id else None
+    return owned_task_or_none(db, task_id=task_id) if task_id else None
 
 
 def _ensure_task_result(db: Session, workflow: ComputerWorkflow, result_content: str) -> None:
     if workflow.task_id is None:
         return
-    task = db.get(TaskCenterTask, workflow.task_id)
+    task = owned_task_or_none(db, task_id=workflow.task_id)
     if not task:
         return
     db.add(
@@ -327,7 +328,15 @@ def _pause_workflow(db: Session, workflow: ComputerWorkflow, reason: str | None 
 
 
 def start_workflow(db: Session, workflow_id: str, *, current_application: str | None = None, current_window: str | None = None, current_screenshot_hash: str | None = None, trace_id: str | None = None) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
+    from backend.task_center_ownership import owned_tasks_query
+
+    workflow = (
+        owned_tasks_query(db)
+        .join(ComputerWorkflow, ComputerWorkflow.task_id == TaskCenterTask.id)
+        .with_entities(ComputerWorkflow)
+        .filter(ComputerWorkflow.workflow_id == workflow_id)
+        .one_or_none()
+    )
     if not workflow:
         raise HTTPException(status_code=404, detail="工作流不存在")
     if workflow.approval_status != "已批准":
@@ -474,7 +483,15 @@ def pause_workflow(db: Session, workflow_id: str, reason: str | None = None) -> 
 
 
 def resume_workflow(db: Session, workflow_id: str, *, current_application: str | None = None, current_window: str | None = None, current_screenshot_hash: str | None = None, trace_id: str | None = None) -> dict:
-    workflow = db.get(ComputerWorkflow, workflow_id)
+    from backend.task_center_ownership import owned_tasks_query
+
+    workflow = (
+        owned_tasks_query(db)
+        .join(ComputerWorkflow, ComputerWorkflow.task_id == TaskCenterTask.id)
+        .with_entities(ComputerWorkflow)
+        .filter(ComputerWorkflow.workflow_id == workflow_id)
+        .one_or_none()
+    )
     if not workflow:
         raise HTTPException(status_code=404, detail="工作流不存在")
     next_step = _next_step(db, workflow)

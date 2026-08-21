@@ -16,6 +16,7 @@ from ..employee_command_dashboard import build_employee_command_dashboard, build
 from ..employee_organization import build_employee_organization_center
 from ..employee_performance import build_ai_employee_business_board
 from ..models import AiEmployee, TaskCenterTask
+from ..task_center_ownership import bind_session_task_ownership, owned_tasks_query
 from ..workers.tian_shang_worker import latest_tian_shang_status
 from . import deploy_center
 
@@ -82,6 +83,12 @@ def get_employee_command_dashboard(request: Request, db: Session = Depends(get_d
 @router.get("/employee-command-dashboard/employees/{employee_code}")
 def get_employee_command_dashboard_detail(employee_code: str, request: Request, db: Session = Depends(get_db)):
     require_ceo_dashboard_user(request, db)
+    if not (
+        owned_tasks_query(db)
+        .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
+        .first()
+    ):
+        raise HTTPException(status_code=404, detail="employee not found")
     return build_employee_detail(db, employee_code)
 
 
@@ -132,6 +139,7 @@ def require_ceo_dashboard_user(request: Request, db: Session):
     role_code = normalize_role(user.role)
     if role_code not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="no CEO dashboard permission")
+    bind_session_task_ownership(db, user=user)
     return user
 
 
@@ -381,7 +389,7 @@ def build_v2_overview(db: Session) -> dict:
 def build_today_task_summary(db: Session) -> dict:
     start = today_start_utc()
     rows = (
-        db.query(TaskCenterTask.status, func.count(TaskCenterTask.id))
+        owned_tasks_query(db).with_entities(TaskCenterTask.status, func.count(TaskCenterTask.id))
         .filter(TaskCenterTask.created_at >= start)
         .group_by(TaskCenterTask.status)
         .all()
@@ -402,7 +410,7 @@ def build_today_task_summary(db: Session) -> dict:
 
 def running_task_employee_codes(db: Session) -> set[str]:
     rows = (
-        db.query(TaskCenterTask.assigned_ai_employee_code)
+        owned_tasks_query(db).with_entities(TaskCenterTask.assigned_ai_employee_code)
         .filter(TaskCenterTask.status == "running", TaskCenterTask.assigned_ai_employee_code.isnot(None))
         .all()
     )
@@ -411,7 +419,7 @@ def running_task_employee_codes(db: Session) -> set[str]:
 
 def recent_failed_tasks(db: Session) -> list[dict]:
     rows = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.status == "rejected")
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .limit(5)
@@ -439,7 +447,7 @@ def build_system_health(db: Session):
 
 def build_task_summary(db: Session):
     counts = {status: 0 for status in TASK_STATUSES}
-    rows = db.query(TaskCenterTask.status, func.count(TaskCenterTask.id)).group_by(TaskCenterTask.status).all()
+    rows = owned_tasks_query(db).with_entities(TaskCenterTask.status, func.count(TaskCenterTask.id)).group_by(TaskCenterTask.status).all()
     total = 0
     for status, count in rows:
         total += count
@@ -447,7 +455,7 @@ def build_task_summary(db: Session):
             counts[status] = count
     pending_count = sum(counts[status] for status in PENDING_STATUSES)
     recent_tasks = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.status.in_(PENDING_STATUSES))
         .order_by(TaskCenterTask.id.desc())
         .limit(8)

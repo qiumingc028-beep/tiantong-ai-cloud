@@ -14,6 +14,7 @@ from ..database import get_db
 from ..dispatch_models import DispatchRecord, EmployeeCapability, EmployeeExecutionLog, TaskRoutingRule
 from ..execution_engine import ExecutionEngineError, ExecutionSafetyError, enqueue_execution_task
 from ..models import AiEmployee, TaskCenterAuditLog, TaskCenterTask, User
+from ..task_center_ownership import bind_session_task_ownership, owned_task_or_none, owned_task_rows_query, owned_tasks_query
 
 
 router = APIRouter(prefix="/api/auto-dispatch")
@@ -273,7 +274,7 @@ def create_dispatch_plan(task_id: int, request: Request, db: Session = Depends(g
     if not recommendations:
         raise HTTPException(status_code=400, detail="no dispatch candidate found")
 
-    existing = db.query(DispatchRecord).filter(DispatchRecord.task_id == task.id).all()
+    existing = owned_task_rows_query(db, DispatchRecord, DispatchRecord.task_id).filter(DispatchRecord.task_id == task.id).all()
     for row in existing:
         row.dispatch_status = "superseded"
 
@@ -382,8 +383,8 @@ def create_execution_tracking(task_id: int, payload: TrackingPayload, request: R
 def get_execution_tracking(task_id: int, request: Request, db: Session = Depends(get_db)):
     require_auto_dispatch_read(request, db)
     get_task_or_404(db, task_id)
-    records = db.query(DispatchRecord).filter(DispatchRecord.task_id == task_id).order_by(DispatchRecord.id.asc()).all()
-    logs = db.query(EmployeeExecutionLog).filter(EmployeeExecutionLog.task_id == task_id).order_by(EmployeeExecutionLog.id.asc()).all()
+    records = owned_task_rows_query(db, DispatchRecord, DispatchRecord.task_id).filter(DispatchRecord.task_id == task_id).order_by(DispatchRecord.id.asc()).all()
+    logs = owned_task_rows_query(db, EmployeeExecutionLog, EmployeeExecutionLog.task_id).filter(EmployeeExecutionLog.task_id == task_id).order_by(EmployeeExecutionLog.id.asc()).all()
     return {
         "task_id": task_id,
         "dispatch_records": [dispatch_record_to_dict(record) for record in records],
@@ -409,8 +410,8 @@ def auto_dispatch_overview(request: Request, db: Session = Depends(get_db)):
     return {
         "employee_capability_count": len(load_capabilities(db)),
         "routing_rule_count": len(load_rules(db)),
-        "dispatch_record_count": db.query(DispatchRecord).count(),
-        "execution_log_count": db.query(EmployeeExecutionLog).count(),
+        "dispatch_record_count": owned_task_rows_query(db, DispatchRecord, DispatchRecord.task_id).count(),
+        "execution_log_count": owned_task_rows_query(db, EmployeeExecutionLog, EmployeeExecutionLog.task_id).count(),
         "readonly_safety": {
             "high_risk_requires_boss_confirmation": True,
             "high_risk_requires_security_audit": True,
@@ -688,13 +689,13 @@ def infer_employee_risk(default_permissions: str | None, duty: str | None) -> st
 
 
 def employee_history_score(db: Session, employee_code: str, task_type: str) -> int:
-    dispatch_count = db.query(DispatchRecord).filter(DispatchRecord.employee_code == employee_code).count()
+    dispatch_count = owned_task_rows_query(db, DispatchRecord, DispatchRecord.task_id).filter(DispatchRecord.employee_code == employee_code).count()
     complete_count = (
-        db.query(EmployeeExecutionLog)
+        owned_task_rows_query(db, EmployeeExecutionLog, EmployeeExecutionLog.task_id)
         .filter(EmployeeExecutionLog.employee_code == employee_code, EmployeeExecutionLog.action == "complete")
         .count()
     )
-    task_query = db.query(TaskCenterTask).filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
+    task_query = owned_tasks_query(db).filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
     if task_type != "general":
         task_query = task_query.filter(TaskCenterTask.description.ilike(f"%{task_type}%"))
     task_count = task_query.count()
@@ -702,7 +703,7 @@ def employee_history_score(db: Session, employee_code: str, task_type: str) -> i
 
 
 def get_task_or_404(db: Session, task_id: int) -> TaskCenterTask:
-    task = db.get(TaskCenterTask, task_id)
+    task = owned_task_or_none(db, task_id=task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
     return task
@@ -710,15 +711,20 @@ def get_task_or_404(db: Session, task_id: int) -> TaskCenterTask:
 
 def require_auto_dispatch_read(request: Request, db: Session) -> User:
     try:
-        return require_permission_user(request, db, "task_center.read")
+        user = require_permission_user(request, db, "task_center.read")
     except HTTPException as exc:
         if exc.status_code == 403:
-            return require_permission_user(request, db, "task_center.manage")
-        raise
+            user = require_permission_user(request, db, "task_center.manage")
+        else:
+            raise
+    bind_session_task_ownership(db, user=user)
+    return user
 
 
 def require_auto_dispatch_manage(request: Request, db: Session) -> User:
-    return require_permission_user(request, db, "task_center.manage")
+    user = require_permission_user(request, db, "task_center.manage")
+    bind_session_task_ownership(db, user=user)
+    return user
 
 
 def require_boss_role(user: User) -> None:
