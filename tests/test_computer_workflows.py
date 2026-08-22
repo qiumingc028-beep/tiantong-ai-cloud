@@ -280,12 +280,47 @@ def test_real_workflow_unavailable_adapter_fails_before_plan_or_workflow_write(c
 
 
 def test_computer_workflow_public_routes_enforce_task_ownership(client, admin_headers, test_db, monkeypatch):
+    from backend.agent_runtime.executors.computer.openclaw_adapter import validate_capture_target_url
+    from backend.config import UAT_PAGE_CAPTURE_ORIGIN, get_settings
+
     _enable_workflow_flags(monkeypatch)
+    allowed_origins = list(get_settings().PAGE_CAPTURE_ALLOWED_ORIGINS or [UAT_PAGE_CAPTURE_ORIGIN])
+    assert allowed_origins == [UAT_PAGE_CAPTURE_ORIGIN]
+    target_url = validate_capture_target_url(
+        f"{allowed_origins[0]}/computer-workflow-center.html",
+        allowed_origins,
+    )
+
+    def ownership_workflow_payload(task_id):
+        return {
+            "task_id": task_id,
+            "goal": "验证ComputerWorkflow ownership隔离",
+            "risk_level": "低风险",
+            "max_steps": 2,
+            "steps": [
+                {
+                    "action_type": "截图",
+                    "target_url": target_url,
+                    "expected_result": "真实页面PNG",
+                    "risk_level": "低风险",
+                    "approval_required": False,
+                    "checkpoint_required": False,
+                },
+                {
+                    "action_type": "等待",
+                    "expected_result": "安全结束",
+                    "risk_level": "低风险",
+                    "approval_required": False,
+                    "checkpoint_required": False,
+                },
+            ],
+        }
+
     owner_task_id = _create_owned_task(client, admin_headers, "ComputerWorkflow private sentinel")
     owner_create = client.post(
         "/api/v2/computer/workflows",
         headers=admin_headers,
-        json=_create_workflow_payload(owner_task_id),
+        json=ownership_workflow_payload(owner_task_id),
     )
     assert owner_create.status_code == 200, owner_create.text
     workflow_id = owner_create.json()["workflow"]["workflow_id"]
@@ -375,13 +410,13 @@ def test_computer_workflow_public_routes_enforce_task_ownership(client, admin_he
         foreign_create = client.post(
             "/api/v2/computer/workflows",
             headers=admin_headers,
-            json=_create_workflow_payload(foreign_task_id),
+            json=ownership_workflow_payload(foreign_task_id),
         )
         client.cookies.clear()
         missing_create = client.post(
             "/api/v2/computer/workflows",
             headers=admin_headers,
-            json=_create_workflow_payload(2_147_483_647),
+            json=ownership_workflow_payload(2_147_483_647),
         )
         assert (foreign_create.status_code, foreign_create.json()) == (
             missing_create.status_code,
