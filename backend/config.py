@@ -31,6 +31,7 @@ SERVICE_ROLE_FIELD_NAME = "SERVICE_ROLE"
 BACKEND_SERVICE_ROLE = "backend"
 WORKER_SERVICE_ROLE = "worker"
 VALID_SERVICE_ROLES = {BACKEND_SERVICE_ROLE, WORKER_SERVICE_ROLE}
+UAT_PAGE_CAPTURE_ORIGIN = "http://127.0.0.1:59200"
 
 
 def _environment() -> str:
@@ -223,6 +224,21 @@ class Settings:
         self.REAL_EXECUTOR_ENABLED = _boolean("REAL_EXECUTOR_ENABLED", False)
         self.COMPUTER_CONTROL_ENABLED = _boolean("COMPUTER_CONTROL_ENABLED", False)
         self.OPENCLAW_ADAPTER_ENABLED = _boolean("OPENCLAW_ADAPTER_ENABLED", False)
+        self.PAGE_CAPTURE_ALLOWED_ORIGINS = _cors_origins(
+            os.getenv("PAGE_CAPTURE_ALLOWED_ORIGINS", ""), production=False
+        )
+        self.PAGE_CAPTURE_CHROME_PATH = os.getenv("PAGE_CAPTURE_CHROME_PATH", "").strip()
+        self.PAGE_CAPTURE_OUTPUT_ROOT = os.getenv(
+            "PAGE_CAPTURE_OUTPUT_ROOT", "/tmp/tiantong-page-captures"
+        ).strip()
+        self.PAGE_CAPTURE_TIMEOUT_SECONDS = int(os.getenv("PAGE_CAPTURE_TIMEOUT_SECONDS", "20"))
+        if self.OPENCLAW_ADAPTER_ENABLED and (
+            self.APP_ENV != "test"
+            or self.PAGE_CAPTURE_ALLOWED_ORIGINS != [UAT_PAGE_CAPTURE_ORIGIN]
+        ):
+            raise ConfigurationError(
+                f"real page capture is restricted to test origin {UAT_PAGE_CAPTURE_ORIGIN}"
+            )
         self.COMPUTER_EXECUTOR_ENABLED = _boolean("COMPUTER_EXECUTOR_ENABLED", False)
         self.ISOLATED_DESKTOP_ENABLED = _boolean("ISOLATED_DESKTOP_ENABLED", False)
         self.SCREEN_CAPTURE_ENABLED = _boolean("SCREEN_CAPTURE_ENABLED", False)

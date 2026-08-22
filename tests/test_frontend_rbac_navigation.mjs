@@ -1658,7 +1658,7 @@ test('server-returned rows, never page-open permission, prove broader employee s
   }
 });
 
-test('all 309 protected-page handlers are migrated without inline event code',()=>{
+test('all 314 protected-page handlers are migrated without inline event code',()=>{
   const root=new URL('../frontend/',import.meta.url);
   const visit=dir=>readdirSync(dir,{withFileTypes:true}).flatMap(entry=>entry.isDirectory()?visit(new URL(`${entry.name}/`,dir)):[new URL(entry.name,dir)]);
   const files=visit(root).filter(file=>file.pathname.endsWith('.html')&&!file.pathname.endsWith('/login.html'));
@@ -1691,11 +1691,11 @@ test('all 309 protected-page handlers are migrated without inline event code',()
     for(const match of html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi))assert.doesNotThrow(()=>new vm.Script(match[1]),file.pathname);
   }
   assert.equal(files.length,76);
-  assert.equal(migrated,309);
-  assert.equal(literalActions,245);
-  assert.equal(dynamicActions,64);
-  assert.equal(migratedHandlerIds.size,309);
-  assert.equal(sharedLogoutBindings,41);
+  assert.equal(migrated,314);
+  assert.equal(literalActions,251);
+  assert.equal(dynamicActions,63);
+  assert.equal(migratedHandlerIds.size,314);
+  assert.equal(sharedLogoutBindings,42);
   assert.equal(files.reduce((count,file)=>count+(readFileSync(file,'utf8').match(/-disabled-entry/g)||[]).length,0),16);
   const research=readFileSync(new URL('../frontend/research-records.html',import.meta.url),'utf8');
   assert.equal((research.match(/TiantongRbac\.registerDynamicAction\(/g)||[]).length,1);

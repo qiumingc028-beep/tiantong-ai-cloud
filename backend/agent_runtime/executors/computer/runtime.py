@@ -22,11 +22,36 @@ from .session import add_action_row, add_evidence_row, add_policy_event, create_
 from .models import ComputerSession
 
 
-def _executor_for_settings():
+def _executor_for_settings(session: ComputerSession | None = None):
     settings = get_settings()
     if settings.OPENCLAW_ADAPTER_ENABLED:
-        return OpenClawAdapter()
-    return MockComputerExecutor()
+        return OpenClawAdapter(settings=settings)
+    if session and session.executor_type == "mock" and session.environment_type == "test" and not getattr(settings, "IS_PRODUCTION", False):
+        return MockComputerExecutor()
+    raise HTTPException(status_code=503, detail="真实电脑执行适配器未启用")
+
+
+def preflight_action_payload(payload) -> None:
+    settings = get_settings()
+    if not settings.OPENCLAW_ADAPTER_ENABLED:
+        return
+    if payload.action_type == "等待":
+        return
+    if payload.action_type != "截图":
+        raise HTTPException(status_code=400, detail="真实页面执行器仅支持截图和等待动作")
+    if not settings.SCREEN_CAPTURE_ENABLED:
+        raise HTTPException(status_code=403, detail="截图功能当前未开启")
+    context = type(
+        "PreflightContext",
+        (),
+        {"action_type": payload.action_type, "target_url": getattr(payload, "target_url", None)},
+    )()
+    try:
+        OpenClawAdapter(settings=settings).validate(context)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="截图动作必须提供允许的target_url") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="真实页面截图适配器不可用") from exc
 
 
 class ComputerRuntime:
@@ -93,13 +118,14 @@ class ComputerRuntime:
             approval_status_value = "已批准"
         else:
             approval_status_value = session.approval_status
-        executor = _executor_for_settings()
+        executor = _executor_for_settings(session)
         context = type("Context", (), {
             "session_id": session.session_id,
             "trace_id": payload.trace_id or session.trace_id,
             "action_type": payload.action_type,
             "target_application": payload.target_application,
             "target_window": payload.target_window,
+            "target_url": payload.target_url,
             "text_input": payload.text_input,
             "coordinates": payload.coordinates,
         })()
@@ -204,11 +230,23 @@ class ComputerRuntime:
         }
 
     @staticmethod
-    def capture_screen(db: Session, session: ComputerSession):
+    def capture_screen(db: Session, session: ComputerSession, *, target_url: str | None = None):
         ensure_executor_enabled()
         ensure_screen_capture_enabled()
-        executor = _executor_for_settings()
-        context = type("Context", (), {"session_id": session.session_id, "trace_id": session.trace_id})()
+        preflight_action_payload(
+            type("CapturePayload", (), {"action_type": "截图", "target_url": target_url})()
+        )
+        executor = _executor_for_settings(session)
+        context = type(
+            "Context",
+            (),
+            {
+                "session_id": session.session_id,
+                "trace_id": session.trace_id,
+                "action_type": "截图",
+                "target_url": target_url,
+            },
+        )()
         payload = executor.capture_screen(context)
         ref = payload["screenshot_reference"]
         evidence = add_evidence_row(db, session_id=session.session_id, action_id=None, evidence_type="screenshot", reference=ref, metadata={"kind": "screen"})
@@ -218,7 +256,7 @@ class ComputerRuntime:
 
     @staticmethod
     def get_window_state(db: Session, session: ComputerSession):
-        executor = _executor_for_settings()
+        executor = _executor_for_settings(session)
         context = type("Context", (), {"session_id": session.session_id, "trace_id": session.trace_id, "target_application": None, "target_window": None})()
         return executor.get_window_state(context)
 

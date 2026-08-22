@@ -1,31 +1,63 @@
 <!doctype html>
 <html lang="zh-CN" data-required-menu="menu.computer_executor">
 <head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>测试工作流中心</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; background: #f8fafc; color: #0f172a; }
-    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 20px; max-width: 960px; box-shadow: 0 10px 30px rgba(15,23,42,.06); }
-    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-    .item { border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; background: #f8fafc; }
-    .label { font-size: 12px; color: #64748b; }
-    .value { font-size: 22px; font-weight: 700; margin-top: 6px; }
-    .muted { color: #64748b; }
+    :root{color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;color:#172033;background:#f5f7fb}
+    *{box-sizing:border-box}body{margin:0;background:#f5f7fb}button,input,select,textarea{font:inherit}button{border:0;border-radius:10px;padding:10px 15px;background:#2457d6;color:#fff;cursor:pointer}button.secondary{background:#e8eefc;color:#244685}button:disabled{cursor:not-allowed;opacity:.48}.page{max-width:1180px;margin:auto;padding:24px}.top,.toolbar,.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.top{justify-content:space-between;margin-bottom:18px}.top a{color:#2457d6;text-decoration:none}.card{background:#fff;border:1px solid #dfe5ef;border-radius:16px;padding:20px;box-shadow:0 8px 24px rgba(24,43,77,.05);margin-bottom:16px}.grid{display:grid;grid-template-columns:minmax(260px,360px) 1fr;gap:16px}.form-grid{display:grid;gap:12px}.form-grid label{font-size:13px;color:#596579}.form-grid input,.form-grid select{width:100%;border:1px solid #cdd6e5;border-radius:10px;padding:10px;background:#fff}.state{border-radius:10px;padding:12px;background:#edf3ff;color:#244685;margin:12px 0}.state.error{background:#fff0f0;color:#a12323}.muted{color:#68758a;font-size:13px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:760px}th,td{text-align:left;padding:12px 10px;border-bottom:1px solid #e6ebf3;vertical-align:top}th{color:#596579;font-size:13px}.tag{display:inline-block;border-radius:999px;padding:4px 9px;background:#edf3ff;color:#244685;font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}.result{margin-top:12px;padding:12px;border-left:3px solid #2457d6;background:#f7f9fe}.danger{color:#a12323}h1,h2{margin:0 0 8px}p{margin:6px 0}
+    @media(max-width:800px){.page{padding:14px}.grid{grid-template-columns:1fr}.top{align-items:flex-start}table{min-width:680px}}
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>测试工作流中心</h1>
-    <p class="muted">最大 5 步、固定计划、关键节点必须审批、执行一步后自动暂停。</p>
-    <div class="grid">
-      <div class="item"><div class="label">工作流目标</div><div class="value">有限多步骤验证</div></div>
-      <div class="item"><div class="label">步骤数量</div><div class="value">2 - 5</div></div>
-      <div class="item"><div class="label">当前状态</div><div class="value">已暂停</div></div>
-      <div class="item"><div class="label">风险等级</div><div class="value">低至中低</div></div>
-      <div class="item"><div class="label">关键节点</div><div class="value">需要确认</div></div>
-      <div class="item"><div class="label">生产开关</div><div class="value">关闭</div></div>
+  <main class="page">
+    <div class="top">
+      <div><h1>测试工作流中心</h1><p class="muted">只展示当前账号有权访问的任务与工作流；最大 5 步，操作结果以服务器返回为准。</p></div>
+      <div class="actions"><a href="/task-center.html">返回任务中心</a><span id="currentUser" class="muted">正在确认身份</span><button class="secondary" data-rbac-action="computer-workflow-005">退出登录</button></div>
     </div>
-  </div>
+    <div class="grid">
+      <section class="card">
+        <h2>创建工作流</h2>
+        <div class="form-grid">
+          <div><label for="taskId">关联任务</label><select id="taskId"><option value="">正在加载可用任务</option></select></div>
+          <div><label for="goal">工作流目标</label><input id="goal" maxlength="200" placeholder="例如：验证任务页面可只读打开"></div>
+          <button id="createButton" data-rbac-action="computer-workflow-002">创建工作流</button>
+        </div>
+        <div class="result"><strong>安全执行范围</strong><p class="muted">创建固定两步的低风险测试流程：隔离页面截图、等待后结束。创建后须先批准，才能启动；生产开关由后端统一控制。</p></div>
+      </section>
+      <section class="card">
+        <div class="top"><div><h2>我的工作流</h2><p class="muted">列表、审批、启动和恢复均调用现有同源接口。</p></div><div class="actions"><button class="secondary" data-rbac-action="computer-workflow-001">刷新状态</button><button class="secondary" data-rbac-action="computer-workflow-004">重新加载</button></div></div>
+        <div id="pageState" class="state">正在加载工作流...</div>
+        <div class="table-wrap"><table><thead><tr><th>工作流</th><th>关联任务</th><th>状态</th><th>进度</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="workflowRows" data-rbac-action="computer-workflow-003"></tbody></table></div>
+      </section>
+    </div>
+  </main>
+  <script type="text/plain" data-rbac-protected>
+    let workflows=[],tasks=[],busyWorkflowId=null;
+    const ACTION_PATHS={approve:'/approve',start:'/start',resume:'/resume'};
+    const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    const fmt=value=>value?new Date(value).toLocaleString('zh-CN',{hour12:false}):'暂无数据';
+    class RequestError extends Error{constructor(message,status){super(message);this.status=status}}
+    async function request(path,options={}){let response;try{response=await fetch(path,{credentials:'include',...options})}catch(error){throw new RequestError('网络连接失败，请检查网络后重试。',0)}if(response.status===401){await TiantongRbac.logout();throw new RequestError('登录已失效，请重新登录。',401)}let payload=null;try{payload=await response.json()}catch(error){}if(!response.ok){const fallback=response.status===403?'当前账号无权访问该资源。':response.status===404?'资源不存在或当前账号无权访问。':'操作失败，请稍后重试。';throw new RequestError(payload&&payload.detail||fallback,response.status)}return payload}
+    function setState(message,isError=false){pageState.className=isError?'state error':'state';pageState.textContent=message}
+    function actionButtons(workflow){if(busyWorkflowId===workflow.workflow_id)return '<button disabled>处理中...</button>';if(workflow.status==='等待批准')return `<button data-workflow-action="approve" data-workflow-id="${esc(workflow.workflow_id)}">批准</button>`;if(workflow.status==='已批准')return `<button data-workflow-action="start" data-workflow-id="${esc(workflow.workflow_id)}">启动</button>`;if(workflow.status==='已暂停')return `<button data-workflow-action="resume" data-workflow-id="${esc(workflow.workflow_id)}">恢复</button>`;if(workflow.status==='已完成')return '<span class="muted">已完成</span>';return '<span class="muted">暂无可用操作</span>'}
+    function renderWorkflows(){if(!workflows.length){workflowRows.innerHTML='<tr><td colspan="6">暂无工作流，请从左侧选择任务创建。</td></tr>';setState('暂无工作流。');return}workflowRows.innerHTML=workflows.map(workflow=>`<tr><td><strong>${esc(workflow.goal||'未命名工作流')}</strong><div class="mono muted">${esc(workflow.workflow_id||'暂无数据')}</div></td><td>${esc(workflow.task_id??'暂无数据')}</td><td><span class="tag">${esc(workflow.status||'暂无数据')}</span><div class="muted">审批：${esc(workflow.approval_status||'暂无数据')}</div></td><td>${esc(workflow.current_step??0)} / ${esc(workflow.total_steps??0)}</td><td>${fmt(workflow.updated_at)}</td><td>${actionButtons(workflow)}</td></tr>`).join('');setState(`已加载 ${workflows.length} 个工作流。`)}
+    async function loadTasks(){const payload=await request('/api/task-center/tasks');if(!Array.isArray(payload))throw new RequestError('任务列表返回格式异常，已停止展示。',0);tasks=payload;taskId.innerHTML=tasks.length?'<option value="">请选择当前账号可访问的任务</option>'+tasks.map(task=>`<option value="${esc(task.id)}">#${esc(task.id)} ${esc(task.title||'未命名任务')}</option>`).join(''):'<option value="">暂无可用任务</option>';createButton.disabled=!tasks.length}
+    async function loadWorkflows(){try{setState('正在加载工作流...');const payload=await request('/api/v2/computer/workflows');if(!payload||!Array.isArray(payload.items))throw new RequestError('工作流列表返回格式异常，已停止展示。',0);workflows=payload.items;renderWorkflows()}catch(error){workflows=[];workflowRows.innerHTML='<tr><td colspan="6">无法加载工作流</td></tr>';setState(error.message,true)}}
+    async function createWorkflow(){const selectedTask=Number(taskId.value),goalText=goal.value.trim(),targetUrl=new URL('/computer-workflow-center.html',window.location.origin).href;if(!selectedTask||!tasks.some(task=>Number(task.id)===selectedTask)){setState('请选择当前账号可访问的任务。',true);return}if(!goalText){setState('请填写工作流目标。',true);return}createButton.disabled=true;try{const payload=await request('/api/v2/computer/workflows',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task_id:selectedTask,goal:goalText,risk_level:'低风险',max_steps:2,steps:[{action_type:'截图',target_url:targetUrl,input_summary:'记录隔离测试页面当前状态',expected_result:'生成隔离测试页面状态记录',risk_level:'低风险'},{action_type:'等待',input_summary:'等待后结束验证',expected_result:'工作流完成且状态可刷新',risk_level:'低风险'}]})});if(!payload||!payload.workflow||!payload.workflow.workflow_id)throw new RequestError('创建结果返回格式异常，请刷新确认。',0);goal.value='';await loadWorkflows();setState(`工作流已创建：${payload.workflow.workflow_id}`)}catch(error){setState(error.message,true)}finally{createButton.disabled=!tasks.length}}
+    async function runAction(action,workflowId){const workflow=workflows.find(item=>item.workflow_id===workflowId);const allowed=workflow&&(action==='approve'&&workflow.status==='等待批准'||action==='start'&&workflow.status==='已批准'||action==='resume'&&workflow.status==='已暂停');if(!allowed||!ACTION_PATHS[action]){setState('当前状态不允许执行该操作，请刷新后重试。',true);return}busyWorkflowId=workflowId;renderWorkflows();let outcome='',failed='';try{const payload=await request(`/api/v2/computer/workflows/${encodeURIComponent(workflowId)}${ACTION_PATHS[action]}`,{method:'POST'});if(!payload||!payload.workflow||payload.workflow.workflow_id!==workflowId)throw new RequestError('操作结果返回格式异常，请刷新确认。',0);await loadWorkflows();outcome=action==='approve'?'工作流已批准。':action==='start'?'工作流已启动并刷新状态。':'工作流已恢复并刷新状态。'}catch(error){failed=error.message}finally{busyWorkflowId=null;renderWorkflows();setState(failed||outcome,Boolean(failed))}}
+    async function init(){try{const user=await request('/api/me');currentUser.textContent=`${user.display_name||user.username||'当前用户'} · ${user.role_label||user.role||'未知角色'}`;await Promise.all([loadTasks(),loadWorkflows()])}catch(error){tasks=[];workflows=[];taskId.innerHTML='<option value="">暂无可用任务</option>';createButton.disabled=true;workflowRows.innerHTML='<tr><td colspan="6">无法加载页面数据</td></tr>';setState(error.message,true)}}
+    init();
+  </script>
+  <script type="text/plain" data-rbac-protected>
+    TiantongRbac.bindActions({
+      "computer-workflow-001":["click",function(event){loadWorkflows();}],
+      "computer-workflow-002":["click",function(event){createWorkflow();}],
+      "computer-workflow-003":["click",function(event){const button=event.target.closest('[data-workflow-action]');if(button)runAction(button.dataset.workflowAction,button.dataset.workflowId);}],
+      "computer-workflow-004":["click",function(event){Promise.all([loadTasks(),loadWorkflows()]).catch(error=>setState(error.message,true));}],
+      "computer-workflow-005":["click",function(event){return TiantongRbac.logout();}]
+    });
+  </script>
 </body>
 </html>

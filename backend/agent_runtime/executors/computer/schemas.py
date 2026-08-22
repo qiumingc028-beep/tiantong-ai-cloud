@@ -28,6 +28,7 @@ class ComputerActionPayload(BaseModel):
     action_type: str
     target_application: str | None = None
     target_window: str | None = None
+    target_url: str | None = Field(default=None, max_length=255)
     target_description: str | None = None
     coordinates: dict[str, int] | None = None
     text_input: str | None = None

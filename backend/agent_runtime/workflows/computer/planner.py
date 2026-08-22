@@ -46,7 +46,11 @@ def build_workflow_plan(db: Session, payload: ComputerWorkflowCreatePayload) -> 
             action_type=step_payload["action_type"],
             target_application=step_payload.get("target_application"),
             target_bundle_id=step_payload.get("target_bundle_id"),
-            target_window=step_payload.get("target_window"),
+            target_window=(
+                step_payload.get("target_url")
+                if step_payload["action_type"] == "截图"
+                else step_payload.get("target_window")
+            ),
             target_control=step_payload.get("target_control"),
             input_summary=step_payload.get("input_summary"),
             expected_result=step_payload.get("expected_result"),

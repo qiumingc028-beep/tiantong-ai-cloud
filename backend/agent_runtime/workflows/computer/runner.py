@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from backend.agent_runtime.executors.computer.actions.service import approve_action, create_action_plan, execute_action, preview_action_plan
+from backend.agent_runtime.executors.computer.actions.service import approve_action, create_action_plan, execute_action, preflight_action_plan, preview_action_plan
 from backend.agent_runtime.executors.computer.actions.schemas import ComputerActionPlanCreatePayload
 from backend.agent_runtime.executors.computer.schemas import ComputerSessionCreatePayload
 from backend.agent_runtime.executors.computer.runtime import ComputerRuntime
@@ -65,6 +65,7 @@ def _step_to_dict(step: ComputerWorkflowStep) -> dict:
         "target_application": step.target_application,
         "target_bundle_id": step.target_bundle_id,
         "target_window": step.target_window,
+        "target_url": step.target_window if step.action_type == "截图" else None,
         "target_control": step.target_control,
         "input_summary": step.input_summary,
         "expected_result": step.expected_result,
@@ -199,6 +200,29 @@ def _ensure_task_result(db: Session, workflow: ComputerWorkflow, result_content:
 
 
 def create_workflow(db: Session, payload: ComputerWorkflowCreatePayload):
+    for step in payload.steps:
+        preflight_action_plan(
+            ComputerActionPlanCreatePayload(
+                session_id=payload.session_id or "workflow-create-preflight",
+                task_id=payload.task_id,
+                employee_id=payload.employee_id,
+                skill_id=payload.skill_id,
+                target_application=step.target_application,
+                target_bundle_id=step.target_bundle_id,
+                target_window=step.target_window,
+                target_url=step.target_url,
+                goal=payload.goal,
+                action_type=step.action_type,
+                control_type=step.target_control,
+                control_label=step.target_control,
+                control_identifier=step.target_control,
+                target_description=step.expected_result or step.input_summary or payload.goal,
+                coordinates=step.coordinates,
+                text_input=step.text_input,
+                risk_level=step.risk_level,
+                trace_id=step.trace_id or payload.trace_id,
+            )
+        )
     if payload.task_id is None or owned_task_or_none(db, task_id=payload.task_id) is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     workflow, steps = build_workflow_plan(db, payload)
@@ -209,7 +233,7 @@ def create_workflow(db: Session, payload: ComputerWorkflowCreatePayload):
             task_id=workflow.task_id,
             employee_id=workflow.employee_id,
             skill_id=workflow.skill_id,
-            executor_type="mock",
+            executor_type="openclaw" if get_settings().OPENCLAW_ADAPTER_ENABLED else "mock",
             environment_type="test",
             risk_level=workflow.risk_level,
             approval_status="等待审批",
@@ -314,7 +338,8 @@ def _build_action_payload(step: ComputerWorkflowStep, workflow: ComputerWorkflow
         skill_id=workflow.skill_id,
         target_application=step.target_application,
         target_bundle_id=step.target_bundle_id,
-        target_window=step.target_window,
+        target_window=None if step.action_type == "截图" else step.target_window,
+        target_url=step.target_window if step.action_type == "截图" else None,
         goal=workflow.goal,
         action_type=action_type_map.get(step.action_type, step.action_type),
         control_type=step.target_control,
@@ -381,6 +406,8 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
         raise HTTPException(status_code=409, detail="工作流会话不存在")
     if step.status not in {"待执行", "已批准", "已跳过"}:
         raise HTTPException(status_code=409, detail="工作流步骤状态不允许执行")
+    plan_payload = _build_action_payload(step, workflow)
+    preflight_action_plan(plan_payload)
     workflow.status = "执行中"
     if not workflow.started_at:
         workflow.started_at = utcnow()
@@ -414,7 +441,6 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
         db.refresh(step)
         db.refresh(checkpoint)
         return {"workflow": _workflow_to_dict(workflow), "step": _step_to_dict(step), "checkpoint": _checkpoint_to_dict(checkpoint), "paused": True}
-    plan_payload = _build_action_payload(step, workflow)
     plan_result = create_action_plan(db, plan_payload)
     plan_id = plan_result["plan"]["plan_id"]
     approval = approve_action(db, plan_id=plan_id, approved_by=None, approval_scope=workflow.goal, trace_id=trace_id or workflow.trace_id, current_screenshot_hash=current_screenshot_hash)
@@ -436,7 +462,7 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
         after_screenshot_reference=action_data.get("screenshot_after") or action_data.get("screenshot_before"),
         state_summary=current_window or current_application,
         result_summary=action_data.get("result") or action_data.get("error_message"),
-        verification_status=(runtime_result.get("verification") or {}).get("verification_status") or "无法判断",
+        verification_status=(action_result.get("verification") or {}).get("verification_status") or "无法判断",
         trace_id=trace_id or workflow.trace_id,
     )
     step.action_id = action_result["target"]["action_id"]

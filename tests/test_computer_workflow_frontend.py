@@ -36,3 +36,40 @@ def test_computer_workflow_frontend_pages_are_served(client):
     assert detail.status_code == 200
     assert "测试工作流中心" in center.text
     assert "测试工作流详情" in detail.text
+
+
+def test_computer_workflow_center_uses_real_owner_scoped_contract():
+    html = CENTER_PAGE.read_text(encoding="utf-8")
+
+    for contract in [
+        "/api/task-center/tasks",
+        "/api/v2/computer/workflows",
+        "/approve",
+        "/start",
+        "/resume",
+        "data-rbac-action=\"computer-workflow-001\"",
+        "data-rbac-action=\"computer-workflow-002\"",
+        "data-rbac-action=\"computer-workflow-003\"",
+        "data-rbac-action=\"computer-workflow-004\"",
+        "data-rbac-action=\"computer-workflow-005\"",
+        "暂无工作流",
+        "网络连接失败，请检查网络后重试。",
+        "action_type:'截图'",
+        "target_url:targetUrl",
+        "new URL('/computer-workflow-center.html',window.location.origin)",
+        "action_type:'等待'",
+    ]:
+        assert contract in html
+
+    assert "127.0.0.1:59200" not in html
+    assert "演示数据" not in html
+    assert "mock" not in html.lower()
+
+
+def test_computer_workflow_actions_follow_server_statuses():
+    html = CENTER_PAGE.read_text(encoding="utf-8")
+
+    assert "workflow.status==='等待批准'" in html
+    assert "workflow.status==='已批准'" in html
+    assert "workflow.status==='已暂停'" in html
+    assert "workflow.status==='已完成'" in html

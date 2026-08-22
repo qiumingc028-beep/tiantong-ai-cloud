@@ -23,6 +23,7 @@ def build_proposed_actions(payload: ComputerActionPlanCreatePayload) -> list[dic
             "target_application": payload.target_application,
             "target_bundle_id": payload.target_bundle_id,
             "target_window": payload.target_window,
+            "target_url": payload.target_url,
             "control_type": payload.control_type,
             "control_label": payload.control_label,
             "control_identifier": payload.control_identifier,

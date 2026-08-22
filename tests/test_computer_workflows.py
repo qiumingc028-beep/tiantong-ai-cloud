@@ -5,6 +5,11 @@ import uuid
 
 from backend.agent_runtime.workflows.computer.constants import WORKFLOW_ACTION_TYPES
 from backend.agent_runtime.executors.computer.models import ComputerSession
+from backend.agent_runtime.executors.computer.actions.models import (
+    ComputerActionApproval,
+    ComputerActionPlan,
+    ComputerActionTarget,
+)
 from backend.agent_runtime.workflows.computer.models import (
     ComputerWorkflow,
     ComputerWorkflowApproval,
@@ -19,6 +24,7 @@ from tests.test_v2_alpha_postgresql_migration_regression import _create_scoped_o
 
 def _enable_workflow_flags(monkeypatch):
     class _Settings:
+        IS_PRODUCTION = False
         MAC_SAFE_WORKFLOW_ENABLED = True
         MAC_MULTI_STEP_ENABLED = True
         COMPUTER_EXECUTOR_ENABLED = True
@@ -64,6 +70,7 @@ def _enable_workflow_flags(monkeypatch):
             "MAC_SAFE_TEXT_INPUT_ENABLED",
         },
     )
+    return _Settings
 
 
 def _create_workflow_payload(task_id=None):
@@ -134,6 +141,10 @@ def _workflow_state(db):
     return state
 
 
+def _action_plan_counts(db):
+    return tuple(db.query(model).count() for model in (ComputerActionPlan, ComputerActionTarget, ComputerActionApproval))
+
+
 def test_computer_workflow_api_and_execution_flow(client, admin_headers, monkeypatch):
     _enable_workflow_flags(monkeypatch)
 
@@ -193,6 +204,79 @@ def test_computer_workflow_api_and_execution_flow(client, admin_headers, monkeyp
     audit_payload = audit_response.json()
     assert audit_payload["workflow_id"] == workflow_id
     assert any(event["event"] == "WORKFLOW_PLAN_CREATED" for event in audit_payload["events"])
+
+
+def test_real_workflow_missing_target_url_fails_before_plan_or_workflow_write(client, admin_headers, test_db, monkeypatch):
+    settings = _enable_workflow_flags(monkeypatch)
+    settings.OPENCLAW_ADAPTER_ENABLED = True
+    settings.PAGE_CAPTURE_ALLOWED_ORIGINS = ["http://127.0.0.1:59200"]
+    settings.PAGE_CAPTURE_CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    settings.PAGE_CAPTURE_OUTPUT_ROOT = "/private/tmp/tiantong-r185-test-captures"
+    settings.PAGE_CAPTURE_TIMEOUT_SECONDS = 10
+    monkeypatch.setattr("backend.agent_runtime.executors.computer.runtime.get_settings", lambda: settings)
+
+    task_id = _create_owned_task(client, admin_headers, "ComputerWorkflow missing target URL")
+    workflow_payload = {
+        "task_id": task_id,
+        "goal": "Real page capture requires a bound target",
+        "risk_level": "低风险",
+        "max_steps": 2,
+        "steps": [
+            {"action_type": "截图", "expected_result": "真实页面PNG"},
+            {"action_type": "等待", "expected_result": "安全结束"},
+        ],
+    }
+    with test_db() as db:
+        before_workflow = _workflow_state(db)
+        before_plans = _action_plan_counts(db)
+
+    response = client.post(
+        "/api/v2/computer/workflows",
+        json=workflow_payload,
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "截图动作必须提供允许的target_url"
+    with test_db() as db:
+        assert _workflow_state(db) == before_workflow
+        assert _action_plan_counts(db) == before_plans
+
+
+def test_real_workflow_unavailable_adapter_fails_before_plan_or_workflow_write(client, admin_headers, test_db, monkeypatch):
+    settings = _enable_workflow_flags(monkeypatch)
+    settings.OPENCLAW_ADAPTER_ENABLED = True
+    settings.PAGE_CAPTURE_ALLOWED_ORIGINS = ["http://127.0.0.1:59200"]
+    settings.PAGE_CAPTURE_CHROME_PATH = "/private/tmp/r185-missing-chrome"
+    settings.PAGE_CAPTURE_OUTPUT_ROOT = "/private/tmp/tiantong-r185-test-captures"
+    settings.PAGE_CAPTURE_TIMEOUT_SECONDS = 10
+    monkeypatch.setattr("backend.agent_runtime.executors.computer.runtime.get_settings", lambda: settings)
+    task_id = _create_owned_task(client, admin_headers, "ComputerWorkflow unavailable adapter")
+    with test_db() as db:
+        before_workflow = _workflow_state(db)
+        before_plans = _action_plan_counts(db)
+
+    response = client.post(
+        "/api/v2/computer/workflows",
+        headers=admin_headers,
+        json={
+            "task_id": task_id,
+            "goal": "Unavailable adapter must not write",
+            "max_steps": 2,
+            "steps": [
+                {
+                    "action_type": "截图",
+                    "target_url": "http://127.0.0.1:59200/computer-workflow-center.html",
+                },
+                {"action_type": "等待"},
+            ],
+        },
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "真实页面截图适配器不可用"
+    with test_db() as db:
+        assert _workflow_state(db) == before_workflow
+        assert _action_plan_counts(db) == before_plans
 
 
 def test_computer_workflow_public_routes_enforce_task_ownership(client, admin_headers, test_db, monkeypatch):

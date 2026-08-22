@@ -127,10 +127,9 @@ def _current_screenshot_hash(payload: dict | None) -> str | None:
     return payload.get("current_screenshot_hash")
 
 
-def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload):
-    session = get_session(db, payload.session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="电脑会话不存在")
+def preflight_action_plan(payload: ComputerActionPlanCreatePayload) -> None:
+    from ..runtime import preflight_action_payload
+
     ensure_safe_action_enabled()
     ensure_per_action_approval_enabled()
     ensure_post_action_verification_enabled()
@@ -149,6 +148,14 @@ def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload):
         ensure_text_safe(payload.text_input)
     elif payload.action_type == "按允许的快捷键":
         ensure_shortcut_safe(payload.text_input)
+    preflight_action_payload(payload)
+
+
+def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload):
+    preflight_action_plan(payload)
+    session = get_session(db, payload.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="电脑会话不存在")
     resolved = resolve_target(
         type("TargetPayload", (), {
             "target_application": payload.target_application,
@@ -171,6 +178,7 @@ def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload):
         target_application=payload.target_application,
         target_bundle_id=payload.target_bundle_id,
         target_window=payload.target_window,
+        target_url=payload.target_url,
         goal=payload.goal,
         action_type=payload.action_type,
         control_type=payload.control_type,
@@ -339,10 +347,16 @@ def execute_action(db: Session, *, plan_id: str, current_application: str | None
         approval.approval_status = "已过期"
         db.commit()
         raise HTTPException(status_code=409, detail="窗口已变化，审批失效")
+    proposed_actions = json.loads(plan.proposed_actions_json or "[]")
+    proposed_action = next(
+        (item for item in proposed_actions if item.get("action_id") == target.action_id),
+        {},
+    )
     payload = ComputerActionPayload(
         action_type=target.action_type,
         target_application=target.expected_application,
         target_window=target.expected_window,
+        target_url=proposed_action.get("target_url"),
         target_description=target.target_description,
         coordinates=json.loads(target.coordinates_json) if target.coordinates_json else None,
         text_input=target.input_text_summary,

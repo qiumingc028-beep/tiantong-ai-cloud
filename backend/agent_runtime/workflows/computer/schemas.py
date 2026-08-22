@@ -13,6 +13,7 @@ class WorkflowStepInput(BaseModel):
     target_application: str | None = None
     target_bundle_id: str | None = None
     target_window: str | None = None
+    target_url: str | None = Field(default=None, max_length=255)
     target_control: str | None = None
     input_summary: str | None = None
     expected_result: str | None = None

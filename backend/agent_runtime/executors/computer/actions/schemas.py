@@ -17,6 +17,7 @@ class ComputerActionPlanCreatePayload(BaseModel):
     target_application: str | None = None
     target_bundle_id: str | None = None
     target_window: str | None = None
+    target_url: str | None = Field(default=None, max_length=255)
     goal: str
     action_type: str
     control_type: str | None = None
