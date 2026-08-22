@@ -3,7 +3,7 @@ from io import BytesIO
 
 import openpyxl
 
-from backend.models import EmployeeLog, JdDailyMetric, MetricDaily, Store, User
+from backend.models import EmployeeLog, JdDailyMetric, MetricDaily, Permission, Role, Store, User
 
 
 def test_rbac_guard_is_served_to_real_browser(client):
@@ -13,7 +13,22 @@ def test_rbac_guard_is_served_to_real_browser(client):
     assert "TiantongRbac" in response.text
 
 
-def test_owner_menu_is_limited_to_the_three_usable_pages(client, owner_headers):
+def test_owner_menu_returns_all_authorized_uat_pages(client, owner_headers, test_db):
+    with test_db() as db:
+        owner_role = db.query(Role).filter(Role.code == "owner").one()
+        for code, name in (
+            ("menu.ai_employees", "AI Employees"),
+            ("menu.settings", "Settings"),
+            ("menu.computer_executor", "Computer Executor"),
+        ):
+            permission = db.query(Permission).filter(Permission.code == code).one_or_none()
+            if permission is None:
+                permission = Permission(code=code, name=name)
+                db.add(permission)
+            if permission not in owner_role.permissions:
+                owner_role.permissions.append(permission)
+        db.commit()
+
     response = client.get("/api/me", headers=owner_headers)
 
     assert response.status_code == 200
@@ -21,7 +36,28 @@ def test_owner_menu_is_limited_to_the_three_usable_pages(client, owner_headers):
         ("老板驾驶舱", "/"),
         ("店铺与数据", "/import.html"),
         ("经营中心", "/jd-dashboard.html"),
+        ("AI员工名册", "/ai-employees.html"),
+        ("电脑执行中心", "/computer-execution-center.html"),
+        ("系统设置", "/settings.html"),
     ]
+    permissions = [item["permission"] for item in response.json()["menus"]]
+    assert len(permissions) == len(set(permissions))
+
+
+def test_restricted_user_menu_keeps_unknown_permissions_fail_closed(client, test_db):
+    with test_db() as db:
+        viewer_role = db.query(Role).filter(Role.code == "viewer").one()
+        unknown = Permission(code="menu.r178_unknown", name="R178 Unknown")
+        viewer_role.permissions.append(unknown)
+        db.add(unknown)
+        db.commit()
+
+    login = client.post("/api/login", json={"username": "viewer", "password": "password"})
+    assert login.status_code == 200
+    response = client.get("/api/me", headers={"Authorization": f"Bearer {login.json()['token']}"})
+
+    assert response.status_code == 200
+    assert response.json()["menus"] == []
 
 
 def test_csv_import_reports_errors_blocks_duplicates_and_persists(client, owner_headers):
