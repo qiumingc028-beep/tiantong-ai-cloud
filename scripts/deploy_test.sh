@@ -179,8 +179,31 @@ PY
 (
   cd "${ROOT_DIR}"
   export APP_ENV=test SERVICE_ROLE=backend DATABASE_URL="${database_url}" REDIS_URL="${redis_url}" ASSET_STORAGE_ROOT="${asset_root}"
-  nohup "${PYTHON_BIN}" -m uvicorn backend.main:app --host "${TEST_BACKEND_HOST}" --port "${TEST_BACKEND_PORT}" --log-config backend/uvicorn_log_config.json >"${log_file}" 2>&1 &
-  echo "$!" >"${pid_file}.tmp"
+  "${PYTHON_BIN}" - "${ROOT_DIR}" "${log_file}" "${PYTHON_BIN}" "${TEST_BACKEND_HOST}" "${TEST_BACKEND_PORT}" >"${pid_file}.tmp" <<'PY'
+from pathlib import Path
+import os
+import subprocess
+import sys
+import time
+
+cwd, log_path, python, host, port = sys.argv[1:]
+command = [python, "-m", "uvicorn", "backend.main:app", "--host", host, "--port", port, "--log-config", "backend/uvicorn_log_config.json"]
+with Path(log_path).open("ab", buffering=0) as log:
+    process = subprocess.Popen(
+        command,
+        cwd=Path(cwd).resolve(strict=True),
+        env=os.environ.copy(),
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+time.sleep(0.1)
+if process.poll() is not None:
+    raise SystemExit("test backend exited during detached startup")
+print(process.pid)
+PY
 )
 mv "${pid_file}.tmp" "${pid_file}"
 backend_pid="$(sed -n '1p' "${pid_file}")"

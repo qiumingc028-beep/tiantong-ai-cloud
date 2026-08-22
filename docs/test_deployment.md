@@ -29,7 +29,7 @@ TEST_REDIS_HOST=127.0.0.1 TEST_REDIS_PORT=<dynamic-test-port> \
 bash scripts/deploy_test.sh
 ```
 
-The backend binds only `http://127.0.0.1:<TEST_BACKEND_PORT>`. PID, metadata, migrations, assets, and logs live under `/tmp/tiantong-test-deploy-<TEST_RUNTIME_ID>/`. Repeating the same command returns `ALREADY_RUNNING` instead of starting a duplicate.
+The backend binds only `http://127.0.0.1:<TEST_BACKEND_PORT>`. PID, metadata, migrations, assets, and logs live under `/tmp/tiantong-test-deploy-<TEST_RUNTIME_ID>/`. Repeating the same command returns `ALREADY_RUNNING` instead of starting a duplicate. After all test-only gates pass, the deployment entry uses the Python standard library to create a new process session, disconnect stdin, close inherited file descriptors, and write stdout/stderr only to the protected runtime log, so the backend remains alive after the launching shell exits.
 
 Check `/api/health` and `/api/ready`, or run the guarded smoke suite:
 
