@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.orm import Session
@@ -99,8 +100,9 @@ def add_evidence_row(db: Session, *, session_id: str, action_id: str | None, evi
 
 
 def add_policy_event(db: Session, *, session_id: str | None, action_id: str | None, event_code: str, event_message: str | None, risk_level: str, sensitive_data_involved: bool = False, trace_id: str | None = None):
+    event_identity = json.dumps(["computer_policy_event", session_id, action_id, event_code], ensure_ascii=False, separators=(",", ":"))
     row = ComputerPolicyEvent(
-        event_id=f"{session_id or 'global'}-{action_id or 'policy'}-{event_code}",
+        event_id=str(uuid.uuid5(uuid.NAMESPACE_URL, event_identity)),
         session_id=session_id,
         action_id=action_id,
         event_code=event_code,

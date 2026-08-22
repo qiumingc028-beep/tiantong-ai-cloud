@@ -1,15 +1,48 @@
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
+from backend.agent_runtime.executors.computer.models import ComputerPolicyEvent
+from backend.agent_runtime.executors.computer.session import add_policy_event
 from backend.models import AiEmployee
 
 
 CENTER_PAGE = Path("frontend/computer-execution-center.html")
 DETAIL_PAGE = Path("frontend/computer-execution-detail.html")
+
+
+def test_computer_policy_event_id_is_deterministic_uuid_without_truncation(test_db):
+    assert ComputerPolicyEvent.__table__.c.event_id.type.length == 36
+    db = test_db()
+    try:
+        def stored_event_id(session_id, action_id, event_code):
+            row = add_policy_event(
+                db,
+                session_id=session_id,
+                action_id=action_id,
+                event_code=event_code,
+                event_message="policy event id regression",
+                risk_level="低风险",
+            )
+            event_id = row.event_id
+            assert db.get(ComputerPolicyEvent, event_id) is row
+            db.rollback()
+            return event_id
+
+        long_components = ("s" * 36, "a" * 36, "EVENT_" + "x" * 74)
+        first_id = stored_event_id(*long_components)
+        assert len(first_id) == 36
+        assert uuid.UUID(first_id).version == 5
+        assert stored_event_id(*long_components) == first_id
+        assert stored_event_id("scope-a", "b", "c") != stored_event_id("scope", "a-b", "c")
+        assert stored_event_id(None, None, "x" * 79 + "a") != stored_event_id(None, None, "x" * 79 + "b")
+    finally:
+        db.rollback()
+        db.close()
 
 
 def enable_computer_flags(monkeypatch, *, take_over: bool = True):
