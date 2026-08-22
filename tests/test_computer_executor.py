@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from backend.agent_runtime.executors.computer.models import ComputerPolicyEvent
+from backend.agent_runtime.executors.computer.actions.models import ComputerActionPlan
+from backend.agent_runtime.executors.computer.models import ComputerAction, ComputerEvidence, ComputerPolicyEvent
 from backend.agent_runtime.executors.computer.session import add_policy_event
 from backend.models import AiEmployee
 
@@ -42,6 +43,170 @@ def test_computer_policy_event_id_is_deterministic_uuid_without_truncation(test_
         assert stored_event_id(None, None, "x" * 79 + "a") != stored_event_id(None, None, "x" * 79 + "b")
     finally:
         db.rollback()
+        db.close()
+
+
+def test_action_plan_persists_action_before_policy_event_and_rolls_back_atomically(postgres_alpha_runtime, monkeypatch):
+    client, owner_headers, session_factory = postgres_alpha_runtime
+    enable_safe_action_flags(monkeypatch)
+    created_session = client.post(
+        "/api/v2/computer/sessions",
+        headers=owner_headers,
+        json={
+            "executor_type": "mock",
+            "environment_type": "test",
+            "risk_level": "中低",
+            "approval_status": "等待审批",
+            "allowed_applications": ["隔离测试浏览器"],
+            "allowed_windows": [".*测试.*"],
+        },
+    )
+    assert created_session.status_code == 200
+    session_id = created_session.json()["session"]["session_id"]
+
+    def plan_payload(trace_id):
+        return {
+            "session_id": session_id,
+            "target_application": "隔离测试浏览器",
+            "target_window": "天统 AI 单步操作测试窗口",
+            "goal": "验证动作与策略事件原子持久化",
+            "action_type": "单击",
+            "control_type": "普通按钮",
+            "control_label": "测试按钮",
+            "control_identifier": "btn-r190",
+            "target_description": "点击安全测试按钮",
+            "coordinates": {"x": 12, "y": 18},
+            "approval_mode": "逐步审批",
+            "risk_level": "中低",
+            "max_actions": 1,
+            "trace_id": trace_id,
+            "allow_coordinate_fallback": False,
+        }
+
+    created = client.post(
+        "/api/v2/computer/action-plans",
+        headers=owner_headers,
+        json=plan_payload("trace-r190-commit"),
+    )
+    assert created.status_code == 200
+    action_id = created.json()["target"]["action_id"]
+    db = session_factory()
+    try:
+        action = db.get(ComputerAction, action_id)
+        event = db.query(ComputerPolicyEvent).filter(
+            ComputerPolicyEvent.action_id == action_id,
+            ComputerPolicyEvent.event_code == "ACTION_PREVIEW_CREATED",
+        ).one()
+        assert action is not None
+        assert event.action_id == action.action_id
+        assert len(event.event_id) == 36
+    finally:
+        db.close()
+
+    approved = client.post(
+        f"/api/v2/computer/actions/{action_id}/approve?trace_id=trace-r190-cross-session-approve",
+        headers=owner_headers,
+    )
+    assert approved.status_code == 200
+    other_session = client.post(
+        "/api/v2/computer/sessions",
+        headers=owner_headers,
+        json={
+            "executor_type": "mock",
+            "environment_type": "test",
+            "risk_level": "中低",
+            "approval_status": "等待审批",
+            "allowed_applications": ["隔离测试浏览器"],
+            "allowed_windows": [".*测试.*"],
+        },
+    )
+    assert other_session.status_code == 200
+    other_session_id = other_session.json()["session"]["session_id"]
+    db = session_factory()
+    try:
+        action_before = db.get(ComputerAction, action_id)
+        action_state_before = (
+            action_before.session_id,
+            action_before.trace_id,
+            action_before.result,
+            action_before.finished_at,
+        )
+        evidence_count_before = db.query(ComputerEvidence).count()
+        event_count_before = db.query(ComputerPolicyEvent).count()
+    finally:
+        db.close()
+
+    cross_session = client.post(
+        f"/api/v2/computer/sessions/{other_session_id}/actions",
+        headers=owner_headers,
+        json={
+            "action_type": "单击",
+            "target_application": "隔离测试浏览器",
+            "target_window": "天统 AI 单步操作测试窗口",
+            "target_description": "跨会话动作必须拒绝",
+            "coordinates": {"x": 12, "y": 18},
+            "trace_id": "trace-r190-cross-session",
+            "approval_context": {
+                "plan_id": created.json()["plan"]["plan_id"],
+                "action_id": action_id,
+            },
+        },
+    )
+    assert cross_session.status_code == 404
+    assert cross_session.json()["detail"] == "动作计划不存在"
+    db = session_factory()
+    try:
+        action_after = db.get(ComputerAction, action_id)
+        assert (
+            action_after.session_id,
+            action_after.trace_id,
+            action_after.result,
+            action_after.finished_at,
+        ) == action_state_before
+        assert db.query(ComputerEvidence).count() == evidence_count_before
+        assert db.query(ComputerPolicyEvent).count() == event_count_before
+    finally:
+        db.close()
+
+    from backend.agent_runtime.executors.computer.actions import service
+
+    original_add_policy_event = service.add_policy_event
+    with monkeypatch.context() as failure_patch:
+        def fail_after_policy_event(*args, **kwargs):
+            original_add_policy_event(*args, **kwargs)
+            raise RuntimeError("R190 forced rollback after policy event flush")
+
+        failure_patch.setattr(service, "add_policy_event", fail_after_policy_event)
+        with pytest.raises(RuntimeError, match="R190 forced rollback"):
+            client.post(
+                "/api/v2/computer/action-plans",
+                headers=owner_headers,
+                json=plan_payload("trace-r190-rollback"),
+            )
+
+    db = session_factory()
+    try:
+        assert db.query(ComputerAction).filter(ComputerAction.trace_id == "trace-r190-rollback").count() == 0
+        assert db.query(ComputerPolicyEvent).filter(ComputerPolicyEvent.trace_id == "trace-r190-rollback").count() == 0
+        assert db.query(ComputerActionPlan).filter(ComputerActionPlan.trace_id == "trace-r190-rollback").count() == 0
+    finally:
+        db.close()
+
+    retried = client.post(
+        "/api/v2/computer/action-plans",
+        headers=owner_headers,
+        json=plan_payload("trace-r190-rollback"),
+    )
+    assert retried.status_code == 200
+    retried_action_id = retried.json()["target"]["action_id"]
+    db = session_factory()
+    try:
+        assert db.query(ComputerAction).filter(ComputerAction.trace_id == "trace-r190-rollback").one().action_id == retried_action_id
+        assert db.query(ComputerPolicyEvent).filter(
+            ComputerPolicyEvent.action_id == retried_action_id,
+            ComputerPolicyEvent.event_code == "ACTION_PREVIEW_CREATED",
+        ).count() == 1
+    finally:
         db.close()
 
 
@@ -297,6 +462,7 @@ def enable_safe_action_flags(monkeypatch):
     )
     monkeypatch.setattr("backend.config.get_settings", lambda: settings)
     monkeypatch.setattr("backend.routers.computer_executor_v2.get_settings", lambda: settings)
+    monkeypatch.setattr("backend.agent_runtime.executors.computer.runtime.get_settings", lambda: settings)
     monkeypatch.setattr("backend.agent_runtime.executors.computer.policy.get_settings", lambda: settings)
     monkeypatch.setattr("backend.agent_runtime.executors.computer.actions.policy.get_settings", lambda: settings)
     monkeypatch.setattr("backend.agent_runtime.registry.get_settings", lambda: settings)

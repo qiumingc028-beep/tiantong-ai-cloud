@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..schemas import ComputerActionPayload, ComputerSessionCreatePayload
 from ..runtime import ComputerRuntime
-from ..session import add_policy_event, get_session
+from ..session import add_action_row, add_policy_event, get_session
 from ..evidence import utcnow
 from ..policy import detect_sensitive_region
 from .policy import (
@@ -204,6 +204,14 @@ def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload):
     )
     plan.status = "等待批准"
     target.status = "待校验"
+    add_action_row(
+        db,
+        session=session,
+        payload=plan_payload,
+        result={"action_id": target.action_id, "risk_level": plan.risk_level},
+        approval_required=True,
+        approval_status="等待审批",
+    )
     add_policy_event(
         db,
         session_id=session.session_id,

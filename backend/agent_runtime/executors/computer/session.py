@@ -55,31 +55,35 @@ def update_session_status(db: Session, session: ComputerSession, *, status: str 
 
 
 def add_action_row(db: Session, *, session: ComputerSession, payload, result: dict, screenshot_before: str | None = None, screenshot_after: str | None = None, approval_required: bool = False, approval_status: str = "无需审批", error_code: str | None = None, error_message: str | None = None):
-    seq = len(session.actions) + 1
-    row = ComputerAction(
-        action_id=result.get("action_id") or f"{session.session_id}-{seq}",
-        session_id=session.session_id,
-        sequence_number=seq,
-        action_type=payload.action_type,
-        target_application=payload.target_application,
-        target_window=payload.target_window,
-        target_description=payload.target_description,
-        input_summary=(payload.text_input[:128] if payload.text_input else None),
-        coordinates_json=json.dumps(payload.coordinates, ensure_ascii=False) if payload.coordinates else None,
-        risk_level=result.get("risk_level", "低风险"),
-        approval_required=approval_required,
-        approval_status=approval_status,
-        screenshot_before=screenshot_before,
-        screenshot_after=screenshot_after,
-        result=result.get("result"),
-        error_code=error_code,
-        error_message=error_message,
-        started_at=result.get("started_at"),
-        finished_at=result.get("finished_at"),
-        duration_ms=result.get("duration_ms"),
-        trace_id=payload.trace_id,
-    )
-    db.add(row)
+    action_id = result.get("action_id") or f"{session.session_id}-{len(session.actions) + 1}"
+    row = db.get(ComputerAction, action_id)
+    if row is None:
+        row = ComputerAction(
+            action_id=action_id,
+            session_id=session.session_id,
+            sequence_number=len(session.actions) + 1,
+        )
+        db.add(row)
+    elif row.session_id != session.session_id:
+        raise ValueError("电脑动作不属于当前会话")
+    row.action_type = payload.action_type
+    row.target_application = payload.target_application
+    row.target_window = payload.target_window
+    row.target_description = payload.target_description
+    row.input_summary = payload.text_input[:128] if payload.text_input else None
+    row.coordinates_json = json.dumps(payload.coordinates, ensure_ascii=False) if payload.coordinates else None
+    row.risk_level = result.get("risk_level", "低风险")
+    row.approval_required = approval_required
+    row.approval_status = approval_status
+    row.screenshot_before = screenshot_before
+    row.screenshot_after = screenshot_after
+    row.result = result.get("result")
+    row.error_code = error_code
+    row.error_message = error_message
+    row.started_at = result.get("started_at")
+    row.finished_at = result.get("finished_at")
+    row.duration_ms = result.get("duration_ms")
+    row.trace_id = payload.trace_id
     db.flush()
     return row
 

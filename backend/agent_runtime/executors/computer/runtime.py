@@ -95,6 +95,8 @@ class ComputerRuntime:
             safe_action_plan = db.get(ComputerActionPlan, plan_id)
             if not safe_action_plan:
                 raise HTTPException(status_code=404, detail="动作计划不存在")
+            if safe_action_plan.session_id != session.session_id:
+                raise HTTPException(status_code=404, detail="动作计划不存在")
             safe_action_target = db.query(ComputerActionTarget).filter(
                 ComputerActionTarget.plan_id == safe_action_plan.plan_id,
                 ComputerActionTarget.action_id == action_id,
@@ -137,7 +139,7 @@ class ComputerRuntime:
             session=session,
             payload=payload,
             result={
-                "action_id": uuid.uuid4().hex,
+                "action_id": safe_action_target.action_id if safe_action_target is not None else uuid.uuid4().hex,
                 "result": json_text(response.action_result if isinstance(response, ComputerExecutorOutcome) else response),
                 "risk_level": session.risk_level,
                 "started_at": started,
