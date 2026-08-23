@@ -379,7 +379,7 @@ def start_workflow(db: Session, workflow_id: str, *, current_application: str | 
     workflow = owned_workflow_or_404(db, workflow_id)
     if workflow.approval_status != "已批准":
         raise HTTPException(status_code=403, detail="工作流尚未批准")
-    if workflow.status not in {"已批准", "已暂停", "等待关键节点确认", "执行中"}:
+    if workflow.status != "已批准":
         raise HTTPException(status_code=409, detail="工作流状态不允许启动")
     step = _next_step(db, workflow)
     if not step:
@@ -409,10 +409,6 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
         raise HTTPException(status_code=409, detail="工作流步骤状态不允许执行")
     plan_payload = _build_action_payload(step, workflow)
     preflight_action_plan(plan_payload)
-    workflow.status = "执行中"
-    if not workflow.started_at:
-        workflow.started_at = utcnow()
-    step.started_at = utcnow()
     approved_checkpoint = (
         db.query(ComputerWorkflowCheckpoint)
         .filter(
@@ -442,6 +438,10 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
         db.refresh(step)
         db.refresh(checkpoint)
         return {"workflow": _workflow_to_dict(workflow), "step": _step_to_dict(step), "checkpoint": _checkpoint_to_dict(checkpoint), "paused": True}
+    workflow.status = "执行中"
+    if not workflow.started_at:
+        workflow.started_at = utcnow()
+    step.started_at = utcnow()
     capture_authorization = None
     try:
         if step.action_type == "截图":
@@ -467,6 +467,7 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
             current_screenshot_hash=current_screenshot_hash,
             trace_id=trace_id or workflow.trace_id,
             capture_authorization=capture_authorization,
+            commit=False,
         )
     except Exception:
         db.rollback()
@@ -474,46 +475,54 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
     finally:
         if capture_authorization is not None:
             capture_authorization.clear()
-    runtime_result = action_result.get("result") or {}
-    action_data = runtime_result.get("action") or {}
-    verification_row = verify_step_result(
-        db,
-        workflow,
-        step,
-        before_screenshot_reference=plan_result["target"].get("screenshot_before"),
-        after_screenshot_reference=action_data.get("screenshot_after") or action_data.get("screenshot_before"),
-        state_summary=current_window or current_application,
-        result_summary=action_data.get("result") or action_data.get("error_message"),
-        verification_status=(action_result.get("verification") or {}).get("verification_status") or "无法判断",
-        trace_id=trace_id or workflow.trace_id,
-    )
-    step.action_id = action_result["target"]["action_id"]
-    step.started_at = step.started_at or utcnow()
-    step.finished_at = utcnow()
-    step.status = "已完成" if verification_row.verification_status in {"结果符合预期", "结果部分符合"} else "已失败"
-    workflow.current_step = max(workflow.current_step, sequence_number)
-    workflow.checkpoint_count = workflow.checkpoint_count + (1 if step.checkpoint_required else 0)
-    workflow.status = "已暂停"
-    if step.status == "已失败":
-        workflow.status = "已失败"
-        workflow.stop_reason = verification_row.result_summary or "步骤验证失败"
-    next_step = _next_step(db, workflow)
-    if not next_step:
-        workflow.status = "已完成" if step.status == "已完成" else workflow.status
-        if workflow.status == "已完成":
-            workflow.finished_at = utcnow()
-            _ensure_task_result(db, workflow, f"工作流 {workflow.goal} 已完成")
-    elif workflow.status == "已暂停" and step.action_type in SAFE_CONTINUE_ACTIONS and not next_step.checkpoint_required and get_settings().WORKFLOW_AUTO_CONTINUE_ENABLED:
-        workflow.status = "执行中"
-    recovery = None
-    if step.status == "已失败":
-        recovery = record_recovery(db, workflow, step_id=step.step_id, reason=workflow.stop_reason, result_summary="失败后停止，等待人工恢复", trace_id=trace_id or workflow.trace_id)
-        workflow.status = "已失败"
-    db.commit()
-    db.refresh(workflow)
-    db.refresh(step)
-    if recovery:
-        db.refresh(recovery)
+    try:
+        runtime_result = action_result.get("result") or {}
+        action_data = runtime_result.get("action") or {}
+        verification_row = verify_step_result(
+            db,
+            workflow,
+            step,
+            before_screenshot_reference=plan_result["target"].get("screenshot_before"),
+            after_screenshot_reference=action_data.get("screenshot_after") or action_data.get("screenshot_before"),
+            state_summary=current_window or current_application,
+            result_summary=action_data.get("result") or action_data.get("error_message"),
+            verification_status=(action_result.get("verification") or {}).get("verification_status") or "无法判断",
+            trace_id=trace_id or workflow.trace_id,
+        )
+        step.action_id = action_result["target"]["action_id"]
+        step.finished_at = utcnow()
+        step.status = "已完成" if verification_row.verification_status in {"结果符合预期", "结果部分符合"} else "已失败"
+        workflow.current_step = max(workflow.current_step, sequence_number)
+        workflow.checkpoint_count = workflow.checkpoint_count + (1 if step.checkpoint_required else 0)
+        workflow.status = "已暂停"
+        if step.status == "已失败":
+            workflow.status = "已失败"
+            workflow.stop_reason = verification_row.result_summary or "步骤验证失败"
+        next_step = _next_step(db, workflow)
+        if not next_step:
+            workflow.status = "已完成" if step.status == "已完成" else workflow.status
+            if workflow.status == "已完成":
+                workflow.finished_at = utcnow()
+                _ensure_task_result(db, workflow, f"工作流 {workflow.goal} 已完成")
+        elif workflow.status == "已暂停" and step.action_type in SAFE_CONTINUE_ACTIONS and not next_step.checkpoint_required and get_settings().WORKFLOW_AUTO_CONTINUE_ENABLED:
+            workflow.status = "执行中"
+        recovery = None
+        if step.status == "已失败":
+            recovery = record_recovery(db, workflow, step_id=step.step_id, reason=workflow.stop_reason, result_summary="失败后停止，等待人工恢复", trace_id=trace_id or workflow.trace_id)
+            workflow.status = "已失败"
+        db.commit()
+        db.refresh(workflow)
+        db.refresh(step)
+        if recovery:
+            db.refresh(recovery)
+    except Exception:
+        db.rollback()
+        screenshot_reference = ((action_result.get("result") or {}).get("action") or {}).get("screenshot_after")
+        if screenshot_reference:
+            from backend.agent_runtime.executors.computer.runtime import _remove_failed_capture
+
+            _remove_failed_capture(screenshot_reference, get_settings())
+        raise
     return {
         "workflow": _workflow_to_dict(workflow),
         "step": _step_to_dict(step),
@@ -540,13 +549,16 @@ def pause_workflow(db: Session, workflow_id: str, reason: str | None = None) -> 
 
 def resume_workflow(db: Session, workflow_id: str, *, current_application: str | None = None, current_window: str | None = None, current_screenshot_hash: str | None = None, trace_id: str | None = None) -> dict:
     workflow = owned_workflow_or_404(db, workflow_id)
+    if workflow.status != "已暂停":
+        raise HTTPException(status_code=409, detail="工作流状态不允许恢复")
     next_step = _next_step(db, workflow)
-    if not next_step:
-        workflow.status = "已完成"
-        workflow.finished_at = utcnow()
-        db.commit()
-        db.refresh(workflow)
-        return {"workflow": _workflow_to_dict(workflow), "steps": []}
+    if (
+        not next_step
+        or next_step.status not in {"待执行", "已批准", "已跳过"}
+        or next_step.started_at is not None
+        or next_step.action_id is not None
+    ):
+        raise HTTPException(status_code=409, detail="工作流状态数据不允许恢复")
     return execute_step(db, workflow_id, next_step.sequence_number, current_application=current_application, current_window=current_window, current_screenshot_hash=current_screenshot_hash, trace_id=trace_id)
 
 

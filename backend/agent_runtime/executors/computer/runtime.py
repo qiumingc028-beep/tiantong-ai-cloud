@@ -88,7 +88,14 @@ class ComputerRuntime:
         return session
 
     @staticmethod
-    def execute_action(db: Session, session: ComputerSession, payload: ComputerActionPayload, *, capture_authorization=None):
+    def execute_action(
+        db: Session,
+        session: ComputerSession,
+        payload: ComputerActionPayload,
+        *,
+        capture_authorization=None,
+        commit: bool = True,
+    ):
         ensure_executor_enabled()
         ensure_screen_capture_enabled()
         validate_action_payload(payload)
@@ -123,11 +130,17 @@ class ComputerRuntime:
                 raise HTTPException(status_code=403, detail="动作尚未批准")
             if _normalize_dt(safe_action_approval.expires_at) and _normalize_dt(safe_action_approval.expires_at) < utcnow():
                 safe_action_approval.approval_status = "已过期"
-                db.commit()
+                if commit:
+                    db.commit()
+                else:
+                    db.flush()
                 raise HTTPException(status_code=409, detail="审批已过期")
             if safe_action_context.get("current_screenshot_hash") and safe_action_approval.before_screenshot_hash and safe_action_context.get("current_screenshot_hash") != safe_action_approval.before_screenshot_hash:
                 safe_action_approval.approval_status = "已过期"
-                db.commit()
+                if commit:
+                    db.commit()
+                else:
+                    db.flush()
                 raise HTTPException(status_code=409, detail="窗口已变化，审批失效")
             approval_status_value = "已批准"
         else:
@@ -191,7 +204,10 @@ class ComputerRuntime:
                 safe_action_plan.status = "已暂停"
                 session.approval_status = "已批准"
                 session.status = "已暂停"
-            db.commit()
+            if commit:
+                db.commit()
+            else:
+                db.flush()
             db.refresh(session)
             if safe_action_plan is not None:
                 db.refresh(safe_action_plan)

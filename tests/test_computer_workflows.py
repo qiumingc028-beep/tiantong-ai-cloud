@@ -3,8 +3,16 @@ from __future__ import annotations
 import json
 import uuid
 
+import pytest
+from sqlalchemy.orm import Session as OrmSession
+
 from backend.agent_runtime.workflows.computer.constants import WORKFLOW_ACTION_TYPES
-from backend.agent_runtime.executors.computer.models import ComputerSession
+from backend.agent_runtime.executors.computer.models import (
+    ComputerAction,
+    ComputerEvidence,
+    ComputerPolicyEvent,
+    ComputerSession,
+)
 from backend.agent_runtime.executors.computer.actions.models import (
     ComputerActionApproval,
     ComputerActionPlan,
@@ -429,3 +437,323 @@ def test_computer_workflow_public_routes_enforce_task_ownership(client, admin_he
 def test_computer_workflow_api_rejects_forbidden_actions():
     assert "单击" in WORKFLOW_ACTION_TYPES
     assert "输入普通文本" in WORKFLOW_ACTION_TYPES
+
+
+@pytest.mark.parametrize(
+    "failure_symbol",
+    (
+        "runtime-evidence",
+        "runtime-policy-event",
+        "service-verification",
+        "service-policy-event",
+        "service-refresh",
+        "workflow-verification",
+    ),
+)
+def test_workflow_post_action_failure_rolls_back_workflow_step_and_action_graph(
+    client,
+    admin_headers,
+    test_db,
+    monkeypatch,
+    tmp_path,
+    failure_symbol,
+):
+    settings_type = _enable_workflow_flags(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent_runtime.executors.computer.runtime.get_settings",
+        lambda: settings_type(),
+    )
+    task_id = _create_owned_task(client, admin_headers, "R193 atomic workflow rollback")
+    created = client.post(
+        "/api/v2/computer/workflows",
+        json=_create_workflow_payload(task_id),
+        headers=admin_headers,
+    )
+    assert created.status_code == 200, created.text
+    workflow_id = created.json()["workflow"]["workflow_id"]
+    approved = client.post(f"/api/v2/computer/workflows/{workflow_id}/approve", headers=admin_headers)
+    assert approved.status_code == 200, approved.text
+
+    def fail_after_action(*_args, **_kwargs):
+        raise RuntimeError("R193 forced post-action workflow verification failure")
+
+    original_commit = OrmSession.commit
+    original_refresh = OrmSession.refresh
+    commit_count = 0
+    refresh_failure_ready = False
+
+    def tracked_commit(db):
+        nonlocal commit_count
+        commit_count += 1
+        return original_commit(db)
+
+    from backend.agent_runtime.executors.computer import runtime as runtime_module
+    from backend.agent_runtime.executors.computer.actions import service as action_service
+
+    capture_path = tmp_path / "r193-orphan-capture.png"
+    settings_type.PAGE_CAPTURE_OUTPUT_ROOT = str(tmp_path)
+    original_runtime_execute = runtime_module.ComputerRuntime.execute_action
+
+    def execute_with_capture(*args, **kwargs):
+        result = original_runtime_execute(*args, **kwargs)
+        capture_path.write_bytes(b"\x89PNG\r\n\x1a\nR193")
+        result["action"]["screenshot_after"] = capture_path.as_uri()
+        return result
+
+    original_service_policy_event = action_service.add_policy_event
+
+    def fail_service_policy_event(*args, **kwargs):
+        if str(kwargs.get("event_code") or "").startswith("ACTION_EXECUTION_"):
+            fail_after_action()
+        return original_service_policy_event(*args, **kwargs)
+
+    def record_service_policy_event(*args, **kwargs):
+        nonlocal refresh_failure_ready
+        result = original_service_policy_event(*args, **kwargs)
+        if str(kwargs.get("event_code") or "").startswith("ACTION_EXECUTION_"):
+            refresh_failure_ready = True
+        return result
+
+    def fail_service_refresh(db, instance, *args, **kwargs):
+        if refresh_failure_ready and isinstance(instance, ComputerActionPlan):
+            fail_after_action()
+        return original_refresh(db, instance, *args, **kwargs)
+
+    with monkeypatch.context() as failure_patch:
+        failure_patch.setattr(runtime_module.ComputerRuntime, "execute_action", staticmethod(execute_with_capture))
+        failure_patch.setattr("backend.config.get_settings", lambda: settings_type())
+        if failure_symbol == "runtime-evidence":
+            failure_patch.setattr(runtime_module, "add_evidence_row", fail_after_action)
+        elif failure_symbol == "runtime-policy-event":
+            failure_patch.setattr(runtime_module, "add_policy_event", fail_after_action)
+        elif failure_symbol == "service-verification":
+            failure_patch.setattr(action_service, "verify_action_result", fail_after_action)
+        elif failure_symbol == "service-policy-event":
+            failure_patch.setattr(action_service, "add_policy_event", fail_service_policy_event)
+        elif failure_symbol == "service-refresh":
+            failure_patch.setattr(action_service, "add_policy_event", record_service_policy_event)
+            failure_patch.setattr(OrmSession, "refresh", fail_service_refresh)
+        else:
+            failure_patch.setattr(
+                "backend.agent_runtime.workflows.computer.runner.verify_step_result",
+                fail_after_action,
+            )
+        failure_patch.setattr(OrmSession, "commit", tracked_commit)
+        with pytest.raises(RuntimeError, match="R193 forced post-action"):
+            client.post(f"/api/v2/computer/workflows/{workflow_id}/start", headers=admin_headers)
+    assert commit_count == 0
+    assert not capture_path.exists()
+
+    with test_db() as db:
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        step = (
+            db.query(ComputerWorkflowStep)
+            .filter(ComputerWorkflowStep.workflow_id == workflow_id)
+            .order_by(ComputerWorkflowStep.sequence_number.asc())
+            .first()
+        )
+        assert workflow.status == "已批准"
+        assert workflow.current_step == 0
+        assert workflow.started_at is None
+        assert step.status == "待执行"
+        assert step.started_at is None
+        assert step.action_id is None
+        assert db.query(ComputerActionPlan).filter(ComputerActionPlan.session_id == workflow.session_id).count() == 0
+        assert db.query(ComputerAction).filter(ComputerAction.session_id == workflow.session_id).count() == 0
+        assert db.query(ComputerPolicyEvent).filter(ComputerPolicyEvent.session_id == workflow.session_id).count() == 0
+        assert db.query(ComputerEvidence).filter(ComputerEvidence.session_id == workflow.session_id).count() == 0
+
+    retried = client.post(f"/api/v2/computer/workflows/{workflow_id}/start", headers=admin_headers)
+    assert retried.status_code == 200, retried.text
+    with test_db() as db:
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        action_ids = [row.action_id for row in db.query(ComputerAction).filter(ComputerAction.session_id == workflow.session_id)]
+        event_ids = [row.event_id for row in db.query(ComputerPolicyEvent).filter(ComputerPolicyEvent.session_id == workflow.session_id)]
+        evidence_ids = [row.evidence_id for row in db.query(ComputerEvidence).filter(ComputerEvidence.session_id == workflow.session_id)]
+        assert len(action_ids) == len(set(action_ids)) == 1
+        assert len(event_ids) == len(set(event_ids))
+        assert len(evidence_ids) == len(set(evidence_ids)) == 1
+
+
+def test_resume_rejects_non_resumable_and_inconsistent_states_without_writes(
+    client,
+    admin_headers,
+    test_db,
+    monkeypatch,
+):
+    _enable_workflow_flags(monkeypatch)
+    task_id = _create_owned_task(client, admin_headers, "R193 resume state allowlist")
+    created = client.post(
+        "/api/v2/computer/workflows",
+        json=_create_workflow_payload(task_id),
+        headers=admin_headers,
+    )
+    assert created.status_code == 200, created.text
+    workflow_id = created.json()["workflow"]["workflow_id"]
+    approved = client.post(f"/api/v2/computer/workflows/{workflow_id}/approve", headers=admin_headers)
+    assert approved.status_code == 200, approved.text
+
+    for status in ("已批准", "执行中", "等待关键节点确认", "已失败", "已完成", "已取消"):
+        with test_db() as db:
+            workflow = db.get(ComputerWorkflow, workflow_id)
+            workflow.status = status
+            db.commit()
+            before = _workflow_state(db)
+        response = client.post(f"/api/v2/computer/workflows/{workflow_id}/resume", headers=admin_headers)
+        assert response.status_code == 409
+        assert response.json()["detail"] == "工作流状态不允许恢复"
+        with test_db() as db:
+            assert _workflow_state(db) == before
+
+
+def test_independent_action_service_keeps_default_commit_behavior(
+    client,
+    admin_headers,
+    test_db,
+    monkeypatch,
+):
+    settings_type = _enable_workflow_flags(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent_runtime.executors.computer.runtime.get_settings",
+        lambda: settings_type(),
+    )
+    created_session = client.post(
+        "/api/v2/computer/sessions",
+        headers=admin_headers,
+        json={
+            "executor_type": "mock",
+            "environment_type": "test",
+            "risk_level": "中低",
+            "approval_status": "等待审批",
+            "allowed_applications": ["天统测试页面"],
+            "allowed_windows": [".*测试.*"],
+            "trace_id": "r193-independent-session",
+        },
+    )
+    assert created_session.status_code == 200, created_session.text
+    session_id = created_session.json()["session"]["session_id"]
+    created_plan = client.post(
+        "/api/v2/computer/action-plans",
+        headers=admin_headers,
+        json={
+            "session_id": session_id,
+            "target_application": "天统测试页面",
+            "target_window": "测试工作流页面",
+            "goal": "R193 independent action commit compatibility",
+            "action_type": "移动鼠标",
+            "target_description": "测试按钮",
+            "coordinates": {"x": 12, "y": 18},
+            "trace_id": "r193-independent-plan",
+        },
+    )
+    assert created_plan.status_code == 200, created_plan.text
+    plan_id = created_plan.json()["plan"]["plan_id"]
+    action_id = created_plan.json()["target"]["action_id"]
+    approved = client.post(
+        f"/api/v2/computer/actions/{action_id}/approve?trace_id=r193-independent-approve",
+        headers=admin_headers,
+    )
+    assert approved.status_code == 200, approved.text
+    executed = client.post(
+        f"/api/v2/computer/actions/{action_id}/execute"
+        "?current_application=天统测试页面&current_window=测试工作流页面"
+        "&trace_id=r193-independent-execute",
+        headers=admin_headers,
+    )
+    assert executed.status_code == 200, executed.text
+
+    with test_db() as db:
+        assert db.get(ComputerActionPlan, plan_id).status == "已暂停"
+        assert db.get(ComputerAction, action_id) is not None
+        evidence = (
+            db.query(ComputerEvidence)
+            .filter(ComputerEvidence.session_id == session_id)
+            .one_or_none()
+        )
+        assert evidence is not None
+        assert evidence.action_id == action_id
+        assert db.query(ComputerPolicyEvent).filter(ComputerPolicyEvent.action_id == action_id).count() >= 1
+
+
+def test_independent_action_service_post_runtime_failure_preserves_committed_capture(
+    client,
+    admin_headers,
+    test_db,
+    monkeypatch,
+    tmp_path,
+):
+    settings_type = _enable_workflow_flags(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent_runtime.executors.computer.runtime.get_settings",
+        lambda: settings_type(),
+    )
+    created_session = client.post(
+        "/api/v2/computer/sessions",
+        headers=admin_headers,
+        json={
+            "executor_type": "mock",
+            "environment_type": "test",
+            "risk_level": "中低",
+            "approval_status": "等待审批",
+            "allowed_applications": ["天统测试页面"],
+            "allowed_windows": [".*测试.*"],
+            "trace_id": "r193-independent-failure-session",
+        },
+    )
+    assert created_session.status_code == 200, created_session.text
+    session_id = created_session.json()["session"]["session_id"]
+    created_plan = client.post(
+        "/api/v2/computer/action-plans",
+        headers=admin_headers,
+        json={
+            "session_id": session_id,
+            "target_application": "天统测试页面",
+            "target_window": "测试工作流页面",
+            "goal": "R193 independent post-runtime failure compatibility",
+            "action_type": "移动鼠标",
+            "target_description": "测试按钮",
+            "coordinates": {"x": 12, "y": 18},
+            "trace_id": "r193-independent-failure-plan",
+        },
+    )
+    assert created_plan.status_code == 200, created_plan.text
+    action_id = created_plan.json()["target"]["action_id"]
+    approved = client.post(
+        f"/api/v2/computer/actions/{action_id}/approve?trace_id=r193-independent-failure-approve",
+        headers=admin_headers,
+    )
+    assert approved.status_code == 200, approved.text
+
+    from backend.agent_runtime.executors.computer import runtime as runtime_module
+    from backend.agent_runtime.executors.computer.actions import service as action_service
+
+    capture_path = tmp_path / "r193-committed-capture.png"
+    original_runtime_execute = runtime_module.ComputerRuntime.execute_action
+
+    def execute_with_committed_capture(db, *args, **kwargs):
+        result = original_runtime_execute(db, *args, **kwargs)
+        capture_path.write_bytes(b"\x89PNG\r\n\x1a\nR193")
+        action = db.get(ComputerAction, result["action"]["action_id"])
+        action.screenshot_after = capture_path.as_uri()
+        db.commit()
+        result["action"]["screenshot_after"] = capture_path.as_uri()
+        return result
+
+    def fail_verification(*_args, **_kwargs):
+        raise RuntimeError("R193 forced independent post-runtime failure")
+
+    monkeypatch.setattr(runtime_module.ComputerRuntime, "execute_action", staticmethod(execute_with_committed_capture))
+    monkeypatch.setattr(action_service, "verify_action_result", fail_verification)
+    with pytest.raises(RuntimeError, match="R193 forced independent post-runtime"):
+        client.post(
+            f"/api/v2/computer/actions/{action_id}/execute"
+            "?current_application=天统测试页面&current_window=测试工作流页面"
+            "&trace_id=r193-independent-failure-execute",
+            headers=admin_headers,
+        )
+    assert capture_path.is_file()
+    with test_db() as db:
+        action = db.get(ComputerAction, action_id)
+        assert action.screenshot_after == capture_path.as_uri()
+        evidence = db.query(ComputerEvidence).filter(ComputerEvidence.action_id == action_id).one()
+        assert evidence is not None

@@ -657,7 +657,9 @@ def _prepare_target_graph(case, client, headers, test_db, graph):
             task.split_plan = json.dumps({"loop_iteration": 0})
             db.commit()
     elif entrypoint_id in {"PUB-055", "PUB-056"}:
+        from backend.agent_runtime.executors.computer.models import ComputerSession
         from backend.agent_runtime.workflows.computer.models import ComputerWorkflow
+        from backend.agent_runtime.workflows.computer.models import ComputerWorkflowStep
         from backend.config import get_settings
 
         settings = get_settings()
@@ -670,19 +672,55 @@ def _prepare_target_graph(case, client, headers, test_db, graph):
         settings.MAC_SAFE_WORKFLOW_ENABLED = True
         graph["workflow_id"] = f"r152-workflow-{graph['task_id']}"
         with test_db() as db:
+            session_id = None
+            if entrypoint_id == "PUB-055":
+                session_id = f"r193-session-{graph['task_id']}"
+                db.add(
+                    ComputerSession(
+                        session_id=session_id,
+                        task_id=graph["task_id"],
+                        employee_id=graph["employee_id"],
+                        executor_type="mock",
+                        environment_type="test",
+                        status="已暂停",
+                        risk_level="低风险",
+                        approval_status="已批准",
+                        allowed_applications_json=json.dumps(["天统测试页面"], ensure_ascii=False),
+                        allowed_windows_json=json.dumps([".*测试.*"], ensure_ascii=False),
+                        takeover_status="未接管",
+                    )
+                )
             db.add(
                 ComputerWorkflow(
                     workflow_id=graph["workflow_id"],
                     task_id=graph["task_id"],
                     employee_id=graph["employee_id"],
+                    session_id=session_id,
                     goal="R152 local mock workflow",
                     status="已暂停" if entrypoint_id == "PUB-055" else "已批准",
                     risk_level="低风险",
                     approval_status="已批准",
-                    total_steps=0,
+                    total_steps=1 if entrypoint_id == "PUB-055" else 0,
+                    current_step=0,
                     max_steps=5,
                 )
             )
+            if entrypoint_id == "PUB-055":
+                db.add(
+                    ComputerWorkflowStep(
+                        step_id=f"r193-step-{graph['task_id']}",
+                        workflow_id=graph["workflow_id"],
+                        sequence_number=1,
+                        action_type="等待",
+                        target_application="天统测试页面",
+                        target_window="测试工作流页面",
+                        expected_result="等待后继续测试工作流",
+                        risk_level="低风险",
+                        approval_required=True,
+                        checkpoint_required=True,
+                        status="待执行",
+                    )
+                )
             db.commit()
     elif entrypoint_id == "PUB-088":
         with test_db() as db:
@@ -714,13 +752,32 @@ def _run_targeted_case(case, client, boss_headers, test_db):
     scenario = case["scenario"]
     entrypoint_id = case["public_entrypoint_id"]
     if scenario == "owner":
+        pub055_gate_state = None
+        if case["case_id"] == "PUB-055::http_request::owner":
+            settings = feature_state[0]
+            pub055_gate_state = (
+                settings.MAC_SAFE_ACTION_ENABLED,
+                settings.PER_ACTION_APPROVAL_ENABLED,
+                settings.POST_ACTION_VERIFICATION_ENABLED,
+            )
+            settings.MAC_SAFE_ACTION_ENABLED = True
+            settings.PER_ACTION_APPROVAL_ENABLED = True
+            settings.POST_ACTION_VERIFICATION_ENABLED = True
         try:
             response = _http(client, case, boss_headers, graph)
         finally:
+            if pub055_gate_state is not None:
+                settings.MAC_SAFE_ACTION_ENABLED, settings.PER_ACTION_APPROVAL_ENABLED, settings.POST_ACTION_VERIFICATION_ENABLED = pub055_gate_state
             if feature_state is not None:
                 settings, computer_enabled, mac_enabled = feature_state
                 settings.COMPUTER_EXECUTOR_ENABLED = computer_enabled
                 settings.MAC_SAFE_WORKFLOW_ENABLED = mac_enabled
+            if pub055_gate_state is not None:
+                assert (
+                    settings.MAC_SAFE_ACTION_ENABLED,
+                    settings.PER_ACTION_APPROVAL_ENABLED,
+                    settings.POST_ACTION_VERIFICATION_ENABLED,
+                ) == pub055_gate_state
         assert 200 <= response.status_code < 300, (case["case_id"], response.status_code, response.json())
         if case["public_entrypoint_id"] == "PUB-099":
             from backend.skills_engine.models import SkillInvocation

@@ -342,7 +342,17 @@ def reject_action(db: Session, *, plan_id: str, approved_by: int | None, reason:
     return {"plan": _plan_to_dict(plan), "target": _target_to_dict(target), "approval": _approval_to_dict(approval)}
 
 
-def execute_action(db: Session, *, plan_id: str, current_application: str | None, current_window: str | None, current_screenshot_hash: str | None, trace_id: str | None, capture_authorization=None):
+def execute_action(
+    db: Session,
+    *,
+    plan_id: str,
+    current_application: str | None,
+    current_window: str | None,
+    current_screenshot_hash: str | None,
+    trace_id: str | None,
+    capture_authorization=None,
+    commit: bool = True,
+):
     from ..runtime import ComputerRuntime
 
     plan = db.get(ComputerActionPlan, plan_id)
@@ -361,11 +371,17 @@ def execute_action(db: Session, *, plan_id: str, current_application: str | None
         raise HTTPException(status_code=403, detail="动作尚未批准")
     if _normalize_dt(approval.expires_at) and _normalize_dt(approval.expires_at) < utcnow():
         approval.approval_status = "已过期"
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         raise HTTPException(status_code=409, detail="审批已过期")
     if current_screenshot_hash and approval.before_screenshot_hash and approval.before_screenshot_hash != current_screenshot_hash:
         approval.approval_status = "已过期"
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         raise HTTPException(status_code=409, detail="窗口已变化，审批失效")
     proposed_actions = json.loads(plan.proposed_actions_json or "[]")
     proposed_action = next(
@@ -389,37 +405,50 @@ def execute_action(db: Session, *, plan_id: str, current_application: str | None
         session,
         payload,
         capture_authorization=capture_authorization,
+        commit=commit,
     )
-    verification = verify_action_result(
-        db,
-        plan=plan,
-        approval=approval,
-        action_result=result["action"],
-        before_screenshot_reference=target.screenshot_before_reference,
-        after_screenshot_reference=result["action"].get("screenshot_after") or result["action"].get("screenshot_before"),
-        current_application=current_application,
-        current_window=current_window,
-        trace_id=trace_id or plan.trace_id,
-    )
-    plan.current_action_index = min(plan.max_actions, plan.current_action_index + 1)
-    plan.status = "已暂停"
-    target.status = "已完成" if verification.verification_status == "结果符合预期" else "已失败"
-    session.status = "已暂停"
-    session.approval_status = "已批准"
-    add_policy_event(
-        db,
-        session_id=plan.session_id,
-        action_id=target.action_id,
-        event_code="ACTION_EXECUTION_SUCCEEDED" if result["action"].get("error_code") is None else "ACTION_EXECUTION_FAILED",
-        event_message=result["action"].get("result") or result["action"].get("error_message") or "单步动作已执行",
-        risk_level=plan.risk_level,
-        trace_id=trace_id or plan.trace_id,
-    )
-    db.commit()
-    db.refresh(plan)
-    db.refresh(target)
-    db.refresh(session)
-    db.refresh(verification)
+    try:
+        verification = verify_action_result(
+            db,
+            plan=plan,
+            approval=approval,
+            action_result=result["action"],
+            before_screenshot_reference=target.screenshot_before_reference,
+            after_screenshot_reference=result["action"].get("screenshot_after") or result["action"].get("screenshot_before"),
+            current_application=current_application,
+            current_window=current_window,
+            trace_id=trace_id or plan.trace_id,
+        )
+        plan.current_action_index = min(plan.max_actions, plan.current_action_index + 1)
+        plan.status = "已暂停"
+        target.status = "已完成" if verification.verification_status == "结果符合预期" else "已失败"
+        session.status = "已暂停"
+        session.approval_status = "已批准"
+        add_policy_event(
+            db,
+            session_id=plan.session_id,
+            action_id=target.action_id,
+            event_code="ACTION_EXECUTION_SUCCEEDED" if result["action"].get("error_code") is None else "ACTION_EXECUTION_FAILED",
+            event_message=result["action"].get("result") or result["action"].get("error_message") or "单步动作已执行",
+            risk_level=plan.risk_level,
+            trace_id=trace_id or plan.trace_id,
+        )
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        db.refresh(plan)
+        db.refresh(target)
+        db.refresh(session)
+        db.refresh(verification)
+    except Exception:
+        db.rollback()
+        if not commit:
+            from .....config import get_settings
+            from ..runtime import _remove_failed_capture
+
+            _remove_failed_capture(result["action"].get("screenshot_after"), get_settings())
+        raise
     result["session"]["status"] = session.status
     result["session"]["approval_status"] = session.approval_status
     return {
