@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.agent_runtime.executors.computer.actions.service import approve_action, create_action_plan, execute_action, preflight_action_plan, preview_action_plan
 from backend.agent_runtime.executors.computer.actions.schemas import ComputerActionPlanCreatePayload
+from backend.agent_runtime.executors.computer.models import ComputerEvidence
 from backend.agent_runtime.executors.computer.schemas import ComputerSessionCreatePayload
 from backend.agent_runtime.executors.computer.runtime import ComputerRuntime
 from backend.auth import create_capture_authorization
@@ -475,6 +476,25 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
     finally:
         if capture_authorization is not None:
             capture_authorization.clear()
+    commit_attempted = False
+    commit_succeeded = False
+    response_snapshot = None
+    screenshot_reference = ((action_result.get("result") or {}).get("action") or {}).get("screenshot_after")
+
+    def response_payload(current_workflow, current_step, current_verification):
+        return {
+            "workflow": _workflow_to_dict(current_workflow),
+            "step": _step_to_dict(current_step),
+            "preview": plan_result["preview"],
+            "plan": plan_result["plan"],
+            "target": plan_result["target"],
+            "approval": approval["approval"],
+            "verification": _verification_to_dict(current_verification),
+            "action": action_data,
+            "result": runtime_result,
+            "paused": current_workflow.status in {"已暂停", "等待关键节点确认"},
+        }
+
     try:
         runtime_result = action_result.get("result") or {}
         action_data = runtime_result.get("action") or {}
@@ -510,31 +530,89 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
         if step.status == "已失败":
             recovery = record_recovery(db, workflow, step_id=step.step_id, reason=workflow.stop_reason, result_summary="失败后停止，等待人工恢复", trace_id=trace_id or workflow.trace_id)
             workflow.status = "已失败"
+        committed_workflow_id = workflow.workflow_id
+        committed_step_id = step.step_id
+        committed_verification_id = verification_row.verification_id
+        committed_recovery_id = recovery.recovery_id if recovery else None
+        committed_evidence_id = (runtime_result.get("evidence") or {}).get("evidence_id")
+        response_snapshot = response_payload(workflow, step, verification_row)
+        commit_attempted = True
         db.commit()
+        commit_succeeded = True
+    except Exception:
+        db.rollback()
+        if commit_attempted:
+            try:
+                evidence = (
+                    db.query(ComputerEvidence)
+                    .filter(ComputerEvidence.evidence_id == committed_evidence_id)
+                    .populate_existing()
+                    .one_or_none()
+                )
+                if evidence is not None:
+                    workflow = (
+                        db.query(ComputerWorkflow)
+                        .filter(ComputerWorkflow.workflow_id == committed_workflow_id)
+                        .populate_existing()
+                        .one_or_none()
+                    )
+                    step = (
+                        db.query(ComputerWorkflowStep)
+                        .filter(ComputerWorkflowStep.step_id == committed_step_id)
+                        .populate_existing()
+                        .one_or_none()
+                    )
+                    verification_row = (
+                        db.query(ComputerWorkflowVerification)
+                        .filter(ComputerWorkflowVerification.verification_id == committed_verification_id)
+                        .populate_existing()
+                        .one_or_none()
+                    )
+                    if workflow is not None and step is not None and verification_row is not None:
+                        recovered = response_payload(workflow, step, verification_row)
+                        recovered["commit_status"] = "committed_requery_recovered"
+                        return recovered
+                    response_snapshot["commit_status"] = "committed_response_refresh_failed"
+                    return response_snapshot
+            except Exception:
+                db.rollback()
+                response_snapshot["commit_status"] = "commit_outcome_unknown_evidence_preserved"
+                return response_snapshot
+        if screenshot_reference:
+            from backend.agent_runtime.executors.computer.runtime import _remove_failed_capture
+
+            _remove_failed_capture(screenshot_reference, get_settings())
+        raise
+
+    try:
         db.refresh(workflow)
         db.refresh(step)
         if recovery:
             db.refresh(recovery)
     except Exception:
         db.rollback()
-        screenshot_reference = ((action_result.get("result") or {}).get("action") or {}).get("screenshot_after")
-        if screenshot_reference:
-            from backend.agent_runtime.executors.computer.runtime import _remove_failed_capture
+        if not commit_succeeded:
+            if screenshot_reference:
+                from backend.agent_runtime.executors.computer.runtime import _remove_failed_capture
 
-            _remove_failed_capture(screenshot_reference, get_settings())
-        raise
-    return {
-        "workflow": _workflow_to_dict(workflow),
-        "step": _step_to_dict(step),
-        "preview": plan_result["preview"],
-        "plan": plan_result["plan"],
-        "target": plan_result["target"],
-        "approval": approval["approval"],
-        "verification": _verification_to_dict(verification_row),
-        "action": action_data,
-        "result": runtime_result,
-        "paused": workflow.status in {"已暂停", "等待关键节点确认"},
-    }
+                _remove_failed_capture(screenshot_reference, get_settings())
+            raise
+        try:
+            workflow = db.get(ComputerWorkflow, committed_workflow_id)
+            step = db.get(ComputerWorkflowStep, committed_step_id)
+            verification_row = db.get(ComputerWorkflowVerification, committed_verification_id)
+            if committed_recovery_id:
+                recovery = db.get(ComputerWorkflowRecovery, committed_recovery_id)
+            if workflow is None or step is None or verification_row is None:
+                raise RuntimeError("已提交工作流响应重新查询失败")
+            recovered = response_payload(workflow, step, verification_row)
+            recovered["commit_status"] = "committed_requery_recovered"
+            return recovered
+        except Exception:
+            db.rollback()
+            response_snapshot["commit_status"] = "committed_response_refresh_failed"
+            return response_snapshot
+    return response_payload(workflow, step, verification_row)
 
 
 def pause_workflow(db: Session, workflow_id: str, reason: str | None = None) -> dict:

@@ -757,3 +757,227 @@ def test_independent_action_service_post_runtime_failure_preserves_committed_cap
         assert action.screenshot_after == capture_path.as_uri()
         evidence = db.query(ComputerEvidence).filter(ComputerEvidence.action_id == action_id).one()
         assert evidence is not None
+
+
+@pytest.mark.parametrize("failure_stage", ["refresh", "commit_ack"])
+def test_independent_action_post_commit_refresh_preserves_capture_and_blocks_reexecution(
+    client,
+    admin_headers,
+    test_db,
+    monkeypatch,
+    tmp_path,
+    failure_stage,
+):
+    settings_type = _enable_workflow_flags(monkeypatch)
+    settings_type.PAGE_CAPTURE_OUTPUT_ROOT = str(tmp_path)
+    monkeypatch.setattr(
+        "backend.agent_runtime.executors.computer.runtime.get_settings",
+        lambda: settings_type(),
+    )
+    created_session = client.post(
+        "/api/v2/computer/sessions",
+        headers=admin_headers,
+        json={
+            "executor_type": "mock",
+            "environment_type": "test",
+            "risk_level": "中低",
+            "approval_status": "等待审批",
+            "allowed_applications": ["天统测试页面"],
+            "allowed_windows": [".*测试.*"],
+            "trace_id": "r194-runtime-refresh-session",
+        },
+    )
+    assert created_session.status_code == 200, created_session.text
+    session_id = created_session.json()["session"]["session_id"]
+    created_plan = client.post(
+        "/api/v2/computer/action-plans",
+        headers=admin_headers,
+        json={
+            "session_id": session_id,
+            "target_application": "天统测试页面",
+            "target_window": "测试工作流页面",
+            "goal": "R194 runtime post-commit refresh boundary",
+            "action_type": "移动鼠标",
+            "target_description": "测试按钮",
+            "coordinates": {"x": 12, "y": 18},
+            "trace_id": "r194-runtime-refresh-plan",
+        },
+    )
+    assert created_plan.status_code == 200, created_plan.text
+    action_id = created_plan.json()["target"]["action_id"]
+    approved = client.post(
+        f"/api/v2/computer/actions/{action_id}/approve?trace_id=r194-runtime-refresh-approve",
+        headers=admin_headers,
+    )
+    assert approved.status_code == 200, approved.text
+
+    from backend.agent_runtime.executors.computer import runtime as runtime_module
+    from backend.agent_runtime.executors.computer.base import ComputerExecutorOutcome
+
+    capture_path = tmp_path / "r194-runtime-committed.png"
+    execute_count = 0
+
+    class CaptureExecutor:
+        def execute_action(self, _context):
+            nonlocal execute_count
+            execute_count += 1
+            capture_path.write_bytes(b"\x89PNG\r\n\x1a\nR194-runtime")
+            capture_path.chmod(0o600)
+            return ComputerExecutorOutcome(
+                success=True,
+                action_result={"processed": True},
+                screenshot_reference=capture_path.as_uri(),
+                duration_ms=1,
+            )
+
+    original_commit = OrmSession.commit
+    original_refresh = OrmSession.refresh
+    commit_succeeded = False
+    commit_ack_failure_count = 0
+    refresh_failure_count = 0
+
+    def commit_then_mark(db):
+        nonlocal commit_succeeded, commit_ack_failure_count
+        result = original_commit(db)
+        commit_succeeded = True
+        if failure_stage == "commit_ack" and commit_ack_failure_count == 0:
+            commit_ack_failure_count += 1
+            raise RuntimeError("R194 forced runtime commit acknowledgement loss")
+        return result
+
+    def fail_first_post_commit_session_refresh(db, instance, *args, **kwargs):
+        nonlocal refresh_failure_count
+        if failure_stage == "refresh" and commit_succeeded and refresh_failure_count == 0 and isinstance(instance, ComputerSession):
+            refresh_failure_count += 1
+            raise RuntimeError("R194 forced runtime post-commit refresh failure")
+        return original_refresh(db, instance, *args, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "_executor_for_settings", lambda _session: CaptureExecutor())
+    monkeypatch.setattr(OrmSession, "commit", commit_then_mark)
+    monkeypatch.setattr(OrmSession, "refresh", fail_first_post_commit_session_refresh)
+    executed = client.post(
+        f"/api/v2/computer/actions/{action_id}/execute"
+        "?current_application=天统测试页面&current_window=测试工作流页面"
+        "&trace_id=r194-runtime-refresh-execute",
+        headers=admin_headers,
+    )
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["result"]["commit_status"] == "committed_requery_recovered"
+    assert refresh_failure_count == (1 if failure_stage == "refresh" else 0)
+    assert commit_ack_failure_count == (1 if failure_stage == "commit_ack" else 0)
+    assert execute_count == 1
+    assert capture_path.is_file()
+    capture_sha = __import__("hashlib").sha256(capture_path.read_bytes()).hexdigest()
+
+    retried = client.post(
+        f"/api/v2/computer/actions/{action_id}/execute"
+        "?current_application=天统测试页面&current_window=测试工作流页面"
+        "&trace_id=r194-runtime-refresh-retry",
+        headers=admin_headers,
+    )
+    assert retried.status_code == 409
+    assert retried.json()["detail"] == "动作已提交，禁止重复执行"
+    assert execute_count == 1
+    assert __import__("hashlib").sha256(capture_path.read_bytes()).hexdigest() == capture_sha
+    with test_db() as db:
+        action = db.get(ComputerAction, action_id)
+        assert action.screenshot_after == capture_path.as_uri()
+        assert db.query(ComputerAction).filter(ComputerAction.action_id == action_id).count() == 1
+        assert db.query(ComputerEvidence).filter(ComputerEvidence.action_id == action_id).count() == 1
+
+
+@pytest.mark.parametrize("failure_stage", ["refresh", "commit_ack"])
+def test_workflow_post_commit_refresh_preserves_committed_graph_and_capture(
+    client,
+    admin_headers,
+    test_db,
+    monkeypatch,
+    tmp_path,
+    failure_stage,
+):
+    settings_type = _enable_workflow_flags(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent_runtime.executors.computer.runtime.get_settings",
+        lambda: settings_type(),
+    )
+    task_id = _create_owned_task(client, admin_headers, "R194 workflow post-commit refresh")
+    created = client.post(
+        "/api/v2/computer/workflows",
+        json=_create_workflow_payload(task_id),
+        headers=admin_headers,
+    )
+    assert created.status_code == 200, created.text
+    workflow_id = created.json()["workflow"]["workflow_id"]
+    approved = client.post(f"/api/v2/computer/workflows/{workflow_id}/approve", headers=admin_headers)
+    assert approved.status_code == 200, approved.text
+
+    from backend.agent_runtime.executors.computer import runtime as runtime_module
+
+    capture_path = tmp_path / "r194-workflow-committed.png"
+    settings_type.PAGE_CAPTURE_OUTPUT_ROOT = str(tmp_path)
+    original_runtime_execute = runtime_module.ComputerRuntime.execute_action
+    execute_count = 0
+
+    def execute_with_capture(db, *args, **kwargs):
+        nonlocal execute_count
+        execute_count += 1
+        result = original_runtime_execute(db, *args, **kwargs)
+        capture_path.write_bytes(b"\x89PNG\r\n\x1a\nR194-workflow")
+        capture_path.chmod(0o600)
+        action = db.get(ComputerAction, result["action"]["action_id"])
+        action.screenshot_after = capture_path.as_uri()
+        result["action"]["screenshot_after"] = capture_path.as_uri()
+        return result
+
+    original_commit = OrmSession.commit
+    original_refresh = OrmSession.refresh
+    commit_succeeded = False
+    commit_ack_failure_count = 0
+    refresh_failure_count = 0
+
+    def commit_then_mark(db):
+        nonlocal commit_succeeded, commit_ack_failure_count
+        result = original_commit(db)
+        commit_succeeded = True
+        if failure_stage == "commit_ack" and commit_ack_failure_count == 0:
+            commit_ack_failure_count += 1
+            raise RuntimeError("R194 forced workflow commit acknowledgement loss")
+        return result
+
+    def fail_first_post_commit_workflow_refresh(db, instance, *args, **kwargs):
+        nonlocal refresh_failure_count
+        if failure_stage == "refresh" and commit_succeeded and refresh_failure_count == 0 and isinstance(instance, ComputerWorkflow):
+            refresh_failure_count += 1
+            raise RuntimeError("R194 forced workflow post-commit refresh failure")
+        return original_refresh(db, instance, *args, **kwargs)
+
+    monkeypatch.setattr(runtime_module.ComputerRuntime, "execute_action", staticmethod(execute_with_capture))
+    monkeypatch.setattr(OrmSession, "commit", commit_then_mark)
+    monkeypatch.setattr(OrmSession, "refresh", fail_first_post_commit_workflow_refresh)
+    started = client.post(f"/api/v2/computer/workflows/{workflow_id}/start", headers=admin_headers)
+    assert started.status_code == 200, started.text
+    assert started.json()["commit_status"] == "committed_requery_recovered"
+    assert refresh_failure_count == (1 if failure_stage == "refresh" else 0)
+    assert commit_ack_failure_count == (1 if failure_stage == "commit_ack" else 0)
+    assert execute_count == 1
+    assert capture_path.is_file()
+    capture_sha = __import__("hashlib").sha256(capture_path.read_bytes()).hexdigest()
+
+    retried = client.post(f"/api/v2/computer/workflows/{workflow_id}/start", headers=admin_headers)
+    assert retried.status_code == 409
+    assert execute_count == 1
+    assert __import__("hashlib").sha256(capture_path.read_bytes()).hexdigest() == capture_sha
+    with test_db() as db:
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        assert workflow.status == "已暂停"
+        assert workflow.current_step == 1
+        step = (
+            db.query(ComputerWorkflowStep)
+            .filter(ComputerWorkflowStep.workflow_id == workflow_id)
+            .order_by(ComputerWorkflowStep.sequence_number.asc())
+            .first()
+        )
+        assert step.status == "已完成"
+        assert step.action_id is not None
+        assert db.query(ComputerAction).filter(ComputerAction.action_id == step.action_id).count() == 1
+        assert db.query(ComputerEvidence).filter(ComputerEvidence.action_id == step.action_id).count() == 1
