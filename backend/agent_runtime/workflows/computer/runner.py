@@ -333,6 +333,22 @@ def _build_action_payload(step: ComputerWorkflowStep, workflow: ComputerWorkflow
         "截图": "截图",
         "等待": "等待",
     }
+    step_trace_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            json.dumps(
+                [
+                    "computer_workflow_step",
+                    workflow.workflow_id,
+                    workflow.session_id,
+                    step.step_id,
+                    step.sequence_number,
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+    )
     return ComputerActionPlanCreatePayload(
         session_id=workflow.session_id or "",
         task_id=workflow.task_id,
@@ -353,7 +369,7 @@ def _build_action_payload(step: ComputerWorkflowStep, workflow: ComputerWorkflow
         approval_mode="逐步审批",
         risk_level=step.risk_level,
         max_actions=1,
-        trace_id=step.trace_id or workflow.trace_id,
+        trace_id=step_trace_id,
         allow_coordinate_fallback=False,
     )
 

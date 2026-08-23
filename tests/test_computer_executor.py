@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from backend.agent_runtime.executors.computer.actions.models import ComputerActionPlan
+from backend.agent_runtime.executors.computer.actions.models import (
+    ComputerActionApproval,
+    ComputerActionPlan,
+    ComputerActionTarget,
+)
 from backend.agent_runtime.executors.computer.models import ComputerAction, ComputerEvidence, ComputerPolicyEvent
 from backend.agent_runtime.executors.computer.session import add_evidence_row, add_policy_event
 from backend.models import AiEmployee
@@ -130,10 +134,17 @@ def test_computer_evidence_uuid5_persists_with_action_foreign_key(postgres_alpha
 def test_action_plan_persists_action_before_policy_event_and_rolls_back_atomically(postgres_alpha_runtime, monkeypatch):
     client, owner_headers, session_factory = postgres_alpha_runtime
     enable_safe_action_flags(monkeypatch)
+    task = client.post(
+        "/api/task-center/tasks",
+        headers=owner_headers,
+        json={"title": "R190 action policy transaction", "description": "owner-bound action plan"},
+    )
+    assert task.status_code == 200, task.text
     created_session = client.post(
         "/api/v2/computer/sessions",
         headers=owner_headers,
         json={
+            "task_id": task.json()["task"]["id"],
             "executor_type": "mock",
             "environment_type": "test",
             "risk_level": "中低",
@@ -183,6 +194,7 @@ def test_action_plan_persists_action_before_policy_event_and_rolls_back_atomical
         assert len(event.event_id) == 36
     finally:
         db.close()
+
 
     approved = client.post(
         f"/api/v2/computer/actions/{action_id}/approve?trace_id=trace-r190-cross-session-approve",
@@ -289,6 +301,148 @@ def test_action_plan_persists_action_before_policy_event_and_rolls_back_atomical
         ).count() == 1
     finally:
         db.close()
+
+
+def test_public_action_plan_is_owner_scoped_and_idempotent(postgres_alpha_runtime, monkeypatch):
+    client, owner_headers, session_factory = postgres_alpha_runtime
+    enable_safe_action_flags(monkeypatch)
+    task = client.post(
+        "/api/task-center/tasks",
+        headers=owner_headers,
+        json={"title": "R195 owner idempotent plan", "description": "server-owned action plan"},
+    )
+    assert task.status_code == 200, task.text
+    task_id = task.json()["task"]["id"]
+    session = client.post(
+        "/api/v2/computer/sessions",
+        headers=owner_headers,
+        json={
+            "task_id": task_id,
+            "executor_type": "mock",
+            "environment_type": "test",
+            "allowed_applications": ["隔离测试浏览器"],
+            "allowed_windows": [".*测试.*"],
+            "trace_id": "r195-owner-session",
+        },
+    )
+    assert session.status_code == 200, session.text
+    session_id = session.json()["session"]["session_id"]
+    taskless_session = client.post(
+        "/api/v2/computer/sessions",
+        headers=owner_headers,
+        json={"executor_type": "mock", "environment_type": "test", "trace_id": "r195-taskless-owner-session"},
+    )
+    assert taskless_session.status_code == 200, taskless_session.text
+    payload = {
+        "session_id": session_id,
+        "task_id": task_id,
+        "target_application": "隔离测试浏览器",
+        "target_window": "天统 AI 单步操作测试窗口",
+        "goal": "R195 owner idempotency",
+        "action_type": "单击",
+        "control_type": "普通按钮",
+        "control_label": "测试按钮",
+        "control_identifier": "r195-owner-button",
+        "target_description": "同一步骤安全重试",
+        "coordinates": {"x": 12, "y": 18},
+        "trace_id": "r195-owner-step-trace",
+        "tenant_id": 999999,
+        "company_id": 999999,
+        "requester_id": 999999,
+        "owner_id": 999999,
+    }
+
+    first = client.post("/api/v2/computer/action-plans", headers=owner_headers, json=payload)
+    assert first.status_code == 200, first.text
+    repeated = client.post("/api/v2/computer/action-plans", headers=owner_headers, json=payload)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["plan"]["plan_id"] == first.json()["plan"]["plan_id"]
+    assert repeated.json()["target"]["action_id"] == first.json()["target"]["action_id"]
+
+    admin_login = client.post("/api/login", json={"username": "admin", "password": "password"})
+    assert admin_login.status_code == 200
+    foreign_headers = {"Authorization": f"Bearer {admin_login.json()['token']}"}
+    foreign = client.post("/api/v2/computer/action-plans", headers=foreign_headers, json=payload)
+    assert foreign.status_code == 404
+    assert foreign.json()["detail"] == "动作计划不存在"
+    missing = client.post(
+        "/api/v2/computer/action-plans",
+        headers=foreign_headers,
+        json={**payload, "session_id": uuid.uuid4().hex},
+    )
+    assert missing.status_code == foreign.status_code
+    assert missing.json() == foreign.json()
+    foreign_task = client.post(
+        "/api/task-center/tasks",
+        headers=foreign_headers,
+        json={"title": "R195 foreign taskless claim", "description": "must not claim another session"},
+    )
+    assert foreign_task.status_code == 200, foreign_task.text
+    foreign_task_claim = client.post(
+        "/api/v2/computer/action-plans",
+        headers=foreign_headers,
+        json={**payload, "task_id": foreign_task.json()["task"]["id"]},
+    )
+    assert foreign_task_claim.status_code == 404
+    assert foreign_task_claim.json()["detail"] == "动作计划不存在"
+    taskless_claim = client.post(
+        "/api/v2/computer/action-plans",
+        headers=foreign_headers,
+        json={
+            **payload,
+            "session_id": taskless_session.json()["session"]["session_id"],
+            "task_id": foreign_task.json()["task"]["id"],
+            "trace_id": "r195-taskless-foreign-claim",
+        },
+    )
+    assert taskless_claim.status_code == 404
+    assert taskless_claim.json()["detail"] == "动作计划不存在"
+
+    client.cookies.clear()
+    changed = client.post(
+        "/api/v2/computer/action-plans",
+        headers=owner_headers,
+        json={**payload, "target_description": "不同步骤或payload不得复用"},
+    )
+    assert changed.status_code == 409
+    assert "plan" not in changed.json()
+    zero_max_payload = {**payload, "trace_id": "r195-owner-zero-max", "max_actions": 0}
+    zero_max_first = client.post("/api/v2/computer/action-plans", headers=owner_headers, json=zero_max_payload)
+    zero_max_retry = client.post("/api/v2/computer/action-plans", headers=owner_headers, json=zero_max_payload)
+    assert zero_max_first.status_code == zero_max_retry.status_code == 200
+    assert zero_max_first.json()["plan"]["plan_id"] == zero_max_retry.json()["plan"]["plan_id"]
+    assert zero_max_retry.json()["plan"]["max_actions"] == 1
+
+    with session_factory() as db:
+        plan = db.query(ComputerActionPlan).filter(ComputerActionPlan.trace_id == payload["trace_id"]).one()
+        target = db.query(ComputerActionTarget).filter(ComputerActionTarget.plan_id == plan.plan_id).one()
+        approval = db.query(ComputerActionApproval).filter(ComputerActionApproval.plan_id == plan.plan_id).one()
+        action = db.get(ComputerAction, target.action_id)
+        assert plan.task_id == task_id
+        assert target.action_id == approval.action_id == action.action_id
+        assert action.session_id == session_id
+        assert db.query(ComputerActionPlan).filter(ComputerActionPlan.trace_id == payload["trace_id"]).count() == 1
+        graph_counts = (
+            db.query(ComputerActionPlan).count(),
+            db.query(ComputerActionTarget).count(),
+            db.query(ComputerActionApproval).count(),
+            db.query(ComputerAction).count(),
+            db.query(ComputerPolicyEvent).count(),
+        )
+        target.control_label = "持久化图已被篡改"
+        db.commit()
+
+    corrupted = client.post("/api/v2/computer/action-plans", headers=owner_headers, json=payload)
+    assert corrupted.status_code == 409
+    with session_factory() as db:
+        assert db.query(ComputerActionPlan).filter(ComputerActionPlan.trace_id == payload["trace_id"]).count() == 1
+        assert (
+            db.query(ComputerActionPlan).count(),
+            db.query(ComputerActionTarget).count(),
+            db.query(ComputerActionApproval).count(),
+            db.query(ComputerAction).count(),
+            db.query(ComputerPolicyEvent).count(),
+        ) == graph_counts
 
 
 def enable_computer_flags(monkeypatch, *, take_over: bool = True):
@@ -564,10 +718,17 @@ def test_safe_action_pages_and_health(client):
 
 def test_safe_action_plan_approval_execution_and_pause(client, owner_headers, monkeypatch):
     enable_safe_action_flags(monkeypatch)
+    task = client.post(
+        "/api/task-center/tasks",
+        headers=owner_headers,
+        json={"title": "Safe action owner task", "description": "owner-bound safe action"},
+    )
+    assert task.status_code == 200, task.text
     session = client.post(
         "/api/v2/computer/sessions",
         headers=owner_headers,
         json={
+            "task_id": task.json()["task"]["id"],
             "executor_type": "mock",
             "environment_type": "test",
             "risk_level": "中低",
@@ -585,7 +746,6 @@ def test_safe_action_plan_approval_execution_and_pause(client, owner_headers, mo
         headers=owner_headers,
         json={
             "session_id": session_id,
-            "task_id": 1,
             "employee_id": 1,
             "skill_id": 1,
             "target_application": "隔离测试浏览器",

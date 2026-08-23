@@ -617,10 +617,12 @@ def test_independent_action_service_keeps_default_commit_behavior(
         "backend.agent_runtime.executors.computer.runtime.get_settings",
         lambda: settings_type(),
     )
+    task_id = _create_owned_task(client, admin_headers, "R193 independent action")
     created_session = client.post(
         "/api/v2/computer/sessions",
         headers=admin_headers,
         json={
+            "task_id": task_id,
             "executor_type": "mock",
             "environment_type": "test",
             "risk_level": "中低",
@@ -687,10 +689,12 @@ def test_independent_action_service_post_runtime_failure_preserves_committed_cap
         "backend.agent_runtime.executors.computer.runtime.get_settings",
         lambda: settings_type(),
     )
+    task_id = _create_owned_task(client, admin_headers, "R193 independent failure")
     created_session = client.post(
         "/api/v2/computer/sessions",
         headers=admin_headers,
         json={
+            "task_id": task_id,
             "executor_type": "mock",
             "environment_type": "test",
             "risk_level": "中低",
@@ -774,10 +778,12 @@ def test_independent_action_post_commit_refresh_preserves_capture_and_blocks_ree
         "backend.agent_runtime.executors.computer.runtime.get_settings",
         lambda: settings_type(),
     )
+    task_id = _create_owned_task(client, admin_headers, "R194 independent post-commit")
     created_session = client.post(
         "/api/v2/computer/sessions",
         headers=admin_headers,
         json={
+            "task_id": task_id,
             "executor_type": "mock",
             "environment_type": "test",
             "risk_level": "中低",
@@ -981,3 +987,119 @@ def test_workflow_post_commit_refresh_preserves_committed_graph_and_capture(
         assert step.action_id is not None
         assert db.query(ComputerAction).filter(ComputerAction.action_id == step.action_id).count() == 1
         assert db.query(ComputerEvidence).filter(ComputerEvidence.action_id == step.action_id).count() == 1
+
+
+def test_two_step_workflow_uses_stable_distinct_plan_traces_and_resumes_once(
+    postgres_alpha_runtime,
+    monkeypatch,
+):
+    client, admin_headers, test_db = postgres_alpha_runtime
+    settings_type = _enable_workflow_flags(monkeypatch)
+    monkeypatch.setattr(
+        "backend.agent_runtime.executors.computer.runtime.get_settings",
+        lambda: settings_type(),
+    )
+
+    class CaptureAuthorization:
+        def clear(self):
+            return None
+
+    executed_action_types = []
+    from backend.agent_runtime.executors.computer.mock_executor import MockComputerExecutor
+
+    original_execute = MockComputerExecutor.execute_action
+
+    def track_execute(executor, context):
+        executed_action_types.append(context.action_type)
+        return original_execute(executor, context)
+
+    monkeypatch.setattr(
+        "backend.agent_runtime.workflows.computer.runner.create_capture_authorization",
+        lambda **_kwargs: CaptureAuthorization(),
+    )
+    monkeypatch.setattr(MockComputerExecutor, "execute_action", track_execute)
+
+    task_id = _create_owned_task(client, admin_headers, "R195 two-step trace identity")
+    created = client.post(
+        "/api/v2/computer/workflows",
+        headers=admin_headers,
+        json={
+            "task_id": task_id,
+            "goal": "R195真实两步PostgreSQL回归",
+            "risk_level": "低风险",
+            "max_steps": 2,
+            "trace_id": "r195-two-step-workflow",
+            "steps": [
+                {
+                    "action_type": "截图",
+                    "target_url": "http://127.0.0.1:59200/computer-workflow-center.html",
+                    "expected_result": "本地页面截图",
+                },
+                {"action_type": "等待", "expected_result": "安全等待完成"},
+            ],
+        },
+    )
+    assert created.status_code == 200, created.text
+    workflow_id = created.json()["workflow"]["workflow_id"]
+    approved = client.post(f"/api/v2/computer/workflows/{workflow_id}/approve", headers=admin_headers)
+    assert approved.status_code == 200, approved.text
+
+    started = client.post(f"/api/v2/computer/workflows/{workflow_id}/start", headers=admin_headers)
+    assert started.status_code == 200, started.text
+    assert started.json()["workflow"]["status"] == "已暂停"
+    assert started.json()["workflow"]["current_step"] == 1
+
+    with test_db() as db:
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        first_step = db.query(ComputerWorkflowStep).filter(
+            ComputerWorkflowStep.workflow_id == workflow_id,
+            ComputerWorkflowStep.sequence_number == 1,
+        ).one()
+        first_plan = db.query(ComputerActionPlan).filter(
+            ComputerActionPlan.session_id == workflow.session_id,
+        ).one()
+        assert first_step.action_id is not None
+        first_action = db.get(ComputerAction, first_step.action_id)
+        first_evidence = db.query(ComputerEvidence).filter(
+            ComputerEvidence.session_id == workflow.session_id,
+        ).one()
+        assert first_action is not None
+        assert first_evidence.action_id == first_step.action_id
+        first_trace = first_plan.trace_id
+        first_screenshot = first_action.screenshot_after
+        first_evidence_id = first_evidence.evidence_id
+        assert first_step.status == "已完成"
+        assert first_screenshot
+
+    resumed = client.post(f"/api/v2/computer/workflows/{workflow_id}/resume", headers=admin_headers)
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["workflow"]["status"] == "已完成"
+    assert resumed.json()["workflow"]["current_step"] == 2
+
+    with test_db() as db:
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        plans = db.query(ComputerActionPlan).filter(
+            ComputerActionPlan.session_id == workflow.session_id,
+        ).order_by(ComputerActionPlan.created_at.asc()).all()
+        actions = db.query(ComputerAction).filter(ComputerAction.session_id == workflow.session_id).all()
+        events = db.query(ComputerPolicyEvent).filter(ComputerPolicyEvent.session_id == workflow.session_id).all()
+        evidence = db.query(ComputerEvidence).filter(ComputerEvidence.session_id == workflow.session_id).all()
+        assert len(plans) == 2
+        assert len({plan.trace_id for plan in plans}) == 2
+        assert plans[0].trace_id == first_trace
+        assert db.get(ComputerAction, first_step.action_id).screenshot_after == first_screenshot
+        assert db.get(ComputerEvidence, first_evidence_id).evidence_id == first_evidence_id
+        before_retry_counts = (len(plans), len(actions), len(events), len(evidence))
+
+    repeated = client.post(f"/api/v2/computer/workflows/{workflow_id}/resume", headers=admin_headers)
+    assert repeated.status_code == 409
+    with test_db() as db:
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        after_retry_counts = (
+            db.query(ComputerActionPlan).filter(ComputerActionPlan.session_id == workflow.session_id).count(),
+            db.query(ComputerAction).filter(ComputerAction.session_id == workflow.session_id).count(),
+            db.query(ComputerPolicyEvent).filter(ComputerPolicyEvent.session_id == workflow.session_id).count(),
+            db.query(ComputerEvidence).filter(ComputerEvidence.session_id == workflow.session_id).count(),
+        )
+        assert after_retry_counts == before_retry_counts
+    assert executed_action_types == ["截图", "等待"]

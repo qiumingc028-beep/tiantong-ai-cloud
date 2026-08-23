@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import uuid
 from datetime import datetime, timezone, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from .....brain_orchestrator.planner import resolve_graph_ownership
+from .....models import User
+from .....task_center_ownership import SESSION_USER_KEY, owned_task_rows_query
+from ..models import ComputerAction, ComputerSession
 from ..schemas import ComputerActionPayload, ComputerSessionCreatePayload
 from ..runtime import ComputerRuntime
 from ..session import add_action_row, add_policy_event, get_session
@@ -151,11 +156,32 @@ def preflight_action_plan(payload: ComputerActionPlanCreatePayload) -> None:
     preflight_action_payload(payload)
 
 
-def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload, *, commit: bool = True):
+def create_action_plan(
+    db: Session,
+    payload: ComputerActionPlanCreatePayload,
+    *,
+    commit: bool = True,
+    owner: User | None = None,
+):
     preflight_action_plan(payload)
-    session = get_session(db, payload.session_id)
-    if not session:
+    owner = owner or db.info.get(SESSION_USER_KEY)
+    if owner is not None:
+        session = (
+            owned_task_rows_query(db, ComputerSession, ComputerSession.task_id, user=owner)
+            .filter(ComputerSession.session_id == payload.session_id)
+            .one_or_none()
+        )
+        if session is None:
+            raise HTTPException(status_code=404, detail="动作计划不存在")
+    else:
+        session = get_session(db, payload.session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="电脑会话不存在")
+    task_id = session.task_id or payload.task_id
+    if owner is not None:
+        if payload.task_id and payload.task_id != session.task_id:
+            raise HTTPException(status_code=409, detail="动作计划幂等身份冲突")
+        task_id = session.task_id
     resolved = resolve_target(
         type("TargetPayload", (), {
             "target_application": payload.target_application,
@@ -172,7 +198,7 @@ def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload, *,
     plan_payload = ComputerActionPlanCreatePayload(
         session_id=session.session_id,
         observation_id=payload.observation_id,
-        task_id=payload.task_id or session.task_id,
+        task_id=task_id,
         employee_id=payload.employee_id or session.employee_id,
         skill_id=payload.skill_id or session.skill_id,
         target_application=payload.target_application,
@@ -189,17 +215,127 @@ def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload, *,
         text_input=payload.text_input,
         approval_mode=payload.approval_mode,
         risk_level=payload.risk_level,
-        max_actions=payload.max_actions,
+        max_actions=max(1, int(payload.max_actions or 1)),
         trace_id=payload.trace_id or session.trace_id,
         allow_coordinate_fallback=payload.allow_coordinate_fallback,
     )
+    owner_fingerprint = None
+    if owner is not None:
+        scope = resolve_graph_ownership(db, owner)
+        owner_fingerprint = hashlib.sha256(
+            json.dumps(
+                [
+                    scope.tenant_id,
+                    scope.company_id,
+                    scope.requester_id,
+                    scope.store_scope_key,
+                    scope.ownership_scope_key,
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    payload_fingerprint = hashlib.sha256(
+        json.dumps(
+            plan_payload.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    approval_scope = json.dumps(
+        {
+            "session_id": session.session_id,
+            "target_window": plan_payload.target_window,
+            "owner_fingerprint": owner_fingerprint,
+            "payload_fingerprint": payload_fingerprint,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if plan_payload.trace_id:
+        existing = (
+            db.query(ComputerActionPlan)
+            .filter(
+                ComputerActionPlan.session_id == session.session_id,
+                ComputerActionPlan.trace_id == plan_payload.trace_id,
+            )
+            .one_or_none()
+        )
+        if existing:
+            targets = db.query(ComputerActionTarget).filter(ComputerActionTarget.plan_id == existing.plan_id).all()
+            approvals = db.query(ComputerActionApproval).filter(ComputerActionApproval.plan_id == existing.plan_id).all()
+            if len(targets) != 1 or len(approvals) != 1:
+                raise HTTPException(status_code=409, detail="动作计划幂等身份冲突")
+            target = targets[0]
+            approval = approvals[0]
+            try:
+                stored_scope = json.loads(approval.approval_scope or "{}")
+            except json.JSONDecodeError:
+                stored_scope = {}
+            if stored_scope.get("owner_fingerprint") != owner_fingerprint:
+                raise HTTPException(status_code=404, detail="动作计划不存在")
+            expected_action = build_proposed_actions(plan_payload)[0]
+            proposed_actions = json.loads(existing.proposed_actions_json or "[]")
+            proposed_action = proposed_actions[0] if len(proposed_actions) == 1 else {}
+            expected_action.pop("action_id", None)
+            proposed_action_id = proposed_action.pop("action_id", None)
+            action = db.get(ComputerAction, target.action_id)
+            graph_matches = (
+                stored_scope.get("payload_fingerprint") == payload_fingerprint
+                and existing.session_id == plan_payload.session_id
+                and existing.observation_id == plan_payload.observation_id
+                and existing.task_id == plan_payload.task_id
+                and existing.employee_id == plan_payload.employee_id
+                and existing.skill_id == plan_payload.skill_id
+                and existing.target_application == plan_payload.target_application
+                and existing.target_bundle_id == plan_payload.target_bundle_id
+                and existing.target_window == plan_payload.target_window
+                and existing.goal == plan_payload.goal
+                and existing.max_actions == plan_payload.max_actions
+                and existing.risk_level == plan_payload.risk_level
+                and existing.approval_mode == plan_payload.approval_mode
+                and existing.trace_id == plan_payload.trace_id
+                and proposed_action == expected_action
+                and proposed_action_id == target.action_id == approval.action_id
+                and target.plan_id == approval.plan_id == existing.plan_id
+                and target.action_type == plan_payload.action_type
+                and target.control_type == plan_payload.control_type
+                and target.control_label == plan_payload.control_label
+                and target.control_identifier == plan_payload.control_identifier
+                and target.target_description == (plan_payload.target_description or plan_payload.goal)
+                and target.expected_window == plan_payload.target_window
+                and target.expected_application == plan_payload.target_application
+                and json.loads(target.coordinates_json or "null") == plan_payload.coordinates
+                and target.input_text_summary == (plan_payload.text_input[:80] if plan_payload.text_input else None)
+                and action is not None
+                and action.session_id == session.session_id
+                and action.action_type == plan_payload.action_type
+                and action.target_application == plan_payload.target_application
+                and action.target_window == plan_payload.target_window
+                and action.target_description == plan_payload.target_description
+                and json.loads(action.coordinates_json or "null") == plan_payload.coordinates
+                and action.input_summary == (plan_payload.text_input[:128] if plan_payload.text_input else None)
+                and action.risk_level == plan_payload.risk_level
+                and action.approval_required is True
+                and action.trace_id == plan_payload.trace_id
+            )
+            if not graph_matches:
+                raise HTTPException(status_code=409, detail="动作计划幂等身份冲突")
+            return {
+                "plan": _plan_to_dict(existing),
+                "target": _target_to_dict(target),
+                "approval": _approval_to_dict(approval),
+                "preview": preview_payload(existing, target, session),
+            }
     plan, target = create_action_plan_row(db, plan_payload)
     approval = create_approval_row(
         db,
         plan,
         target,
         approved_by=None,
-        approval_scope=json.dumps({"session_id": session.session_id, "target_window": target.expected_window}, ensure_ascii=False),
+        approval_scope=approval_scope,
         trace_id=payload.trace_id or session.trace_id,
     )
     plan.status = "等待批准"

@@ -25,6 +25,7 @@ from ..agent_runtime.executors.computer.actions.service import (
     health_check as safe_action_health_check,
 )
 from ..config import get_settings
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/v2/computer")
@@ -204,8 +205,9 @@ def capture_screen(session_id: str, request: Request, db: Session = Depends(get_
 def create_plan(payload: ComputerActionPlanCreatePayload, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_ACTION_ENABLED")
-    require_skills_manage_user(request, db)
-    result = create_action_plan(db, payload)
+    user = require_skills_manage_user(request, db)
+    bind_session_task_ownership(db, user=user)
+    result = create_action_plan(db, payload, owner=user)
     return {"ok": True, **result}
 
 
