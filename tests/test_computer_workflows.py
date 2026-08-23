@@ -4,6 +4,7 @@ import json
 import uuid
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.orm import Session as OrmSession
 
 from backend.agent_runtime.workflows.computer.constants import WORKFLOW_ACTION_TYPES
@@ -26,7 +27,10 @@ from backend.agent_runtime.workflows.computer.models import (
     ComputerWorkflowStep,
     ComputerWorkflowVerification,
 )
+from backend.agent_runtime.workflows.computer.recovery import record_recovery
+from backend.agent_runtime.workflows.computer.verifier import verify_step_result
 from backend.models import User, UserStoreMembership
+from backend.task_center_ownership import bind_session_task_ownership
 from tests.test_v2_alpha_postgresql_migration_regression import _create_scoped_owner
 
 
@@ -1063,9 +1067,14 @@ def test_two_step_workflow_uses_stable_distinct_plan_traces_and_resumes_once(
         first_evidence = db.query(ComputerEvidence).filter(
             ComputerEvidence.session_id == workflow.session_id,
         ).one()
+        first_verification = db.query(ComputerWorkflowVerification).filter(
+            ComputerWorkflowVerification.workflow_id == workflow_id,
+            ComputerWorkflowVerification.step_id == first_step.step_id,
+        ).one()
         assert first_action is not None
         assert first_evidence.action_id == first_step.action_id
         first_trace = first_plan.trace_id
+        assert first_verification.trace_id == first_trace
         first_screenshot = first_action.screenshot_after
         first_evidence_id = first_evidence.evidence_id
         assert first_step.status == "已完成"
@@ -1084,8 +1093,13 @@ def test_two_step_workflow_uses_stable_distinct_plan_traces_and_resumes_once(
         actions = db.query(ComputerAction).filter(ComputerAction.session_id == workflow.session_id).all()
         events = db.query(ComputerPolicyEvent).filter(ComputerPolicyEvent.session_id == workflow.session_id).all()
         evidence = db.query(ComputerEvidence).filter(ComputerEvidence.session_id == workflow.session_id).all()
+        verifications = db.query(ComputerWorkflowVerification).filter(
+            ComputerWorkflowVerification.workflow_id == workflow_id,
+        ).order_by(ComputerWorkflowVerification.created_at.asc()).all()
         assert len(plans) == 2
         assert len({plan.trace_id for plan in plans}) == 2
+        assert len(verifications) == 2
+        assert {row.trace_id for row in verifications} == {plan.trace_id for plan in plans}
         assert plans[0].trace_id == first_trace
         assert db.get(ComputerAction, first_step.action_id).screenshot_after == first_screenshot
         assert db.get(ComputerEvidence, first_evidence_id).evidence_id == first_evidence_id
@@ -1103,3 +1117,207 @@ def test_two_step_workflow_uses_stable_distinct_plan_traces_and_resumes_once(
         )
         assert after_retry_counts == before_retry_counts
     assert executed_action_types == ["截图", "等待"]
+
+
+def test_step_verification_is_idempotent_for_the_same_attempt(
+    postgres_alpha_runtime,
+    monkeypatch,
+):
+    client, admin_headers, test_db = postgres_alpha_runtime
+    _enable_workflow_flags(monkeypatch)
+    task_id = _create_owned_task(client, admin_headers, "R196 verification idempotency")
+    created = client.post(
+        "/api/v2/computer/workflows",
+        headers=admin_headers,
+        json=_create_workflow_payload(task_id),
+    )
+    assert created.status_code == 200, created.text
+    workflow_id = created.json()["workflow"]["workflow_id"]
+
+    def add_attempt_graph(db, workflow, step, trace_id, sequence_number):
+        action_id = uuid.uuid4().hex
+        plan_id = uuid.uuid4().hex
+        db.add_all(
+            [
+                ComputerAction(
+                    action_id=action_id,
+                    session_id=workflow.session_id,
+                    sequence_number=sequence_number,
+                    action_type=step.action_type,
+                    risk_level=step.risk_level,
+                    approval_required=True,
+                    approval_status="已批准",
+                    trace_id=trace_id,
+                ),
+                ComputerActionPlan(
+                    plan_id=plan_id,
+                    session_id=workflow.session_id,
+                    task_id=workflow.task_id,
+                    goal=workflow.goal,
+                    proposed_actions_json=json.dumps([{"action_id": action_id, "action_type": step.action_type}]),
+                    current_action_index=0,
+                    max_actions=1,
+                    risk_level=step.risk_level,
+                    approval_mode="逐步审批",
+                    status="已批准",
+                    trace_id=trace_id,
+                ),
+                ComputerActionTarget(
+                    target_id=uuid.uuid4().hex,
+                    plan_id=plan_id,
+                    action_id=action_id,
+                    action_type=step.action_type,
+                    status="已执行",
+                ),
+            ]
+        )
+        step.action_id = action_id
+        db.flush()
+        return {"plan_id": plan_id, "action_id": action_id}
+
+    values = {
+        "before_screenshot_reference": "evidence://r196/before",
+        "after_screenshot_reference": "evidence://r196/after",
+        "state_summary": "R196 stable state",
+        "result_summary": "R196 verified",
+        "verification_status": "结果符合预期",
+        "trace_id": "r196-stable-attempt",
+    }
+    with test_db() as db:
+        owner = db.query(User).filter(User.username == "boss").one()
+        bind_session_task_ownership(db, user=owner)
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        step = db.query(ComputerWorkflowStep).filter(
+            ComputerWorkflowStep.workflow_id == workflow_id,
+            ComputerWorkflowStep.sequence_number == 1,
+        ).one()
+        workflow.session_id = uuid.uuid4().hex
+        db.add(
+            ComputerSession(
+                session_id=workflow.session_id,
+                task_id=workflow.task_id,
+                executor_type="mock",
+                environment_type="test",
+                status="已创建",
+                risk_level="低风险",
+                approval_status="已批准",
+                trace_id="r196-workflow-session",
+            )
+        )
+        db.flush()
+        values.update(add_attempt_graph(db, workflow, step, values["trace_id"], 1))
+        first = verify_step_result(db, workflow, step, **values)
+        first_id = first.verification_id
+        db.commit()
+
+    with test_db() as db:
+        owner = db.query(User).filter(User.username == "boss").one()
+        bind_session_task_ownership(db, user=owner)
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        step = db.query(ComputerWorkflowStep).filter(
+            ComputerWorkflowStep.workflow_id == workflow_id,
+            ComputerWorkflowStep.sequence_number == 1,
+        ).one()
+        repeated = verify_step_result(db, workflow, step, **values)
+        db.commit()
+        assert repeated.verification_id == first_id
+        assert db.query(ComputerWorkflowVerification).filter(
+            ComputerWorkflowVerification.workflow_id == workflow_id,
+            ComputerWorkflowVerification.step_id == step.step_id,
+        ).count() == 1
+
+    with test_db() as db:
+        owner = db.query(User).filter(User.username == "boss").one()
+        bind_session_task_ownership(db, user=owner)
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        step = db.query(ComputerWorkflowStep).filter(
+            ComputerWorkflowStep.workflow_id == workflow_id,
+            ComputerWorkflowStep.sequence_number == 1,
+        ).one()
+        step.action_id = uuid.uuid4().hex
+        with pytest.raises(HTTPException) as action_conflict:
+            verify_step_result(db, workflow, step, **values)
+        assert (action_conflict.value.status_code, action_conflict.value.detail) == (409, "工作流步骤验证身份冲突")
+        db.rollback()
+
+    conflicting_values = dict(values, trace_id="r196-foreign-attempt", result_summary="must not overwrite")
+    with test_db() as db:
+        owner = db.query(User).filter(User.username == "boss").one()
+        bind_session_task_ownership(db, user=owner)
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        step = db.query(ComputerWorkflowStep).filter(
+            ComputerWorkflowStep.workflow_id == workflow_id,
+            ComputerWorkflowStep.sequence_number == 1,
+        ).one()
+        with pytest.raises(HTTPException) as conflict:
+            verify_step_result(db, workflow, step, **conflicting_values)
+        assert (conflict.value.status_code, conflict.value.detail) == (409, "工作流步骤验证身份冲突")
+        db.rollback()
+    with test_db() as db:
+        preserved = db.get(ComputerWorkflowVerification, first_id)
+        assert preserved is not None
+        assert preserved.result_summary == values["result_summary"]
+        assert preserved.trace_id == values["trace_id"]
+        assert db.query(ComputerWorkflowVerification).filter(
+            ComputerWorkflowVerification.workflow_id == workflow_id,
+        ).count() == 1
+
+    _foreign_headers, foreign_scope = _create_scoped_owner(client, test_db, "r196-verification-foreign")
+    with test_db() as db:
+        bind_session_task_ownership(db, user=db.get(User, foreign_scope[0]))
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        step = db.query(ComputerWorkflowStep).filter(
+            ComputerWorkflowStep.workflow_id == workflow_id,
+            ComputerWorkflowStep.sequence_number == 1,
+        ).one()
+        before_count = db.query(ComputerWorkflowVerification).filter(
+            ComputerWorkflowVerification.workflow_id == workflow_id,
+        ).count()
+        with pytest.raises(HTTPException) as foreign_conflict:
+            verify_step_result(db, workflow, step, **values)
+        assert (foreign_conflict.value.status_code, foreign_conflict.value.detail) == (404, "工作流步骤验证不存在")
+        assert db.query(ComputerWorkflowVerification).filter(
+            ComputerWorkflowVerification.workflow_id == workflow_id,
+        ).count() == before_count
+        db.rollback()
+
+    reset_values = dict(values, trace_id="r196-audited-reset-attempt", result_summary="verified after audited reset")
+    with test_db() as db:
+        owner = db.query(User).filter(User.username == "boss").one()
+        bind_session_task_ownership(db, user=owner)
+        workflow = db.get(ComputerWorkflow, workflow_id)
+        step = db.query(ComputerWorkflowStep).filter(
+            ComputerWorkflowStep.workflow_id == workflow_id,
+            ComputerWorkflowStep.sequence_number == 1,
+        ).one()
+        stale = db.get(ComputerWorkflowVerification, first_id)
+        record_recovery(
+            db,
+            workflow,
+            step_id=step.step_id,
+            recovery_type="Verification受审计重置",
+            reason="R196 regression invalidates the exact prior attempt",
+            result_summary=json.dumps({"invalidated_verification_id": first_id}, sort_keys=True),
+            trace_id="r196-audited-reset",
+        )
+        db.delete(stale)
+        db.flush()
+        step.verification_id = None
+        step.status = "待执行"
+        step.finished_at = None
+        reset_values.update(add_attempt_graph(db, workflow, step, reset_values["trace_id"], 2))
+        replacement = verify_step_result(db, workflow, step, **reset_values)
+        replacement_id = replacement.verification_id
+        db.commit()
+    assert replacement_id != first_id
+    with test_db() as db:
+        rows = db.query(ComputerWorkflowVerification).filter(
+            ComputerWorkflowVerification.workflow_id == workflow_id,
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].verification_id == replacement_id
+        assert rows[0].trace_id == reset_values["trace_id"]
+        assert db.query(ComputerWorkflowRecovery).filter(
+            ComputerWorkflowRecovery.workflow_id == workflow_id,
+            ComputerWorkflowRecovery.recovery_type == "Verification受审计重置",
+        ).count() == 1

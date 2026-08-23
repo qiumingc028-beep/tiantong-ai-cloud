@@ -514,6 +514,7 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
     try:
         runtime_result = action_result.get("result") or {}
         action_data = runtime_result.get("action") or {}
+        step.action_id = action_result["target"]["action_id"]
         verification_row = verify_step_result(
             db,
             workflow,
@@ -523,9 +524,10 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
             state_summary=current_window or current_application,
             result_summary=action_data.get("result") or action_data.get("error_message"),
             verification_status=(action_result.get("verification") or {}).get("verification_status") or "无法判断",
-            trace_id=trace_id or workflow.trace_id,
+            plan_id=plan_result["plan"]["plan_id"],
+            action_id=step.action_id,
+            trace_id=plan_result["plan"]["trace_id"],
         )
-        step.action_id = action_result["target"]["action_id"]
         step.finished_at = utcnow()
         step.status = "已完成" if verification_row.verification_status in {"结果符合预期", "结果部分符合"} else "已失败"
         workflow.current_step = max(workflow.current_step, sequence_number)
