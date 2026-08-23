@@ -8,7 +8,7 @@ import pytest
 
 from backend.agent_runtime.executors.computer.actions.models import ComputerActionPlan
 from backend.agent_runtime.executors.computer.models import ComputerAction, ComputerEvidence, ComputerPolicyEvent
-from backend.agent_runtime.executors.computer.session import add_policy_event
+from backend.agent_runtime.executors.computer.session import add_evidence_row, add_policy_event
 from backend.models import AiEmployee
 
 
@@ -41,6 +41,87 @@ def test_computer_policy_event_id_is_deterministic_uuid_without_truncation(test_
         assert stored_event_id(*long_components) == first_id
         assert stored_event_id("scope-a", "b", "c") != stored_event_id("scope", "a-b", "c")
         assert stored_event_id(None, None, "x" * 79 + "a") != stored_event_id(None, None, "x" * 79 + "b")
+    finally:
+        db.rollback()
+        db.close()
+
+
+def test_computer_evidence_id_is_deterministic_uuid_without_truncation(test_db):
+    assert ComputerEvidence.__table__.c.evidence_id.type.length == 36
+    db = test_db()
+    try:
+        def stored_evidence_id(session_id, action_id, evidence_type, reference):
+            row = add_evidence_row(
+                db,
+                session_id=session_id,
+                action_id=action_id,
+                evidence_type=evidence_type,
+                reference=reference,
+                metadata={"kind": "evidence id regression"},
+            )
+            evidence_id = row.evidence_id
+            assert db.get(ComputerEvidence, evidence_id) is row
+            db.rollback()
+            return evidence_id
+
+        long_components = (
+            "s" * 36,
+            "a" * 36,
+            "screenshot-" + "x" * 40,
+            "file:///private/tmp/" + "r" * 120 + ".png",
+        )
+        first_id = stored_evidence_id(*long_components)
+        assert len(first_id) == 36
+        assert uuid.UUID(first_id).version == 5
+        assert stored_evidence_id(*long_components) == first_id
+        assert stored_evidence_id("scope-a", None, "b", "c") != stored_evidence_id("scope", None, "a-b", "c")
+        assert stored_evidence_id("scope", None, "type", "x" * 119 + "a") != stored_evidence_id("scope", None, "type", "x" * 119 + "b")
+    finally:
+        db.rollback()
+        db.close()
+
+
+def test_computer_evidence_uuid5_persists_with_action_foreign_key(postgres_alpha_runtime, monkeypatch):
+    client, owner_headers, session_factory = postgres_alpha_runtime
+    enable_computer_flags(monkeypatch)
+    created = client.post(
+        "/api/v2/computer/sessions",
+        headers=owner_headers,
+        json={"executor_type": "mock", "environment_type": "test"},
+    )
+    assert created.status_code == 200
+    session_id = created.json()["session"]["session_id"]
+    action_id = uuid.uuid4().hex
+    db = session_factory()
+    try:
+        db.add(
+            ComputerAction(
+                action_id=action_id,
+                session_id=session_id,
+                sequence_number=1,
+                action_type="截图",
+                risk_level="低风险",
+                approval_required=False,
+                approval_status="无需审批",
+            )
+        )
+        db.flush()
+        evidence = add_evidence_row(
+            db,
+            session_id=session_id,
+            action_id=action_id,
+            evidence_type="screenshot",
+            reference="file:///private/tmp/" + "r" * 120 + ".png",
+            metadata={"provider": "chrome_cdp_page_capture"},
+        )
+        evidence_id = evidence.evidence_id
+        db.commit()
+        stored = db.get(ComputerEvidence, evidence_id)
+        assert stored is not None
+        assert stored.action_id == action_id
+        assert len(stored.evidence_id) == 36
+        assert uuid.UUID(stored.evidence_id).version == 5
+        assert "Bearer " not in (stored.metadata_json or "")
     finally:
         db.rollback()
         db.close()

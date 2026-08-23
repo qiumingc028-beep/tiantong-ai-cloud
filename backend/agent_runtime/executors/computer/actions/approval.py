@@ -43,18 +43,31 @@ def create_approval_row(db: Session, plan: ComputerActionPlan, target: ComputerA
     return approval
 
 
-def approve_action_row(db: Session, approval: ComputerActionApproval, *, approved_by: int | None, trace_id: str | None):
+def approve_action_row(
+    db: Session,
+    approval: ComputerActionApproval,
+    *,
+    approved_by: int | None,
+    trace_id: str | None,
+    commit: bool = True,
+):
     if approval.approval_status == "已批准":
         raise HTTPException(status_code=409, detail="审批已使用，不能重复批准")
     if _normalize_dt(approval.expires_at) and _normalize_dt(approval.expires_at) < utcnow():
         approval.approval_status = "已过期"
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         raise HTTPException(status_code=409, detail="审批已过期")
     approval.approval_status = "已批准"
     approval.approved_by = approved_by
     approval.approved_at = utcnow()
     approval.trace_id = trace_id or approval.trace_id
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(approval)
     return approval
 

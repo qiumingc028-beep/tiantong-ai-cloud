@@ -11,9 +11,10 @@ from backend.agent_runtime.executors.computer.actions.service import approve_act
 from backend.agent_runtime.executors.computer.actions.schemas import ComputerActionPlanCreatePayload
 from backend.agent_runtime.executors.computer.schemas import ComputerSessionCreatePayload
 from backend.agent_runtime.executors.computer.runtime import ComputerRuntime
+from backend.auth import create_capture_authorization
 from backend.config import get_settings
 from backend.models import AiEmployee, TaskCenterResult, TaskCenterTask, User
-from backend.task_center_ownership import owned_task_or_none, owned_tasks_query
+from backend.task_center_ownership import SESSION_USER_KEY, owned_task_or_none, owned_tasks_query
 
 from .approval import approve_checkpoint, approve_scope_approval, create_checkpoint_approval, create_scope_approval, reject_checkpoint, reject_scope_approval, utcnow
 from .audit import summarize_workflow_audit
@@ -441,17 +442,38 @@ def execute_step(db: Session, workflow_id: str, sequence_number: int, *, current
         db.refresh(step)
         db.refresh(checkpoint)
         return {"workflow": _workflow_to_dict(workflow), "step": _step_to_dict(step), "checkpoint": _checkpoint_to_dict(checkpoint), "paused": True}
-    plan_result = create_action_plan(db, plan_payload)
-    plan_id = plan_result["plan"]["plan_id"]
-    approval = approve_action(db, plan_id=plan_id, approved_by=None, approval_scope=workflow.goal, trace_id=trace_id or workflow.trace_id, current_screenshot_hash=current_screenshot_hash)
-    action_result = execute_action(
-        db,
-        plan_id=plan_id,
-        current_application=current_application,
-        current_window=current_window,
-        current_screenshot_hash=current_screenshot_hash,
-        trace_id=trace_id or workflow.trace_id,
-    )
+    capture_authorization = None
+    try:
+        if step.action_type == "截图":
+            owner = db.info.get(SESSION_USER_KEY)
+            if owner is None:
+                raise HTTPException(status_code=403, detail="截图动作缺少Owner授权上下文")
+            try:
+                capture_authorization = create_capture_authorization(
+                    user_id=owner.id,
+                    workflow_id=workflow.workflow_id,
+                    target_url=plan_payload.target_url,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=403, detail="截图动作授权上下文无效") from exc
+        plan_result = create_action_plan(db, plan_payload, commit=False)
+        plan_id = plan_result["plan"]["plan_id"]
+        approval = approve_action(db, plan_id=plan_id, approved_by=None, approval_scope=workflow.goal, trace_id=trace_id or workflow.trace_id, current_screenshot_hash=current_screenshot_hash, commit=False)
+        action_result = execute_action(
+            db,
+            plan_id=plan_id,
+            current_application=current_application,
+            current_window=current_window,
+            current_screenshot_hash=current_screenshot_hash,
+            trace_id=trace_id or workflow.trace_id,
+            capture_authorization=capture_authorization,
+        )
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        if capture_authorization is not None:
+            capture_authorization.clear()
     runtime_result = action_result.get("result") or {}
     action_data = runtime_result.get("action") or {}
     verification_row = verify_step_result(

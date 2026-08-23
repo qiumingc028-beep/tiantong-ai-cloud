@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -31,6 +33,16 @@ def _executor_for_settings(session: ComputerSession | None = None):
     raise HTTPException(status_code=503, detail="真实电脑执行适配器未启用")
 
 
+def _remove_failed_capture(reference: str | None, settings) -> None:
+    parsed = urlsplit(reference or "")
+    if parsed.scheme != "file":
+        return
+    output_root = Path(settings.PAGE_CAPTURE_OUTPUT_ROOT).resolve()
+    candidate = Path(parsed.path).resolve()
+    if candidate.is_relative_to(output_root):
+        candidate.unlink(missing_ok=True)
+
+
 def preflight_action_payload(payload) -> None:
     settings = get_settings()
     if not settings.OPENCLAW_ADAPTER_ENABLED:
@@ -47,7 +59,7 @@ def preflight_action_payload(payload) -> None:
         {"action_type": payload.action_type, "target_url": getattr(payload, "target_url", None)},
     )()
     try:
-        OpenClawAdapter(settings=settings).validate(context)
+        OpenClawAdapter(settings=settings).validate_target(context)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="截图动作必须提供允许的target_url") from exc
     except RuntimeError as exc:
@@ -76,7 +88,7 @@ class ComputerRuntime:
         return session
 
     @staticmethod
-    def execute_action(db: Session, session: ComputerSession, payload: ComputerActionPayload):
+    def execute_action(db: Session, session: ComputerSession, payload: ComputerActionPayload, *, capture_authorization=None):
         ensure_executor_enabled()
         ensure_screen_capture_enabled()
         validate_action_payload(payload)
@@ -130,57 +142,63 @@ class ComputerRuntime:
             "target_url": payload.target_url,
             "text_input": payload.text_input,
             "coordinates": payload.coordinates,
+            "capture_authorization": capture_authorization,
         })()
         started = utcnow()
         response = executor.execute_action(context)
         finished = utcnow()
-        action = add_action_row(
-            db,
-            session=session,
-            payload=payload,
-            result={
-                "action_id": safe_action_target.action_id if safe_action_target is not None else uuid.uuid4().hex,
-                "result": json_text(response.action_result if isinstance(response, ComputerExecutorOutcome) else response),
-                "risk_level": session.risk_level,
-                "started_at": started,
-                "finished_at": finished,
-                "duration_ms": response.duration_ms if isinstance(response, ComputerExecutorOutcome) else 0,
-            },
-            screenshot_before=make_screenshot_reference(session.session_id, f"before-{payload.trace_id or 'action'}"),
-            screenshot_after=response.screenshot_reference if isinstance(response, ComputerExecutorOutcome) else None,
-            approval_required=bool(safe_action_context) or session.approval_status == "等待审批",
-            approval_status=approval_status_value,
-        )
-        evidence = add_evidence_row(
-            db,
-            session_id=session.session_id,
-            action_id=action.action_id,
-            evidence_type="screenshot",
-            reference=make_evidence_reference(session.session_id, action.action_id, "action_screenshot"),
-            metadata={"action_type": payload.action_type, "target_application": payload.target_application, "target_window": payload.target_window},
-        )
-        add_policy_event(
-            db,
-            session_id=session.session_id,
-            action_id=action.action_id,
-            event_code="ACTION_EXECUTED",
-            event_message="电脑动作已执行",
-            risk_level=session.risk_level,
-            sensitive_data_involved=detect_sensitive_region(payload.target_window, payload.target_application, payload.text_input),
-            trace_id=payload.trace_id,
-        )
-        session.status = "执行中"
-        session.last_screenshot_at = finished
-        db.commit()
-        db.refresh(session)
-        if safe_action_plan is not None:
-            safe_action_plan.current_action_index = min(safe_action_plan.max_actions, safe_action_plan.current_action_index + 1)
-            safe_action_plan.status = "已暂停"
-            session.approval_status = "已批准"
-            session.status = "已暂停"
+        screenshot_reference = response.screenshot_reference if isinstance(response, ComputerExecutorOutcome) else None
+        try:
+            action = add_action_row(
+                db,
+                session=session,
+                payload=payload,
+                result={
+                    "action_id": safe_action_target.action_id if safe_action_target is not None else uuid.uuid4().hex,
+                    "result": json_text(response.action_result if isinstance(response, ComputerExecutorOutcome) else response),
+                    "risk_level": session.risk_level,
+                    "started_at": started,
+                    "finished_at": finished,
+                    "duration_ms": response.duration_ms if isinstance(response, ComputerExecutorOutcome) else 0,
+                },
+                screenshot_before=make_screenshot_reference(session.session_id, f"before-{payload.trace_id or 'action'}"),
+                screenshot_after=screenshot_reference,
+                approval_required=bool(safe_action_context) or session.approval_status == "等待审批",
+                approval_status=approval_status_value,
+            )
+            evidence = add_evidence_row(
+                db,
+                session_id=session.session_id,
+                action_id=action.action_id,
+                evidence_type="screenshot",
+                reference=make_evidence_reference(session.session_id, action.action_id, "action_screenshot"),
+                metadata={"action_type": payload.action_type, "target_application": payload.target_application, "target_window": payload.target_window},
+            )
+            add_policy_event(
+                db,
+                session_id=session.session_id,
+                action_id=action.action_id,
+                event_code="ACTION_EXECUTED",
+                event_message="电脑动作已执行",
+                risk_level=session.risk_level,
+                sensitive_data_involved=detect_sensitive_region(payload.target_window, payload.target_application, payload.text_input),
+                trace_id=payload.trace_id,
+            )
+            session.status = "执行中"
+            session.last_screenshot_at = finished
+            if safe_action_plan is not None:
+                safe_action_plan.current_action_index = min(safe_action_plan.max_actions, safe_action_plan.current_action_index + 1)
+                safe_action_plan.status = "已暂停"
+                session.approval_status = "已批准"
+                session.status = "已暂停"
             db.commit()
-            db.refresh(safe_action_plan)
             db.refresh(session)
+            if safe_action_plan is not None:
+                db.refresh(safe_action_plan)
+        except Exception:
+            db.rollback()
+            _remove_failed_capture(screenshot_reference, settings)
+            raise
         session_dict = {
             "session_id": session.session_id,
             "execution_id": session.execution_id,

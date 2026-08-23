@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..auth import current_user, require_permission_user
+from ..auth import capture_workflow_id, current_user, require_permission_user
 from ..database import get_db
 from ..models import AiEmployee, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask, User
 from ..task_center_ownership import (
@@ -100,6 +100,14 @@ def create_task(payload: TaskCreate, request: Request, db: Session = Depends(get
 def list_tasks(request: Request, status: str | None = None, db: Session = Depends(get_db)):
     user = require_task_read(request, db)
     query = owned_tasks_query(db, user=user)
+    capture_id = capture_workflow_id(request)
+    if capture_id:
+        from ..agent_runtime.workflows.computer.models import ComputerWorkflow
+
+        query = query.join(
+            ComputerWorkflow,
+            ComputerWorkflow.task_id == TaskCenterTask.id,
+        ).filter(ComputerWorkflow.workflow_id == capture_id)
     if status:
         query = query.filter(TaskCenterTask.status == status)
     tasks = query.order_by(TaskCenterTask.id.desc()).all()

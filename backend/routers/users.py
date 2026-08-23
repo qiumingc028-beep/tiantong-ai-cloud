@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import (
     ROLE_LABELS,
+    capture_workflow_id,
     create_session,
     delete_session,
     hash_password,
@@ -48,7 +49,12 @@ def logout(request: Request, response: Response):
 
 @router.get("/api/me")
 def me(request: Request, db: Session = Depends(get_db)):
-    return require_user(request, db)
+    user = require_user(request, db)
+    if capture_workflow_id(request):
+        user["menus"] = [
+            item for item in user["menus"] if item["permission"] == "menu.computer_executor"
+        ]
+    return user
 
 
 @router.get("/api/dashboard")

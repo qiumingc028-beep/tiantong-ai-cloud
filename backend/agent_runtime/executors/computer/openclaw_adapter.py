@@ -15,6 +15,11 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from ....auth import (
+    CAPTURE_AUTH_WORKFLOW_HEADER,
+    CAPTURE_PAGE_PATH,
+    CAPTURE_READONLY_METHODS,
+)
 from ....config import get_settings
 from .base import ComputerExecutorBase, ComputerExecutorOutcome
 from .evidence import utcnow
@@ -94,6 +99,7 @@ class _WebSocket:
         self.next_id = 1
         self.events: list[dict] = []
         self.allowed_origins: list[str] = []
+        self.capture_authorization = None
 
     def close(self) -> None:
         try:
@@ -173,18 +179,46 @@ class _WebSocket:
         if message.get("method") != "Fetch.requestPaused":
             return False
         paused = message.get("params") or {}
-        paused_url = str((paused.get("request") or {}).get("url") or "")
+        request = paused.get("request") or {}
+        paused_url = str(request.get("url") or "")
+        request_method = str(request.get("method") or "GET").upper()
+        authorization = self.capture_authorization
+        boundary_error = False
         try:
             validate_capture_target_url(paused_url, self.allowed_origins)
+            if authorization is None or not authorization.token:
+                raise PermissionError("capture authorization is required")
+            if request_method not in CAPTURE_READONLY_METHODS:
+                raise PermissionError("capture authorization is read-only")
+            if urlsplit(paused_url).path not in authorization.allowed_paths:
+                raise PermissionError("capture request path is not allowed")
             method = "Fetch.continueRequest"
-            params = {"requestId": paused["requestId"]}
+            request_headers = [
+                {"name": name, "value": str(value)}
+                for name, value in (request.get("headers") or {}).items()
+                if name.lower() not in {"authorization", CAPTURE_AUTH_WORKFLOW_HEADER.lower()}
+            ]
+            request_headers.extend(
+                [
+                    {"name": "Authorization", "value": f"Bearer {authorization.token}"},
+                    {"name": CAPTURE_AUTH_WORKFLOW_HEADER, "value": authorization.workflow_id},
+                ]
+            )
+            params = {"requestId": paused["requestId"], "headers": request_headers}
         except ValueError:
+            boundary_error = True
+            method = "Fetch.failRequest"
+            params = {"requestId": paused["requestId"], "errorReason": "BlockedByClient"}
+        except PermissionError:
             method = "Fetch.failRequest"
             params = {"requestId": paused["requestId"], "errorReason": "BlockedByClient"}
         self._send_json({"id": self.next_id, "method": method, "params": params})
         self.next_id += 1
         if method == "Fetch.failRequest":
-            raise ValueError("page navigation left the allowlisted origin")
+            if request_method not in CAPTURE_READONLY_METHODS:
+                raise PermissionError("capture authorization is read-only")
+            if paused.get("resourceType") == "Document" or boundary_error:
+                raise ValueError("page navigation left the allowed capture boundary")
         return True
 
     def call(self, method: str, params: dict | None = None) -> dict:
@@ -201,8 +235,9 @@ class _WebSocket:
                 return message.get("result") or {}
             self.events.append(message)
 
-    def navigate(self, target_url: str, allowed_origins: list[str]) -> dict:
+    def navigate(self, target_url: str, allowed_origins: list[str], capture_authorization) -> dict:
         self.allowed_origins = allowed_origins
+        self.capture_authorization = capture_authorization
         request_id = self.next_id
         self.next_id += 1
         self._send_json({"id": request_id, "method": "Page.navigate", "params": {"url": target_url}})
@@ -245,7 +280,7 @@ class OpenClawAdapter(ComputerExecutorBase):
         if not bool(getattr(self.settings, "OPENCLAW_ADAPTER_ENABLED", False)):
             raise RuntimeError("real page capture adapter is disabled")
 
-    def validate(self, context):
+    def validate_target(self, context):
         target_url = self._target_url(context)
         chrome = Path(str(getattr(self.settings, "PAGE_CAPTURE_CHROME_PATH", "")))
         output_root = Path(str(getattr(self.settings, "PAGE_CAPTURE_OUTPUT_ROOT", "")))
@@ -262,6 +297,48 @@ class OpenClawAdapter(ComputerExecutorBase):
         ):
             raise RuntimeError("page capture output root must be a dedicated temporary directory")
         return target_url
+
+    def validate(self, context):
+        target_url = self.validate_target(context)
+        authorization = getattr(context, "capture_authorization", None)
+        parsed = urlsplit(target_url)
+        if (
+            authorization is None
+            or not authorization.token
+            or authorization.origin != f"{parsed.scheme}://{parsed.netloc}"
+            or authorization.target_path != parsed.path
+            or parsed.path not in authorization.allowed_paths
+        ):
+            raise PermissionError("capture authorization is required")
+        return target_url, authorization
+
+    @staticmethod
+    def _verify_workflow_page(websocket: _WebSocket, workflow_id: str, deadline: float) -> None:
+        workflow_id_json = json.dumps(workflow_id)
+        expression = f"""(() => {{
+            const body = document.body ? document.body.innerText : '';
+            const state = document.getElementById('pageState');
+            const user = document.getElementById('currentUser');
+            const rows = document.getElementById('workflowRows');
+            return {{
+                denied: body.includes('无权访问') || location.pathname.endsWith('/login.html'),
+                error: Boolean(state && state.classList.contains('error')),
+                ready: Boolean(state && user && rows &&
+                    user.textContent !== '正在确认身份' &&
+                    !state.textContent.includes('正在加载') &&
+                    document.documentElement.style.visibility !== 'hidden'),
+                workflowVisible: body.includes({workflow_id_json})
+            }};
+        }})()"""
+        while time.monotonic() < deadline:
+            evaluated = websocket.call("Runtime.evaluate", {"expression": expression, "returnByValue": True})
+            page_state = ((evaluated.get("result") or {}).get("value") or {})
+            if page_state.get("denied") or page_state.get("error"):
+                raise PermissionError("capture page authorization failed")
+            if page_state.get("ready") and page_state.get("workflowVisible"):
+                return
+            time.sleep(0.05)
+        raise TimeoutError("authorized workflow page did not become ready")
 
     def create_session(self, context):
         self._ensure_enabled()
@@ -301,7 +378,7 @@ class OpenClawAdapter(ComputerExecutorBase):
         )
 
     def _capture(self, context) -> dict:
-        target_url = self.validate(context)
+        target_url, authorization = self.validate(context)
         timeout = float(getattr(self.settings, "PAGE_CAPTURE_TIMEOUT_SECONDS", 20))
         output_root = Path(self.settings.PAGE_CAPTURE_OUTPUT_ROOT)
         output_root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -357,13 +434,26 @@ class OpenClawAdapter(ComputerExecutorBase):
             websocket = _WebSocket(page["webSocketDebuggerUrl"], timeout)
             websocket.call("Page.enable")
             websocket.call("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
-            navigation = websocket.navigate(target_url, list(self.settings.PAGE_CAPTURE_ALLOWED_ORIGINS))
+            navigation = websocket.navigate(
+                target_url,
+                list(self.settings.PAGE_CAPTURE_ALLOWED_ORIGINS),
+                authorization,
+            )
             if navigation.get("errorText"):
                 raise RuntimeError("isolated page navigation failed")
             websocket.wait_for("Page.loadEventFired", deadline)
             evaluated = websocket.call("Runtime.evaluate", {"expression": "location.href", "returnByValue": True})
             final_url = str(((evaluated.get("result") or {}).get("value") or "")).strip()
             validate_capture_target_url(final_url, list(self.settings.PAGE_CAPTURE_ALLOWED_ORIGINS))
+            final_target = urlsplit(final_url)
+            if (
+                f"{final_target.scheme}://{final_target.netloc}" != authorization.origin
+                or final_target.path != authorization.target_path
+                or final_target.query
+                or final_target.fragment
+            ):
+                raise ValueError("page navigation left the authorized capture target")
+            self._verify_workflow_page(websocket, authorization.workflow_id, deadline)
             captured = websocket.call(
                 "Page.captureScreenshot",
                 {"format": "png", "fromSurface": True, "captureBeyondViewport": False},
@@ -384,6 +474,7 @@ class OpenClawAdapter(ComputerExecutorBase):
             screenshot.unlink(missing_ok=True)
             raise
         finally:
+            authorization.clear()
             if websocket is not None:
                 websocket.close()
             if process is not None and process.poll() is None:

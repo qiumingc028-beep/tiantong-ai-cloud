@@ -151,7 +151,7 @@ def preflight_action_plan(payload: ComputerActionPlanCreatePayload) -> None:
     preflight_action_payload(payload)
 
 
-def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload):
+def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload, *, commit: bool = True):
     preflight_action_plan(payload)
     session = get_session(db, payload.session_id)
     if not session:
@@ -222,7 +222,10 @@ def create_action_plan(db: Session, payload: ComputerActionPlanCreatePayload):
         sensitive_data_involved=detect_sensitive_region(target.expected_window, target.expected_application, payload.text_input),
         trace_id=payload.trace_id or session.trace_id,
     )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(plan)
     db.refresh(target)
     db.refresh(approval)
@@ -270,7 +273,7 @@ def preview_action_plan(db: Session, plan_id: str, *, current_screenshot_hash: s
     }
 
 
-def approve_action(db: Session, *, plan_id: str, approved_by: int | None, approval_scope: str | None, trace_id: str | None, current_screenshot_hash: str | None = None):
+def approve_action(db: Session, *, plan_id: str, approved_by: int | None, approval_scope: str | None, trace_id: str | None, current_screenshot_hash: str | None = None, commit: bool = True):
     plan = db.get(ComputerActionPlan, plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="动作计划不存在")
@@ -282,10 +285,19 @@ def approve_action(db: Session, *, plan_id: str, approved_by: int | None, approv
         approval = create_approval_row(db, plan, target, approved_by=approved_by, approval_scope=approval_scope, trace_id=trace_id)
     if current_screenshot_hash and approval.before_screenshot_hash and approval.before_screenshot_hash != current_screenshot_hash:
         raise HTTPException(status_code=409, detail="窗口已变化，审批失效")
-    approval = approve_action_row(db, approval, approved_by=approved_by, trace_id=trace_id)
+    approval = approve_action_row(
+        db,
+        approval,
+        approved_by=approved_by,
+        trace_id=trace_id,
+        commit=commit,
+    )
     plan.status = "已批准"
     target.status = "已批准"
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(plan)
     db.refresh(target)
     db.refresh(approval)
@@ -330,7 +342,7 @@ def reject_action(db: Session, *, plan_id: str, approved_by: int | None, reason:
     return {"plan": _plan_to_dict(plan), "target": _target_to_dict(target), "approval": _approval_to_dict(approval)}
 
 
-def execute_action(db: Session, *, plan_id: str, current_application: str | None, current_window: str | None, current_screenshot_hash: str | None, trace_id: str | None):
+def execute_action(db: Session, *, plan_id: str, current_application: str | None, current_window: str | None, current_screenshot_hash: str | None, trace_id: str | None, capture_authorization=None):
     from ..runtime import ComputerRuntime
 
     plan = db.get(ComputerActionPlan, plan_id)
@@ -372,7 +384,12 @@ def execute_action(db: Session, *, plan_id: str, current_application: str | None
         trace_id=trace_id or plan.trace_id,
         approval_context={"plan_id": plan.plan_id, "action_id": target.action_id, "approval_id": approval.approval_id},
     )
-    result = ComputerRuntime.execute_action(db, session, payload)
+    result = ComputerRuntime.execute_action(
+        db,
+        session,
+        payload,
+        capture_authorization=capture_authorization,
+    )
     verification = verify_action_result(
         db,
         plan=plan,

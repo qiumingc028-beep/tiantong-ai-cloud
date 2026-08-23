@@ -89,8 +89,13 @@ def add_action_row(db: Session, *, session: ComputerSession, payload, result: di
 
 
 def add_evidence_row(db: Session, *, session_id: str, action_id: str | None, evidence_type: str, reference: str, metadata: dict | None = None):
+    evidence_identity = json.dumps(
+        ["computer_evidence", session_id, action_id, evidence_type, reference],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     row = ComputerEvidence(
-        evidence_id=f"{session_id}-{action_id or 'session'}-{evidence_type}",
+        evidence_id=str(uuid.uuid5(uuid.NAMESPACE_URL, evidence_identity)),
         session_id=session_id,
         action_id=action_id,
         evidence_type=evidence_type,

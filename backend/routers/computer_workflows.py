@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
+from ..auth import capture_workflow_id
 from ..database import get_db
 from ..skills_engine.permissions import require_feature_enabled, require_skills_manage_user, require_skills_user
 from ..agent_runtime.workflows.computer.schemas import ComputerWorkflowCreatePayload
@@ -70,7 +71,11 @@ def list_workflows(request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("COMPUTER_EXECUTOR_ENABLED")
     require_feature_enabled("MAC_SAFE_WORKFLOW_ENABLED")
     _bind_owner_scope(request, db)
-    workflows = owned_workflows_query(db).order_by(ComputerWorkflow.created_at.desc()).all()
+    query = owned_workflows_query(db)
+    capture_id = capture_workflow_id(request)
+    if capture_id:
+        query = query.filter(ComputerWorkflow.workflow_id == capture_id)
+    workflows = query.order_by(ComputerWorkflow.created_at.desc()).all()
     return {"items": [_workflow_to_dict_from_model(row) for row in workflows]}
 
 
