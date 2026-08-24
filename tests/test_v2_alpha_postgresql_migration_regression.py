@@ -1400,7 +1400,6 @@ def test_concurrent_mixed_payloads_persist_only_the_winner(postgres_alpha_runtim
 def test_atomic_planning_failure_rolls_back_graph_and_run(postgres_alpha_runtime):
     from backend.alpha_workflow.registry import ensure_default_scenarios
     from backend.database import get_db
-    from backend.main import app
 
     client, boss_headers, test_db = postgres_alpha_runtime
     with test_db() as db:
@@ -1408,7 +1407,7 @@ def test_atomic_planning_failure_rolls_back_graph_and_run(postgres_alpha_runtime
         before = _alpha_state_counts(db)
     request_db = test_db()
     override_missing = object()
-    previous_override = app.dependency_overrides.get(get_db, override_missing)
+    previous_override = client.app.dependency_overrides.get(get_db, override_missing)
     fired = 0
     flushed_deltas = {}
 
@@ -1430,7 +1429,7 @@ def test_atomic_planning_failure_rolls_back_graph_and_run(postgres_alpha_runtime
         fired += 1
         raise RuntimeError("injected atomic persistence failure")
 
-    app.dependency_overrides[get_db] = override_request_db
+    client.app.dependency_overrides[get_db] = override_request_db
     event.listen(request_db, "before_commit", fail_atomic_commit)
     try:
         with pytest.raises(RuntimeError, match="injected atomic persistence failure"):
@@ -1444,9 +1443,9 @@ def test_atomic_planning_failure_rolls_back_graph_and_run(postgres_alpha_runtime
     finally:
         event.remove(request_db, "before_commit", fail_atomic_commit)
         if previous_override is override_missing:
-            app.dependency_overrides.pop(get_db, None)
+            client.app.dependency_overrides.pop(get_db, None)
         else:
-            app.dependency_overrides[get_db] = previous_override
+            client.app.dependency_overrides[get_db] = previous_override
         request_db.close()
     assert not event.contains(request_db, "before_commit", fail_atomic_commit)
     assert fired == 1
