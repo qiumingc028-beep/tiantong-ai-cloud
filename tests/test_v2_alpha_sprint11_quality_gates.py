@@ -464,7 +464,7 @@ def test_migration_graph_is_single_head_and_core_tables_are_not_duplicated():
         re.MULTILINE,
     ), "两个0005节点必须是线性DAG，不得按文件名前缀误判为并行重复Migration"
     head_file = revisions[heads.pop()]
-    assert head_file == "0046_task_center_ownership_scope.py"
+    assert head_file == "0047_skill_invocation_audit_scope.py"
 
 
 def test_migrations_0039_and_0040_form_one_constrained_head():

@@ -1407,7 +1407,8 @@ def test_atomic_planning_failure_rolls_back_graph_and_run(postgres_alpha_runtime
         ensure_default_scenarios(db)
         before = _alpha_state_counts(db)
     request_db = test_db()
-    previous_override = app.dependency_overrides[get_db]
+    override_missing = object()
+    previous_override = app.dependency_overrides.get(get_db, override_missing)
     fired = 0
     flushed_deltas = {}
 
@@ -1442,7 +1443,10 @@ def test_atomic_planning_failure_rolls_back_graph_and_run(postgres_alpha_runtime
         assert request_db.is_active
     finally:
         event.remove(request_db, "before_commit", fail_atomic_commit)
-        app.dependency_overrides[get_db] = previous_override
+        if previous_override is override_missing:
+            app.dependency_overrides.pop(get_db, None)
+        else:
+            app.dependency_overrides[get_db] = previous_override
         request_db.close()
     assert not event.contains(request_db, "before_commit", fail_atomic_commit)
     assert fired == 1

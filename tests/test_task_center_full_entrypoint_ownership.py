@@ -848,6 +848,38 @@ def _run_targeted_case(case, client, boss_headers, test_db):
         assert foreign_payload == missing_payload
         assert _observable_state(test_db) == before
         return
+    if entrypoint_id == "PUB-070" and scenario != "missing":
+        assert response.status_code == missing.status_code == 200
+        foreign_payload = response.json()
+        missing_payload = missing.json()
+        for current_response, payload in (
+            (response, foreign_payload),
+            (missing, missing_payload),
+        ):
+            requested_employee_code = current_response.request.url.path.split("/")[-2]
+            assert payload["employee"] == {"employee_code": requested_employee_code}
+            assert payload["summary"] == {
+                "trace_type": "employee",
+                "total_nodes": 0,
+                "total_edges": 0,
+                "has_blocker": False,
+                "missing_steps": 0,
+            }
+            assert payload["trace_nodes"] == payload["trace_edges"] == []
+            assert payload["task"] == payload["orchestrator_source"] == {}
+            assert payload["boss_confirmation"] == payload["review_status"] == {}
+            assert payload["audit_status"] == payload["deploy_status"] == {}
+            assert payload["git_commit"] == {}
+            assert (
+                payload["blockers"]
+                == payload["missing_steps"]
+                == payload["safety_flags"]
+                == []
+            )
+            payload["employee"]["employee_code"] = "<requested_employee_code>"
+        assert foreign_payload == missing_payload
+        assert _observable_state(test_db) == before
+        return
     if entrypoint_id not in mixed_employee_entrypoints or scenario == "missing":
         assert (response.status_code, response.json()) == (missing.status_code, missing.json())
         assert _observable_state(test_db) == before
