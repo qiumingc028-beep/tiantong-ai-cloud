@@ -196,7 +196,19 @@ jobs:
           docker image rm "$S12_BACKEND_IMAGE" "$S12_WORKER_IMAGE"
 
       - name: Validate production compose
-        run: docker compose -f docker-compose.prod.yml config
+        env:
+          PRODUCTION_ENV_FILE: .env.production.example
+        run: |
+          test "$PRODUCTION_ENV_FILE" = ".env.production.example"
+          test -f "$PRODUCTION_ENV_FILE"
+          git ls-files --error-unmatch -- "$PRODUCTION_ENV_FILE" >/dev/null
+          for key in POSTGRES_DB POSTGRES_ADMIN_USER POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD TLS_CERT_PATH TLS_KEY_PATH; do
+            grep -Eq "^${key}=.+" "$PRODUCTION_ENV_FILE"
+          done
+          docker compose \
+            --env-file "$PRODUCTION_ENV_FILE" \
+            -f docker-compose.prod.yml \
+            config --quiet
 
       - name: Build frontend image
         run: docker build -f Dockerfile.frontend -t tiantong-ai-cloud-frontend:${{ github.sha }} .
