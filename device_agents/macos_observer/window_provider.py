@@ -27,4 +27,3 @@ class StaticWindowProvider:
 
     def list_windows(self) -> list[WindowSnapshot]:
         return list(self._windows)
-

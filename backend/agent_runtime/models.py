@@ -80,4 +80,3 @@ class AgentExecutionAudit(Base):
     sensitive_data_involved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     trace_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-

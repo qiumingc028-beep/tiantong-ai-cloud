@@ -35,3 +35,24 @@ def list_audit_logs(db: Session, skill_id: int | None = None, limit: int = 50):
         }
         for row in rows
     ]
+
+
+def list_invocation_audit_logs(db: Session, *, invocation_id: int, limit: int = 50):
+    rows = (
+        db.query(EmployeeLog)
+        .filter(EmployeeLog.skill_invocation_id == invocation_id)
+        .order_by(EmployeeLog.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "log_id": row.id,
+            "user_id": row.user_id,
+            "action": row.action,
+            "detail": row.detail,
+            "ip_address": row.ip_address,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]

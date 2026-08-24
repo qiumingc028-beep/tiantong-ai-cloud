@@ -294,21 +294,246 @@ def test_macos_observer_agent_blocks_sensitive_windows():
     assert result["screenshots"]
 
 
-def test_device_center_health_and_seeded_capability(client, owner_headers, monkeypatch):
+def test_device_center_health_and_seeded_capability(client, owner_headers, test_db, monkeypatch, alpha_enabled):
+    from backend.agent_runtime.constants import DEFAULT_CAPABILITIES
+    from backend.agent_runtime.models import AgentCapability, AgentExecution, AgentExecutionAudit
+    from backend.agent_runtime.permission import get_settings as get_agent_runtime_settings
+    from backend.device_center.models import (
+        Device,
+        DeviceCredential,
+        DeviceObservationEvent,
+        DeviceObservationSession,
+        DeviceRegistrationToken,
+        DeviceSecurityEvent,
+    )
+    from backend.models import TaskCenterResult, TaskCenterTask
+
+    def registry_state():
+        db = test_db()
+        try:
+            rows = db.query(AgentCapability).all()
+            return {
+                row.capability_id: (
+                    row.capability_name,
+                    row.capability_type,
+                    row.executor_type,
+                    row.risk_level,
+                    row.enabled,
+                    row.readonly,
+                    row.requires_boss_approval,
+                    row.requires_security_audit,
+                    row.timeout_seconds,
+                    row.max_retries,
+                    row.version,
+                )
+                for row in rows
+            }
+        finally:
+            db.close()
+
+    def business_state():
+        db = test_db()
+        try:
+            return tuple(
+                db.query(model).count()
+                for model in (
+                    Device,
+                    DeviceRegistrationToken,
+                    DeviceCredential,
+                    DeviceObservationSession,
+                    DeviceObservationEvent,
+                    DeviceSecurityEvent,
+                    AgentExecution,
+                    AgentExecutionAudit,
+                    TaskCenterTask,
+                    TaskCenterResult,
+                )
+            )
+        finally:
+            db.close()
+
+    external_device_actions = []
+
+    def reject_external_device_action(*args, **kwargs):
+        external_device_actions.append((args, kwargs))
+        raise AssertionError("health and capability listing must not execute a device action")
+
+    monkeypatch.setattr(MacReadonlyObserverAgent, "observe", reject_external_device_action)
     enable_device_flags(monkeypatch)
+    runtime_settings = get_agent_runtime_settings()
+    assert runtime_settings.AGENT_RUNTIME_ENABLED is True
+    assert runtime_settings.REAL_EXECUTOR_ENABLED is False
+    before_registry = registry_state()
+    before_ids = set(before_registry)
+    before_business = business_state()
+
     health = client.get("/api/v2/device-center/health", headers=owner_headers)
     assert health.status_code == 200
     payload = health.json()
     assert payload["status"] == "healthy"
-    assert payload["feature_flags"]["DEVICE_CENTER_ENABLED"] is True
-    assert payload["feature_flags"]["EXTERNAL_VISION_PROVIDER_ENABLED"] is False
+    assert payload["ok"] is True
+    assert payload["feature_flags"] == {
+        "DEVICE_CENTER_ENABLED": True,
+        "MAC_DEVICE_AGENT_ENABLED": True,
+        "MAC_READONLY_OBSERVER_ENABLED": True,
+        "MAC_WINDOW_ENUMERATION_ENABLED": True,
+        "MAC_SCREEN_CAPTURE_ENABLED": True,
+        "LOCAL_VISION_PROVIDER_ENABLED": True,
+        "EXTERNAL_VISION_PROVIDER_ENABLED": False,
+    }
+    assert payload["summary"] == {
+        "devices": 0,
+        "online": 0,
+        "observations": 0,
+        "events": 0,
+        "security_events": 0,
+    }
+    assert payload["defaults"] == {
+        "allowed_applications": [
+            "VS Code",
+            "Chrome",
+            "Safari",
+            "纯文本测试编辑器",
+            "天统 AI 测试页面",
+            "隔离演示应用",
+        ],
+        "blocked_applications": [
+            "Terminal",
+            "iTerm",
+            "系统设置",
+            "钥匙串",
+            "密码管理器",
+            "邮件",
+            "微信",
+            "企业微信",
+            "钉钉",
+            "飞书",
+            "银行",
+            "支付",
+            "App Store",
+            "Docker Desktop",
+            "SSH",
+            "远程桌面",
+        ],
+        "allowed_windows": [
+            ".*测试.*",
+            ".*隔离.*",
+            ".*天统.*",
+            ".*VS Code.*",
+            ".*Chrome.*",
+            ".*Safari.*",
+        ],
+        "blocked_windows": [
+            ".*密码.*",
+            ".*Password.*",
+            ".*验证码.*",
+            ".*OTP.*",
+            ".*Token.*",
+            ".*Secret.*",
+            ".*私钥.*",
+            ".*Keychain.*",
+            ".*钥匙串.*",
+            ".*付款.*",
+            ".*银行卡.*",
+            ".*身份证.*",
+            ".*登录凭据.*",
+            ".*恢复密钥.*",
+            ".*Terminal.*",
+            ".*iTerm.*",
+        ],
+    }
 
     skills = client.get("/api/v2/skills", headers=owner_headers)
     assert skills.status_code == 200
+    assert skills.json()["readonly"] is True
     skill_items = skills.json()["skills"]
-    assert any(item["skill_code"] == "computer.macos.window_check" for item in skill_items)
+    window_check = next(item for item in skill_items if item["skill_code"] == "computer.macos.window_check")
+    assert window_check["chinese_description"] == "仅对授权的 Mac 测试设备进行只读观察，不允许点击、输入或 Shell 操作。"
+    assert window_check["capability_codes"] == ["computer.macos.observe", "computer.sandbox.observe"]
+    version = window_check["current_version"]
+    assert version["required_permissions"] == ["skills.read"]
+    assert version["required_capabilities"] == ["computer.macos.observe", "computer.sandbox.observe"]
+    assert version["required_feature_flags"] == [
+        "DEVICE_CENTER_ENABLED",
+        "MAC_DEVICE_AGENT_ENABLED",
+        "MAC_READONLY_OBSERVER_ENABLED",
+        "MAC_WINDOW_ENUMERATION_ENABLED",
+        "MAC_SCREEN_CAPTURE_ENABLED",
+    ]
+    manifest = version["manifest"]
+    assert manifest["allowed_employee_codes"] == ["tianjian_test", "tiancai_data"]
+    assert manifest["network_access"] is False
+    assert manifest["filesystem_access"] is False
+    assert manifest["browser_access"] is False
+    assert manifest["computer_access"] is False
+    assert manifest["mobile_access"] is False
+    assert manifest["shell_access"] is False
 
     capabilities = client.get("/api/v2/capabilities", headers=owner_headers)
     assert capabilities.status_code == 200
     capability_items = capabilities.json()["items"]
-    assert any(item["capability_id"] == "computer.macos.observe" for item in capability_items)
+    capability = next(item for item in capability_items if item["capability_id"] == "computer.macos.observe")
+    assert capability["capability_name"] == "Mac 测试设备只读观察"
+    assert capability["capability_type"] == "电脑操作"
+    assert capability["executor_type"] == "desktop"
+    assert capability["risk_level"] == "low"
+    assert capability["enabled"] is False
+    assert capability["readonly"] is True
+    assert capability["requires_boss_approval"] is False
+    assert capability["requires_security_audit"] is True
+    assert capability["timeout_seconds"] == 30
+    assert capability["max_retries"] == 0
+    assert capability["allowed_employee_codes"] == ["tianjian_test", "tiancai_data"]
+
+    after_first_registry = registry_state()
+    after_first_ids = set(after_first_registry)
+    builtin_ids = {str(row["capability_id"]) for row in DEFAULT_CAPABILITIES}
+    expected_missing_ids = builtin_ids - before_ids
+    assert builtin_ids <= after_first_ids
+    assert after_first_ids - before_ids == expected_missing_ids
+    assert len(after_first_registry) - len(before_registry) == len(expected_missing_ids)
+    assert {capability_id: after_first_registry[capability_id] for capability_id in before_ids} == before_registry
+    db = test_db()
+    try:
+        assert (
+            db.query(AgentCapability)
+            .filter(AgentCapability.capability_id == "computer.macos.observe")
+            .count()
+            == 1
+        )
+    finally:
+        db.close()
+    assert after_first_registry["computer.macos.observe"] == (
+        "Mac 测试设备只读观察",
+        "电脑操作",
+        "desktop",
+        "low",
+        False,
+        True,
+        False,
+        True,
+        30,
+        0,
+        "1.0.0",
+    )
+    assert business_state() == before_business
+    assert external_device_actions == []
+
+    second_listing = client.get("/api/v2/capabilities", headers=owner_headers)
+    assert second_listing.status_code == 200
+    assert second_listing.json() == capabilities.json()
+    after_second_registry = registry_state()
+    assert after_second_registry == after_first_registry
+    db = test_db()
+    try:
+        assert (
+            db.query(AgentCapability)
+            .filter(AgentCapability.capability_id == "computer.macos.observe")
+            .count()
+            == 1
+        )
+    finally:
+        db.close()
+    assert business_state() == before_business
+    assert external_device_actions == []
+    assert get_agent_runtime_settings().AGENT_RUNTIME_ENABLED is True

@@ -245,6 +245,8 @@ def execute_skill(skill: Skill, input_payload: dict, *, db: Session, employee_co
 
 
 def finalize_invocation(db: Session, invocation: SkillInvocation, result: RuntimeResult, *, employee_code: str, task_id: int | None = None, execution_id: int | None = None):
+    if invocation.id is None:
+        raise ValueError("invocation must be persisted before audit")
     invocation.status = "执行成功" if result.success else ("已超时" if result.error_code == "EXECUTION_TIMEOUT" else "执行失败")
     invocation.started_at = result.started_at
     invocation.finished_at = result.finished_at
@@ -258,6 +260,7 @@ def finalize_invocation(db: Session, invocation: SkillInvocation, result: Runtim
         action="skill_invocation",
         detail=f"skill_code={invocation.skill_id} employee={employee_code} status={invocation.status}",
         skill_id=invocation.skill_id,
+        skill_invocation_id=invocation.id,
     )
     if task_id is not None:
         from ..models import TaskCenterResult

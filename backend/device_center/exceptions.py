@@ -20,4 +20,3 @@ class DeviceReplayError(DeviceAuthenticationError):
 
 class DeviceObservationError(DeviceCenterError):
     pass
-

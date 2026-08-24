@@ -10,6 +10,7 @@ from ..database import get_db
 from ..models import User
 from ..research_runtime.constants import RESEARCH_EXECUTION_STATUS_LABELS, SOURCE_TYPE_LABELS
 from ..research_runtime.models import ResearchClaim, ResearchEvidence, ResearchExecution, ResearchSource
+from ..task_center_ownership import owned_task_rows_query
 
 
 router = APIRouter(prefix="/api/v2/research")
@@ -33,15 +34,23 @@ def health(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/executions")
 def list_executions(request: Request, db: Session = Depends(get_db)):
-    require_research_user(request, db)
-    rows = db.query(ResearchExecution).order_by(ResearchExecution.created_at.desc()).all()
+    user = require_research_user(request, db)
+    rows = (
+        _owned_research_executions_query(db, user=user)
+        .order_by(ResearchExecution.created_at.desc())
+        .all()
+    )
     return {"items": [execution_to_dict(row, db) for row in rows]}
 
 
 @router.get("/executions/{execution_id}")
 def get_execution(execution_id: str, request: Request, db: Session = Depends(get_db)):
-    require_research_user(request, db)
-    row = db.get(ResearchExecution, execution_id)
+    user = require_research_user(request, db)
+    row = (
+        _owned_research_executions_query(db, user=user)
+        .filter(ResearchExecution.execution_id == execution_id)
+        .one_or_none()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="research execution not found")
     return {"execution": execution_to_dict(row, db)}
@@ -49,22 +58,58 @@ def get_execution(execution_id: str, request: Request, db: Session = Depends(get
 
 @router.get("/executions/{execution_id}/sources")
 def get_sources(execution_id: str, request: Request, db: Session = Depends(get_db)):
-    require_research_user(request, db)
-    rows = db.query(ResearchSource).filter(ResearchSource.execution_id == execution_id).order_by(ResearchSource.created_at.asc()).all()
+    user = require_research_user(request, db)
+    if (
+        _owned_research_executions_query(db, user=user)
+        .filter(ResearchExecution.execution_id == execution_id)
+        .one_or_none()
+        is None
+    ):
+        raise HTTPException(status_code=404, detail="research execution not found")
+    rows = (
+        db.query(ResearchSource)
+        .filter(ResearchSource.execution_id == execution_id)
+        .order_by(ResearchSource.created_at.asc())
+        .all()
+    )
     return {"items": [source_to_dict(row) for row in rows]}
 
 
 @router.get("/executions/{execution_id}/claims")
 def get_claims(execution_id: str, request: Request, db: Session = Depends(get_db)):
-    require_research_user(request, db)
-    rows = db.query(ResearchClaim).filter(ResearchClaim.execution_id == execution_id).order_by(ResearchClaim.created_at.asc()).all()
+    user = require_research_user(request, db)
+    if (
+        _owned_research_executions_query(db, user=user)
+        .filter(ResearchExecution.execution_id == execution_id)
+        .one_or_none()
+        is None
+    ):
+        raise HTTPException(status_code=404, detail="research execution not found")
+    rows = (
+        db.query(ResearchClaim)
+        .filter(ResearchClaim.execution_id == execution_id)
+        .order_by(ResearchClaim.created_at.asc())
+        .all()
+    )
     return {"items": [claim_to_dict(row) for row in rows]}
 
 
 @router.get("/executions/{execution_id}/evidence")
 def get_evidence(execution_id: str, request: Request, db: Session = Depends(get_db)):
-    require_research_user(request, db)
-    rows = db.query(ResearchEvidence).filter(ResearchEvidence.execution_id == execution_id).order_by(ResearchEvidence.created_at.asc()).all()
+    user = require_research_user(request, db)
+    if (
+        _owned_research_executions_query(db, user=user)
+        .filter(ResearchExecution.execution_id == execution_id)
+        .one_or_none()
+        is None
+    ):
+        raise HTTPException(status_code=404, detail="research execution not found")
+    rows = (
+        db.query(ResearchEvidence)
+        .filter(ResearchEvidence.execution_id == execution_id)
+        .order_by(ResearchEvidence.created_at.asc())
+        .all()
+    )
     return {"items": [evidence_to_dict(row) for row in rows]}
 
 
@@ -73,6 +118,15 @@ def require_research_user(request: Request, db: Session) -> User:
     if normalize_role(user.role) not in OWNER_ROLES and user.username != "boss":
         raise HTTPException(status_code=403, detail="无研究中心访问权限")
     return user
+
+
+def _owned_research_executions_query(db: Session, *, user: User):
+    return owned_task_rows_query(
+        db,
+        ResearchExecution,
+        ResearchExecution.task_id,
+        user=user,
+    )
 
 
 def execution_to_dict(row: ResearchExecution, db: Session):

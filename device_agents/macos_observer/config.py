@@ -14,4 +14,3 @@ class MacObserverConfig:
     window_enumeration_enabled: bool = True
     vision_provider_enabled: bool = False
     stop_on_sensitive_window: bool = True
-

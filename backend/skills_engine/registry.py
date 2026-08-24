@@ -324,10 +324,25 @@ def review_to_dict(review: SkillReview) -> dict:
     }
 
 
-def audit_employee_log(db: Session, *, user_id: int | None, action: str, detail: str, skill_id: int | None = None, ip_address: str | None = None):
+def audit_employee_log(
+    db: Session,
+    *,
+    user_id: int | None,
+    action: str,
+    detail: str,
+    skill_id: int | None = None,
+    skill_invocation_id: int | None = None,
+    ip_address: str | None = None,
+):
     if skill_id is not None:
         detail = f"[skill_id={skill_id}] {detail}"
-    log = EmployeeLog(user_id=user_id, action=action, detail=detail, ip_address=ip_address)
+    log = EmployeeLog(
+        user_id=user_id,
+        skill_invocation_id=skill_invocation_id,
+        action=action,
+        detail=detail,
+        ip_address=ip_address,
+    )
     db.add(log)
     return log
 

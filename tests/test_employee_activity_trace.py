@@ -258,17 +258,159 @@ def test_employee_activity_trace_response_schema_and_content(client, owner_heade
     assert "嵌套标记" in data["safety_flags"]
 
 
-def test_employee_activity_trace_handles_empty_and_missing_data(client, owner_headers):
-    response = client.get(f"{BASE}/employees/missing_employee/trace", headers=owner_headers)
-    assert response.status_code == 200
-    data = response.json()
-    assert_trace_shape(data)
-    assert data["trace_nodes"] == []
-    assert data["employee"]["employee_code"] == "missing_employee"
+def test_employee_activity_trace_handles_empty_and_missing_data(client, owner_headers, test_db):
+    from backend.task_center_ownership import bind_task_ownership
 
-    response = client.get(f"{BASE}/trace-overview", headers=owner_headers)
-    assert response.status_code == 200
-    assert_trace_shape(response.json())
+    trace_keys = {
+        "summary",
+        "trace_nodes",
+        "trace_edges",
+        "employee",
+        "task",
+        "orchestrator_source",
+        "boss_confirmation",
+        "review_status",
+        "audit_status",
+        "deploy_status",
+        "git_commit",
+        "blockers",
+        "missing_steps",
+        "next_suggestion",
+        "safety_flags",
+    }
+
+    def database_state():
+        db = test_db()
+        try:
+            state = {}
+            for model in (
+                AiEmployee,
+                TaskCenterTask,
+                TaskCenterResult,
+                TaskCenterAuditLog,
+                TaskCenterReview,
+                OrchestratorAnalysisRecord,
+                OrchestratorTaskLink,
+                DeployRecord,
+            ):
+                payloads = [
+                    {column.name: getattr(row, column.name) for column in model.__table__.columns}
+                    for row in db.query(model).all()
+                ]
+                canonical_rows = sorted(
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+                    for payload in payloads
+                )
+                state[model.__tablename__] = hashlib.sha256("\n".join(canonical_rows).encode("utf-8")).hexdigest()
+            return state
+        finally:
+            db.close()
+
+    def expected_empty_employee_trace(requested_code):
+        return {
+            "summary": {
+                "trace_type": "employee",
+                "total_nodes": 0,
+                "total_edges": 0,
+                "has_blocker": False,
+                "missing_steps": 0,
+            },
+            "trace_nodes": [],
+            "trace_edges": [],
+            "employee": {"employee_code": requested_code},
+            "task": {},
+            "orchestrator_source": {},
+            "boss_confirmation": {},
+            "review_status": {},
+            "audit_status": {},
+            "deploy_status": {},
+            "git_commit": {},
+            "blockers": [],
+            "missing_steps": [],
+            "next_suggestion": "继续跟进任务流转",
+            "safety_flags": [],
+        }
+
+    def assert_empty_employee_trace(response, requested_code):
+        assert response.status_code == 200
+        data = response.json()
+        assert set(data) == trace_keys
+        assert data == expected_empty_employee_trace(requested_code)
+        return data
+
+    empty_before = database_state()
+    empty = client.get(f"{BASE}/employees/missing_employee/trace", headers=owner_headers)
+    empty_data = assert_empty_employee_trace(empty, "missing_employee")
+    assert database_state() == empty_before
+
+    seed_trace_data(test_db)
+    foreign_employee_code = "trace_foreign_r211"
+    db = test_db()
+    try:
+        boss = db.query(User).filter(User.username == "boss").one()
+        db.add(
+            AiEmployee(
+                employee_code=foreign_employee_code,
+                employee_name="外域追溯员工",
+                legion="外域",
+                duty="外域追溯",
+                status="active",
+                task_types='["foreign"]',
+                default_permissions="[]",
+                is_legacy=False,
+                sort_order=902,
+            )
+        )
+        foreign_task = TaskCenterTask(
+            title="Foreign employee trace task",
+            status="accepted",
+            assigned_ai_employee_code=foreign_employee_code,
+            assigned_ai_employee_name="外域追溯员工",
+        )
+        db.add(foreign_task)
+        bind_task_ownership(db, foreign_task, user=boss)
+        db.add(
+            DeployRecord(
+                deploy_version="R211 foreign",
+                commit_hash="foreign-commit",
+                branch="foreign",
+                operator=foreign_employee_code,
+                status="success",
+                note="must remain invisible",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    populated_before = database_state()
+    missing = client.get(f"{BASE}/employees/missing_employee/trace", headers=owner_headers)
+    missing_data = assert_empty_employee_trace(missing, "missing_employee")
+    foreign = client.get(f"{BASE}/employees/{foreign_employee_code}/trace", headers=owner_headers)
+    foreign_data = assert_empty_employee_trace(foreign, foreign_employee_code)
+
+    normalized_missing = json.loads(json.dumps(missing_data, ensure_ascii=False))
+    normalized_foreign = json.loads(json.dumps(foreign_data, ensure_ascii=False))
+    normalized_missing["employee"]["employee_code"] = "<requested_employee>"
+    normalized_foreign["employee"]["employee_code"] = "<requested_employee>"
+    assert normalized_missing == normalized_foreign == expected_empty_employee_trace("<requested_employee>")
+    assert foreign_employee_code not in json.dumps(missing_data, ensure_ascii=False)
+    assert "tiandun" not in json.dumps(missing_data, ensure_ascii=False)
+    assert "tiandun" not in json.dumps(foreign_data, ensure_ascii=False)
+
+    owner = client.get(f"{BASE}/employees/trace_tianwang/trace", headers=owner_headers)
+    assert owner.status_code == 200
+    owner_data = owner.json()
+    assert set(owner_data) == trace_keys
+    assert owner_data["trace_nodes"]
+    assert owner_data["summary"]["total_nodes"] == len(owner_data["trace_nodes"])
+    assert owner_data["employee"]["employee_code"] == "trace_tianwang"
+    assert foreign_employee_code not in json.dumps(owner_data, ensure_ascii=False)
+
+    overview = client.get(f"{BASE}/trace-overview", headers=owner_headers)
+    assert overview.status_code == 200
+    assert_trace_shape(overview.json())
+    assert database_state() == populated_before
 
 
 def test_employee_activity_trace_handles_mixed_values_without_500(client, owner_headers, test_db):

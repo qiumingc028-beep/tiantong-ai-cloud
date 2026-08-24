@@ -11,4 +11,3 @@ class DeviceRegistrationEnvelope:
     nonce: str
     timestamp: str
     signature: str
-

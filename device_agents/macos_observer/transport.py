@@ -24,4 +24,3 @@ class LocalObservationTransport:
 
     def send_observation(self, payload: dict[str, object]) -> ObservationTransportResult:
         return ObservationTransportResult(ok=True, message="本地模拟观察已发送")
-

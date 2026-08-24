@@ -53,4 +53,3 @@ class ObservabilityScoreView(BaseModel):
     explanation: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
-

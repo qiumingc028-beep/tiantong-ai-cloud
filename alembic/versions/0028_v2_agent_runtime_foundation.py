@@ -138,4 +138,3 @@ def downgrade():
     op.drop_index("ix_agent_capabilities_capability_type", table_name="agent_capabilities")
     op.drop_index("ix_agent_capabilities_capability_name", table_name="agent_capabilities")
     op.drop_table("agent_capabilities")
-

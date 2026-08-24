@@ -13,4 +13,3 @@ def test_observability_frontend_pages_render(client):
         assert response.status_code == 200
         for snippet in snippets:
             assert snippet in response.text
-

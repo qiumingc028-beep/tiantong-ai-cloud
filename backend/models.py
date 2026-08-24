@@ -268,6 +268,10 @@ class EmployeeLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     store_id: Mapped[int | None] = mapped_column(ForeignKey("stores.id", ondelete="SET NULL"), index=True)
+    skill_invocation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("skill_invocations.id", ondelete="SET NULL"),
+        index=True,
+    )
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     detail: Mapped[str | None] = mapped_column(Text)
     ip_address: Mapped[str | None] = mapped_column(String(100))

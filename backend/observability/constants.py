@@ -28,4 +28,3 @@ ALERT_DEFAULT_RULES = [
     {"rule_code": "risk_high", "中文名称": "风险分数达到高", "metric_name": "risk_score", "condition": "gte", "threshold": "70", "duration_seconds": 0, "severity": "高", "action": "暂停工作流", "enabled": True, "environment": "test"},
     {"rule_code": "risk_extreme", "中文名称": "风险分数达到极高", "metric_name": "risk_score", "condition": "gte", "threshold": "90", "duration_seconds": 0, "severity": "紧急", "action": "熔断会话", "enabled": True, "environment": "test"},
 ]
-

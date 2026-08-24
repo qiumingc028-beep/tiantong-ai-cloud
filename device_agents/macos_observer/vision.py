@@ -43,4 +43,3 @@ class LocalRuleBasedVisionProvider:
 class ExternalVisionProvider:
     def analyze(self, windows: list[dict[str, object]]) -> VisionAnalysisResult:  # pragma: no cover - explicit off
         raise RuntimeError("外部视觉模型默认关闭")
-

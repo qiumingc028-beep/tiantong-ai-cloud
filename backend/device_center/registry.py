@@ -33,4 +33,3 @@ def default_allowed_windows() -> list[str]:
 
 def default_blocked_windows() -> list[str]:
     return list(DEFAULT_MAC_BLOCKED_WINDOW_PATTERNS)
-

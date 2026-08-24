@@ -23,4 +23,3 @@ class MacObserverPermissionPolicy:
         if self.file_access:
             allowed.append("文件访问")
         return allowed
-

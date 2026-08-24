@@ -34,4 +34,3 @@ def require_device_center_manage_user(request: Request, db: Session):
 
 def require_device_center_auditor(request: Request, db: Session):
     return require_device_center_user(request, db)
-

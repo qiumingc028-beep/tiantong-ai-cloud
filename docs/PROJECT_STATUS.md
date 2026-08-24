@@ -1,14 +1,17 @@
 # PROJECT_STATUS
 
-## 天统AI可用 V1.0 S1（功能分支）
+## V2 Usable V1 S1 release candidate
 
-- 基线：`develop-v2@99f1c78f72f7d60300be741a108a01059453114b`
-- 分支：`feat/v2-usable-v1-s1-jd-import`
-- 状态：本地闭环及租户/公司/店铺授权修复验收通过，等待独立复审，尚未部署。
-- 可见菜单：老板驾驶舱、店铺与数据、经营中心。
-- 数据闭环：内部测试店铺的 XLSX/CSV 导入、错误明细、重复拦截、经营查询、驾驶舱汇总与重启持久化均已验证。
-- 授权模型：0044 单链迁移新增租户、公司和显式店铺成员关系；所有经营数据读写由服务端认证作用域限制。
-- 安全边界：0044 仅在一次性本地 PostgreSQL 测试库完成升级/降级验证；未访问真实京东账号、未修改生产数据库、未构建镜像或部署。
+- 候选基线：本文件所在的新 release-candidate 提交；直接父提交为 `baad4adebe17f3b0bb44e4ca40e680ef10cf91ea`。
+- PR：[#34](https://github.com/qiumingc028-beep/tiantong-ai-cloud/pull/34) 仍为 OPEN，尚未合并。
+- 生产状态：生产仍运行旧基线 `483ebf560e1a4cfadecee4912a3ff6bca99516f6`；本候选尚未生产部署。
+- 业务 UAT：`12/12 PASS`。
+- Trusted CI replacement：`1691/1691 PASS`；FC-CI-01 `593/593 PASS`、FC-CI-02 `11/11 PASS`、FC-CI-03 `12/12 PASS`。
+- 数据库：Alembic 唯一 head 为 `0047_skill_invocation_audit_scope`。
+- CI 合同：job-local PostgreSQL 16、Redis 7、完整 Git 历史，以及从当前候选源码构建的临时 backend/worker 测试镜像；目标为零 SKIP。
+- Research 安全：list/detail/sources/claims/evidence 五个读取入口均在 SQL 层执行 Owner scope 隔离，foreign/missing 非枚举。
+- Skills Invocation 安全：list/detail/audit/cancel/retry 五个入口均在 SQL 层执行 Owner scope 隔离；EmployeeLog 以 `skill_invocation_id` 精确关联审计。
+- 发布门禁：生产数据库与配置备份、rollback readiness 及回滚演练必须在后续生产任务中重新核验；当前不得宣称备份或回滚已就绪。
 
 ## 项目名称
 
@@ -16,17 +19,17 @@
 
 ## 当前版本
 
-Sprint26.4-v1.0
+V2 Usable V1 S1 release candidate
 
 当前 Git Commit:
 
-`66ae283785545c6487230938307cd7f89a648170`
+以本文件所在的 release-candidate 提交为准（直接父提交 `baad4adebe17f3b0bb44e4ca40e680ef10cf91ea`）。
 
 ## 当前 Sprint
 
-Sprint26.4：Archive Sync 长期记忆档案系统安全审计与封版
+R229：文档真值、CI 零 SKIP 与不可变 release candidate 封板
 
-状态：已完成
+状态：候选验证中；PR OPEN，未合并、未生产部署
 
 ## 已完成
 
@@ -51,19 +54,20 @@ Sprint26.4：Archive Sync 长期记忆档案系统安全审计与封版
 
 ## 进行中
 
-- 无。
+- R229 正在固定新的不可变 release-candidate 提交、完成 Spec 与 Standards/Security 复审、生成并恢复验证 bundle，以及更新现有 PR #34。
+- PR 的自然 CI 必须达到 `1691 PASS / 0 SKIP / 0 FAIL / 0 ERROR`；不得手工 rerun 掩盖首败。
 
 ## 下一步
 
-1. 进入 Sprint27 规划。
-2. 建议方向：天商执行闭环验收增强，打通执行报告、复盘学习和老板确认入口。
-3. 后续每个 Sprint 完成后继续使用 Archive Sync 生成项目档案更新草稿，并由老板确认后写入文档。
+1. 仅在 R229 复审、bundle verify/restore 与 PR 自然 CI 全部通过后，将结果返回 V2 主控。
+2. 由后续受控生产任务重新核验生产身份、数据库与配置备份、rollback rehearsal、最终 PR 差异及发布入口。
+3. 未获得后续明确授权前，不得合并 PR #34，不得部署生产。
 
 ## 风险
 
-- Archive Sync 当前为 MVP，只生成草稿，不自动保存。
-- 项目文档仍需人工确认后更新，避免错误状态自动写入。
-- 生产环境密码、token、API key 不得写入 docs 或 Archive draft。
+- 当前候选包含数据库迁移与 Owner scope 安全修复；CI 通过不替代生产备份、维护窗口、写入冻结和回滚演练。
+- PR #34 仍为 OPEN，当前候选与生产运行版本不同；禁止把候选验证结果表述为生产发布结果。
+- 生产环境密码、token、API key、连接串及其他凭据不得写入文档、日志或 release bundle。
 
 ## 禁止事项
 
@@ -72,7 +76,7 @@ Sprint26.4：Archive Sync 长期记忆档案系统安全审计与封版
 - 禁止自动部署。
 - 禁止自动调用外部 API。
 - 禁止在文档中记录 password / token / secret / API key / Authorization / Bearer / private_key。
-- Archive Sync 禁止自动写 docs，禁止自动提交 Git，禁止自动部署生产。
+- 本任务禁止 merge 与生产部署；发布文档不得提前标记 production ready 或 rollback ready。
 
 ## Sprint 完成记录
 

@@ -50,15 +50,39 @@ def get_task_trace(task_id: int, request: Request, db: Session = Depends(get_db)
 @router.get("/employees/{employee_code}/trace")
 def get_employee_trace(employee_code: str, request: Request, db: Session = Depends(get_db)):
     bind_session_task_ownership(db, user=require_trace_user(request, db))
-    visible = (
+    visible_task = (
         owned_tasks_query(db)
         .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
         .first()
     )
-    employee = find_employee(db, employee_code) if visible else None
-    response = build_trace_response(db, employee_code=employee_code if visible else None)
+    employee = find_employee(db, employee_code) if visible_task else None
+    if not visible_task or not employee:
+        return {
+            "summary": {
+                "trace_type": "employee",
+                "total_nodes": 0,
+                "total_edges": 0,
+                "has_blocker": False,
+                "missing_steps": 0,
+            },
+            "trace_nodes": [],
+            "trace_edges": [],
+            "employee": {"employee_code": employee_code},
+            "task": {},
+            "orchestrator_source": {},
+            "boss_confirmation": {},
+            "review_status": {},
+            "audit_status": {},
+            "deploy_status": {},
+            "git_commit": {},
+            "blockers": [],
+            "missing_steps": [],
+            "next_suggestion": "继续跟进任务流转",
+            "safety_flags": [],
+        }
+    response = build_trace_response(db, employee_code=employee_code)
     response["summary"]["trace_type"] = "employee"
-    response["employee"] = employee_payload(employee) if employee else {}
+    response["employee"] = employee_payload(employee)
     return response
 
 

@@ -8,10 +8,10 @@ from sqlalchemy.orm import Session
 from ..auth import current_user
 from ..database import get_db
 from ..models import AiEmployee, TaskCenterTask, User
-from ..skills_engine.audit import list_audit_logs, record_skill_audit
+from ..skills_engine.audit import list_audit_logs, list_invocation_audit_logs, record_skill_audit
 from ..skills_engine.models import Skill, SkillInstallation, SkillInvocation
 from ..skills_engine.permissions import require_feature_enabled, require_skills_manage_user, require_skills_user
-from ..skills_engine.registry import ensure_default_skills, installation_to_dict, invocation_to_dict, permission_to_dict, skill_to_dict, skill_version_to_dict
+from ..skills_engine.registry import audit_employee_log, ensure_default_skills, installation_to_dict, invocation_to_dict, permission_to_dict, skill_to_dict, skill_version_to_dict
 from ..skills_engine.schemas import SkillCreatePayload, SkillInstallPayload, SkillInvokePayload, SkillPermissionPayload, SkillReviewPayload, SkillStatusUpdatePayload, SkillUpdatePayload, SkillVersionCreatePayload
 from ..skills_engine.service import (
     approve_skill,
@@ -31,11 +31,15 @@ from ..skills_engine.service import (
     update_skill,
     reject_skill,
 )
-from ..task_center_ownership import bind_session_task_ownership
+from ..task_center_ownership import bind_session_task_ownership, owned_task_rows_query
 
 
 router = APIRouter(prefix="/api/v2/skills")
 health_router = APIRouter(prefix="/api/v2/skills-engine")
+
+
+def _owned_invocations_query(db: Session, *, user: User):
+    return owned_task_rows_query(db, SkillInvocation, SkillInvocation.task_id, user=user)
 
 
 @router.get("")
@@ -186,16 +190,16 @@ def api_invoke_skill(skill_id: int, payload: SkillInvokePayload, request: Reques
 @router.get("/invocations")
 def api_list_invocations(request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("SKILLS_ENGINE_ENABLED")
-    require_skills_user(request, db)
-    rows = db.query(SkillInvocation).order_by(SkillInvocation.id.desc()).limit(200).all()
+    user = require_skills_user(request, db)
+    rows = _owned_invocations_query(db, user=user).order_by(SkillInvocation.id.desc()).limit(200).all()
     return {"readonly": True, "invocations": [invocation_to_dict(row) for row in rows]}
 
 
 @router.get("/invocations/{invocation_id:int}")
 def api_get_invocation(invocation_id: int, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("SKILLS_ENGINE_ENABLED")
-    require_skills_user(request, db)
-    invocation = db.get(SkillInvocation, invocation_id)
+    user = require_skills_user(request, db)
+    invocation = _owned_invocations_query(db, user=user).filter(SkillInvocation.id == invocation_id).one_or_none()
     if not invocation:
         raise HTTPException(status_code=404, detail="调用记录不存在")
     return {"readonly": True, "invocation": invocation_to_dict(invocation)}
@@ -205,9 +209,17 @@ def api_get_invocation(invocation_id: int, request: Request, db: Session = Depen
 def api_cancel_invocation(invocation_id: int, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("SKILLS_ENGINE_ENABLED")
     user = require_skills_manage_user(request, db)
-    invocation = db.get(SkillInvocation, invocation_id)
+    invocation = _owned_invocations_query(db, user=user).filter(SkillInvocation.id == invocation_id).one_or_none()
     if not invocation:
         raise HTTPException(status_code=404, detail="调用记录不存在")
+    audit_employee_log(
+        db,
+        user_id=user.id,
+        action="skill_invocation_cancelled",
+        detail="技能调用已取消",
+        skill_id=invocation.skill_id,
+        skill_invocation_id=invocation.id,
+    )
     return {"ok": True, "invocation": cancel_invocation(db, invocation, user)}
 
 
@@ -215,20 +227,32 @@ def api_cancel_invocation(invocation_id: int, request: Request, db: Session = De
 def api_retry_invocation(invocation_id: int, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("SKILLS_ENGINE_ENABLED")
     user = require_skills_manage_user(request, db)
-    invocation = db.get(SkillInvocation, invocation_id)
+    invocation = _owned_invocations_query(db, user=user).filter(SkillInvocation.id == invocation_id).one_or_none()
     if not invocation:
         raise HTTPException(status_code=404, detail="调用记录不存在")
+    audit_employee_log(
+        db,
+        user_id=user.id,
+        action="skill_invocation_retried",
+        detail="技能调用已重试",
+        skill_id=invocation.skill_id,
+        skill_invocation_id=invocation.id,
+    )
     return {"ok": True, "invocation": retry_invocation(db, invocation, user)}
 
 
 @router.get("/invocations/{invocation_id:int}/audit")
 def api_invocation_audit(invocation_id: int, request: Request, db: Session = Depends(get_db)):
     require_feature_enabled("SKILLS_ENGINE_ENABLED")
-    require_skills_user(request, db)
-    invocation = db.get(SkillInvocation, invocation_id)
+    user = require_skills_user(request, db)
+    invocation = _owned_invocations_query(db, user=user).filter(SkillInvocation.id == invocation_id).one_or_none()
     if not invocation:
         raise HTTPException(status_code=404, detail="调用记录不存在")
-    return {"readonly": True, "audit": list_audit_logs(db, skill_id=invocation.skill_id, limit=20), "invocation": invocation_to_dict(invocation)}
+    return {
+        "readonly": True,
+        "audit": list_invocation_audit_logs(db, invocation_id=invocation.id, limit=20),
+        "invocation": invocation_to_dict(invocation),
+    }
 
 
 @router.get("/{skill_id:int}/audit")

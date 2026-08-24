@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## V2 Usable V1 S1 release candidate（R229）
+
+状态：PR #34 OPEN；尚未合并，尚未生产部署。
+
+变更：
+
+- CI 使用 job-local PostgreSQL 16、Redis 7 与完整 Git 历史，并从当前候选源码构建临时 backend/worker 测试镜像，补齐原三个环境 SKIP 的真实执行条件。
+- Research Runtime 的 list/detail/sources/claims/evidence 读取入口统一使用 Owner-scoped SQL 查询；foreign、missing、taskless 与 ownership 不完整记录均失败关闭并保持非枚举。
+- Skills Invocation 的 list/detail/audit/cancel/retry 五个入口统一使用 Owner-scoped SQL 查询，foreign 读取与写入均失败关闭。
+- EmployeeLog 新增 nullable、非唯一索引的 `skill_invocation_id` 精确外键；`0047_skill_invocation_audit_scope` 迁移不回填历史日志，Invocation 审计不再使用 skill 或文本模糊关联。
+- 逐步修复 Agent Runtime、Browser、Device Center、Employee Trace、Money Loop、Research 与 Skills 测试的真实运行前置和 Owner fixture 合同，未放宽产品权限或非枚举边界。
+
+验证：
+
+- 业务 UAT：`12/12 PASS`。
+- Trusted CI replacement：`1691/1691 PASS`。
+- FC-CI-01：`593/593 PASS`；FC-CI-02：`11/11 PASS`；FC-CI-03：`12/12 PASS`。
+- Alembic 唯一 head：`0047_skill_invocation_audit_scope`。
+
+发布边界：
+
+- 生产仍运行 `483ebf560e1a4cfadecee4912a3ff6bca99516f6`。
+- 本候选未合并、未生产部署；生产备份、rollback readiness 与回滚演练须在后续受控生产门禁重新核验。
+
 ## 天统AI可用 V1.0 S1 - 京东经营数据垂直切片
 
 ### 授权安全修复 R3

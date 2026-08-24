@@ -50,4 +50,3 @@ def record_security_event(db: Session, *, device_id: str | None, observation_id:
     db.commit()
     db.refresh(row)
     return row
-

@@ -10,13 +10,51 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping | grep PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      V2_ALPHA_POSTGRES_ADMIN_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
+      STORE_AUTHZ_POSTGRES_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
+      REDIS_URL: redis://127.0.0.1:6379/0
+      MIGRATION_CODE_FIX_COMMIT: 8d9b5f2890545f1f08d05b9b1618f71ff82d6621
+      RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      S12_BACKEND_IMAGE: tiantong-ci-backend:${{ github.event.pull_request.head.sha || github.sha }}
+      S12_WORKER_IMAGE: tiantong-ci-worker:${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,20 +65,137 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
+      - name: Verify CI PostgreSQL isolation
+        run: |
+          python - <<'PY'
+          import os
+          import uuid
+
+          import psycopg2
+          from psycopg2 import sql
+          from sqlalchemy.engine import make_url
+
+          database_name = f"alpha_s11_ci_probe_{uuid.uuid4().hex[:12]}"
+          admin_url = make_url(os.environ["V2_ALPHA_POSTGRES_ADMIN_URL"])
+          admin_dsn = admin_url.set(drivername="postgresql").render_as_string(hide_password=False)
+          connection = psycopg2.connect(admin_dsn)
+          connection.autocommit = True
+          try:
+              with connection.cursor() as cursor:
+                  cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
+                  cursor.execute(sql.SQL("DROP DATABASE {}").format(sql.Identifier(database_name)))
+          finally:
+              connection.close()
+          PY
+
+      - name: Verify CI Redis isolation
+        run: |
+          python - <<'PY'
+          import os
+
+          import redis
+
+          client = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+          assert client.ping() is True
+          assert client.llen("tiantong:employee:tianshang:execution") == 0
+          assert client.llen("tiantong:execution:tasks") == 0
+          assert list(client.scan_iter("tiantong:execution:lock:*")) == []
+          PY
+
       - name: Syntax check
         run: python -m py_compile $(find backend tests -name '*.py')
 
+      - name: Prepare verified amd64 wheelhouse
+        run: |
+          wheelhouse=artifacts/wheelhouse/linux-amd64-cp312
+          python -m pip download \
+            --require-hashes \
+            --only-binary=:all: \
+            --implementation cp \
+            --python-version 3.12 \
+            --abi cp312 \
+            --platform manylinux_2_28_x86_64 \
+            --platform manylinux2014_x86_64 \
+            --platform manylinux_2_24_x86_64 \
+            --platform manylinux_2_17_x86_64 \
+            --dest "$wheelhouse" \
+            --requirement "$wheelhouse/requirements-linux-amd64-cp312.lock"
+          cd "$wheelhouse"
+          sha256sum --check SHA256SUMS
+
+      - name: Build temporary backend and worker test images
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          source_date_epoch="$(git show -s --format=%ct "$RELEASE_SOURCE_SHA")"
+          docker build \
+            --pull=false \
+            --network=none \
+            --build-arg "SOURCE_DATE_EPOCH=$source_date_epoch" \
+            --label "org.opencontainers.image.revision=$RELEASE_SOURCE_SHA" \
+            --file Dockerfile.backend \
+            --tag "$S12_BACKEND_IMAGE" \
+            .
+          docker build \
+            --pull=false \
+            --network=none \
+            --build-arg "SOURCE_DATE_EPOCH=$source_date_epoch" \
+            --label "org.opencontainers.image.revision=$RELEASE_SOURCE_SHA" \
+            --file Dockerfile.worker \
+            --tag "$S12_WORKER_IMAGE" \
+            .
+
       - name: Run tests
-        run: python -m pytest -v tests/
+        run: |
+          python -m pytest -v tests/ --junitxml=/tmp/pytest-results.xml
+          python - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          result_path = Path("/tmp/pytest-results.xml")
+          root = ET.parse(result_path).getroot()
+          if root.tag == "testsuite":
+              suites = [root]
+          elif all(name in root.attrib for name in ("tests", "failures", "errors", "skipped")):
+              suites = [root]
+          else:
+              suites = root.findall("testsuite")
+          totals = {
+              name: sum(int(suite.attrib.get(name, "0")) for suite in suites)
+              for name in ("tests", "failures", "errors", "skipped")
+          }
+          assert totals == {
+              "tests": 1691,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+          }, totals
+          print("CI_PYTEST_RESULT=1691_PASS/0_SKIP/0_FAIL/0_ERROR")
+          PY
+
+      - name: Verify CI Redis queue and lock residue
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+
+          import redis
+
+          client = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+          assert client.ping() is True
+          assert client.llen("tiantong:employee:tianshang:execution") == 0
+          assert client.llen("tiantong:execution:tasks") == 0
+          assert list(client.scan_iter("tiantong:execution:lock:*")) == []
+          PY
+
+      - name: Remove temporary backend and worker test images
+        if: always()
+        run: |
+          test -z "$(docker ps --all --quiet --filter "ancestor=$S12_BACKEND_IMAGE")"
+          test -z "$(docker ps --all --quiet --filter "ancestor=$S12_WORKER_IMAGE")"
+          docker image rm "$S12_BACKEND_IMAGE" "$S12_WORKER_IMAGE"
 
       - name: Validate production compose
         run: docker compose -f docker-compose.prod.yml config
-
-      - name: Build backend image
-        run: docker build -f Dockerfile.backend -t tiantong-ai-cloud-backend:${{ github.sha }} .
-
-      - name: Build worker image
-        run: docker build -f Dockerfile.worker -t tiantong-ai-cloud-worker:${{ github.sha }} .
 
       - name: Build frontend image
         run: docker build -f Dockerfile.frontend -t tiantong-ai-cloud-frontend:${{ github.sha }} .

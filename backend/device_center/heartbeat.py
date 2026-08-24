@@ -19,4 +19,3 @@ def mark_online(device: Device, *, ip_hash: str | None = None, agent_version: st
     if capabilities_json is not None:
         device.capabilities_json = capabilities_json
     return device
-

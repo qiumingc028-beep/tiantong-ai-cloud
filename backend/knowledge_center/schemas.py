@@ -97,4 +97,3 @@ class KnowledgeVersionView(BaseModel):
     approved_at: datetime | None = None
     created_at: datetime
     chunks: list[dict[str, Any]] = Field(default_factory=list)
-

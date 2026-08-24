@@ -11,4 +11,3 @@ class ObservabilityPermissionError(ObservabilityError):
 
 class ObservabilityNotFoundError(ObservabilityError):
     pass
-

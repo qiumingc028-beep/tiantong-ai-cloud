@@ -122,6 +122,8 @@ def test_agent_runtime_requires_permission_and_supports_registration(client, vie
 
 
 def test_agent_runtime_execution_modes_and_audit(client, owner_headers, boss_headers, test_db):
+    from backend.agent_runtime.models import AgentExecution, AgentExecutionAudit
+
     client.cookies.clear()
     db = test_db()
     try:
@@ -214,15 +216,105 @@ def test_agent_runtime_execution_modes_and_audit(client, owner_headers, boss_hea
     assert waiting["status"] == "waiting_approval"
     assert waiting["approval_status"] == "pending"
 
-    approved = client.post(
+    missing_execution_id = "00000000-0000-0000-0000-000000000000"
+    db = test_db()
+    try:
+        owner = db.query(User).filter(User.username == "owner").one()
+        waiting_row = db.get(AgentExecution, waiting["execution_id"])
+        assert waiting_row is not None
+        owner_scope = resolve_graph_ownership(db, owner)
+        ownership_before = (
+            waiting_row.created_by_id,
+            owner.id,
+            owner.tenant_id,
+            owner.company_id,
+            owner_scope.store_scope_key,
+            owner_scope.ownership_scope_key,
+        )
+        foreign_write_before = (
+            db.query(AgentExecution).count(),
+            db.query(AgentExecutionAudit).count(),
+            waiting_row.status,
+            waiting_row.approval_status,
+            waiting_row.output_payload,
+            waiting_row.error_code,
+        )
+    finally:
+        db.close()
+
+    foreign_detail = client.get(f"/api/v2/executions/{waiting['execution_id']}", headers=boss_headers)
+    missing_detail = client.get(f"/api/v2/executions/{missing_execution_id}", headers=boss_headers)
+    assert foreign_detail.status_code == missing_detail.status_code == 404
+    assert foreign_detail.json() == missing_detail.json() == {"detail": "执行记录不存在"}
+
+    foreign_approval = client.post(
         f"/api/v2/executions/{waiting['execution_id']}/approve",
         json={"boss_confirmed": True, "security_audited": True},
         headers=boss_headers,
     )
+    missing_approval = client.post(
+        f"/api/v2/executions/{missing_execution_id}/approve",
+        json={"boss_confirmed": True, "security_audited": True},
+        headers=boss_headers,
+    )
+    assert foreign_approval.status_code == missing_approval.status_code == 404
+    assert foreign_approval.json() == missing_approval.json() == {"detail": "执行记录不存在"}
+
+    db = test_db()
+    try:
+        waiting_row = db.get(AgentExecution, waiting["execution_id"])
+        assert waiting_row is not None
+        assert (
+            db.query(AgentExecution).count(),
+            db.query(AgentExecutionAudit).count(),
+            waiting_row.status,
+            waiting_row.approval_status,
+            waiting_row.output_payload,
+            waiting_row.error_code,
+        ) == foreign_write_before
+    finally:
+        db.close()
+
+    approved = client.post(
+        f"/api/v2/executions/{waiting['execution_id']}/approve",
+        json={"boss_confirmed": True, "security_audited": True},
+        headers=owner_headers,
+    )
     assert approved.status_code == 200, approved.text
     approved_data = approved.json()["execution"]
+    assert approved_data["execution_id"] == waiting["execution_id"]
     assert approved_data["status"] == "success"
     assert approved_data["approval_status"] == "approved"
+
+    db = test_db()
+    try:
+        owner = db.query(User).filter(User.username == "owner").one()
+        approved_row = db.get(AgentExecution, waiting["execution_id"])
+        assert approved_row is not None
+        owner_scope = resolve_graph_ownership(db, owner)
+        assert (
+            approved_row.created_by_id,
+            owner.id,
+            owner.tenant_id,
+            owner.company_id,
+            owner_scope.store_scope_key,
+            owner_scope.ownership_scope_key,
+        ) == ownership_before
+        assert db.query(AgentExecution).count() == foreign_write_before[0]
+        approval_audits = (
+            db.query(AgentExecutionAudit)
+            .filter(
+                AgentExecutionAudit.execution_id == waiting["execution_id"],
+                AgentExecutionAudit.event_type == "execution_approved",
+            )
+            .all()
+        )
+        assert len(approval_audits) == 1
+        assert approval_audits[0].actor_id == "user:owner"
+        assert approval_audits[0].approval_status == "approved"
+        assert approval_audits[0].approval_decision == "approved"
+    finally:
+        db.close()
 
     denied = create_execution(
         client,
@@ -234,7 +326,7 @@ def test_agent_runtime_execution_modes_and_audit(client, owner_headers, boss_hea
     reject_response = client.post(
         f"/api/v2/executions/{denied['execution_id']}/reject",
         json={"reason": "不执行"},
-        headers=boss_headers,
+        headers=owner_headers,
     )
     assert reject_response.status_code == 200
     rejected = reject_response.json()["execution"]

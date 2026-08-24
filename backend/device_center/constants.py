@@ -134,4 +134,3 @@ DEFAULT_MAC_OBSERVER_WINDOWS = [
     {"application_name": "Chrome", "bundle_id": "com.google.Chrome", "window_title": "天统 AI 测试页面 - 只读观察", "width": 1440, "height": 900, "frontmost": True, "screenshot_allowed": True},
     {"application_name": "VS Code", "bundle_id": "com.microsoft.VSCode", "window_title": "项目代码 - 只读观察", "width": 1680, "height": 1050, "frontmost": False, "screenshot_allowed": True},
 ]
-

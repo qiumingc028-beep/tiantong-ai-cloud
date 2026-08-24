@@ -30,4 +30,3 @@ def require_observability_manage_user(request: Request, db: Session):
     if normalize_role(user.role) not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="没有安全运营中心管理权限")
     return user
-

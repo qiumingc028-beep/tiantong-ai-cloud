@@ -69,4 +69,3 @@ def summarize_windows(windows: list[SanitizedWindow]) -> dict[str, object]:
         "can_continue": not blocked,
         "suggested_next_step": "继续只读观察" if not blocked else "请求人工处理敏感窗口",
     }
-
