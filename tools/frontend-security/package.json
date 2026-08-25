@@ -1,0 +1,12 @@
+{
+  "name": "tiantong-frontend-security-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npm ci --offline --ignore-scripts --no-audit --no-fund && node --test ../../tests/test_frontend_rbac_navigation.mjs"
+  },
+  "devDependencies": {
+    "acorn": "file:vendor/acorn-8.17.0.tgz"
+  }
+}

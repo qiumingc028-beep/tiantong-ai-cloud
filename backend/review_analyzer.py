@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from .dispatch_models import EmployeeExecutionLog
 from .models import TaskCenterResult, TaskCenterTask
 from .review_models import TaskReview
+from .task_center_ownership import owned_results_query, owned_task_or_none
 
 
 SENSITIVE_WORDS = {
@@ -34,7 +35,7 @@ def redact_text(value: Any) -> str | None:
 
 
 def generate_task_review(db: Session, task_id: int) -> TaskReview:
-    task = db.get(TaskCenterTask, task_id)
+    task = owned_task_or_none(db, task_id=task_id)
     if not task:
         raise ValueError("task not found")
 
@@ -45,7 +46,7 @@ def generate_task_review(db: Session, task_id: int) -> TaskReview:
         .all()
     )
     latest_result = (
-        db.query(TaskCenterResult)
+        owned_results_query(db)
         .filter(TaskCenterResult.task_id == task.id)
         .order_by(TaskCenterResult.id.desc())
         .first()

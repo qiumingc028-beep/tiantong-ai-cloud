@@ -1,0 +1,409 @@
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from ....config import get_settings
+from ....models import AiEmployee
+from ...runtime import invoke_agent_runtime
+from .action_validator import validate_action_payload
+from .base import ComputerExecutorOutcome
+from .actions.models import ComputerActionApproval, ComputerActionPlan, ComputerActionTarget
+from .actions.approval import _normalize_dt
+from .evidence import json_text, make_evidence_reference, make_screenshot_reference, utcnow
+from .mock_executor import MockComputerExecutor
+from .openclaw_adapter import OpenClawAdapter
+from .policy import ensure_executor_enabled, ensure_screen_capture_enabled, ensure_human_takeover_enabled, detect_sensitive_region
+from .schemas import ComputerActionPayload, ComputerSessionCreatePayload
+from .session import add_action_row, add_evidence_row, add_policy_event, create_session_row, get_session, list_sessions, request_takeover, update_session_status
+from .models import ComputerAction, ComputerEvidence, ComputerSession
+
+
+def _executor_for_settings(session: ComputerSession | None = None):
+    settings = get_settings()
+    if settings.OPENCLAW_ADAPTER_ENABLED:
+        return OpenClawAdapter(settings=settings)
+    if session and session.executor_type == "mock" and session.environment_type == "test" and not getattr(settings, "IS_PRODUCTION", False):
+        return MockComputerExecutor()
+    raise HTTPException(status_code=503, detail="真实电脑执行适配器未启用")
+
+
+def _remove_failed_capture(reference: str | None, settings) -> None:
+    parsed = urlsplit(reference or "")
+    if parsed.scheme != "file":
+        return
+    output_root = Path(settings.PAGE_CAPTURE_OUTPUT_ROOT).resolve()
+    candidate = Path(parsed.path).resolve()
+    if candidate.is_relative_to(output_root):
+        candidate.unlink(missing_ok=True)
+
+
+def preflight_action_payload(payload) -> None:
+    settings = get_settings()
+    if not settings.OPENCLAW_ADAPTER_ENABLED:
+        return
+    if payload.action_type == "等待":
+        return
+    if payload.action_type != "截图":
+        raise HTTPException(status_code=400, detail="真实页面执行器仅支持截图和等待动作")
+    if not settings.SCREEN_CAPTURE_ENABLED:
+        raise HTTPException(status_code=403, detail="截图功能当前未开启")
+    context = type(
+        "PreflightContext",
+        (),
+        {"action_type": payload.action_type, "target_url": getattr(payload, "target_url", None)},
+    )()
+    try:
+        OpenClawAdapter(settings=settings).validate_target(context)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="截图动作必须提供允许的target_url") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="真实页面截图适配器不可用") from exc
+
+
+class ComputerRuntime:
+    @staticmethod
+    def create_session(db: Session, payload: ComputerSessionCreatePayload):
+        ensure_executor_enabled()
+        session_id = uuid.uuid4().hex
+        session = create_session_row(db, session_id=session_id, payload=payload)
+        db.commit()
+        db.refresh(session)
+        return session
+
+    @staticmethod
+    def list_sessions(db: Session, limit: int = 100):
+        return list_sessions(db, limit=limit)
+
+    @staticmethod
+    def get_session(db: Session, session_id: str) -> ComputerSession:
+        session = get_session(db, session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="电脑会话不存在")
+        return session
+
+    @staticmethod
+    def execute_action(
+        db: Session,
+        session: ComputerSession,
+        payload: ComputerActionPayload,
+        *,
+        capture_authorization=None,
+        commit: bool = True,
+    ):
+        ensure_executor_enabled()
+        ensure_screen_capture_enabled()
+        validate_action_payload(payload)
+        settings = get_settings()
+        safe_action_context = payload.approval_context if isinstance(payload.approval_context, dict) else None
+        safe_action_plan: ComputerActionPlan | None = None
+        safe_action_target: ComputerActionTarget | None = None
+        safe_action_approval: ComputerActionApproval | None = None
+        if settings.MAC_SAFE_ACTION_ENABLED and not safe_action_context:
+            raise HTTPException(status_code=403, detail="安全单步动作必须通过审批流执行")
+        if safe_action_context and settings.MAC_SAFE_ACTION_ENABLED:
+            plan_id = str(safe_action_context.get("plan_id") or "").strip()
+            action_id = str(safe_action_context.get("action_id") or "").strip()
+            if not plan_id or not action_id:
+                raise HTTPException(status_code=400, detail="安全动作缺少审批上下文")
+            safe_action_plan = db.get(ComputerActionPlan, plan_id)
+            if not safe_action_plan:
+                raise HTTPException(status_code=404, detail="动作计划不存在")
+            if safe_action_plan.session_id != session.session_id:
+                raise HTTPException(status_code=404, detail="动作计划不存在")
+            safe_action_target = db.query(ComputerActionTarget).filter(
+                ComputerActionTarget.plan_id == safe_action_plan.plan_id,
+                ComputerActionTarget.action_id == action_id,
+            ).order_by(ComputerActionTarget.created_at.asc()).first()
+            if not safe_action_target:
+                raise HTTPException(status_code=404, detail="动作目标不存在")
+            safe_action_approval = db.query(ComputerActionApproval).filter(
+                ComputerActionApproval.plan_id == safe_action_plan.plan_id,
+                ComputerActionApproval.action_id == safe_action_target.action_id,
+            ).order_by(ComputerActionApproval.created_at.desc()).first()
+            if not safe_action_approval or safe_action_approval.approval_status != "已批准":
+                raise HTTPException(status_code=403, detail="动作尚未批准")
+            if _normalize_dt(safe_action_approval.expires_at) and _normalize_dt(safe_action_approval.expires_at) < utcnow():
+                safe_action_approval.approval_status = "已过期"
+                if commit:
+                    db.commit()
+                else:
+                    db.flush()
+                raise HTTPException(status_code=409, detail="审批已过期")
+            if safe_action_context.get("current_screenshot_hash") and safe_action_approval.before_screenshot_hash and safe_action_context.get("current_screenshot_hash") != safe_action_approval.before_screenshot_hash:
+                safe_action_approval.approval_status = "已过期"
+                if commit:
+                    db.commit()
+                else:
+                    db.flush()
+                raise HTTPException(status_code=409, detail="窗口已变化，审批失效")
+            existing_action = db.get(ComputerAction, safe_action_target.action_id)
+            if existing_action is not None and existing_action.finished_at is not None:
+                raise HTTPException(status_code=409, detail="动作已提交，禁止重复执行")
+            approval_status_value = "已批准"
+        else:
+            approval_status_value = session.approval_status
+        executor = _executor_for_settings(session)
+        context = type("Context", (), {
+            "session_id": session.session_id,
+            "trace_id": payload.trace_id or session.trace_id,
+            "action_type": payload.action_type,
+            "target_application": payload.target_application,
+            "target_window": payload.target_window,
+            "target_url": payload.target_url,
+            "text_input": payload.text_input,
+            "coordinates": payload.coordinates,
+            "capture_authorization": capture_authorization,
+        })()
+        started = utcnow()
+        response = executor.execute_action(context)
+        finished = utcnow()
+        screenshot_reference = response.screenshot_reference if isinstance(response, ComputerExecutorOutcome) else None
+        commit_attempted = False
+        commit_succeeded = False
+        response_snapshot = None
+
+        def response_payload(current_session, current_action, current_evidence):
+            session_dict = {
+                "session_id": current_session.session_id,
+                "execution_id": current_session.execution_id,
+                "task_id": current_session.task_id,
+                "employee_id": current_session.employee_id,
+                "skill_id": current_session.skill_id,
+                "executor_type": current_session.executor_type,
+                "environment_type": current_session.environment_type,
+                "status": current_session.status,
+                "risk_level": current_session.risk_level,
+                "approval_status": current_session.approval_status,
+                "allowed_applications": json.loads(current_session.allowed_applications_json or "[]"),
+                "allowed_windows": json.loads(current_session.allowed_windows_json or "[]"),
+                "started_at": current_session.started_at.isoformat() if current_session.started_at else None,
+                "expires_at": current_session.expires_at.isoformat() if current_session.expires_at else None,
+                "ended_at": current_session.ended_at.isoformat() if current_session.ended_at else None,
+                "takeover_status": current_session.takeover_status,
+                "last_screenshot_at": current_session.last_screenshot_at.isoformat() if current_session.last_screenshot_at else None,
+                "trace_id": current_session.trace_id,
+                "created_at": current_session.created_at.isoformat() if current_session.created_at else None,
+                "updated_at": current_session.updated_at.isoformat() if current_session.updated_at else None,
+            }
+            return {
+                "session": session_dict,
+                "action": {
+                    "action_id": current_action.action_id,
+                    "session_id": current_session.session_id,
+                    "sequence_number": current_action.sequence_number,
+                    "action_type": current_action.action_type,
+                    "target_application": current_action.target_application,
+                    "target_window": current_action.target_window,
+                    "target_description": current_action.target_description,
+                    "input_summary": current_action.input_summary,
+                    "coordinates": json.loads(current_action.coordinates_json) if current_action.coordinates_json else None,
+                    "risk_level": current_action.risk_level,
+                    "approval_required": current_action.approval_required,
+                    "approval_status": current_action.approval_status,
+                    "screenshot_before": current_action.screenshot_before,
+                    "screenshot_after": current_action.screenshot_after,
+                    "result": current_action.result,
+                    "error_code": current_action.error_code,
+                    "error_message": current_action.error_message,
+                    "started_at": current_action.started_at.isoformat() if current_action.started_at else None,
+                    "finished_at": current_action.finished_at.isoformat() if current_action.finished_at else None,
+                    "duration_ms": current_action.duration_ms,
+                    "trace_id": current_action.trace_id,
+                },
+                "evidence": {"evidence_id": current_evidence.evidence_id, "reference": current_evidence.reference},
+            }
+
+        try:
+            action = add_action_row(
+                db,
+                session=session,
+                payload=payload,
+                result={
+                    "action_id": safe_action_target.action_id if safe_action_target is not None else uuid.uuid4().hex,
+                    "result": json_text(response.action_result if isinstance(response, ComputerExecutorOutcome) else response),
+                    "risk_level": session.risk_level,
+                    "started_at": started,
+                    "finished_at": finished,
+                    "duration_ms": response.duration_ms if isinstance(response, ComputerExecutorOutcome) else 0,
+                },
+                screenshot_before=make_screenshot_reference(session.session_id, f"before-{payload.trace_id or 'action'}"),
+                screenshot_after=screenshot_reference,
+                approval_required=bool(safe_action_context) or session.approval_status == "等待审批",
+                approval_status=approval_status_value,
+            )
+            evidence = add_evidence_row(
+                db,
+                session_id=session.session_id,
+                action_id=action.action_id,
+                evidence_type="screenshot",
+                reference=make_evidence_reference(session.session_id, action.action_id, "action_screenshot"),
+                metadata={"action_type": payload.action_type, "target_application": payload.target_application, "target_window": payload.target_window},
+            )
+            add_policy_event(
+                db,
+                session_id=session.session_id,
+                action_id=action.action_id,
+                event_code="ACTION_EXECUTED",
+                event_message="电脑动作已执行",
+                risk_level=session.risk_level,
+                sensitive_data_involved=detect_sensitive_region(payload.target_window, payload.target_application, payload.text_input),
+                trace_id=payload.trace_id,
+            )
+            session.status = "执行中"
+            session.last_screenshot_at = finished
+            if safe_action_plan is not None:
+                safe_action_plan.current_action_index = min(safe_action_plan.max_actions, safe_action_plan.current_action_index + 1)
+                safe_action_plan.status = "已暂停"
+                session.approval_status = "已批准"
+                session.status = "已暂停"
+            session_id = session.session_id
+            action_id = action.action_id
+            evidence_id = evidence.evidence_id
+            plan_id = safe_action_plan.plan_id if safe_action_plan is not None else None
+            response_snapshot = response_payload(session, action, evidence)
+            if commit:
+                commit_attempted = True
+                db.commit()
+                commit_succeeded = True
+            else:
+                db.flush()
+        except Exception:
+            db.rollback()
+            if commit_attempted:
+                try:
+                    evidence = (
+                        db.query(ComputerEvidence)
+                        .filter(ComputerEvidence.evidence_id == evidence_id)
+                        .populate_existing()
+                        .one_or_none()
+                    )
+                    if evidence is not None:
+                        session = (
+                            db.query(ComputerSession)
+                            .filter(ComputerSession.session_id == session_id)
+                            .populate_existing()
+                            .one_or_none()
+                        )
+                        action = (
+                            db.query(ComputerAction)
+                            .filter(ComputerAction.action_id == action_id)
+                            .populate_existing()
+                            .one_or_none()
+                        )
+                        plan_required = plan_id is not None
+                        if plan_required:
+                            safe_action_plan = (
+                                db.query(ComputerActionPlan)
+                                .filter(ComputerActionPlan.plan_id == plan_id)
+                                .populate_existing()
+                                .one_or_none()
+                            )
+                        if session is not None and action is not None and (not plan_required or safe_action_plan is not None):
+                            recovered = response_payload(session, action, evidence)
+                            recovered["commit_status"] = "committed_requery_recovered"
+                            return recovered
+                        response_snapshot["commit_status"] = "committed_response_refresh_failed"
+                        return response_snapshot
+                except Exception:
+                    db.rollback()
+                    response_snapshot["commit_status"] = "commit_outcome_unknown_evidence_preserved"
+                    return response_snapshot
+            _remove_failed_capture(screenshot_reference, settings)
+            raise
+
+        try:
+            db.refresh(session)
+            if safe_action_plan is not None:
+                db.refresh(safe_action_plan)
+        except Exception:
+            db.rollback()
+            if not commit_succeeded:
+                _remove_failed_capture(screenshot_reference, settings)
+                raise
+            try:
+                session = db.get(ComputerSession, session_id)
+                action = db.get(ComputerAction, action_id)
+                evidence = db.get(ComputerEvidence, evidence_id)
+                plan_required = plan_id is not None
+                if plan_required:
+                    safe_action_plan = db.get(ComputerActionPlan, plan_id)
+                if session is None or action is None or evidence is None or (plan_required and safe_action_plan is None):
+                    raise RuntimeError("已提交动作响应重新查询失败")
+                recovered = response_payload(session, action, evidence)
+                recovered["commit_status"] = "committed_requery_recovered"
+                return recovered
+            except Exception:
+                db.rollback()
+                response_snapshot["commit_status"] = "committed_response_refresh_failed"
+                return response_snapshot
+        return response_payload(session, action, evidence)
+
+    @staticmethod
+    def capture_screen(db: Session, session: ComputerSession, *, target_url: str | None = None):
+        ensure_executor_enabled()
+        ensure_screen_capture_enabled()
+        preflight_action_payload(
+            type("CapturePayload", (), {"action_type": "截图", "target_url": target_url})()
+        )
+        executor = _executor_for_settings(session)
+        context = type(
+            "Context",
+            (),
+            {
+                "session_id": session.session_id,
+                "trace_id": session.trace_id,
+                "action_type": "截图",
+                "target_url": target_url,
+            },
+        )()
+        payload = executor.capture_screen(context)
+        ref = payload["screenshot_reference"]
+        evidence = add_evidence_row(db, session_id=session.session_id, action_id=None, evidence_type="screenshot", reference=ref, metadata={"kind": "screen"})
+        session.last_screenshot_at = utcnow()
+        db.commit()
+        return evidence
+
+    @staticmethod
+    def get_window_state(db: Session, session: ComputerSession):
+        executor = _executor_for_settings(session)
+        context = type("Context", (), {"session_id": session.session_id, "trace_id": session.trace_id, "target_application": None, "target_window": None})()
+        return executor.get_window_state(context)
+
+    @staticmethod
+    def pause(db: Session, session: ComputerSession):
+        session.status = "已暂停"
+        db.commit()
+        return session
+
+    @staticmethod
+    def resume(db: Session, session: ComputerSession):
+        session.status = "执行中"
+        db.commit()
+        return session
+
+    @staticmethod
+    def cancel(db: Session, session: ComputerSession):
+        session.status = "已取消"
+        session.ended_at = utcnow()
+        db.commit()
+        return session
+
+    @staticmethod
+    def handoff_to_human(db: Session, session: ComputerSession, requested_by: str | None = None, reason: str | None = None):
+        ensure_human_takeover_enabled()
+        request_takeover(db, session, requested_by=requested_by, reason=reason)
+        db.refresh(session)
+        return session
+
+    @staticmethod
+    def close_session(db: Session, session: ComputerSession):
+        session.status = "已关闭"
+        session.ended_at = utcnow()
+        db.commit()
+        return session

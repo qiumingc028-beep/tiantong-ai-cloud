@@ -12,6 +12,7 @@ from ..services.ai_employee_skills import (
     build_employee_skill_relations,
     build_skill_detail,
 )
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/ai-employee-skills")
@@ -30,6 +31,7 @@ def get_employee_skills(
     db: Session = Depends(get_db),
 ):
     user = require_ai_employee_skills_user(request, db)
+    bind_session_task_ownership(db, user=user)
     return build_employee_skill_list(
         db,
         user,
@@ -46,12 +48,14 @@ def get_employee_skills(
 @router.get("/skills/{skill_id}")
 def get_employee_skill_detail(skill_id: str, request: Request, db: Session = Depends(get_db)):
     user = require_ai_employee_skills_user(request, db)
+    bind_session_task_ownership(db, user=user)
     return build_skill_detail(db, user, skill_id)
 
 
 @router.get("/employees/{employee_id}/skills")
 def get_employee_skill_relations(employee_id: str, request: Request, db: Session = Depends(get_db)):
     user = require_ai_employee_skills_user(request, db)
+    bind_session_task_ownership(db, user=user)
     return build_employee_skill_relations(db, user, employee_id)
 
 

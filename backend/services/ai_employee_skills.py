@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..evolution_models import RiskEvent
 from ..models import AiEmployee, TaskCenterTask, User
 from ..routers import sop_skill_center
+from ..task_center_ownership import owned_tasks_query
 
 
 SUCCESS_TASK_STATUSES = {"accepted", "audited", "summarized"}
@@ -178,7 +179,7 @@ def make_asset(
 
 def task_stats_by_employee(db: Session) -> dict[str, dict]:
     result: dict[str, dict] = {}
-    rows = db.query(TaskCenterTask).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all()
+    rows = owned_tasks_query(db).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all()
     for task in rows:
         code = task.assigned_ai_employee_code
         if not code:
@@ -206,7 +207,7 @@ def static_employee_info() -> dict[str, dict]:
 
 def risk_by_employee(db: Session) -> dict[str, str]:
     levels: dict[str, str] = {}
-    for task in db.query(TaskCenterTask).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all():
+    for task in owned_tasks_query(db).filter(TaskCenterTask.assigned_ai_employee_code.isnot(None)).all():
         code = task.assigned_ai_employee_code
         if not code:
             continue
@@ -219,7 +220,7 @@ def risk_by_employee(db: Session) -> dict[str, str]:
 
 def task_usage_refs(db: Session, employee_codes: list[str]) -> list[dict]:
     rows = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.assigned_ai_employee_code.in_(employee_codes))
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .limit(20)

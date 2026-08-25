@@ -6,6 +6,7 @@ from backend.config import ConfigurationError, Settings
 PRODUCTION_KEYS = (
     "APP_ENV",
     "ENV",
+    "SERVICE_ROLE",
     "DATABASE_URL",
     "REDIS_URL",
     "JWT_SECRET",
@@ -13,6 +14,7 @@ PRODUCTION_KEYS = (
     "CORS_ALLOWED_ORIGINS",
     "CORS_ALLOW_CREDENTIALS",
     "DEBUG",
+    "AGENT_RUNTIME_ENABLED",
 )
 
 
@@ -21,6 +23,7 @@ def production_env(monkeypatch, **overrides):
         monkeypatch.delenv(key, raising=False)
     values = {
         "APP_ENV": "production",
+        "SERVICE_ROLE": "backend",
         "DATABASE_URL": "postgresql+psycopg2://app:isolated-test-password@postgres:5432/app",
         "REDIS_URL": "redis://:isolated-test-password@redis:6379/0",
         "JWT_SECRET": "isolated-production-policy-jwt-secret-32-plus",
@@ -44,6 +47,7 @@ def test_valid_production_origins_and_credentials(monkeypatch):
     assert settings.CORS_ALLOWED_ORIGINS == ["https://app.example.com", "https://admin.example.com"]
     assert settings.CORS_ALLOW_CREDENTIALS is True
     assert settings.DEBUG is False
+    assert settings.AGENT_RUNTIME_ENABLED is False
 
 
 def test_production_requires_cors_origins(monkeypatch):

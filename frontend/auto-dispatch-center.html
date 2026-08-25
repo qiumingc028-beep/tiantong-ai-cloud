@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.settings">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AI自动派单中心 - 天统AI云中台</title>
@@ -20,7 +20,7 @@
         <div class="meta">
           <span id="time" class="pill">--</span>
           <span id="me" class="pill">加载中</span>
-          <button class="secondary" onclick="logout()">退出登录</button>
+          <button class="secondary" data-rbac-action="auto-dispatch-center-001">退出登录</button>
         </div>
       </header>
 
@@ -42,7 +42,7 @@
             <div class="card">
               <div class="head">
                 <h2>任务输入区</h2>
-                <button id="analyzeBtn" onclick="analyzeTask()">分析任务</button>
+                <button id="analyzeBtn" data-rbac-action="auto-dispatch-center-002">分析任务</button>
               </div>
               <div class="row">
                 <div class="full">
@@ -93,8 +93,8 @@
                 </div>
               </div>
               <div class="actions">
-                <button class="secondary" onclick="resetInput()">重置</button>
-                <button class="secondary" onclick="loadOverview()">刷新统计</button>
+                <button class="secondary" data-rbac-action="auto-dispatch-center-003">重置</button>
+                <button class="secondary" data-rbac-action="auto-dispatch-center-004">刷新统计</button>
               </div>
             </div>
 
@@ -124,7 +124,7 @@
             <div class="card">
               <div class="head">
                 <h2>派单方案区</h2>
-                <button class="secondary" onclick="generateDispatchPlan()">生成派单方案</button>
+                <button class="secondary" data-rbac-action="auto-dispatch-center-005">生成派单方案</button>
               </div>
               <div class="state warn">生成后端派单方案需要现有 Task Center 任务 ID。没有任务 ID 时，本区只展示本地预览，不写入后端。</div>
               <div id="planPanel" class="detail-box empty">暂无派单方案</div>
@@ -161,9 +161,9 @@
                 </div>
               </div>
               <div class="actions">
-                <button class="warn" onclick="confirmDispatch()">确认派单</button>
-                <button class="danger" onclick="rejectDispatch()">拒绝</button>
-                <button class="secondary" onclick="reanalyzeTask()">重新分析</button>
+                <button class="warn" data-rbac-action="auto-dispatch-center-006">确认派单</button>
+                <button class="danger" data-rbac-action="auto-dispatch-center-007">拒绝</button>
+                <button class="secondary" data-rbac-action="auto-dispatch-center-008">重新分析</button>
               </div>
               <div id="confirmState" class="state" style="display:none"></div>
             </div>
@@ -173,7 +173,7 @@
             <div class="card">
               <div class="head">
                 <h2>总览统计</h2>
-                <button class="secondary" onclick="loadOverview()">刷新</button>
+                <button class="secondary" data-rbac-action="auto-dispatch-center-009">刷新</button>
               </div>
               <div id="overviewBox" class="kv"></div>
             </div>
@@ -181,7 +181,7 @@
             <div class="card">
               <div class="head">
                 <h2>执行追踪区</h2>
-                <button class="secondary" onclick="refreshTracking()">刷新追踪</button>
+                <button class="secondary" data-rbac-action="auto-dispatch-center-010">刷新追踪</button>
               </div>
               <div class="row">
                 <div>
@@ -203,7 +203,7 @@
                 </div>
               </div>
               <div class="actions">
-                <button class="secondary" onclick="recordTracking()">记录追踪</button>
+                <button class="secondary" data-rbac-action="auto-dispatch-center-011">记录追踪</button>
               </div>
               <div class="divider"></div>
               <div id="trackingPanel" class="detail-box empty">暂无执行追踪</div>
@@ -232,7 +232,7 @@
     </main>
   </div>
 
-  <script>
+  <script type="text/plain" data-rbac-protected>
     const menus=[
       ['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['AI员工工作台','/employee-workspace.html'],
       ['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],
@@ -412,7 +412,7 @@
           <td>${esc(safe(item.reason))}</td>
           <td>${badge(item.risk_level)}</td>
           <td>${esc(safe(item.score))}</td>
-          <td><button class="secondary" onclick="selectEmployee('${esc(item.employee_code)}')">查看详情</button></td>
+          <td><button class="secondary" data-rbac-action="${TiantongRbac.registerDynamicAction("auto-dispatch-center-012","click",function(event){selectEmployee((item.employee_code));})}>查看详情</button></td>
         </tr>`;
       }).join('') : '<tr><td colspan="6">暂无数据</td></tr>';
       confirmEmployee.innerHTML=employees.length ? employees.map(item=>`<option value="${esc(item.employee_code)}">${esc(item.employee_name)}（${esc(item.employee_code)}）</option>`).join('') : '<option value="">暂无推荐员工</option>';
@@ -612,5 +612,21 @@
     }
     init();
   </script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "auto-dispatch-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "auto-dispatch-center-002":["click",function(event){analyzeTask();}],
+  "auto-dispatch-center-003":["click",function(event){resetInput();}],
+  "auto-dispatch-center-004":["click",function(event){loadOverview();}],
+  "auto-dispatch-center-005":["click",function(event){generateDispatchPlan();}],
+  "auto-dispatch-center-006":["click",function(event){confirmDispatch();}],
+  "auto-dispatch-center-007":["click",function(event){rejectDispatch();}],
+  "auto-dispatch-center-008":["click",function(event){reanalyzeTask();}],
+  "auto-dispatch-center-009":["click",function(event){loadOverview();}],
+  "auto-dispatch-center-010":["click",function(event){refreshTracking();}],
+  "auto-dispatch-center-011":["click",function(event){recordTracking();}]
+});
+</script>
 </body>
 </html>

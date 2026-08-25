@@ -1,0 +1,52 @@
+{
+  "evidence_format_version": 2,
+  "generated_at_utc": "2026-07-13T12:44:15Z",
+  "validated_code_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+  "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+  "checksum_algorithm": "sha256",
+  "database_engine": "PostgreSQL",
+  "postgresql_version": "16.14 (Debian 16.14-1.pgdg13+1)",
+  "required_files": [
+    "artifacts/alpha-migration-evidence/path_a_current.log",
+    "artifacts/alpha-migration-evidence/path_b_current.log",
+    "artifacts/alpha-migration-evidence/alembic-evidence.txt",
+    "artifacts/alpha-migration-evidence/checksums.sha256",
+    "artifacts/alpha-migration-evidence/validation-manifest.json",
+    "docs/V2_ALPHA_MIGRATION_EVIDENCE.md",
+    "docs/V2_MIGRATION_FREEZE_POLICY.md"
+  ],
+  "path_a": {
+    "path_id": "A",
+    "database_id": "alpha_authentic_v2_a",
+    "start_commit": "483ebf560e1a4cfadecee4912a3ff6bca99516f6",
+    "start_revision": "0027_v1_schema_alignment",
+    "validated_code_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+    "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+    "result": "PASS"
+  },
+  "path_b": {
+    "path_id": "B",
+    "database_id": "alpha_authentic_v2_b",
+    "start_commit": "85586868bad3dd5d0fecba5f840383feccdc1c78",
+    "start_revision": "0041_v2_alpha_migration_history_repair",
+    "validated_code_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+    "final_revision": "0042_v2_alpha_workflow_unique_constraints",
+    "result": "PASS"
+  },
+  "known_broken_historical_baseline": {
+    "KNOWN_BROKEN_HISTORICAL_BASELINE": "2ca1a2579569324ce3ca82f68332fb7f96be004d",
+    "accepted_path": false
+  },
+  "catalog_verification": {
+    "single_head": true,
+    "required_unique_constraints": true,
+    "trace_id_unique": true,
+    "knowledge_asset_index_unique": false,
+    "knowledge_asset_reuse": true,
+    "multiple_nulls_allowed": true,
+    "append_only_triggers": true,
+    "downgrade_reupgrade": true,
+    "full_sql_recorded": true,
+    "real_command_transcript": true
+  }
+}

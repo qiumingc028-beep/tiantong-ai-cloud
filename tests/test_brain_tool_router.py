@@ -7,6 +7,7 @@ from alembic.script import ScriptDirectory
 
 from backend.brain_tool_router.models import BrainExecutionLog
 from backend.main import app
+from tests.test_helpers import latest_alembic_head
 
 
 def test_brain_tool_router_routes_registered():
@@ -167,5 +168,4 @@ def test_brain_tool_router_source_has_no_real_execution_calls():
 def test_brain_tool_router_migration_head_and_table():
     assert "brain_execution_logs" in set(BrainExecutionLog.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
-
+    assert script.get_heads() == [latest_alembic_head()]

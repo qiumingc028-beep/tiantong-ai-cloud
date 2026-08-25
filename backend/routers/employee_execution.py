@@ -9,6 +9,7 @@ from ..auth_data import normalize_role
 from ..database import get_db
 from ..employee_execution.models import EmployeeExecutionContract
 from ..workers.tian_shang_worker import contract_to_dict, create_tian_shang_task, latest_tian_shang_status, process_next_tian_shang_execution
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/employee-execution")
@@ -22,7 +23,7 @@ class TianShangTaskCreate(BaseModel):
 @router.post("/tian-shang/tasks")
 def create_tian_shang_execution_task(payload: TianShangTaskCreate, request: Request, db: Session = Depends(get_db)):
     user = require_privileged_user(request, db)
-    return create_tian_shang_task(db, payload.goal, created_by_id=user.id, enqueue=True)
+    return create_tian_shang_task(db, payload.goal, user=user, enqueue=True)
 
 
 @router.post("/tian-shang/process-next")
@@ -51,6 +52,7 @@ def require_execution_view_user(request: Request, db: Session):
     user = current_user(request, db)
     role = normalize_role(user.role)
     if role in PRIVILEGED_ROLES:
+        bind_session_task_ownership(db, user=user)
         return user
     if user.username == "tianshang":
         return user
@@ -61,4 +63,5 @@ def require_privileged_user(request: Request, db: Session):
     user = current_user(request, db)
     if normalize_role(user.role) not in PRIVILEGED_ROLES:
         raise HTTPException(status_code=403, detail="需要 Owner/Admin 权限")
+    bind_session_task_ownership(db, user=user)
     return user

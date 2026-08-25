@@ -1,5 +1,49 @@
 from .knowledge_learning import learn_from_execution
 from .knowledge_search import search_knowledge
 from .knowledge_storage import clear_knowledge, list_knowledge, save_knowledge
+from .service import (
+    approve,
+    archive,
+    create_draft,
+    create_version,
+    get_asset,
+    get_version,
+    knowledge_health,
+    list_assets,
+    list_citations,
+    list_sources,
+    list_versions,
+    record_use,
+    reject,
+    search,
+    submit_research_report,
+    submit_review,
+    update_asset,
+    publish,
+)
 
-__all__ = ["clear_knowledge", "learn_from_execution", "list_knowledge", "save_knowledge", "search_knowledge"]
+__all__ = [
+    "approve",
+    "archive",
+    "clear_knowledge",
+    "create_draft",
+    "create_version",
+    "get_asset",
+    "get_version",
+    "knowledge_health",
+    "learn_from_execution",
+    "list_assets",
+    "list_citations",
+    "list_knowledge",
+    "list_sources",
+    "list_versions",
+    "publish",
+    "record_use",
+    "reject",
+    "save_knowledge",
+    "search",
+    "search_knowledge",
+    "submit_research_report",
+    "submit_review",
+    "update_asset",
+]

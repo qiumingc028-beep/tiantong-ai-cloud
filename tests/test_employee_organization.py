@@ -10,10 +10,14 @@ from backend.employee_organization import (
 )
 from backend.models import AiEmployee, TaskCenterTask
 from backend.task_queue import ORCHESTRATOR_QUEUE_NAME
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def seed_organization_employees(test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add_all(
             [
@@ -60,6 +64,7 @@ def seed_organization_employees(test_db):
                 assigned_ai_employee_name="天商：商品中心",
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -67,7 +72,7 @@ def seed_organization_employees(test_db):
 
 def test_department_system_contains_department_leader_and_employee_list(test_db):
     seed_organization_employees(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         departments = build_department_system(db)
     finally:
@@ -83,7 +88,7 @@ def test_department_system_contains_department_leader_and_employee_list(test_db)
 
 def test_employee_relationships_include_manager_subordinates_and_collaborators(test_db):
     seed_organization_employees(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         relationships = build_employee_relationships(db)
     finally:
@@ -99,7 +104,7 @@ def test_employee_relationships_include_manager_subordinates_and_collaborators(t
 
 def test_organization_permissions_enforce_roles_and_tian_shen_gate(test_db):
     seed_organization_employees(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         permissions = build_organization_permission_matrix(db)
     finally:
@@ -120,7 +125,7 @@ def test_organization_permissions_enforce_roles_and_tian_shen_gate(test_db):
 
 def test_employee_organization_center_connects_capability_workspace_performance_without_queue(test_db):
     seed_organization_employees(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         center = build_employee_organization_center(db)
     finally:
@@ -156,7 +161,7 @@ def test_ceo_dashboard_includes_ai_employee_organization_board(client, owner_hea
 
 def test_employee_organization_center_does_not_write_database(client, owner_headers, test_db):
     seed_organization_employees(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     engine = db.get_bind()
     statements = []
 

@@ -12,6 +12,7 @@ from ..database import get_db
 from ..deploy_models import DeployRecord
 from ..models import AiEmployee, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
 from ..orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
+from ..task_center_ownership import bind_session_task_ownership, owned_results_query, owned_task_or_none, owned_task_rows_query, owned_tasks_query
 
 
 router = APIRouter()
@@ -24,12 +25,12 @@ AUDIT_PENDING_STATUSES = {"accepted"}
 DEPLOY_PENDING_STATUSES = {"audited", "summarized"}
 @router.get("/logs/{log_id}/trace")
 def get_log_trace(log_id: str, request: Request, db: Session = Depends(get_db)):
-    require_trace_user(request, db)
+    bind_session_task_ownership(db, user=require_trace_user(request, db))
     logs = build_activity_logs(db)
     log = next((row for row in logs if row["log_id"] == log_id), None)
     if not log:
         raise HTTPException(status_code=404, detail="log not found")
-    task = db.get(TaskCenterTask, log["task_id"]) if log.get("task_id") else None
+    task = owned_task_or_none(db, task_id=log["task_id"]) if log.get("task_id") else None
     response = build_trace_response(db, task=task, employee_code=log.get("employee_code"), focus_log=log)
     response["summary"]["trace_type"] = "log"
     return response
@@ -37,8 +38,8 @@ def get_log_trace(log_id: str, request: Request, db: Session = Depends(get_db)):
 
 @router.get("/tasks/{task_id}/trace")
 def get_task_trace(task_id: int, request: Request, db: Session = Depends(get_db)):
-    require_trace_user(request, db)
-    task = db.get(TaskCenterTask, task_id)
+    bind_session_task_ownership(db, user=require_trace_user(request, db))
+    task = owned_task_or_none(db, task_id=task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
     response = build_trace_response(db, task=task, employee_code=task.assigned_ai_employee_code)
@@ -48,19 +49,48 @@ def get_task_trace(task_id: int, request: Request, db: Session = Depends(get_db)
 
 @router.get("/employees/{employee_code}/trace")
 def get_employee_trace(employee_code: str, request: Request, db: Session = Depends(get_db)):
-    require_trace_user(request, db)
-    employee = find_employee(db, employee_code)
+    bind_session_task_ownership(db, user=require_trace_user(request, db))
+    visible_task = (
+        owned_tasks_query(db)
+        .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
+        .first()
+    )
+    employee = find_employee(db, employee_code) if visible_task else None
+    if not visible_task or not employee:
+        return {
+            "summary": {
+                "trace_type": "employee",
+                "total_nodes": 0,
+                "total_edges": 0,
+                "has_blocker": False,
+                "missing_steps": 0,
+            },
+            "trace_nodes": [],
+            "trace_edges": [],
+            "employee": {"employee_code": employee_code},
+            "task": {},
+            "orchestrator_source": {},
+            "boss_confirmation": {},
+            "review_status": {},
+            "audit_status": {},
+            "deploy_status": {},
+            "git_commit": {},
+            "blockers": [],
+            "missing_steps": [],
+            "next_suggestion": "继续跟进任务流转",
+            "safety_flags": [],
+        }
     response = build_trace_response(db, employee_code=employee_code)
     response["summary"]["trace_type"] = "employee"
-    response["employee"] = employee_payload(employee) if employee else {"employee_code": safe_text(employee_code)}
+    response["employee"] = employee_payload(employee)
     return response
 
 
 @router.get("/trace-overview")
 def get_trace_overview(request: Request, db: Session = Depends(get_db)):
-    require_trace_user(request, db)
+    bind_session_task_ownership(db, user=require_trace_user(request, db))
     logs = build_activity_logs(db)
-    tasks = db.query(TaskCenterTask).order_by(TaskCenterTask.id.desc()).limit(500).all()
+    tasks = owned_tasks_query(db).order_by(TaskCenterTask.id.desc()).limit(500).all()
     blockers = [safe_log(row) for row in logs if row.get("has_blocker")][:100]
     pending_boss = [safe_log(row) for row in logs if row.get("needs_boss_confirmation")][:100]
     missing_steps = []
@@ -151,7 +181,7 @@ def build_trace_response(db: Session, task: TaskCenterTask | None = None, employ
 
 def build_activity_logs(db: Session) -> list[dict]:
     employees = {row.employee_code: row for row in db.query(AiEmployee).all()}
-    tasks = db.query(TaskCenterTask).order_by(TaskCenterTask.id.desc()).limit(500).all()
+    tasks = owned_tasks_query(db).order_by(TaskCenterTask.id.desc()).limit(500).all()
     task_map = {task.id: task for task in tasks}
     logs: list[dict] = []
     for task in tasks:
@@ -163,15 +193,15 @@ def build_activity_logs(db: Session) -> list[dict]:
         if task.status in PENDING_BOSS_STATUSES:
             logs.append(make_log("boss_confirmation_required", "等待老板确认", task.updated_at or task.created_at, task, employees, "task_center", str(task.id), task.status, "任务等待老板确认", needs_boss_confirmation=True))
 
-    for row in db.query(TaskCenterAuditLog).order_by(TaskCenterAuditLog.id.asc()).limit(500).all():
+    for row in owned_task_rows_query(db, TaskCenterAuditLog, TaskCenterAuditLog.task_id).order_by(TaskCenterAuditLog.id.asc()).limit(500).all():
         task = task_map.get(row.task_id)
         logs.append(make_log("task_status_changed", "任务状态流转", row.created_at, task, employees, "task_center", str(row.id), row.to_status or (task.status if task else None), safe_summary(row.detail) or "任务状态流转"))
 
-    for row in db.query(TaskCenterResult).order_by(TaskCenterResult.id.asc()).limit(500).all():
+    for row in owned_results_query(db).order_by(TaskCenterResult.id.asc()).limit(500).all():
         task = task_map.get(row.task_id)
         logs.append(make_log("task_submitted", "提交结果", row.created_at, task, employees, "task_center", str(row.id), task.status if task else "result_submitted", "AI员工提交任务结果", employee_code=row.ai_employee_code))
 
-    for row in db.query(TaskCenterReview).order_by(TaskCenterReview.id.asc()).limit(500).all():
+    for row in owned_task_rows_query(db, TaskCenterReview, TaskCenterReview.task_id).order_by(TaskCenterReview.id.asc()).limit(500).all():
         task = task_map.get(row.task_id)
         action_type = "task_audited" if row.review_type == "audit" else "task_reviewed"
         title = "天监审计" if row.review_type == "audit" else "天检验收"
@@ -197,7 +227,7 @@ def build_activity_logs(db: Session) -> list[dict]:
             )
         )
 
-    for link in db.query(OrchestratorTaskLink).order_by(OrchestratorTaskLink.id.asc()).limit(300).all():
+    for link in owned_task_rows_query(db, OrchestratorTaskLink, OrchestratorTaskLink.task_id).order_by(OrchestratorTaskLink.id.asc()).limit(300).all():
         task = task_map.get(link.task_id)
         logs.append(make_log("task_created_from_orchestrator", "Orchestrator 来源链路", link.created_at, task, employees, "orchestrator", str(link.id), task.status if task else link.link_type, f"来源链路：{safe_text(link.link_type)}", employee_code=link.recommended_codex))
 
@@ -264,7 +294,7 @@ def build_edges(nodes: list[dict]) -> list[dict]:
 def first_task_from_logs(db: Session, logs: list[dict]) -> TaskCenterTask | None:
     for log in logs:
         if log.get("task_id"):
-            return db.get(TaskCenterTask, log["task_id"])
+            return owned_task_or_none(db, task_id=log["task_id"])
     return None
 
 
@@ -305,7 +335,7 @@ def employee_payload(employee: AiEmployee | None) -> dict:
 def orchestrator_source_for_task(db: Session, task: TaskCenterTask | None) -> dict:
     if not task:
         return {}
-    link = db.query(OrchestratorTaskLink).filter(OrchestratorTaskLink.task_id == task.id).order_by(OrchestratorTaskLink.id.desc()).first()
+    link = owned_task_rows_query(db, OrchestratorTaskLink, OrchestratorTaskLink.task_id).filter(OrchestratorTaskLink.task_id == task.id).order_by(OrchestratorTaskLink.id.desc()).first()
     if not link:
         return {}
     analysis = db.get(OrchestratorAnalysisRecord, link.analysis_record_id)
@@ -328,13 +358,13 @@ def orchestrator_source_for_task(db: Session, task: TaskCenterTask | None) -> di
 def reviews_for_task(db: Session, task: TaskCenterTask | None) -> list[TaskCenterReview]:
     if not task:
         return []
-    return db.query(TaskCenterReview).filter(TaskCenterReview.task_id == task.id, TaskCenterReview.review_type != "audit").order_by(TaskCenterReview.id.desc()).all()
+    return owned_task_rows_query(db, TaskCenterReview, TaskCenterReview.task_id).filter(TaskCenterReview.task_id == task.id, TaskCenterReview.review_type != "audit").order_by(TaskCenterReview.id.desc()).all()
 
 
 def audits_for_task(db: Session, task: TaskCenterTask | None) -> list[TaskCenterReview]:
     if not task:
         return []
-    return db.query(TaskCenterReview).filter(TaskCenterReview.task_id == task.id, TaskCenterReview.review_type == "audit").order_by(TaskCenterReview.id.desc()).all()
+    return owned_task_rows_query(db, TaskCenterReview, TaskCenterReview.task_id).filter(TaskCenterReview.task_id == task.id, TaskCenterReview.review_type == "audit").order_by(TaskCenterReview.id.desc()).all()
 
 
 def deploys_for_task(db: Session, task: TaskCenterTask | None) -> list[DeployRecord]:

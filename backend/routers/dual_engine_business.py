@@ -10,10 +10,11 @@ from sqlalchemy.orm import Session
 from ..ai_employees import DEFAULT_STRATEGY_EMPLOYEE
 from ..core.orchestrator import handle_event
 from ..database import get_db
-from ..models import TaskCenterResult, TaskCenterTask
+from ..models import TaskCenterResult, TaskCenterTask, User
 from ..queue_worker import process_next_event
 from ..task_queue import ORCHESTRATOR_STATUS_PREFIX
 from .ai_execution import require_automation_read, require_automation_user
+from ..task_center_ownership import bind_task_ownership, owned_results_query
 
 
 router = APIRouter()
@@ -38,7 +39,7 @@ class MoneyOptimizePayload(BaseModel):
 def ecommerce_orders(payload: BusinessPayload, request: Request, db: Session = Depends(get_db)):
     user = require_automation_user(request, db, "task_center.manage")
     result = dispatch_business_event("ecommerce_order", payload.data)
-    row = write_engine_result(db, user.id, "ecommerce_order", payload.data, result, DEFAULT_STRATEGY_EMPLOYEE)
+    row = write_engine_result(db, user, "ecommerce_order", payload.data, result, DEFAULT_STRATEGY_EMPLOYEE)
     return {"ok": True, "engine": "ecommerce", "task_id": row.task_id, "result": result}
 
 
@@ -46,7 +47,7 @@ def ecommerce_orders(payload: BusinessPayload, request: Request, db: Session = D
 def ecommerce_metrics(payload: BusinessPayload, request: Request, db: Session = Depends(get_db)):
     user = require_automation_user(request, db, "task_center.manage")
     result = dispatch_business_event("ecommerce_metrics", payload.data)
-    row = write_engine_result(db, user.id, "ecommerce_metrics", payload.data, result, "tianshu")
+    row = write_engine_result(db, user, "ecommerce_metrics", payload.data, result, "tianshu")
     return {"ok": True, "engine": "ecommerce", "task_id": row.task_id, "result": result}
 
 
@@ -54,7 +55,7 @@ def ecommerce_metrics(payload: BusinessPayload, request: Request, db: Session = 
 def ecommerce_decision(payload: BusinessPayload, request: Request, db: Session = Depends(get_db)):
     user = require_automation_user(request, db, "task_center.manage")
     result = dispatch_business_event("dual_engine_decision", payload.data)
-    row = write_engine_result(db, user.id, "dual_engine_decision", payload.data, result, DEFAULT_STRATEGY_EMPLOYEE)
+    row = write_engine_result(db, user, "dual_engine_decision", payload.data, result, DEFAULT_STRATEGY_EMPLOYEE)
     return {"ok": True, "engine": "dual", "task_id": row.task_id, "result": result}
 
 
@@ -62,7 +63,7 @@ def ecommerce_decision(payload: BusinessPayload, request: Request, db: Session =
 def generate_video(payload: BusinessPayload, request: Request, db: Session = Depends(get_db)):
     user = require_automation_user(request, db, "task_center.manage")
     result = dispatch_business_event("content_video", payload.data)
-    row = write_engine_result(db, user.id, "content_video", payload.data, result, "tianbo")
+    row = write_engine_result(db, user, "content_video", payload.data, result, "tianbo")
     return {"ok": True, "engine": "content", "task_id": row.task_id, "result": result}
 
 
@@ -70,7 +71,7 @@ def generate_video(payload: BusinessPayload, request: Request, db: Session = Dep
 def generate_xiaohongshu(payload: BusinessPayload, request: Request, db: Session = Depends(get_db)):
     user = require_automation_user(request, db, "task_center.manage")
     result = dispatch_business_event("content_xiaohongshu", payload.data)
-    row = write_engine_result(db, user.id, "content_xiaohongshu", payload.data, result, "tianyu")
+    row = write_engine_result(db, user, "content_xiaohongshu", payload.data, result, "tianyu")
     return {"ok": True, "engine": "content", "task_id": row.task_id, "result": result}
 
 
@@ -78,7 +79,7 @@ def generate_xiaohongshu(payload: BusinessPayload, request: Request, db: Session
 def analyze_content_trend(payload: BusinessPayload, request: Request, db: Session = Depends(get_db)):
     user = require_automation_user(request, db, "task_center.manage")
     result = dispatch_business_event("content_trend", payload.data)
-    row = write_engine_result(db, user.id, "content_trend", payload.data, result, "tianshu")
+    row = write_engine_result(db, user, "content_trend", payload.data, result, "tianshu")
     return {"ok": True, "engine": "content", "task_id": row.task_id, "result": result}
 
 
@@ -86,7 +87,7 @@ def analyze_content_trend(payload: BusinessPayload, request: Request, db: Sessio
 def decision_center(payload: BusinessPayload, request: Request, db: Session = Depends(get_db)):
     user = require_automation_user(request, db, "task_center.manage")
     result = dispatch_business_event("decision_center", payload.data)
-    row = write_engine_result(db, user.id, "decision_center", payload.data, result, result["assigned_to"])
+    row = write_engine_result(db, user, "decision_center", payload.data, result, result["assigned_to"])
     return {"ok": True, "engine": result["engine"], "task_id": row.task_id, "result": result}
 
 
@@ -94,8 +95,7 @@ def decision_center(payload: BusinessPayload, request: Request, db: Session = De
 def data_lake(request: Request, db: Session = Depends(get_db)):
     require_automation_read(request, db)
     rows = (
-        db.query(TaskCenterResult)
-        .join(TaskCenterTask, TaskCenterResult.task_id == TaskCenterTask.id)
+        owned_results_query(db)
         .filter(TaskCenterTask.source == SOURCE)
         .order_by(TaskCenterResult.id.desc())
         .all()
@@ -114,7 +114,7 @@ def start_money_loop(payload: MoneyLoopStartPayload, request: Request, db: Sessi
     user = require_automation_user(request, db, "task_center.manage")
     loop_status = dispatch_business_event("money_loop_start", {"seed": payload.seed, "cycles": payload.cycles})
     rows = [
-        write_engine_result(db, user.id, "money_loop_cycle", payload.seed, cycle, "tiantong")
+        write_engine_result(db, user, "money_loop_cycle", payload.seed, cycle, "tiantong")
         for cycle in loop_status.get("results", [])
     ]
     return {
@@ -140,7 +140,7 @@ def money_loop_status(request: Request, db: Session = Depends(get_db)):
 def optimize_money_loop(payload: MoneyOptimizePayload, request: Request, db: Session = Depends(get_db)):
     user = require_automation_user(request, db, "task_center.manage")
     result = dispatch_business_event("money_optimize", {"feedback": payload.feedback})
-    row = write_engine_result(db, user.id, "money_loop_optimization", payload.feedback, result, "tiantong")
+    row = write_engine_result(db, user, "money_loop_optimization", payload.feedback, result, "tiantong")
     return {"ok": True, "task_id": row.task_id, "result": result}
 
 
@@ -172,7 +172,7 @@ def read_queued_result(event_id: str) -> dict:
 
 def write_engine_result(
     db: Session,
-    user_id: int,
+    user: User,
     event_type: str,
     payload: dict,
     result: dict,
@@ -193,9 +193,10 @@ def write_engine_result(
         assigned_ai_employee_code=assigned_to,
         assigned_ai_employee_name=assigned_to,
         split_plan=json.dumps(metadata, ensure_ascii=False),
-        created_by_id=user_id,
-        updated_by_id=user_id,
+        created_by_id=user.id,
+        updated_by_id=user.id,
     )
+    bind_task_ownership(db, task, user=user)
     db.add(task)
     db.flush()
     row = TaskCenterResult(
@@ -212,7 +213,7 @@ def write_engine_result(
             ensure_ascii=False,
         ),
         attachments_json=json.dumps([], ensure_ascii=False),
-        submitted_by_id=user_id,
+        submitted_by_id=user.id,
     )
     db.add(row)
     db.commit()

@@ -20,6 +20,7 @@ def test_index_html_calls_daily_summary_api():
 
 def test_daily_operations_frontend_does_not_add_business_write_calls():
     html = INDEX_HTML.read_text(encoding="utf-8")
+    html += Path("frontend/rbac-navigation.js").read_text(encoding="utf-8")
     normalized = html.replace("method:'POST'", "method: 'POST'")
     assert "method: 'PATCH'" not in normalized
     assert 'method:"PATCH"' not in normalized

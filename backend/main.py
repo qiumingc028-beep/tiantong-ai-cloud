@@ -3,20 +3,30 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .config import get_settings, require_service_role
+
+require_service_role("backend")
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 
 from .core.orchestrator import handle_event as orchestrator_handle_event
-from .config import get_settings
 from .database import SessionLocal, ensure_tables, engine, get_redis
 from .logging_config import configure_json_logging
 from .archive_sync import router as archive_sync_router
 from .command_center import controller as command_center
+from .agent_runtime import models as agent_runtime_models  # noqa: F401
+from .agent_runtime.executors.computer.actions import models as computer_action_models  # noqa: F401
+from .alpha_workflow import models as alpha_workflow_models  # noqa: F401
 from .routers import auto_dispatch
 from .brain_execution import router as brain_execution_router
-from .routers import account_center, ai_capabilities, ai_employee_ecosystem, ai_employee_growth, ai_employee_growth_system, ai_employee_health, ai_employee_skills, ai_employees, ai_execution, ai_workforce, approval_center, brain_tool_router, business_loop, ceo_dashboard, deploy_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_evolution, employee_execution, employee_workspace, enterprise_brain_console, execution_engine, jd_collection, jd_integrations, knowledge_center, metrics, model_routing, orchestrator, orchestrator_hotfix, orchestrator_task_links, release_center, reviews, skill_plugin_center, skill_plugin_research, sop_skill_center, stores, task_center, tiancang, tool_center, tool_permissions, tool_router, users
+from .routers import account_center, agent_runtime, ai_capabilities, ai_employee_ecosystem, ai_employee_growth, ai_employee_growth_system, ai_employee_health, ai_employee_skills, ai_employees, ai_execution, ai_product_assets, ai_workforce, approval_center, brain_tool_router, business_loop, ceo_dashboard, computer_executor_v2, deploy_center, device_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_evolution, employee_execution, employee_workspace, enterprise_brain_console, execution_engine, jd_collection, jd_integrations, knowledge_center, knowledge_center_v2, metrics, model_routing, observability, orchestrator, orchestrator_hotfix, orchestrator_task_links, release_center, research_runtime, reviews, skill_plugin_center, skill_plugin_research, skills_engine_v2, sop_skill_center, stores, task_center, tiancang, tool_center, tool_permissions, tool_router, users
+from .routers import alpha_workflow, computer_workflows
+from .skills_engine import models as skills_engine_models  # noqa: F401
+from .device_center import models as device_center_models  # noqa: F401
+from .observability import models as observability_models  # noqa: F401
 from .version import APPLICATION_VERSION
 from .seed import seed_defaults
 
@@ -31,7 +41,12 @@ HTML_PAGES = {
     "ai-assets.html", "workflows.html", "ai-employees.html", "settings.html",
     "account-center.html", "template-center.html", "brands.html", "store-groups.html",
     "knowledge-center.html", "tiancang.html", "task-center.html", "orchestrator.html", "auto-dispatch-center.html", "deploy-center.html",
-    "ai-execution.html", "ai-employee-detail.html", "ai-employee-capability.html", "ai-employee-dashboard.html", "ai-employee-growth-system.html", "ai-employee-health.html", "ai-workforce.html", "ai-workforce-center.html", "enterprise-brain-console.html", "skill-center.html", "skill-detail.html", "release-center.html", "tool-center.html", "tool-router.html", "brain-center.html", "brain-orchestrator.html",
+    "ai-execution.html", "ai-employee-detail.html", "ai-employee-capability.html", "ai-employee-dashboard.html", "ai-employee-growth-system.html", "ai-employee-health.html", "ai-workforce.html", "ai-workforce-center.html", "ai-workspace.html", "ecommerce-dashboard.html", "enterprise-brain-console.html", "skill-center.html", "skill-detail.html", "release-center.html", "tool-center.html", "tool-router.html", "brain-center.html", "brain-orchestrator.html",
+    "agent-runtime.html", "capability-center.html", "execution-records.html", "research-records.html", "browser-readonly-test.html", "knowledge-asset-center.html", "knowledge-asset-detail.html",
+    "computer-execution-center.html", "computer-execution-detail.html", "computer-action-approval.html", "computer-action-test.html", "device-center.html", "desktop-observer.html",
+    "computer-workflow-center.html", "computer-workflow-detail.html",
+    "alpha-workflow.html",
+    "security-ops-center.html", "device-monitoring.html", "execution-quality.html", "security-incidents.html",
 }
 DASHBOARD_HTML_PAGES = {
     "overview.html",
@@ -81,12 +96,19 @@ def startup():
     db = SessionLocal()
     try:
         seed_defaults(db)
+        from .alpha_workflow.registry import ensure_default_scenarios
+        from .observability.service import ensure_default_alert_rules, ensure_default_circuit_breakers
+
+        ensure_default_scenarios(db)
+        ensure_default_alert_rules(db)
+        ensure_default_circuit_breakers(db)
     finally:
         db.close()
 
 
 app.include_router(users.router)
 app.include_router(stores.router)
+app.include_router(ai_product_assets.router)
 app.include_router(account_center.router)
 app.include_router(jd_integrations.router)
 app.include_router(jd_collection.router)
@@ -115,6 +137,24 @@ app.include_router(tool_permissions.router, prefix="/api/tool-permissions")
 app.include_router(sop_skill_center.router, prefix="/api/sop-skill-center")
 app.include_router(skill_plugin_center.router, prefix="/api/skill-plugin-center")
 app.include_router(skill_plugin_research.router, prefix="/api/skill-plugin-research")
+app.include_router(skills_engine_v2.router)
+app.include_router(skills_engine_v2.health_router)
+app.include_router(computer_executor_v2.router)
+app.include_router(computer_executor_v2.health_router)
+app.include_router(computer_workflows.router)
+app.include_router(computer_workflows.health_router)
+app.include_router(device_center.router)
+app.include_router(device_center.observation_router)
+app.include_router(device_center.health_router)
+app.include_router(alpha_workflow.router)
+app.include_router(observability.router)
+app.include_router(observability.security_router)
+app.include_router(observability.health_router)
+app.include_router(observability.replay_router)
+app.include_router(agent_runtime.router)
+app.include_router(research_runtime.router)
+app.include_router(knowledge_center_v2.router)
+app.include_router(knowledge_center_v2.HEALTH_ROUTER)
 app.include_router(ai_execution.router)
 app.include_router(execution_engine.router)
 app.include_router(reviews.router)
@@ -235,6 +275,11 @@ def frontend_file(filename: str):
 @app.get("/", include_in_schema=False)
 def index_page():
     return frontend_file("index.html")
+
+
+@app.get("/rbac-navigation.js", include_in_schema=False)
+def rbac_navigation_script():
+    return frontend_file("rbac-navigation.js")
 
 
 @app.get("/dashboard/{page_name}.html", include_in_schema=False)

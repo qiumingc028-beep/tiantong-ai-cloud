@@ -12,6 +12,7 @@ from ..models import TaskCenterTask, User
 from ..review_analyzer import generate_task_review, review_to_dict
 from ..review_models import EmployeeScore, TaskReview
 from ..score_calculator import calculate_employee_score, recalculate_all_employee_scores, score_to_dict
+from ..task_center_ownership import bind_session_task_ownership, owned_task_or_none
 
 
 router = APIRouter(prefix="/api/reviews")
@@ -48,7 +49,7 @@ def list_employee_scores(request: Request, db: Session = Depends(get_db)):
 @router.post("/generate")
 def generate_review(payload: GenerateReviewPayload, request: Request, db: Session = Depends(get_db)):
     user = require_review_user(request, db)
-    task = db.get(TaskCenterTask, payload.task_id)
+    task = owned_task_or_none(db, task_id=payload.task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
     if not can_view_all_reviews(user) and task.assigned_ai_employee_code != user.username:
@@ -94,6 +95,7 @@ def require_review_user(request: Request, db: Session) -> User:
     if role == "viewer":
         raise HTTPException(status_code=403, detail="无复盘访问权限")
     if role in PRIVILEGED_ROLES or role in EMPLOYEE_ROLES:
+        bind_session_task_ownership(db, user=user)
         return user
     raise HTTPException(status_code=403, detail="无复盘访问权限")
 

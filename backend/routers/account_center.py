@@ -18,7 +18,9 @@ from ..models import (
     Store,
     StoreAccountNote,
     StoreGroup,
+    UserStoreMembership,
 )
+from ..store_authorization import authorized_stores, require_authorized_store
 
 
 router = APIRouter()
@@ -63,7 +65,7 @@ def list_accounts(
     status: str | None = None,
     db: Session = Depends(get_db),
 ):
-    require_account_user(request, db)
+    user = require_account_user(request, db)
     query = (
         db.query(StoreAccountNote)
         .options(
@@ -73,6 +75,7 @@ def list_accounts(
         )
         .filter(StoreAccountNote.active.is_(True))
         .join(Store, Store.id == StoreAccountNote.store_id)
+        .filter(Store.id.in_(authorized_stores(db, user, write=False).with_entities(Store.id)))
         .outerjoin(Brand, Brand.id == StoreAccountNote.brand_id)
         .order_by(Store.store_code.asc())
     )
@@ -99,19 +102,27 @@ def list_accounts(
 
 @router.post("/api/accounts")
 async def create_account(request: Request, db: Session = Depends(get_db)):
-    require_account_user(request, db)
+    user = require_account_user(request, db)
     data = await request.json()
     reject_forbidden_sensitive_payload(data, allow_plain_password=True)
     store_code = clean(data.get("store_code") or data.get("店铺编号"))
     store_name = clean(data.get("store_name") or data.get("店铺名称"))
     if not store_code or not store_name:
         raise HTTPException(status_code=400, detail="店铺编号和店铺名称不能为空")
-    if db.query(Store).filter(Store.store_code == store_code).first():
+    if db.query(Store).filter(Store.tenant_id == user.tenant_id, Store.store_code == store_code).first():
         raise HTTPException(status_code=400, detail="店铺编号已存在")
 
-    store = Store(platform="jd", store_code=store_code, store_name=store_name, active=True)
+    store = Store(
+        platform="jd",
+        store_code=store_code,
+        store_name=store_name,
+        tenant_id=user.tenant_id,
+        company_id=user.company_id,
+        active=True,
+    )
     db.add(store)
     db.flush()
+    db.add(UserStoreMembership(user_id=user.id, store_id=store.id, can_read=True, can_write=True, active=True))
     upsert_account_meta(db, store, data)
     db.commit()
     return {"ok": True, "id": store.id}
@@ -119,17 +130,19 @@ async def create_account(request: Request, db: Session = Depends(get_db)):
 
 @router.put("/api/accounts/{account_id}")
 async def update_account(account_id: int, request: Request, db: Session = Depends(get_db)):
-    require_account_user(request, db)
+    user = require_account_user(request, db)
     data = await request.json()
     reject_forbidden_sensitive_payload(data, allow_plain_password=True)
-    store = db.get(Store, account_id)
-    if not store:
-        raise HTTPException(status_code=404, detail="账号资料不存在")
+    store = require_authorized_store(db, user, store_id=account_id, write=True, active_only=False)
 
     store_code = clean(data.get("store_code") or data.get("店铺编号"))
     store_name = clean(data.get("store_name") or data.get("店铺名称"))
     if store_code and store_code != store.store_code:
-        exists = db.query(Store).filter(Store.store_code == store_code, Store.id != store.id).first()
+        exists = db.query(Store).filter(
+            Store.tenant_id == user.tenant_id,
+            Store.store_code == store_code,
+            Store.id != store.id,
+        ).first()
         if exists:
             raise HTTPException(status_code=400, detail="店铺编号已存在")
         store.store_code = store_code
@@ -142,8 +155,9 @@ async def update_account(account_id: int, request: Request, db: Session = Depend
 
 @router.delete("/api/accounts/{account_id}")
 def delete_account(account_id: int, request: Request, db: Session = Depends(get_db)):
-    require_account_user(request, db)
-    note = db.query(StoreAccountNote).filter(StoreAccountNote.store_id == account_id).first()
+    user = require_account_user(request, db)
+    store = require_authorized_store(db, user, store_id=account_id, write=True, active_only=False)
+    note = db.query(StoreAccountNote).filter(StoreAccountNote.store_id == store.id).first()
     if not note:
         raise HTTPException(status_code=404, detail="账号资料不存在")
     note.active = False
@@ -154,7 +168,7 @@ def delete_account(account_id: int, request: Request, db: Session = Depends(get_
 
 @router.post("/api/accounts/import")
 async def import_accounts(request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    require_account_user(request, db)
+    user = require_account_user(request, db)
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="导入文件为空")
@@ -176,11 +190,21 @@ async def import_accounts(request: Request, file: UploadFile = File(...), db: Se
         store_name = clean(data.get("店铺名称"))
         if not store_code or not store_name:
             continue
-        store = db.query(Store).filter(Store.store_code == store_code).first()
+        store = authorized_stores(db, user, write=True, active_only=False).filter(Store.store_code == store_code).one_or_none()
         if not store:
-            store = Store(platform="jd", store_code=store_code, store_name=store_name, active=True)
+            if db.query(Store).filter(Store.tenant_id == user.tenant_id, Store.store_code == store_code).first():
+                raise HTTPException(status_code=403, detail="没有店铺访问权限")
+            store = Store(
+                platform="jd",
+                store_code=store_code,
+                store_name=store_name,
+                tenant_id=user.tenant_id,
+                company_id=user.company_id,
+                active=True,
+            )
             db.add(store)
             db.flush()
+            db.add(UserStoreMembership(user_id=user.id, store_id=store.id, can_read=True, can_write=True, active=True))
         else:
             store.store_name = store_name
         upsert_account_meta(db, store, data)

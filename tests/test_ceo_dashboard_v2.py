@@ -1,5 +1,9 @@
 from backend.brain_execution.models import BrainExecutionRun, BrainWorkerStatus
 from backend.models import AiEmployee, TaskCenterTask
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 V2_ENDPOINTS = [
@@ -57,7 +61,7 @@ def test_ceo_dashboard_v2_system_health_shape(client, owner_headers):
 
 
 def test_ceo_dashboard_v2_task_summary_uses_task_center_data(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         for status in [
             "created",
@@ -71,6 +75,7 @@ def test_ceo_dashboard_v2_task_summary_uses_task_center_data(client, owner_heade
             "summarized",
         ]:
             db.add(TaskCenterTask(title=f"{status} task", status=status))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -101,10 +106,11 @@ def test_ceo_dashboard_v2_task_summary_uses_task_center_data(client, owner_heade
 
 
 def test_ceo_dashboard_v2_employee_status_uses_ai_employee_data(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(TaskCenterTask(title="running task", status="running", assigned_ai_employee_code="tiantong"))
         db.query(AiEmployee).filter(AiEmployee.employee_code == "tianwang").one().status = "inactive"
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -125,13 +131,14 @@ def test_ceo_dashboard_v2_employee_status_uses_ai_employee_data(client, owner_he
 
 
 def test_ceo_dashboard_v2_execution_status_uses_execution_engine_data(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(BrainExecutionRun(goal="running execution", status="RUNNING", risk_level="low"))
         db.add(BrainExecutionRun(goal="queued execution", status="QUEUED", risk_level="low"))
         db.add(BrainExecutionRun(goal="success execution", status="SUCCESS", risk_level="low"))
         db.add(BrainExecutionRun(goal="failed execution", status="FAILED", risk_level="high", last_error="blocked by safety"))
         db.add(BrainWorkerStatus(worker_id="brain-worker-1", status="running", current_task="dry-run task"))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -198,7 +205,7 @@ def test_ceo_dashboard_v2_overview_aggregates_core_sections(client, owner_header
 
 
 def test_ceo_dashboard_v2_is_readonly(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         before_tasks = db.query(TaskCenterTask).count()
         before_employees = db.query(AiEmployee).count()
@@ -211,7 +218,7 @@ def test_ceo_dashboard_v2_is_readonly(client, owner_headers, test_db):
 
         assert response.status_code == 200
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         assert db.query(TaskCenterTask).count() == before_tasks
         assert db.query(AiEmployee).count() == before_employees

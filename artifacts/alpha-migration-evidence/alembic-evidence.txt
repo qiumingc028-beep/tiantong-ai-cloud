@@ -1,0 +1,47 @@
+V2 Alpha Sprint 11.1 PostgreSQL Migration Evidence
+
+evidence_format_version=2
+validated_code_commit=8d9b5f2890545f1f08d05b9b1618f71ff82d6621
+final_revision=0042_v2_alpha_workflow_unique_constraints
+database_engine=PostgreSQL
+postgresql_version=16.14 (Debian 16.14-1.pgdg13+1)
+path_a_result=PASS
+path_b_result=PASS
+single_head_result=PASS
+alembic_check_result=PASS
+repeat_upgrade_result=NO_OP
+downgrade_reupgrade_result=PASS
+constraint_query_result=PASS
+secret_scan_result=PASS
+real_command_transcript_result=PASS
+full_catalog_sql_result=PASS
+
+Path A 使用新建独立数据库 alpha_authentic_v2_a，从 V1.0.1 冻结 Commit
+483ebf560e1a4cfadecee4912a3ff6bca99516f6 的
+0027_v1_schema_alignment 升级到 0042_v2_alpha_workflow_unique_constraints。
+
+Path B 使用另一新建独立数据库 alpha_authentic_v2_b，从冻结可运行 Commit
+85586868bad3dd5d0fecba5f840383feccdc1c78 的
+0041_v2_alpha_migration_history_repair 升级到 0042_v2_alpha_workflow_unique_constraints。
+
+KNOWN_BROKEN_HISTORICAL_BASELINE=2ca1a2579569324ce3ca82f68332fb7f96be004d
+该历史基线只作为已知不可运行历史事实记录，不作为通过路径。
+
+实库 Catalog 结论：
+
+- trace_id 唯一约束存在。
+- workflow_id、root_span_id、orchestrator_run_id、research_report_id、skill_invocation_id 五项 Required 唯一约束存在。
+- knowledge_asset_id 只有 ix_alpha_workflow_runs_knowledge_asset_id 普通非唯一索引。
+- 两个 Run 复用同一 knowledge_asset_id 成功。
+- 五项 nullable 唯一字段的多行 NULL 写入成功。
+- alpha_workflow_events_no_update 与 alpha_workflow_events_no_delete 触发器存在。
+- 两条路径均完成 0042→0041→0042，并保留验证数据。
+
+真实命令和原始输出见：
+
+- artifacts/alpha-migration-evidence/path_a_current.log
+- artifacts/alpha-migration-evidence/path_b_current.log
+
+两份日志记录了实际执行的 `pwd`、`git rev-parse HEAD`、`python --version`、
+`python -m alembic ...` 与 `docker exec ... psql ...` 命令。Catalog 调用后紧随
+完整 SQL 文件正文及 PostgreSQL stdout/stderr，不使用摘要标签冒充命令。

@@ -18,6 +18,7 @@ from ..models import (
     TaskCenterTask,
 )
 from ..orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
+from ..task_center_ownership import bind_session_task_ownership, owned_results_query, owned_task_rows_query, owned_tasks_query
 
 
 router = APIRouter()
@@ -125,6 +126,7 @@ def require_activity_log_user(request: Request, db: Session):
     user = current_user(request, db)
     if normalize_role(user.role) not in PRIVILEGED_ROLES:
         raise HTTPException(status_code=403, detail="no employee activity log permission")
+    bind_session_task_ownership(db, user=user)
     return user
 
 
@@ -136,7 +138,7 @@ def build_employee_activity_log_overview(db: Session, filters: dict, limit: int)
         .all()
     )
     employee_map = {row.employee_code: row for row in employees}
-    tasks = db.query(TaskCenterTask).order_by(TaskCenterTask.id.desc()).limit(500).all()
+    tasks = owned_tasks_query(db).order_by(TaskCenterTask.id.desc()).limit(500).all()
     task_map = {row.id: row for row in tasks}
 
     logs: list[dict] = []
@@ -236,7 +238,7 @@ def task_logs(tasks: list[TaskCenterTask], employee_map: dict[str, AiEmployee]) 
 
 
 def task_audit_logs(db: Session, task_map: dict[int, TaskCenterTask], employee_map: dict[str, AiEmployee]) -> list[dict]:
-    rows = db.query(TaskCenterAuditLog).order_by(TaskCenterAuditLog.id.desc()).limit(500).all()
+    rows = owned_task_rows_query(db, TaskCenterAuditLog, TaskCenterAuditLog.task_id).order_by(TaskCenterAuditLog.id.desc()).limit(500).all()
     logs = []
     for row in rows:
         task = task_map.get(row.task_id)
@@ -263,7 +265,7 @@ def task_audit_logs(db: Session, task_map: dict[int, TaskCenterTask], employee_m
 
 
 def task_result_logs(db: Session, task_map: dict[int, TaskCenterTask], employee_map: dict[str, AiEmployee]) -> list[dict]:
-    rows = db.query(TaskCenterResult).order_by(TaskCenterResult.id.desc()).limit(500).all()
+    rows = owned_results_query(db).order_by(TaskCenterResult.id.desc()).limit(500).all()
     logs = []
     for row in rows:
         task = task_map.get(row.task_id)
@@ -286,7 +288,7 @@ def task_result_logs(db: Session, task_map: dict[int, TaskCenterTask], employee_
 
 
 def task_review_logs(db: Session, task_map: dict[int, TaskCenterTask], employee_map: dict[str, AiEmployee]) -> list[dict]:
-    rows = db.query(TaskCenterReview).order_by(TaskCenterReview.id.desc()).limit(500).all()
+    rows = owned_task_rows_query(db, TaskCenterReview, TaskCenterReview.task_id).order_by(TaskCenterReview.id.desc()).limit(500).all()
     logs = []
     for row in rows:
         task = task_map.get(row.task_id)
@@ -370,7 +372,7 @@ def orchestrator_logs(db: Session, task_map: dict[int, TaskCenterTask], employee
                     next_suggestion="等待老板确认是否创建任务",
                 )
             )
-    links = db.query(OrchestratorTaskLink).order_by(OrchestratorTaskLink.id.desc()).limit(300).all()
+    links = owned_task_rows_query(db, OrchestratorTaskLink, OrchestratorTaskLink.task_id).order_by(OrchestratorTaskLink.id.desc()).limit(300).all()
     for link in links:
         task = task_map.get(link.task_id)
         logs.append(

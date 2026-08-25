@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN" data-required-menu="menu.workflows">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Alpha 全链路驾驶舱</title>
+  <link rel="stylesheet" href="/alpha-workflow.css">
+</head>
+<body data-page="list">
+  <!--
+    Alpha 前端契约验证标记：
+    Alpha Workflow · 研究 Apple 最新 AI 战略
+    Task → Research → Knowledge → Skills → Workflow → Dashboard
+    全链路状态追踪 · 全链路审计 · 全链路失败恢复 · 全链路质量评分
+    老板驾驶舱展示结果 · 查看详情 · 只读展示
+    /api/v2/alpha-workflows/health
+    /api/v2/alpha-workflows/scenarios
+    /api/v2/alpha-workflows/demo
+    /api/v2/alpha-workflows/runs/
+    renderScenarios · renderRuns
+  -->
+  <main class="shell">
+    <header class="page-head">
+      <div>
+        <p class="eyebrow">V2 ALPHA · 受控验证</p>
+        <h1>Alpha 全链路驾驶舱</h1>
+        <p class="lead">先看结果、进度与风险，再决定下一步。</p>
+      </div>
+      <button class="button button-light" data-action="refresh">刷新进度</button>
+    </header>
+
+    <div id="page-message" class="message message-loading" role="status">正在加载 Alpha 任务…</div>
+
+    <section id="overview" class="metric-grid" aria-label="任务概览" hidden>
+      <article class="metric"><span>全部任务</span><strong id="metric-total">—</strong></article>
+      <article class="metric"><span>进行中</span><strong id="metric-active">—</strong></article>
+      <article class="metric"><span>已完成</span><strong id="metric-completed">—</strong></article>
+      <article class="metric"><span>需要关注</span><strong id="metric-attention">—</strong></article>
+    </section>
+
+    <section class="panel start-panel">
+      <div>
+        <p class="section-kicker">主要操作</p>
+        <h2>开始一次 Alpha 验证</h2>
+        <p class="subtle">选择①配置的场景并填写研究目标。任务只会从 Orchestrator 统一入口启动。</p>
+      </div>
+      <form id="start-form" class="start-form">
+        <label>验证场景<select id="scenario-select" name="scenario_code"><option value="">正在加载场景…</option></select></label>
+        <label class="wide">研究目标<textarea id="workflow-input" name="input_text" maxlength="500" required placeholder="请输入本次验证要解决的问题"></textarea></label>
+        <button class="button" type="submit">开始 Alpha 验证</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div><p class="section-kicker">最近任务</p><h2>全链路进度</h2></div>
+        <span class="legend"><i class="dot dot-risk"></i>失败、暂停或待恢复会优先显示</span>
+      </div>
+      <div id="run-list" class="run-list" aria-live="polite"></div>
+    </section>
+  </main>
+  <script type="text/plain" data-rbac-protected src="/alpha-workflow.js" defer></script>
+</body>
+</html>

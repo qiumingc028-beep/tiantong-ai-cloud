@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 
 from backend.auth import verify_password
-from backend.models import User
+from backend.models import Company, Store, Tenant, User, UserStoreMembership
 from backend.seed import seed_defaults
 from scripts.admin_login_recovery import ensure_core_admin_accounts, list_admin_accounts, reset_admin_password
 
@@ -62,6 +62,45 @@ def test_seed_defaults_creates_login_ready_boss_account(client, test_db):
     assert data["user"]["role_code"] == "owner"
     assert "password" not in data
     assert "password_hash" not in str(data)
+
+
+def test_seed_defaults_does_not_restore_revoked_store_membership(test_db):
+    with test_db() as db:
+        db.query(User).filter(User.username == "boss").delete()
+        db.commit()
+        seed_defaults(db)
+        boss = db.query(User).filter(User.username == "boss").one()
+        tenant = db.query(Tenant).filter(Tenant.tenant_code == "default").one()
+        company = db.query(Company).filter(
+            Company.tenant_id == tenant.id,
+            Company.company_code == "default",
+        ).one()
+        store = Store(
+            platform="jd",
+            store_code="DEFAULT-REVOCATION",
+            store_name="Default Revocation",
+            tenant_id=tenant.id,
+            company_id=company.id,
+            active=True,
+        )
+        db.add(store)
+        db.flush()
+        membership = UserStoreMembership(
+            user_id=boss.id,
+            store_id=store.id,
+            can_read=False,
+            can_write=False,
+            active=False,
+        )
+        db.add(membership)
+        db.commit()
+
+        seed_defaults(db)
+
+        db.refresh(membership)
+        assert membership.active is False
+        assert membership.can_read is False
+        assert membership.can_write is False
 
 
 def test_login_rejects_wrong_password(client):

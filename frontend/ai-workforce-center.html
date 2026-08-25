@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.ai_employees">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AI Workforce Center MVP - 天统AI云中台</title>
@@ -69,18 +69,18 @@
           </div>
           <div class="toolbar" aria-label="AI员工列表优化">
             <div>
-              <input id="employeeSearch" type="search" placeholder="搜索AI员工名称" oninput="renderEmployees()">
-              <select id="departmentFilter" onchange="renderEmployees()">
+              <input id="employeeSearch" type="search" placeholder="搜索AI员工名称" data-rbac-action="ai-workforce-center-001">
+              <select id="departmentFilter" data-rbac-action="ai-workforce-center-002">
                 <option value="">全部部门</option>
               </select>
-              <select id="statusFilter" onchange="renderEmployees()">
+              <select id="statusFilter" data-rbac-action="ai-workforce-center-003">
                 <option value="">全部状态</option>
                 <option value="working">working</option>
                 <option value="idle">idle</option>
                 <option value="frozen">frozen</option>
                 <option value="offline">offline</option>
               </select>
-              <select id="riskFilter" onchange="renderEmployees()">
+              <select id="riskFilter" data-rbac-action="ai-workforce-center-004">
                 <option value="">全部风险</option>
                 <option value="low">low</option>
                 <option value="medium">medium</option>
@@ -113,7 +113,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 let workforceData={employee_cards:[]};
 let healthData=null;
 let employeeRows=[];
@@ -315,6 +315,15 @@ function employeeCard(row){
 }
 
 loadPage();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "ai-workforce-center-001":["input",function(event){renderEmployees();}],
+  "ai-workforce-center-002":["change",function(event){renderEmployees();}],
+  "ai-workforce-center-003":["change",function(event){renderEmployees();}],
+  "ai-workforce-center-004":["change",function(event){renderEmployees();}]
+});
 </script>
 </body>
 </html>

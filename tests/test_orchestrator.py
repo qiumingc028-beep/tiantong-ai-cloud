@@ -1,6 +1,8 @@
 import subprocess
 import sys
 
+from tests.test_helpers import latest_alembic_head_line
+
 from backend.brain_orchestrator.models import BrainOrchestratorLog, BrainTaskEdge, BrainTaskGraph, BrainTaskNode
 from backend.models import AiEmployee, TaskCenterTask
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorPromptConfirmation
@@ -407,7 +409,7 @@ def test_orchestrator_migration_is_single_head():
         check=True,
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0027_v1_schema_alignment (head)"]
+    assert heads == [latest_alembic_head_line()]
 
 
 def add_employee(test_db, employee_code: str, employee_name: str, task_type: str, sort_order: int):

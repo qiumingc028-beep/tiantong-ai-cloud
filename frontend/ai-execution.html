@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.ai_employees">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>天统AI Brain Execution Center</title>
@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>天统AI Brain Execution Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>天统AI Brain Execution Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="ai-execution-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>天统AI Brain Execution Center</h1><p>任务规划展示中心、审批中心、执行日志查看中心和 Task Graph 可视化。</p></div>
@@ -27,8 +27,8 @@
             <div class="head"><h2>目标输入区</h2><span class="badge simulation">simulation</span></div>
             <div class="input-row">
               <textarea id="goalText">分析最近30天销售下降原因</textarea>
-              <button onclick="analyzeGoal()">生成分析计划</button>
-              <button class="secondary" onclick="createPlan()">生成 dry-run 计划</button>
+              <button data-rbac-action="ai-execution-002">生成分析计划</button>
+              <button class="secondary" data-rbac-action="ai-execution-003">生成 dry-run 计划</button>
             </div>
             <div id="analysisBox" class="list-item muted">等待 Brain 分析结果。</div>
           </div>
@@ -39,7 +39,7 @@
           <div class="card">
             <div class="head"><h2>Dry-run 执行</h2><span class="muted">模拟执行计划，不触发真实动作</span></div>
             <div id="dryRunBox" class="list-item muted">请先生成执行计划。</div>
-            <div class="row" style="margin-top:10px"><button class="secondary" onclick="startDryRun()">启动 dry-run</button></div>
+            <div class="row" style="margin-top:10px"><button class="secondary" data-rbac-action="ai-execution-004">启动 dry-run</button></div>
           </div>
         </section>
         <aside>
@@ -52,7 +52,7 @@
             <div id="toolBox"></div>
           </div>
           <div class="card">
-            <div class="head"><h2>执行日志</h2><button class="secondary" onclick="loadLogs()">刷新</button></div>
+            <div class="head"><h2>执行日志</h2><button class="secondary" data-rbac-action="ai-execution-005">刷新</button></div>
             <div id="logBox" class="table-wrap"></div>
           </div>
           <div class="card">
@@ -64,7 +64,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['Brain Center','/brain-center.html'],['Brain Orchestrator','/brain-orchestrator.html'],['Brain Execution Center','/ai-execution.html'],['Tool Router','/tool-router.html'],['Tool Center','/tool-center.html'],['AI任务中心','/task-center.html'],['天盾部署中心','/deploy-center.html']];
 const sensitiveWords=['pass'+'word_hash','tok'+'en','sec'+'ret','API '+'Key','Authori'+'zation','Bear'+'er','private_'+'key'];
 let state={analysis:null,plan:null,logs:[]};
@@ -101,13 +101,25 @@ function currentNodes(){if(state.plan&&state.plan.nodes)return state.plan.nodes;
 function currentTools(){return state.plan&&state.plan.tool_calls?state.plan.tool_calls:[]}
 function currentApprovals(){return state.plan&&state.plan.approvals?state.plan.approvals:[]}
 function renderGraph(){const nodes=currentNodes();if(!nodes.length){graphBox.innerHTML='<div class="node pending"><strong>目标</strong><div class="muted">等待生成 Task Graph</div></div>';return}const goal=(state.plan&&state.plan.run&&state.plan.run.goal)||(state.analysis&&state.analysis.goal)||'目标';graphBox.innerHTML=`<div class="node approved"><strong>目标</strong><div>${esc(goal)}</div>${badge('simulation','simulation')}</div>`+nodes.map(node=>`<div class="node ${nodeStatus(node)}"><strong>${esc(node.node_name||node.node_type)}</strong><div class="muted">员工节点：${esc(node.employee_name||node.employee_code)}</div><div class="muted">工具节点：${esc(node.tool_name||text(node.required_tools))}</div><div class="tags">${badge(node.risk_level)}${badge(node.status||nodeStatus(node))}${node.approval_required?badge('审批节点','pending'):badge('只读计划','allowed')}</div></div>`).join('')}
-function renderApprovals(){const run=state.plan&&state.plan.run?state.plan.run:null;const approvals=currentApprovals();if(!run){approvalBox.innerHTML='<div class="state">暂无待审批任务</div>';return}const actions=run.risk_level==='high'?'<div class="muted">高风险只允许记录阻断，不进入真实执行。</div>':'<div class="row"><button onclick="approve(\'approved\')">批准</button><button class="danger" onclick="approve(\'rejected\')">拒绝</button></div>';approvalBox.innerHTML=`<div class="list-item"><div class="tags">${badge(run.risk_level)}${badge(run.status)}</div><p><strong>审批原因：</strong>${run.approval_required?'存在中高风险节点或工具权限检查':'低风险 dry-run，无需审批'}</p>${actions}</div>`+(approvals.length?approvals.map(row=>`<div class="list-item"><strong>${esc(row.decision)}</strong><div class="muted">${esc(row.reason)}</div><div class="tags">${badge(row.boss_confirmed?'boss_confirmed':'boss_pending')}${badge(row.security_audited?'security_audited':'audit_pending')}</div></div>`).join(''):'')}
+function renderApprovals(){const run=state.plan&&state.plan.run?state.plan.run:null;const approvals=currentApprovals();if(!run){approvalBox.innerHTML='<div class="state">暂无待审批任务</div>';return}const actions=run.risk_level==='high'?'<div class="muted">高风险只允许记录阻断，不进入真实执行。</div>':'<div class="row"><button data-rbac-action="ai-execution-006">批准</button><button class="danger" data-rbac-action="ai-execution-007">拒绝</button></div>';approvalBox.innerHTML=`<div class="list-item"><div class="tags">${badge(run.risk_level)}${badge(run.status)}</div><p><strong>审批原因：</strong>${run.approval_required?'存在中高风险节点或工具权限检查':'低风险 dry-run，无需审批'}</p>${actions}</div>`+(approvals.length?approvals.map(row=>`<div class="list-item"><strong>${esc(row.decision)}</strong><div class="muted">${esc(row.reason)}</div><div class="tags">${badge(row.boss_confirmed?'boss_confirmed':'boss_pending')}${badge(row.security_audited?'security_audited':'audit_pending')}</div></div>`).join(''):'')}
 function renderTools(){const rows=currentTools();toolBox.innerHTML=rows.length?rows.map(row=>`<div class="list-item tool"><div><strong>${esc(row.tool_name)}</strong><div class="muted">${esc(row.employee_code)} · ${esc(row.node_id)}</div><div class="muted">${esc(text(row.permission_result))}</div></div><div class="tags">${badge(row.status)}${badge(row.risk_level)}${badge(row.dry_run?'dry-run':'unknown','dry-run')}</div></div>`).join(''):'<div class="state">暂无工具检查记录</div>'}
 function renderDryRun(){const run=state.plan&&state.plan.run?state.plan.run:null;if(!run){dryRunBox.innerHTML='请先生成执行计划。';return}dryRunBox.innerHTML=`<div class="tags">${badge(run.status)}${badge(run.risk_level)}${badge(run.dry_run?'dry-run':'unknown','dry-run')}</div><p>模拟执行计划 ID：${esc(run.id)}</p><p class="muted">不会真实执行 Shell、外部 API、安装 Skill、修改 Prompt 或修改代码。</p>`}
 function renderLogs(){logBox.innerHTML=state.logs.length?`<table><thead><tr><th>时间</th><th>执行</th><th>员工</th><th>状态</th></tr></thead><tbody>${state.logs.map(log=>`<tr><td>${esc(text(log.created_at))}</td><td>${esc(text(log.action))}<div class="mono muted">run ${esc(text(log.run_id))}</div></td><td>${esc(text(log.employee_code))}</td><td>${badge(log.status)}</td></tr>`).join('')}</tbody></table>`:'<div class="state">暂无执行日志</div>'}
 function renderSafety(){safetyBox.innerHTML=['simulation / dry-run','任务规划展示中心','审批中心','执行日志查看中心','禁止 Shell 执行按钮','禁止外部 API 调用按钮','禁止自动安装 Skill','禁止自动修改 Prompt','禁止自动修改代码'].map(item=>`<div class="list-item">${esc(item)}</div>`).join('')}
 function nodeStatus(node){if(node.status==='blocked'||node.risk_level==='high')return 'blocked';if(node.status==='running')return 'running';if(node.status==='completed')return 'completed';return node.approval_required?'pending':'planned'}
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "ai-execution-001":["click",function(event){return TiantongRbac.logout();}],
+  "ai-execution-002":["click",function(event){analyzeGoal();}],
+  "ai-execution-003":["click",function(event){createPlan();}],
+  "ai-execution-004":["click",function(event){startDryRun();}],
+  "ai-execution-005":["click",function(event){loadLogs();}],
+  "ai-execution-006":["click",function(event){approve('approved');}],
+  "ai-execution-007":["click",function(event){approve('rejected');}]
+});
 </script>
 </body>
 </html>

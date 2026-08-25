@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -11,9 +10,16 @@ from sqlalchemy.orm import Session
 
 from ..ai_employees import DEFAULT_STRATEGY_EMPLOYEE, employee_name
 from ..database import get_db
-from ..models import TaskCenterResult, TaskCenterTask
+from ..models import TaskCenterResult, TaskCenterTask, User
 from ..queue import enqueue_task
-from .ai_execution import constant_time_equal, first_system_user, parse_json_value, require_automation_read, require_automation_user
+from ..task_center_ownership import (
+    bind_session_task_ownership,
+    bind_task_ownership,
+    owned_results_query,
+    owned_tasks_query,
+    task_ownership_context,
+)
+from .ai_execution import parse_json_value, require_automation_read, require_automation_user
 
 
 router = APIRouter()
@@ -65,7 +71,7 @@ def ecommerce_order_webhook(
     user = authorize_business_webhook(request, db, x_webhook_secret)
     task = create_business_task(
         db=db,
-        user_id=user.id,
+        user=user,
         event_type="ecommerce_order",
         event_payload=payload.model_dump(),
         auto_optimize=payload.auto_optimize,
@@ -86,7 +92,7 @@ def content_metrics_webhook(
     user = authorize_business_webhook(request, db, x_webhook_secret)
     task = create_business_task(
         db=db,
-        user_id=user.id,
+        user=user,
         event_type="content_metrics",
         event_payload=payload.model_dump(),
         auto_optimize=payload.auto_optimize,
@@ -107,7 +113,7 @@ def file_upload_webhook(
     user = authorize_business_webhook(request, db, x_webhook_secret)
     task = create_business_task(
         db=db,
-        user_id=user.id,
+        user=user,
         event_type="file_upload",
         event_payload=payload.model_dump(),
         auto_optimize=payload.auto_optimize,
@@ -120,9 +126,10 @@ def file_upload_webhook(
 
 @router.get("/api/business-loop/decisions")
 def list_business_decisions(request: Request, db: Session = Depends(get_db)):
-    require_automation_read(request, db)
+    user = require_automation_read(request, db)
+    bind_session_task_ownership(db, user=user)
     tasks = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.source == "sprint18_business_loop")
         .order_by(TaskCenterTask.id.desc())
         .all()
@@ -132,10 +139,10 @@ def list_business_decisions(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/api/business-loop/results")
 def list_business_results(request: Request, db: Session = Depends(get_db)):
-    require_automation_read(request, db)
+    user = require_automation_read(request, db)
+    bind_session_task_ownership(db, user=user)
     rows = (
-        db.query(TaskCenterResult)
-        .join(TaskCenterTask, TaskCenterResult.task_id == TaskCenterTask.id)
+        owned_results_query(db)
         .filter(TaskCenterTask.source == "sprint18_business_loop")
         .order_by(TaskCenterResult.id.desc())
         .all()
@@ -146,7 +153,8 @@ def list_business_results(request: Request, db: Session = Depends(get_db)):
 @router.post("/api/business-loop/results/{result_id}/replay")
 def replay_business_result(result_id: int, payload: ReplayRequest, request: Request, db: Session = Depends(get_db)):
     user = require_automation_user(request, db, "task_center.manage")
-    row = db.get(TaskCenterResult, result_id)
+    bind_session_task_ownership(db, user=user)
+    row = owned_results_query(db).filter(TaskCenterResult.id == result_id).one_or_none()
     if not row or not row.task or row.task.source != "sprint18_business_loop":
         from fastapi import HTTPException
 
@@ -154,7 +162,7 @@ def replay_business_result(result_id: int, payload: ReplayRequest, request: Requ
     previous = parse_json_value(row.result_content)
     task = create_business_task(
         db=db,
-        user_id=user.id,
+        user=user,
         event_type="feedback_replay",
         event_payload={"previous_result": previous, "feedback": payload.feedback},
         auto_optimize=False,
@@ -167,15 +175,12 @@ def replay_business_result(result_id: int, payload: ReplayRequest, request: Requ
 
 
 def authorize_business_webhook(request: Request, db: Session, secret: str | None):
-    expected_secret = os.getenv("WEBHOOK_SECRET", "").strip()
-    if expected_secret and constant_time_equal(secret or "", expected_secret):
-        return first_system_user(db)
     return require_automation_user(request, db, "task_center.manage")
 
 
 def create_business_task(
     db: Session,
-    user_id: int,
+    user: User,
     event_type: str,
     event_payload: dict,
     auto_optimize: bool,
@@ -199,9 +204,10 @@ def create_business_task(
         assigned_ai_employee_code=DEFAULT_STRATEGY_EMPLOYEE,
         assigned_ai_employee_name=employee_name(DEFAULT_STRATEGY_EMPLOYEE),
         split_plan=json.dumps(metadata, ensure_ascii=False),
-        created_by_id=user_id,
-        updated_by_id=user_id,
+        created_by_id=user.id,
+        updated_by_id=user.id,
     )
+    bind_task_ownership(db, task, user=user)
     db.add(task)
     db.flush()
     return task
@@ -213,6 +219,7 @@ def enqueue_business_task(task: TaskCenterTask) -> None:
         {
             "task_center_id": task.id,
             "metadata": task_metadata(task),
+            "ownership": task_ownership_context(task),
         },
         max_retries=1,
         delay_note="Sprint 18 business loop queued",
@@ -222,7 +229,7 @@ def enqueue_business_task(task: TaskCenterTask) -> None:
 def task_to_business_api(task: TaskCenterTask, db: Session) -> dict:
     metadata = task_metadata(task)
     latest_result = (
-        db.query(TaskCenterResult)
+        owned_results_query(db)
         .filter(TaskCenterResult.task_id == task.id)
         .order_by(TaskCenterResult.id.desc())
         .first()

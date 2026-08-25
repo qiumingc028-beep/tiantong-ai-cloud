@@ -2,6 +2,10 @@ from pathlib import Path
 
 from backend.deploy_models import DeployRecord
 from backend.models import EmployeeLog, TaskCenterAuditLog, TaskCenterTask
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 API_PATH = "/api/enterprise-brain-console/overview"
@@ -68,7 +72,7 @@ def test_enterprise_brain_console_api_returns_center_entries(client, owner_heade
 
 
 def test_enterprise_brain_console_api_aggregates_employee_task_health_and_pending_data(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add_all(
             [
@@ -95,6 +99,7 @@ def test_enterprise_brain_console_api_aggregates_employee_task_health_and_pendin
                 ),
             ]
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -125,14 +130,16 @@ def test_enterprise_brain_console_api_aggregates_employee_task_health_and_pendin
 
 
 def test_enterprise_brain_console_api_returns_dynamic_center_status_and_recent_activities(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         task = TaskCenterTask(title="Audited task", status="created", priority="normal")
         db.add(task)
+        _bind_pending_tasks(db)
         db.flush()
         db.add(TaskCenterAuditLog(task_id=task.id, action="task_created", to_status="created", detail="created from test"))
         db.add(EmployeeLog(action="ai_employee_view", detail="employee workspace opened"))
         db.add(DeployRecord(deploy_version="Sprint59", branch="New-Terminal", operator="tiandun", status="running", note="readonly status"))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()

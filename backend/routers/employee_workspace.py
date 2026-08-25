@@ -14,6 +14,7 @@ from ..employee_workspace import build_employee_home
 from ..deploy_models import DeployRecord
 from ..models import AiEmployee, TaskCenterAuditLog, TaskCenterTask
 from ..orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
+from ..task_center_ownership import bind_session_task_ownership, owned_tasks_query
 
 
 router = APIRouter(prefix="/api/employee-workspace")
@@ -94,14 +95,19 @@ DEPLOYING_STATUSES = {"initialized", "pending", "running"}
 
 @router.get("/overview")
 def get_employee_workspace_overview(request: Request, db: Session = Depends(get_db)):
-    require_employee_workspace_user(request, db)
+    bind_session_task_ownership(db, user=require_employee_workspace_user(request, db))
     return build_employee_workspace_overview(db)
 
 
 @router.get("/employees/{employee_code}/home")
 def get_employee_workspace_home(employee_code: str, request: Request, db: Session = Depends(get_db)):
-    require_employee_home_access(request, db, employee_code)
-    return build_employee_home(db, employee_code)
+    bind_session_task_ownership(db, user=require_employee_home_access(request, db, employee_code))
+    visible = (
+        owned_tasks_query(db)
+        .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
+        .first()
+    )
+    return build_employee_home(db, employee_code if visible else "")
 
 
 def require_employee_workspace_user(request: Request, db: Session):
@@ -128,7 +134,7 @@ def build_employee_workspace_overview(db: Session):
         .order_by(AiEmployee.sort_order.asc(), AiEmployee.id.asc())
         .all()
     )
-    tasks = db.query(TaskCenterTask).order_by(TaskCenterTask.id.desc()).all()
+    tasks = owned_tasks_query(db).order_by(TaskCenterTask.id.desc()).all()
     latest_tasks = latest_task_by_employee(tasks)
     latest_orchestrator = latest_orchestrator_by_employee(db)
     latest_deploy = db.query(DeployRecord).order_by(DeployRecord.id.desc()).first()
@@ -392,7 +398,13 @@ def current_sprint(db: Session) -> str | None:
 
 def today_task_count(db: Session) -> int:
     start = datetime.now(timezone.utc).date().isoformat()
-    return db.query(func.count(TaskCenterTask.id)).filter(func.date(TaskCenterTask.created_at) == start).scalar() or 0
+    return (
+        owned_tasks_query(db)
+        .with_entities(func.count(TaskCenterTask.id))
+        .filter(func.date(TaskCenterTask.created_at) == start)
+        .scalar()
+        or 0
+    )
 
 
 def blocker_item(row: dict) -> dict:
@@ -438,7 +450,14 @@ def deploy_pending_items(deploy: DeployRecord | None) -> list[dict]:
 
 def build_recent_actions(db: Session, tasks: list[TaskCenterTask]) -> list[dict]:
     actions = []
-    audit_logs = db.query(TaskCenterAuditLog).order_by(TaskCenterAuditLog.id.desc()).limit(10).all()
+    audit_logs = (
+        owned_tasks_query(db)
+        .join(TaskCenterAuditLog, TaskCenterAuditLog.task_id == TaskCenterTask.id)
+        .with_entities(TaskCenterAuditLog)
+        .order_by(TaskCenterAuditLog.id.desc())
+        .limit(10)
+        .all()
+    )
     task_by_id = {task.id: task for task in tasks}
     for row in audit_logs:
         task = task_by_id.get(row.task_id)
@@ -454,7 +473,14 @@ def build_recent_actions(db: Session, tasks: list[TaskCenterTask]) -> list[dict]
             }
         )
 
-    links = db.query(OrchestratorTaskLink).order_by(OrchestratorTaskLink.id.desc()).limit(10).all()
+    links = (
+        owned_tasks_query(db)
+        .join(OrchestratorTaskLink, OrchestratorTaskLink.task_id == TaskCenterTask.id)
+        .with_entities(OrchestratorTaskLink)
+        .order_by(OrchestratorTaskLink.id.desc())
+        .limit(10)
+        .all()
+    )
     for link in links:
         actions.append(
             {

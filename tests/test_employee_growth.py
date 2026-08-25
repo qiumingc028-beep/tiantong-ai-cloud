@@ -9,10 +9,14 @@ from backend.employee_growth import (
 from backend.knowledge_center import clear_knowledge, list_knowledge
 from backend.models import TaskCenterAuditLog, TaskCenterTask
 from backend.task_queue import ORCHESTRATOR_QUEUE_NAME
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def seed_growth_tasks(test_db, employee_code: str = "tianshang"):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         completed = TaskCenterTask(
             title="优化商品详情页转化",
@@ -36,6 +40,7 @@ def seed_growth_tasks(test_db, employee_code: str = "tianshang"):
             assigned_ai_employee_name="天商",
         )
         db.add_all([completed, failed, pending_risk])
+        _bind_pending_tasks(db)
         db.flush()
         db.add(
             TaskCenterAuditLog(
@@ -47,6 +52,7 @@ def seed_growth_tasks(test_db, employee_code: str = "tianshang"):
                 actor_role="tianjian",
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -54,7 +60,7 @@ def seed_growth_tasks(test_db, employee_code: str = "tianshang"):
 
 def test_growth_profile_records_task_count_success_failure_risk_and_skill_growth(test_db):
     seed_growth_tasks(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         profile = build_employee_growth_profile(db, "tianshang")
     finally:
@@ -75,7 +81,7 @@ def test_growth_profile_records_task_count_success_failure_risk_and_skill_growth
 
 def test_tianbrain_growth_analysis_is_suggestion_only(test_db):
     seed_growth_tasks(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         profile = build_employee_growth_profile(db, "tianshang")
     finally:
@@ -93,7 +99,7 @@ def test_tianbrain_growth_analysis_is_suggestion_only(test_db):
 
 def test_tiancang_distillation_previews_knowledge_without_production_rule_change(test_db):
     seed_growth_tasks(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         profile = build_employee_growth_profile(db, "tianshang")
     finally:
@@ -114,7 +120,7 @@ def test_tiancang_distillation_previews_knowledge_without_production_rule_change
 def test_growth_report_can_append_only_to_tiancang_without_queue_or_permission_expansion(test_db):
     clear_knowledge()
     seed_growth_tasks(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         report = build_employee_growth_report(db, "tianshang", persist_knowledge=True)
     finally:
@@ -135,7 +141,7 @@ def test_growth_report_can_append_only_to_tiancang_without_queue_or_permission_e
 
 
 def test_growth_profile_empty_employee_is_safe(test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         report = build_employee_growth_report(db, "new_employee")
     finally:

@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from backend.auth import hash_password
 from backend.database import Base, get_db
 from backend.main import app
-from backend.models import AiTask, Permission, Role, Store, User
+from backend.models import AiTask, Company, Permission, Role, Store, Tenant, User, UserStoreMembership
 
 
 engine = create_engine(
@@ -42,9 +42,16 @@ def setup_module():
         Permission(code="ai.tasks.read", name="读取AI员工任务"),
     ]
     role = Role(code="owner", name="Owner", permissions=permissions)
-    db.add(role)
-    db.add(User(username="owner", password_hash=hash_password("password"), role="owner", display_name="老板", active=True))
-    db.add(Store(platform="jd", store_code="JD01", store_name="京东店铺01", active=True))
+    db.add_all([
+        Tenant(id=1, tenant_code="internal-test", tenant_name="Internal Test", active=True),
+        Company(id=1, tenant_id=1, company_code="internal-test", company_name="Internal Test", active=True),
+        role,
+    ])
+    user = User(username="owner", password_hash=hash_password("password"), role="owner", display_name="老板", tenant_id=1, company_id=1, active=True)
+    store = Store(platform="jd", store_code="JD01", store_name="京东店铺01", tenant_id=1, company_id=1, active=True)
+    db.add_all([user, store])
+    db.flush()
+    db.add(UserStoreMembership(user_id=user.id, store_id=store.id, can_read=True, can_write=True, active=True))
     db.add(AiTask(ai_employee_code="ai_operator", ai_employee_name="AI运营", status="idle", today_task="检查数据", execution_log=""))
     db.commit()
     db.close()

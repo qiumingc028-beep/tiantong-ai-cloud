@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+import subprocess
+import sys
+import uuid
+
+import psycopg2
 import pytest
 from fastapi.testclient import TestClient
+from psycopg2 import sql
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -10,7 +19,25 @@ from backend.auth import hash_password
 from backend.database import Base, get_db
 from backend.deploy_models import DeployRecord
 from backend.main import app
-from backend.models import AiEmployee, AiTask, Permission, Role, Store, User
+from backend.models import AiEmployee, AiTask, Company, Permission, Role, Store, Tenant, User, UserStoreMembership
+
+
+ROOT = Path(__file__).resolve().parents[1]
+POSTGRES_ADMIN_URL_ENV = "V2_ALPHA_POSTGRES_ADMIN_URL"
+ALPHA_FLAGS = {
+    "AGENT_RUNTIME_ENABLED": "true",
+    "ALPHA_WORKFLOW_ENABLED": "true",
+    "ALPHA_WORKFLOW_DASHBOARD_ENABLED": "true",
+    "PUBLIC_RESEARCH_ENABLED": "true",
+    "PUBLIC_SEARCH_ENABLED": "true",
+    "PUBLIC_SEARCH_PROVIDER": "mock",
+    "KNOWLEDGE_CENTER_ENABLED": "true",
+    "KNOWLEDGE_SUBMISSION_ENABLED": "true",
+    "KNOWLEDGE_LOCAL_SEARCH_ENABLED": "true",
+    "SKILLS_ENGINE_ENABLED": "true",
+    "SKILL_INSTALLATION_ENABLED": "true",
+    "SKILL_INVOCATION_ENABLED": "true",
+}
 
 
 class FakeRedis:
@@ -62,6 +89,113 @@ class FakeRedis:
 
     def ping(self):
         return True
+
+
+def _alembic(database_url: str, *args: str):
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
+    for key in tuple(env):
+        assert "DRIFT" not in key or "SKIP" not in key, f"禁止Drift跳过变量：{key}"
+    env.pop("ALEMBIC_SKIP_SQLITE_DRIFT", None)
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", *args],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+
+@pytest.fixture(scope="module")
+def postgres_database_factory():
+    raw_admin_url = os.getenv(POSTGRES_ADMIN_URL_ENV)
+    assert raw_admin_url, f"真实PostgreSQL专项要求设置 {POSTGRES_ADMIN_URL_ENV}"
+    admin_url = make_url(raw_admin_url)
+    assert admin_url.get_backend_name() == "postgresql", "Migration专项禁止SQLite或其它数据库"
+    admin_dsn = admin_url.set(drivername="postgresql").render_as_string(hide_password=False)
+    created: list[str] = []
+
+    def create_database(label: str) -> str:
+        name = f"alpha_s11_{label}_{uuid.uuid4().hex[:12]}"
+        connection = psycopg2.connect(admin_dsn)
+        connection.autocommit = True
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+        finally:
+            connection.close()
+        created.append(name)
+        return admin_url.set(database=name).render_as_string(hide_password=False)
+
+    yield create_database
+
+    connection = psycopg2.connect(admin_dsn)
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            for name in created:
+                cursor.execute(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
+                    (name,),
+                )
+                cursor.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
+    finally:
+        connection.close()
+
+
+@pytest.fixture()
+def alpha_enabled(monkeypatch):
+    from backend.config import get_settings
+
+    for key, value in ALPHA_FLAGS.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture()
+def postgres_alpha_runtime(postgres_database_factory, alpha_enabled, monkeypatch):
+    """Run the HTTP workflow against an isolated migrated PostgreSQL database."""
+    database_url = postgres_database_factory("alpha_api")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    previous_overrides = app.dependency_overrides.copy()
+
+    def override_db():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_db
+    fake_redis = FakeRedis()
+    for target in (
+        "backend.database.get_redis",
+        "backend.auth.get_redis",
+        "backend.queue.get_redis",
+        "backend.task_queue.get_redis",
+        "backend.brain_execution.queue.get_redis",
+        "backend.execution_engine.get_redis",
+        "backend.command_center.orchestration_view.get_redis",
+        "backend.routers.metrics.get_redis",
+        "backend.routers.ai_employees.get_redis",
+        "backend.routers.deploy_center.get_redis",
+        "backend.main.get_redis",
+    ):
+        monkeypatch.setattr(target, lambda: fake_redis)
+    seed_database(session_factory)
+    client = TestClient(app)
+    login = client.post("/api/login", json={"username": "boss", "password": "password"})
+    assert login.status_code == 200
+    headers = {"Authorization": f"Bearer {login.json()['token']}"}
+    yield client, headers, session_factory
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(previous_overrides)
+    engine.dispose()
 
 
 @pytest.fixture()
@@ -149,11 +283,31 @@ def login_headers(client: TestClient, username: str, password: str):
 def seed_database(session_factory):
     db = session_factory()
     try:
+        tenant = db.query(Tenant).filter(Tenant.tenant_code == "internal-test").one_or_none()
+        if not tenant:
+            tenant = Tenant(tenant_code="internal-test", tenant_name="Internal Test", active=True)
+            db.add(tenant)
+            db.flush()
+        company = db.query(Company).filter(
+            Company.tenant_id == tenant.id,
+            Company.company_code == "internal-test",
+        ).one_or_none()
+        if not company:
+            company = Company(
+                tenant_id=tenant.id,
+                company_code="internal-test",
+                company_name="Internal Test",
+                active=True,
+            )
+            db.add(company)
+            db.flush()
         permissions = [
             Permission(code="menu.dashboard", name="Dashboard"),
             Permission(code="menu.jd_data", name="JD Data"),
+            Permission(code="menu.import", name="Import"),
             Permission(code="menu.stores", name="Stores"),
             Permission(code="data.metrics.write", name="Metrics Write"),
+            Permission(code="stores.manage", name="Stores Manage"),
             Permission(code="ai.tasks.manage", name="AI Tasks Manage"),
             Permission(code="ai.tasks.read", name="AI Tasks Read"),
             Permission(code="task_center.read", name="Task Center Read"),
@@ -163,6 +317,19 @@ def seed_database(session_factory):
             Permission(code="task_center.audit", name="Task Center Audit"),
             Permission(code="ai_employees.read", name="AI Employees Read"),
             Permission(code="ai_employees.manage", name="AI Employees Manage"),
+            Permission(code="menu.skills_center", name="Skills Center Menu"),
+            Permission(code="menu.computer_executor", name="Computer Executor Menu"),
+            Permission(code="menu.device_center", name="Device Center Menu"),
+            Permission(code="skills.read", name="Skills Read"),
+            Permission(code="skills.manage", name="Skills Manage"),
+            Permission(code="skills.install", name="Skills Install"),
+            Permission(code="skills.invoke", name="Skills Invoke"),
+            Permission(code="skills.audit", name="Skills Audit"),
+            Permission(code="computer_executor.read", name="Computer Executor Read"),
+            Permission(code="computer_executor.manage", name="Computer Executor Manage"),
+            Permission(code="device_center.read", name="Device Center Read"),
+            Permission(code="device_center.manage", name="Device Center Manage"),
+            Permission(code="device_center.audit", name="Device Center Audit"),
             Permission(code="deploy_center.read", name="Deploy Center Read"),
             Permission(code="deploy_center.manage", name="Deploy Center Manage"),
             Permission(code="orchestrator.read", name="Orchestrator Read"),
@@ -176,6 +343,9 @@ def seed_database(session_factory):
             for p in permissions
             if not p.code.startswith("task_center.")
             and not p.code.startswith("ai_employees.")
+            and not p.code.startswith("skills.")
+            and not p.code.startswith("computer_executor.")
+            and not p.code.startswith("device_center.")
             and not p.code.startswith("deploy_center.")
             and not p.code.startswith("orchestrator.")
         ]
@@ -192,6 +362,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="owner",
                     display_name="Owner",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -199,6 +371,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="admin",
                     display_name="Admin",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -206,6 +380,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="boss",
                     display_name="Boss",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -213,6 +389,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="operator",
                     display_name="Operator",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -220,6 +398,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="customer_service",
                     display_name="Customer Service",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -227,6 +407,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="designer",
                     display_name="Designer",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -234,6 +416,8 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="editor",
                     display_name="Editor",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
                 User(
@@ -241,11 +425,36 @@ def seed_database(session_factory):
                     password_hash=hash_password("password"),
                     role="viewer",
                     display_name="Viewer",
+                    tenant_id=tenant.id,
+                    company_id=company.id,
                     active=True,
                 ),
             ]
         )
-        db.add(Store(platform="jd", store_code="JD01", store_name="JD Store 01", active=True))
+        db.flush()
+        store = Store(
+            platform="jd",
+            store_code="JD01",
+            store_name="JD Store 01",
+            tenant_id=tenant.id,
+            company_id=company.id,
+            active=True,
+        )
+        db.add(store)
+        db.flush()
+        permitted_users = db.query(User).filter(User.username.in_(["owner", "admin", "boss", "operator"])).all()
+        db.add_all(
+            [
+                UserStoreMembership(
+                    user_id=user.id,
+                    store_id=store.id,
+                    can_read=True,
+                    can_write=True,
+                    active=True,
+                )
+                for user in permitted_users
+            ]
+        )
         db.add(
             DeployRecord(
                 deploy_version="Sprint 3 MVP",

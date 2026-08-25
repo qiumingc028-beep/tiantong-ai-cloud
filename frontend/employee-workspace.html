@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.ai_employees">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AI员工工作台 Employee Workspace - 天统AI云中台</title>
@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>AI员工工作台 Employee Workspace</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>AI员工工作台 Employee Workspace</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="employee-workspace-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>AI员工工作台 Employee Workspace</h1><p>查看所有 AI 员工的运行状态、当前任务、进度、卡点、验收、审计、部署和最近动作。</p></div>
@@ -25,9 +25,9 @@
         <section>
           <div class="card">
             <div class="toolbar">
-              <input id="searchInput" placeholder="搜索员工名称 / code / 部门 / 任务" oninput="renderEmployees()">
-              <select id="statusFilter" onchange="renderEmployees()"><option value="">全部状态</option></select>
-              <button class="secondary" onclick="loadWorkspace()">刷新</button>
+              <input id="searchInput" placeholder="搜索员工名称 / code / 部门 / 任务" data-rbac-action="employee-workspace-002">
+              <select id="statusFilter" data-rbac-action="employee-workspace-003"><option value="">全部状态</option></select>
+              <button class="secondary" data-rbac-action="employee-workspace-004">刷新</button>
               <a class="btn secondary" href="/task-center.html">任务中心</a>
               <a class="btn secondary" href="/orchestrator.html">Orchestrator</a>
             </div>
@@ -51,7 +51,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['老板控制中心','/control.html'],['店铺管理','/stores.html'],['京东60店数据中心','/jd-dashboard.html'],['京东数据接入','/jd-integrations.html'],['AI员工工作台','/employee-workspace.html'],['AI员工能力档案','/employee-capabilities.html'],['多模型路由中心','/model-routing.html'],['AI工具调用权限中心','/tool-permissions.html'],['SOP / Skill 绑定中心','/sop-skill-center.html'],['天赋：Skill / 插件赋能中心','/skill-plugin-center.html'],['AI执行日志中心','/employee-activity-log.html'],['AI执行追溯中心','/employee-activity-trace.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['今日数据录入','/metrics.html'],['Excel导入','/import.html'],['AI素材中心','/ai-assets.html'],['AI工作流中心','/workflows.html'],['AI员工名册','/ai-employees.html'],['天盾部署中心','/deploy-center.html'],['账号资料中心','/account-center.html'],['模板中心','/template-center.html'],['品牌中心','/brands.html'],['店铺分组','/store-groups.html'],['系统设置','/settings.html']];
 const statusLabels={standby:'待命',running:'执行中',reviewing:'验收中',auditing:'审计中',deploying:'部署中',completed:'已完成',blocked:'卡住',pending_boss:'等待老板确认'};
 let workspace={summary:{},employees:[],blockers:[],pending_reviews:[],pending_audits:[],pending_deploys:[],recent_actions:[]};
@@ -150,7 +150,7 @@ function renderEmployees(){
 
 function employeeCard(e){
   const blocked=!!e.has_blocker,selected=e.employee_code===selectedCode;
-  return `<article class="employee-card ${blocked?'blocked':''} ${selected?'selected':''}" onclick="selectEmployee('${esc(e.employee_code)}')">
+  return `<article class="employee-card ${blocked?'blocked':''} ${selected?'selected':''}" data-rbac-action="${TiantongRbac.registerDynamicAction("employee-workspace-005","click",function(event){selectEmployee((e.employee_code));})}>
     <div class="employee-title"><div><h3>${esc(text(e.employee_name))}</h3><div class="code">${esc(text(e.employee_code))}</div></div>${statusBadge(e.status)}</div>
     <div class="muted">${esc(text(e.department))} · ${esc(text(e.role))}</div>
     <div class="detail-row"><strong>${esc(text(e.current_task))}</strong><div class="muted">task_id：${esc(text(e.task_id))} · ${esc(text(e.sprint))} · ${esc(text(e.stage))}</div>${progressBar(e.progress_percent,e.status)}</div>
@@ -193,6 +193,15 @@ function renderList(el,items,emptyText,formatter){
 }
 
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "employee-workspace-001":["click",function(event){return TiantongRbac.logout();}],
+  "employee-workspace-002":["input",function(event){renderEmployees();}],
+  "employee-workspace-003":["change",function(event){renderEmployees();}],
+  "employee-workspace-004":["click",function(event){loadWorkspace();}]
+});
 </script>
 </body>
 </html>

@@ -6,9 +6,9 @@ def test_dual_engine_requires_auth(client):
     assert response.status_code == 401
 
 
-def test_ecommerce_order_engine_writes_result_with_api_key(client, monkeypatch):
+def test_ecommerce_order_engine_requires_authenticated_scope_even_with_api_key(client, owner_headers, monkeypatch):
     monkeypatch.setenv("AUTOMATION_API_KEY", "dual-key")
-    headers = {"X-API-Key": "dual-key"}
+    headers = {**owner_headers, "X-API-Key": "dual-key"}
 
     response = client.post(
         "/api/business/ecommerce/orders",

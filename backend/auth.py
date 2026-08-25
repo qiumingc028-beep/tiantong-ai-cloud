@@ -1,6 +1,8 @@
 import hashlib
 import secrets
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 import jwt
 from fastapi import Depends, HTTPException, Request
@@ -14,6 +16,109 @@ from .models import Permission, Role, User
 
 settings = get_settings()
 SESSION_TTL = settings.SESSION_TTL_SECONDS
+CAPTURE_AUTH_PURPOSE = "computer_workflow_readonly_capture"
+CAPTURE_AUTH_WORKFLOW_HEADER = "X-Tiantong-Capture-Workflow"
+CAPTURE_AUTH_TTL_SECONDS = 60
+CAPTURE_PAGE_PATH = "/computer-workflow-center.html"
+CAPTURE_READONLY_PATHS = frozenset(
+    {
+        CAPTURE_PAGE_PATH,
+        "/rbac-navigation.js",
+        "/api/me",
+        "/api/task-center/tasks",
+        "/api/v2/computer/workflows",
+    }
+)
+CAPTURE_READONLY_METHODS = frozenset({"GET", "HEAD"})
+
+
+@dataclass
+class CaptureAuthorization:
+    token: str = field(repr=False)
+    workflow_id: str
+    origin: str
+    target_path: str
+    allowed_paths: frozenset[str] = CAPTURE_READONLY_PATHS
+
+    def clear(self) -> None:
+        self.token = ""
+
+
+def _capture_signing_key(active_settings) -> bytes:
+    return hashlib.sha256(
+        f"{active_settings.JWT_SECRET}\0{CAPTURE_AUTH_PURPOSE}".encode("utf-8")
+    ).digest()
+
+
+def create_capture_authorization(*, user_id: int, workflow_id: str, target_url: str) -> CaptureAuthorization:
+    active_settings = get_settings()
+    parsed = urlsplit((target_url or "").strip())
+    origin = f"{parsed.scheme}://{parsed.hostname}"
+    if parsed.port is not None:
+        origin = f"{origin}:{parsed.port}"
+    if (
+        active_settings.APP_ENV != "test"
+        or active_settings.IS_PRODUCTION
+        or origin not in active_settings.PAGE_CAPTURE_ALLOWED_ORIGINS
+        or parsed.path != CAPTURE_PAGE_PATH
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+        or not workflow_id
+        or int(user_id) <= 0
+    ):
+        raise ValueError("capture authorization target is not permitted")
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user_id),
+        "purpose": CAPTURE_AUTH_PURPOSE,
+        "workflow_id": workflow_id,
+        "origin": origin,
+        "target_path": parsed.path,
+        "jti": secrets.token_urlsafe(16),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=CAPTURE_AUTH_TTL_SECONDS)).timestamp()),
+    }
+    token = jwt.encode(
+        payload,
+        _capture_signing_key(active_settings),
+        algorithm=active_settings.JWT_ALGORITHM,
+    )
+    return CaptureAuthorization(
+        token=token,
+        workflow_id=workflow_id,
+        origin=origin,
+        target_path=parsed.path,
+    )
+
+
+def decode_capture_access_token(token: str, request: Request) -> int | None:
+    active_settings = get_settings()
+    try:
+        payload = jwt.decode(
+            token,
+            _capture_signing_key(active_settings),
+            algorithms=[active_settings.JWT_ALGORITHM],
+        )
+        request_origin = f"{request.url.scheme}://{request.url.hostname}"
+        if request.url.port is not None:
+            request_origin = f"{request_origin}:{request.url.port}"
+        if (
+            active_settings.APP_ENV != "test"
+            or active_settings.IS_PRODUCTION
+            or payload.get("purpose") != CAPTURE_AUTH_PURPOSE
+            or request.method.upper() not in CAPTURE_READONLY_METHODS
+            or request.url.path not in CAPTURE_READONLY_PATHS
+            or request_origin != payload.get("origin")
+            or payload.get("target_path") != CAPTURE_PAGE_PATH
+            or request.headers.get(CAPTURE_AUTH_WORKFLOW_HEADER) != payload.get("workflow_id")
+        ):
+            return None
+        request.state.capture_workflow_id = str(payload["workflow_id"])
+        return int(payload["sub"])
+    except Exception:
+        return None
 
 
 def hash_password(password: str, salt: str = None) -> str:
@@ -91,6 +196,10 @@ def serialize_user(db: Session, user: User):
     }
 
 
+def capture_workflow_id(request: Request) -> str | None:
+    return getattr(request.state, "capture_workflow_id", None)
+
+
 def current_user(request: Request, db: Session = Depends(get_db)):
     session_token = request.cookies.get("tiantong_session")
     user_id = None
@@ -100,7 +209,8 @@ def current_user(request: Request, db: Session = Depends(get_db)):
     if not user_id:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            user_id = decode_access_token(auth_header.removeprefix("Bearer ").strip())
+            token = auth_header.removeprefix("Bearer ").strip()
+            user_id = decode_access_token(token) or decode_capture_access_token(token, request)
 
     if not user_id:
         raise HTTPException(status_code=401, detail="未登录")

@@ -1,0 +1,20 @@
+{
+  "contract_commit": "8d9b5f2890545f1f08d05b9b1618f71ff82d6621",
+  "branch": "test/v2-alpha-e2e-quality",
+  "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. V2_ALPHA_POSTGRES_ADMIN_URL=<isolated-local-postgresql> MIGRATION_CODE_FIX_COMMIT=8d9b5f2890545f1f08d05b9b1618f71ff82d6621 pytest -q --ignore=tests/test_v2_alpha_migration_evidence.py",
+  "total": 892,
+  "passed": 892,
+  "failed": 0,
+  "warnings": 82,
+  "duration_seconds": 330.38,
+  "baseline": 835,
+  "baseline_count_met": true,
+  "all_passed": true,
+  "migration_evidence_accepted": false,
+  "failed_gates": [],
+  "external_blockers": [
+    "Path A and Path B logs lack the required structured RAW OUTPUT sections",
+    "validation manifest lacks hardened commit, revision, checksum, required-files, and path metadata",
+    "evidence checksum does not recompute and 0037 dual-document disclosure is incomplete"
+  ]
+}

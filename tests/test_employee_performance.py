@@ -5,10 +5,14 @@ from sqlalchemy import event
 from backend.employee_performance import build_ai_employee_business_board, build_employee_leaderboard, build_employee_performance_stats
 from backend.models import TaskCenterTask
 from backend.task_queue import ORCHESTRATOR_QUEUE_NAME
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def seed_performance_tasks(test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add_all(
             [
@@ -42,6 +46,7 @@ def seed_performance_tasks(test_db):
                 ),
             ]
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -49,7 +54,7 @@ def seed_performance_tasks(test_db):
 
 def test_employee_performance_stats_include_counts_success_duration_failure_and_risk(test_db):
     seed_performance_tasks(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         stats = build_employee_performance_stats(db)
     finally:
@@ -69,7 +74,7 @@ def test_employee_performance_stats_include_counts_success_duration_failure_and_
 
 def test_employee_leaderboard_returns_best_growth_and_risk_employee(test_db):
     seed_performance_tasks(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         stats = build_employee_performance_stats(db)
     finally:
@@ -85,7 +90,7 @@ def test_employee_leaderboard_returns_best_growth_and_risk_employee(test_db):
 
 def test_ai_employee_business_board_connects_growth_tianbrain_and_tiancang_without_queue(test_db):
     seed_performance_tasks(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         board = build_ai_employee_business_board(db)
     finally:
@@ -122,7 +127,7 @@ def test_ceo_dashboard_includes_ai_employee_business_board(client, owner_headers
 
 def test_employee_performance_does_not_write_database(client, owner_headers, test_db):
     seed_performance_tasks(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     engine = db.get_bind()
     statements = []
 

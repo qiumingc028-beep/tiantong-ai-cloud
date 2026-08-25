@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from backend.models import TaskCenterAuditLog, TaskCenterTask
+from backend.task_center_ownership import owned_tasks_query
 
 
 PENDING_STATUSES = {"created", "pending", "assigned"}
@@ -15,7 +16,7 @@ FAILED_STATUSES = {"rejected", "failed", "blocked"}
 
 def build_task_linkage(db: Session, employee_code: str) -> dict[str, Any]:
     tasks = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.assigned_ai_employee_code == employee_code)
         .order_by(TaskCenterTask.id.desc())
         .limit(100)

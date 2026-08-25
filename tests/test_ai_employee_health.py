@@ -2,6 +2,10 @@ from pathlib import Path
 
 from backend.evolution_models import EmployeeGrowth, RiskEvent
 from backend.models import AiEmployee, KnowledgeArticle, PromptLibrary, SopLibrary, TaskCenterTask, User
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 BASE = "/api/ai-employee-health/overview"
@@ -86,7 +90,7 @@ def test_ai_employee_health_security_flags(client, owner_headers):
 
 
 def test_ai_employee_health_aggregates_existing_ecosystem_data(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add_all(
             [
@@ -104,6 +108,7 @@ def test_ai_employee_health_aggregates_existing_ecosystem_data(client, owner_hea
                 RiskEvent(employee_code="tianwang", event_type="blocked", risk_level="high"),
             ]
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -126,7 +131,7 @@ def test_ai_employee_health_aggregates_existing_ecosystem_data(client, owner_hea
 
 
 def test_ai_employee_health_is_readonly(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         before_task_count = db.query(TaskCenterTask).count()
         before_employee_count = db.query(AiEmployee).count()
@@ -137,7 +142,7 @@ def test_ai_employee_health_is_readonly(client, owner_headers, test_db):
     response = client.get(BASE, headers=owner_headers)
 
     assert response.status_code == 200
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         assert db.query(TaskCenterTask).count() == before_task_count
         assert db.query(AiEmployee).count() == before_employee_count

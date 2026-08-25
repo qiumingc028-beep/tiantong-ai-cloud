@@ -7,13 +7,13 @@ def patch_worker_session(monkeypatch, test_db):
     monkeypatch.setattr(worker, "get_redis", queue.get_redis)
 
 
-def test_ecommerce_webhook_creates_business_loop_task_with_secret(client, test_db, monkeypatch):
+def test_ecommerce_webhook_creates_business_loop_task_with_secret(client, owner_headers, test_db, monkeypatch):
     patch_worker_session(monkeypatch, test_db)
     monkeypatch.setenv("WEBHOOK_SECRET", "business-secret")
 
     response = client.post(
         "/api/business-webhooks/ecommerce/orders",
-        headers={"X-Webhook-Secret": "business-secret"},
+        headers={**owner_headers, "X-Webhook-Secret": "business-secret"},
         json={
             "platform": "shop",
             "order_id": "O-1001",
@@ -54,20 +54,20 @@ def test_content_metrics_webhook_requires_auth_when_secret_wrong(client, monkeyp
     assert response.status_code == 401
 
 
-def test_content_metrics_webhook_uses_api_key_and_worker_writes_decision(client, test_db, monkeypatch):
+def test_content_metrics_webhook_uses_authenticated_scope_and_worker_writes_decision(client, owner_headers, test_db, monkeypatch):
     patch_worker_session(monkeypatch, test_db)
     monkeypatch.setenv("AUTOMATION_API_KEY", "business-api-key")
 
     response = client.post(
         "/api/business-webhooks/content/metrics",
-        headers={"X-API-Key": "business-api-key"},
+        headers={**owner_headers, "X-API-Key": "business-api-key"},
         json={"content_id": "C-18", "title": "AI 内容", "views": 1200, "likes": 60, "comments": 8, "shares": 12},
     )
 
     assert response.status_code == 200
     assert worker.process_next_task() is True
 
-    decisions = client.get("/api/business-loop/decisions", headers={"X-API-Key": "business-api-key"})
+    decisions = client.get("/api/business-loop/decisions", headers=owner_headers)
     assert decisions.status_code == 200
     task = decisions.json()["tasks"][0]
     assert task["event_type"] == "content_metrics"

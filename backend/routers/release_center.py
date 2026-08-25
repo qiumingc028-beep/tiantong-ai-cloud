@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,6 +12,7 @@ from ..auth import current_user
 from ..auth_data import normalize_role
 from ..database import get_db
 from ..release_models import ReleaseVersion
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/release")
@@ -110,6 +112,7 @@ def require_release_user(request: Request, db: Session):
     user = current_user(request, db)
     role = normalize_role(user.role)
     if role in PRIVILEGED_ROLES:
+        bind_session_task_ownership(db, user=user)
         return user
     raise HTTPException(status_code=403, detail="无 Release Center 访问权限")
 
@@ -138,9 +141,21 @@ def current_commit_id() -> str | None:
         value = os.getenv(key)
         if value:
             return value
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(BASE_DIR), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        commit = completed.stdout.strip()
+        if commit:
+            return commit
+    except Exception:
+        pass
     git_dir = git_metadata_dir()
     if not git_dir.exists():
-        return None
+        return "worktree" if (BASE_DIR / ".git").exists() else None
     head_path = git_dir / "HEAD"
     try:
         head = head_path.read_text(encoding="utf-8").strip()
@@ -150,7 +165,7 @@ def current_commit_id() -> str | None:
                 return ref_path.read_text(encoding="utf-8").strip()
         return head or None
     except OSError:
-        return None
+        return "worktree" if (BASE_DIR / ".git").exists() else None
 
 
 def current_branch() -> str | None:
@@ -158,9 +173,21 @@ def current_branch() -> str | None:
         value = os.getenv(key)
         if value:
             return value
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(BASE_DIR), "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        branch = completed.stdout.strip()
+        if branch:
+            return branch
+    except Exception:
+        pass
     git_dir = git_metadata_dir()
     if not git_dir.exists():
-        return None
+        return "worktree" if (BASE_DIR / ".git").exists() else None
     try:
         head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
     except OSError:

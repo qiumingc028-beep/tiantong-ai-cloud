@@ -4,6 +4,10 @@ import json
 
 from backend.main import app
 from backend.models import AiEmployee, TaskCenterTask
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 BASE = "/api/employee-capabilities"
@@ -24,6 +28,8 @@ SENSITIVE_KEYS = {
     "refresh_token",
     "private_key",
 }
+
+
 EMPLOYEE_FIELDS = {
     "employee_code",
     "employee_name",
@@ -199,7 +205,7 @@ def test_employee_capabilities_no_write_routes():
 
 
 def test_employee_capabilities_does_not_modify_task_status(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         task = TaskCenterTask(
             title="Capability read only task",
@@ -209,6 +215,7 @@ def test_employee_capabilities_does_not_modify_task_status(client, owner_headers
             assigned_ai_employee_name="天王：后端开发中心",
         )
         db.add(task)
+        _bind_pending_tasks(db)
         db.commit()
         task_id = task.id
     finally:
@@ -217,7 +224,7 @@ def test_employee_capabilities_does_not_modify_task_status(client, owner_headers
     response = client.get(f"{BASE}/employees/tianwang", headers=owner_headers)
     assert response.status_code == 200
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         assert db.get(TaskCenterTask, task_id).status == "created"
     finally:
@@ -225,32 +232,113 @@ def test_employee_capabilities_does_not_modify_task_status(client, owner_headers
 
 
 def test_employee_capabilities_safe_defaults(client, owner_headers, test_db):
-    db = test_db()
+    from backend.brain_orchestrator.planner import resolve_graph_ownership
+    from backend.deploy_models import DeployRecord
+    from backend.models import TaskCenterReview, User
+    from backend.task_center_ownership import SESSION_USER_KEY, bind_task_ownership
+
+    def database_state():
+        snapshot = test_db()
+        try:
+            return {
+                model.__tablename__: tuple(
+                    tuple(getattr(row, column.name) for column in model.__table__.columns)
+                    for row in snapshot.query(model).order_by(*model.__table__.primary_key.columns).all()
+                )
+                for model in (AiEmployee, TaskCenterTask, TaskCenterReview, DeployRecord)
+            }
+        finally:
+            snapshot.close()
+
+    db = _owner_db(test_db)
     try:
-        db.add(
-            AiEmployee(
-                employee_code="odd_capability_employee",
-                employee_name="异常能力员工",
-                legion=None,
-                duty=None,
-                status="active",
-                task_types=None,
-                default_permissions=None,
-                is_legacy=False,
-                sort_order=999,
-            )
+        employee = AiEmployee(
+            employee_code="odd_capability_employee",
+            employee_name="异常能力员工",
+            legion=None,
+            duty=None,
+            status="active",
+            task_types=None,
+            default_permissions=None,
+            is_legacy=False,
+            sort_order=999,
+        )
+        owner_task = TaskCenterTask(
+            title="Odd capability owner task",
+            description="Owner-visible capability fixture",
+            status="created",
+            assigned_ai_employee_code=employee.employee_code,
+            assigned_ai_employee_name=employee.employee_name,
+        )
+        db.add_all([employee, owner_task])
+        _bind_pending_tasks(db)
+
+        foreign_employee = AiEmployee(
+            employee_code="foreign_capability_employee",
+            employee_name="外域能力员工",
+            status="active",
+            is_legacy=False,
+            sort_order=1000,
+        )
+        foreign_task = TaskCenterTask(
+            title="Foreign capability task",
+            status="created",
+            assigned_ai_employee_code=foreign_employee.employee_code,
+            assigned_ai_employee_name=foreign_employee.employee_name,
+        )
+        db.add_all([foreign_employee, foreign_task])
+        bind_task_ownership(
+            db,
+            foreign_task,
+            user=db.query(User).filter(User.username == "boss").one(),
         )
         db.commit()
+
+        owner_scope = resolve_graph_ownership(db, db.info[SESSION_USER_KEY])
+        assert (
+            owner_task.tenant_id,
+            owner_task.company_id,
+            owner_task.requester_id,
+            owner_task.store_scope_key,
+            owner_task.ownership_scope_key,
+        ) == (
+            owner_scope.tenant_id,
+            owner_scope.company_id,
+            owner_scope.requester_id,
+            owner_scope.store_scope_key,
+            owner_scope.ownership_scope_key,
+        )
     finally:
         db.close()
 
+    before_gets = database_state()
     response = client.get(f"{BASE}/employees/odd_capability_employee", headers=owner_headers)
     assert response.status_code == 200
     data = response.json()
     assert_employee_shape(data)
+    assert set(data) == EMPLOYEE_FIELDS
+    assert data["employee_code"] == "odd_capability_employee"
     assert data["employee_name"] == "异常能力员工"
     assert data["allowed_tools"] == []
     assert data["current_limitations"]
+
+    missing = client.get(f"{BASE}/employees/missing_capability_employee", headers=owner_headers)
+    foreign = client.get(f"{BASE}/employees/foreign_capability_employee", headers=owner_headers)
+    assert missing.status_code == foreign.status_code == 200
+    assert missing.json() == foreign.json()
+    assert set(missing.json()) == set(foreign.json()) == EMPLOYEE_FIELDS
+    assert missing.json()["employee_code"] == "暂无"
+    assert missing.json()["employee_name"] == "未知 AI员工"
+
+    visible_payload = json.dumps(data, ensure_ascii=False)
+    hidden_payload = json.dumps(missing.json(), ensure_ascii=False)
+    assert "foreign_capability_employee" not in visible_payload
+    assert "外域能力员工" not in visible_payload
+    assert "Odd capability owner task" not in visible_payload
+    assert "foreign_capability_employee" not in hidden_payload
+    assert "外域能力员工" not in hidden_payload
+    assert "Foreign capability task" not in hidden_payload
+    assert database_state() == before_gets
 
 
 def capability_paths():

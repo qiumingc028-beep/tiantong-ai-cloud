@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="zh-CN" data-required-menu="menu.settings">
+<head><style>html{visibility:hidden}</style><script src="/rbac-navigation.js"></script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>天统AI Brain Center - 天统AI云中台</title>
@@ -13,7 +13,7 @@
 <div class="app">
   <aside class="side"><div class="brand">天统AI云中台</div><nav id="menu" class="menu"></nav></aside>
   <main>
-    <header class="top"><strong>天统AI Brain Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button onclick="logout()">退出登录</button></div></header>
+    <header class="top"><strong>天统AI Brain Center</strong><div class="meta"><span id="time" class="pill"></span><span id="me" class="pill">加载中</span><button data-rbac-action="brain-center-001">退出登录</button></div></header>
     <section class="content">
       <div class="hero">
         <div><h1>天统AI Brain Center</h1><p>老板输入任务后，由 Brain Center 标准化意图，再联动 Tool Router 生成安全模拟执行计划。</p></div>
@@ -27,8 +27,8 @@
             <div class="head"><h2>任务输入区</h2><span class="badge simulation">simulation</span></div>
             <div class="input-row">
               <textarea id="requestText" placeholder="例如：分析今天销售下降原因">分析今天销售下降原因</textarea>
-              <button onclick="analyzeTask()">提交分析</button>
-              <button class="secondary" onclick="generatePlan()">生成计划</button>
+              <button data-rbac-action="brain-center-002">提交分析</button>
+              <button class="secondary" data-rbac-action="brain-center-003">生成计划</button>
             </div>
             <div id="analysisBox" class="list-item muted">等待提交任务分析。</div>
           </div>
@@ -37,7 +37,7 @@
             <div id="planBox" class="muted">暂无执行计划。</div>
           </div>
           <div class="card">
-            <div class="head"><h2>日志区域</h2><button class="secondary" onclick="loadLogs()">刷新日志</button></div>
+            <div class="head"><h2>日志区域</h2><button class="secondary" data-rbac-action="brain-center-004">刷新日志</button></div>
             <div id="logTable" class="table-wrap"></div>
           </div>
         </section>
@@ -49,7 +49,7 @@
               <label><input id="bossConfirmed" type="checkbox"> boss_confirmed</label>
               <label><input id="securityAudited" type="checkbox"> security_audited</label>
             </div>
-            <div class="tags" style="margin-top:10px"><button class="good" onclick="checkApproval()">审批检查</button></div>
+            <div class="tags" style="margin-top:10px"><button class="good" data-rbac-action="brain-center-005">审批检查</button></div>
           </div>
           <div class="card">
             <div class="head"><h2>风险等级说明</h2></div>
@@ -66,7 +66,7 @@
     </section>
   </main>
 </div>
-<script>
+<script type="text/plain" data-rbac-protected>
 const menus=[['老板驾驶舱','/index.html'],['天统AI Brain Center','/brain-center.html'],['Tool Router 工具路由中心','/tool-router.html'],['Tool Center 工具中心','/tool-center.html'],['AI任务中心','/task-center.html'],['AI自动派单中心','/auto-dispatch-center.html'],['天盾部署中心','/deploy-center.html'],['Release Center','/release-center.html'],['系统设置','/settings.html']];
 const blockedWords=['pass'+'word_hash','tok'+'en','sec'+'ret','API '+'Key','Authori'+'zation','Bear'+'er'];
 let state={analysis:null,plan:null,logs:[]};
@@ -103,6 +103,16 @@ function renderLogs(){logTable.innerHTML=state.logs.length?`<table><thead><tr><t
 function renderStats(){const waiting=state.logs.filter(log=>String(log.approval_status||'').includes('pending')||String(log.approval_status||'').includes('needs')).length;const plans=state.logs.filter(log=>log.execution_result==='plan_generated_dry_run').length;stats.innerHTML=[['当前任务数量',state.analysis?1:0],['分析次数',state.logs.filter(log=>log.approval_status==='analysis_only').length],['审批等待',waiting],['执行日志',state.logs.length+plans*0]].map(([label,value])=>`<div class="stat"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div></div>`).join('')}
 function renderSafety(){safetyBox.innerHTML=['禁止真实工具调用','禁止浏览器控制','禁止 Shell 执行','禁止修改 Skill','禁止修改 Prompt','只做模拟大脑控制台'].map(item=>`<div class="list-item">${esc(item)}</div>`).join('')}
 init();
+</script>
+
+<script type="text/plain" data-rbac-protected>
+TiantongRbac.bindActions({
+  "brain-center-001":["click",function(event){return TiantongRbac.logout();}],
+  "brain-center-002":["click",function(event){analyzeTask();}],
+  "brain-center-003":["click",function(event){generatePlan();}],
+  "brain-center-004":["click",function(event){loadLogs();}],
+  "brain-center-005":["click",function(event){checkApproval();}]
+});
 </script>
 </body>
 </html>

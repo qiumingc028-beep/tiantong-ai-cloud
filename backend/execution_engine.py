@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from .database import get_redis
 from .dispatch_models import EmployeeExecutionLog
 from .models import TaskCenterResult, TaskCenterTask
+from .task_center_ownership import owned_task_from_context_or_none, task_ownership_context
 
 
 logger = logging.getLogger("tiantong.execution_engine")
@@ -74,6 +75,7 @@ def enqueue_execution_task(db: Session, task: TaskCenterTask, boss_confirmed: bo
         "employee_code": task.assigned_ai_employee_code,
         "employee_name": task.assigned_ai_employee_name,
         "task_status": task.status,
+        "ownership": task_ownership_context(task),
         "risk_level": infer_execution_risk(task),
         "boss_confirmed": bool(boss_confirmed),
         "security_audited": bool(security_audited),
@@ -113,7 +115,11 @@ def process_next_execution_task(db: Session, timeout: int = 1, worker_id: str = 
     item = pop_execution_task(timeout=timeout)
     if not item:
         return False
-    task = db.get(TaskCenterTask, int(item["task_id"]))
+    task = owned_task_from_context_or_none(
+        db,
+        task_id=int(item["task_id"]),
+        ownership=item.get("ownership"),
+    )
     if not task:
         return False
     if not acquire_execution_lock(task.id, worker_id):

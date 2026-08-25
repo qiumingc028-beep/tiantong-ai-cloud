@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..evolution_models import EmployeeGrowth, RiskEvent
 from ..models import AiEmployee, BugCase, KnowledgeArticle, PromptLibrary, SopLibrary, TaskCenterTask, User
 from ..routers import employee_capabilities, sop_skill_center
+from ..task_center_ownership import owned_tasks_query
 
 
 WORKING_TASK_STATUSES = {"assigned", "running", "in_progress"}
@@ -58,7 +59,7 @@ def collect_employee_stats(db: Session) -> dict:
     working_codes: set[str] = set()
     if active_codes:
         rows = (
-            db.query(TaskCenterTask.assigned_ai_employee_code)
+            owned_tasks_query(db).with_entities(TaskCenterTask.assigned_ai_employee_code)
             .filter(TaskCenterTask.assigned_ai_employee_code.in_(active_codes))
             .filter(TaskCenterTask.status.in_(WORKING_TASK_STATUSES))
             .all()
@@ -175,7 +176,7 @@ def collect_meeting_stats() -> dict:
 
 
 def collect_task_stats(db: Session) -> dict:
-    rows = db.query(TaskCenterTask.status, func.count(TaskCenterTask.id)).group_by(TaskCenterTask.status).all()
+    rows = owned_tasks_query(db).with_entities(TaskCenterTask.status, func.count(TaskCenterTask.id)).group_by(TaskCenterTask.status).all()
     counts = {normalize_text(status): int(count) for status, count in rows}
     return {
         "total": sum(counts.values()),
@@ -280,14 +281,26 @@ def default_task_stats() -> dict:
 
 
 def count_rows(db: Session, model: Any) -> int:
+    if model is TaskCenterTask:
+        return int(owned_tasks_query(db).with_entities(func.count(TaskCenterTask.id)).scalar() or 0)
     return int(db.query(func.count(model.id)).scalar() or 0)
 
 
 def count_statuses(db: Session, model: Any, statuses: set[str]) -> int:
+    if model is TaskCenterTask:
+        return int(
+            owned_tasks_query(db)
+            .with_entities(func.count(TaskCenterTask.id))
+            .filter(TaskCenterTask.status.in_(statuses))
+            .scalar()
+            or 0
+        )
     return int(db.query(func.count(model.id)).filter(model.status.in_(statuses)).scalar() or 0)
 
 
 def max_value(db: Session, column: Any):
+    if column is TaskCenterTask.updated_at:
+        return owned_tasks_query(db).with_entities(func.max(TaskCenterTask.updated_at)).scalar()
     return db.query(func.max(column)).scalar()
 
 

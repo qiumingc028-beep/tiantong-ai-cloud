@@ -1,6 +1,8 @@
 import subprocess
 import sys
 
+from tests.test_helpers import latest_alembic_head_line
+
 
 def test_ai_employee_list_returns_real_employees(client, owner_headers):
     response = client.get("/api/ai-employees", headers=owner_headers)
@@ -126,7 +128,7 @@ def test_alembic_heads_has_single_head():
     )
 
     heads = [line for line in result.stdout.splitlines() if line.strip()]
-    assert heads == ["0027_v1_schema_alignment (head)"]
+    assert heads == [latest_alembic_head_line()]
 
 
 def create_task(client, headers):

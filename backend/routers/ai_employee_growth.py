@@ -11,6 +11,7 @@ from ..services.ai_employee_growth import (
     build_employee_growth_timeline,
     build_growth_overview,
 )
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/ai-employee-growth")
@@ -20,19 +21,19 @@ ALLOWED_ROLES = {"owner", "admin", "boss"}
 
 @router.get("/overview")
 def get_ai_employee_growth_overview(request: Request, db: Session = Depends(get_db)):
-    require_growth_user(request, db)
+    bind_session_task_ownership(db, user=require_growth_user(request, db))
     return build_growth_overview(db)
 
 
 @router.get("/employees/{employee_id}")
 def get_ai_employee_growth_detail(employee_id: str, request: Request, db: Session = Depends(get_db)):
-    require_growth_user(request, db)
+    bind_session_task_ownership(db, user=require_growth_user(request, db))
     return build_employee_growth_detail(db, employee_id)
 
 
 @router.get("/employees/{employee_id}/timeline")
 def get_ai_employee_growth_timeline(employee_id: str, request: Request, db: Session = Depends(get_db)):
-    require_growth_user(request, db)
+    bind_session_task_ownership(db, user=require_growth_user(request, db))
     return build_employee_growth_timeline(db, employee_id)
 
 

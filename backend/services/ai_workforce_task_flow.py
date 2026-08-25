@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from ..models import AiEmployee, TaskCenterAuditLog, TaskCenterTask
+from ..task_center_ownership import owned_task_or_none, owned_tasks_query
 
 
 CREATED_STATUSES = {"created", "split"}
@@ -31,7 +32,7 @@ def build_employee_task_flow(db: Session, employee_id: str) -> dict:
         .first()
     )
     tasks = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.assigned_ai_employee_code == employee_id)
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .all()
@@ -56,7 +57,7 @@ def build_employee_task_flow(db: Session, employee_id: str) -> dict:
 
 
 def build_task_lifecycle(db: Session, task_id: int) -> dict | None:
-    task = db.get(TaskCenterTask, task_id)
+    task = owned_task_or_none(db, task_id=task_id)
     if task is None:
         return None
     audit_logs = task_audit_logs(db, task_id)
@@ -72,7 +73,7 @@ def build_task_lifecycle(db: Session, task_id: int) -> dict | None:
 
 def build_waiting_confirm_tasks(db: Session) -> dict:
     tasks = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.status.in_(WAITING_CONFIRM_STATUSES))
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .all()

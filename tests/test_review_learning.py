@@ -11,10 +11,15 @@ from backend.models import Role, TaskCenterResult, TaskCenterTask, User
 from backend.review_analyzer import generate_task_review
 from backend.review_models import EmployeeScore, KnowledgeFeedback, TaskReview
 from backend.score_calculator import calculate_employee_score
+from tests.test_helpers import latest_alembic_head
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def create_task_with_execution(test_db, status="completed", employee_code="tianshang", error_message=None):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         task = TaskCenterTask(
             title="分析近期爆款手表趋势",
@@ -26,6 +31,7 @@ def create_task_with_execution(test_db, status="completed", employee_code="tians
             assigned_ai_employee_name="天商：商品运营中心",
         )
         db.add(task)
+        _bind_pending_tasks(db)
         db.commit()
         db.refresh(task)
         log = EmployeeExecutionLog(
@@ -50,6 +56,7 @@ def create_task_with_execution(test_db, status="completed", employee_code="tians
                     attachments_json="[]",
                 )
             )
+        _bind_pending_tasks(db)
         db.commit()
         return task.id
     finally:
@@ -57,21 +64,26 @@ def create_task_with_execution(test_db, status="completed", employee_code="tians
 
 
 def create_employee_login(test_db, username="tianshang", role="operator"):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         if not db.query(Role).filter(Role.code == role).first():
             db.add(Role(code=role, name=role, permissions=[]))
+            _bind_pending_tasks(db)
             db.commit()
         user = db.query(User).filter(User.username == username).first()
         if not user:
+            scope_user = db.query(User).filter(User.username == "owner").one()
             user = User(
                 username=username,
                 password_hash=hash_password("password"),
                 role=role,
                 display_name=username,
+                tenant_id=scope_user.tenant_id,
+                company_id=scope_user.company_id,
                 active=True,
             )
             db.add(user)
+            _bind_pending_tasks(db)
             db.commit()
         return username
     finally:
@@ -87,7 +99,7 @@ def login_headers(client, username: str):
 def test_review_learning_tables_and_migration_head():
     assert {"task_reviews", "employee_scores", "knowledge_feedback"} <= set(TaskReview.metadata.tables)
     script = ScriptDirectory.from_config(Config(str(Path("alembic.ini"))))
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
+    assert script.get_heads() == [latest_alembic_head()]
 
 
 def test_reviews_routes_require_login_and_reject_viewer(client, viewer_headers):
@@ -109,7 +121,7 @@ def test_owner_can_generate_review_score_and_feedback(client, owner_headers, tes
     assert data["employee_score"]["task_count"] == 1
     assert data["knowledge_feedback"]["status"] == "draft"
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         task = db.get(TaskCenterTask, task_id)
         assert task.status == "completed"
@@ -133,7 +145,7 @@ def test_failed_review_redacts_sensitive_error(client, owner_headers, test_db):
 def test_employee_can_only_view_own_reviews(client, test_db):
     create_employee_login(test_db, username="tianshang", role="operator")
     task_id = create_task_with_execution(test_db, status="completed", employee_code="tianshang")
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         review = generate_task_review(db, task_id)
         calculate_employee_score(db, review.employee_code)

@@ -16,19 +16,18 @@ def test_skill_center_frontend_contains_employee_skill_fields():
     html = read_page()
 
     for text in [
-        "AI员工技能资产管理中心",
-        "技能名称",
-        "所属AI员工",
-        "技能版本",
-        "使用次数",
-        "成功率",
-        "风险等级",
-        "更新时间",
+        "统一 Skills Engine",
+        "技能总数",
+        "已安装数量",
+        "已启用数量",
+        "待审核数量",
+        "高风险数量",
+        "技能列表",
+        "执行记录",
         "查看详情",
-        "技能详情",
-        "readonly安全模式",
+        "默认只读展示",
         "暂无数据",
-        "当前数据暂不可用",
+        "技能中心已加载，当前为只读管理视图。",
     ]:
         assert text in html
 
@@ -36,10 +35,10 @@ def test_skill_center_frontend_contains_employee_skill_fields():
 def test_skill_center_frontend_uses_ai_employee_skill_apis():
     html = read_page()
 
-    assert "/api/ai-employee-skills/skills" in html
-    assert "/api/ai-employee-skills/skills/" in html
-    assert "loadSkillDetail" in html
-    assert "successRateText" in html
+    assert "/api/v2/skills" in html
+    assert "/api/v2/skills/invocations" in html
+    assert "renderSkills" in html
+    assert "renderInvocations" in html
 
 
 def test_skill_center_frontend_does_not_expose_dangerous_entries():
@@ -48,16 +47,13 @@ def test_skill_center_frontend_does_not_expose_dangerous_entries():
         "Execution Engine",
         "OpenClaw",
         "n8n",
-        "自动调用技能",
         "自动安装技能",
         "自动升级技能",
-        "调用技能",
-        "安装技能",
-        "升级技能",
         "修改权限",
         "立即执行",
         "/api/execution",
         "/ai-execution.html",
+        "shell_execute",
     ]
 
     for text in forbidden:
@@ -68,4 +64,4 @@ def test_skill_center_frontend_page_is_served(client):
     response = client.get("/skill-center.html")
 
     assert response.status_code == 200
-    assert "Skill Center V1" in response.text
+    assert "技能中心" in response.text

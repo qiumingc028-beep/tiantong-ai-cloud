@@ -7,6 +7,10 @@ from backend.main import app
 from backend.models import AiEmployee, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
 from backend.routers.employee_activity_log import orchestrator_blocker_reason
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 API_PATH = "/api/employee-activity-log/overview"
@@ -90,7 +94,7 @@ def test_employee_activity_log_response_shape(client, owner_headers):
 
 
 def seed_activity_data(test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         if not db.query(AiEmployee).filter(AiEmployee.employee_code == "log_tianwang").one_or_none():
             db.add(
@@ -122,6 +126,7 @@ def seed_activity_data(test_db):
         )
         created = TaskCenterTask(title="Sprint 8 confirmation task", status="created")
         db.add_all([task, blocked, created])
+        _bind_pending_tasks(db)
         db.flush()
         db.add_all(
             [
@@ -148,9 +153,11 @@ def seed_activity_data(test_db):
             safety_flags_json=json.dumps(["manual_review"]),
         )
         db.add(analysis)
+        _bind_pending_tasks(db)
         db.flush()
         db.add(OrchestratorTaskLink(analysis_record_id=analysis.id, task_id=task.id, link_type="created_from_draft", recommended_codex="log_tianwang", source_stage="backend"))
         db.add(DeployRecord(deploy_version="Sprint 8", commit_hash="abc123", branch="main", operator="log_tianwang", status="success", note="deployed"))
+        _bind_pending_tasks(db)
         db.commit()
         return task.id, blocked.id, created.id
     finally:
@@ -195,7 +202,7 @@ def test_employee_activity_log_generates_action_types_and_filters(client, owner_
 
 
 def test_employee_activity_log_handles_empty_sources(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.query(OrchestratorTaskLink).delete()
         db.query(OrchestratorAnalysisRecord).delete()
@@ -205,6 +212,7 @@ def test_employee_activity_log_handles_empty_sources(client, owner_headers, test
         db.query(TaskCenterTask).delete()
         db.query(DeployRecord).delete()
         db.query(AiEmployee).delete()
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -251,7 +259,7 @@ def test_orchestrator_blocker_reason_handles_mixed_flag_shapes():
 
 
 def test_employee_activity_log_handles_mixed_orchestrator_flags(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         db.add(
             OrchestratorAnalysisRecord(
@@ -276,6 +284,7 @@ def test_employee_activity_log_handles_mixed_orchestrator_flags(client, owner_he
                 ),
             )
         )
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -291,7 +300,7 @@ def test_employee_activity_log_handles_mixed_orchestrator_flags(client, owner_he
 
 def test_employee_activity_log_is_read_only_and_limit_is_capped(client, owner_headers, test_db):
     task_id, _, _ = seed_activity_data(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         before = db.get(TaskCenterTask, task_id).status
     finally:
@@ -302,7 +311,7 @@ def test_employee_activity_log_is_read_only_and_limit_is_capped(client, owner_he
     data = response.json()
     assert len(data["logs"]) <= 200
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         assert db.get(TaskCenterTask, task_id).status == before
     finally:

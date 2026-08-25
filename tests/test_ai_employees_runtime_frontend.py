@@ -27,6 +27,10 @@ def test_ai_employees_runtime_panel_adds_no_execution_controls():
 
     forbidden_labels = ["自动执行", "自动部署", "修改权限", "安装插件", "执行任务", "调用工具"]
     button_lines = [line for line in runtime_section.splitlines() if "<button" in line]
-    assert button_lines == ['          <button class="secondary" onclick="loadRuntimeStatus()">刷新运行状态</button>']
+    assert len(button_lines) == 1
+    assert 'class="secondary"' in button_lines[0]
+    assert 'data-rbac-action="ai-employees-003"' in button_lines[0]
+    assert "onclick" not in button_lines[0]
+    assert "刷新运行状态" in button_lines[0]
     for line in button_lines:
         assert not any(label in line for label in forbidden_labels)

@@ -1,6 +1,7 @@
 # 天统AI云中台
 
-当前正式版本：**1.0.1**（TIANTONG AI Cloud V1.0.1）
+当前生产版本：**1.0.1**（TIANTONG AI Cloud V1.0.1）。
+当前待发布候选：**V2 Usable V1 S1**；PR #34 仍为 OPEN，尚未合并、尚未生产部署。
 产品定位：Enterprise AI Operating System。
 
 天统AI云中台是公司内部电商经营管理系统，覆盖老板驾驶舱、员工登录、京东60店数据中心、今日数据录入、Excel批量导入、京东商智/京准通采集、AI店长分析和AI员工任务系统。
@@ -36,7 +37,7 @@ V1 安全边界：
 - V1 不接入 OpenClaw、n8n。
 - V1 不允许绕过 Task Center / 审批链自动执行业务动作。
 
-V2 的 Agent Runtime、Capability Layer、Skills Engine、Enterprise Memory、Browser/Desktop/Mobile Use、多模型路由及 AI 员工自主执行不属于 V1.0.1 发布范围。
+V2 Usable V1 S1 候选已包含 Agent Runtime、Capability Layer、Skills Engine、Computer Workflow、Research Runtime 与 Task Center 闭环；这些能力属于本次候选范围，但在 PR 合并及受控生产门禁完成前不代表已生产发布。
 
 ## 生产发布入口
 
@@ -274,8 +275,10 @@ alembic upgrade head
 当前 Alembic head：
 
 ```text
-0002_jd_collection_tables
+0047_skill_invocation_audit_scope
 ```
+
+本地与 CI 验证使用隔离 PostgreSQL 16、Redis 7 和完整 Git 历史。CI 通过 `fetch-depth: 0` 取得历史提交，数据库及 Redis 均指向 job-local loopback 服务；backend/worker 测试镜像从当前候选提交和固定哈希 wheelhouse 构建，不得引用生产服务或不受控 `latest` 镜像。
 
 ## 环境变量
 

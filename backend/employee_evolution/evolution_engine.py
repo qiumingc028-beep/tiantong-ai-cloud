@@ -8,6 +8,7 @@ from ..dispatch_models import EmployeeExecutionLog
 from ..evolution_models import EmployeeGrowth, ReviewAnalysis, RiskEvent, SkillSuggestion
 from ..models import TaskCenterResult, TaskCenterTask
 from ..review_models import EmployeeScore, TaskReview
+from ..task_center_ownership import owned_task_or_none
 
 
 HIGH_RISK_WORDS = {
@@ -43,7 +44,7 @@ def analyze_employee_evolution(db: Session, payload: EvolutionPayload) -> dict:
     employee_code = payload.employee_code
     task_id = payload.task_id
     if task_id:
-        task = db.get(TaskCenterTask, task_id)
+        task = owned_task_or_none(db, task_id=task_id)
         if not task:
             raise ValueError("task not found")
         employee_code = employee_code or task.assigned_ai_employee_code

@@ -1,6 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
 from backend.models import AiEmployee, TaskCenterTask
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 def test_daily_summary_requires_login(client):
@@ -42,7 +46,7 @@ def test_daily_summary_response_shape(client, owner_headers):
 
 
 def test_daily_summary_counts_operating_metrics(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         old_time = datetime.now(timezone.utc) - timedelta(days=2)
         db.add(TaskCenterTask(title="old task", status="created", created_at=old_time, updated_at=old_time))
@@ -51,6 +55,7 @@ def test_daily_summary_counts_operating_metrics(client, owner_headers, test_db):
         db.add(TaskCenterTask(title="today running", status="running", assigned_ai_employee_code="tianwang"))
         db.add(TaskCenterTask(title="today completed", status="summarized", assigned_ai_employee_code="tiantong"))
         db.add(TaskCenterTask(title="today failed", status="rejected", assigned_ai_employee_code="tianwang"))
+        _bind_pending_tasks(db)
         db.commit()
     finally:
         db.close()
@@ -69,7 +74,7 @@ def test_daily_summary_counts_operating_metrics(client, owner_headers, test_db):
 
 
 def test_daily_summary_is_readonly(client, owner_headers, test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         before_tasks = db.query(TaskCenterTask).count()
         before_employees = db.query(AiEmployee).count()
@@ -79,7 +84,7 @@ def test_daily_summary_is_readonly(client, owner_headers, test_db):
     response = client.get("/api/ceo-dashboard/daily-summary", headers=owner_headers)
     assert response.status_code == 200
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         assert db.query(TaskCenterTask).count() == before_tasks
         assert db.query(AiEmployee).count() == before_employees

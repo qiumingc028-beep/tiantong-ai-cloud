@@ -1,14 +1,17 @@
 import json
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .ai_employees.registry import AI_EMPLOYEE_REGISTRY, TIANBO, TIANCAI_DATA, TIANCE_STRATEGY, TIANSHU
 from .auth import hash_password, verify_password
 from .auth_data import ROLE_LABELS
 from .config import get_settings
-from .models import AiEmployee, AiTask, Permission, Role, User
+from .models import AiEmployee, AiTask, Company, Permission, Role, Store, Tenant, User, UserStoreMembership
+from .skills_engine.registry import ensure_default_skills, resolve_manager_user
 
 
 BOSS_USERNAME = "boss"
+SEED_ADVISORY_LOCK_KEY = 0x5449414E544F4E47
 
 
 PERMISSIONS = [
@@ -20,6 +23,9 @@ PERMISSIONS = [
     ("menu.metrics", "今日数据录入"),
     ("menu.import", "Excel导入"),
     ("menu.ai_assets", "AI素材中心"),
+    ("menu.skills_center", "技能中心"),
+    ("menu.computer_executor", "电脑执行中心"),
+    ("menu.device_center", "测试设备中心"),
     ("menu.tiancang", "天藏：知识资产中心"),
     ("menu.workflows", "AI工作流"),
     ("menu.ai_employees", "AI员工管理"),
@@ -30,6 +36,16 @@ PERMISSIONS = [
     ("stores.manage", "管理店铺"),
     ("ai.tasks.read", "读取AI员工任务"),
     ("ai.tasks.manage", "管理AI员工任务"),
+    ("skills.read", "读取技能中心"),
+    ("skills.manage", "管理技能中心"),
+    ("skills.install", "安装技能"),
+    ("skills.invoke", "调用技能"),
+    ("skills.audit", "审计技能"),
+    ("computer_executor.read", "读取电脑执行中心"),
+    ("computer_executor.manage", "管理电脑执行中心"),
+    ("device_center.read", "读取测试设备中心"),
+    ("device_center.manage", "管理测试设备中心"),
+    ("device_center.audit", "审计测试设备中心"),
 ]
 
 ROLE_PERMISSIONS = {
@@ -39,6 +55,7 @@ ROLE_PERMISSIONS = {
         "menu.dashboard", "menu.stores", "menu.jd_data", "menu.ads",
         "menu.metrics", "menu.import", "menu.workflows",
         "data.metrics.read", "data.metrics.write", "stores.manage", "ai.tasks.read",
+        "skills.read",
     ],
     "customer_service": ["menu.dashboard", "menu.metrics", "data.metrics.read", "data.metrics.write", "ai.tasks.read"],
     "designer": ["menu.ai_assets", "menu.workflows", "ai.tasks.read"],
@@ -89,11 +106,44 @@ REAL_AI_EMPLOYEES = [
 
 PERMISSIONS.append(("menu.account_center", "账号资料中心"))
 for role_code in ("owner", "admin", "operator"):
-    ROLE_PERMISSIONS.setdefault(role_code, []).append("menu.account_center")
+    ROLE_PERMISSIONS.setdefault(role_code, []).extend(["menu.account_center"])
+for role_code in ("owner", "admin"):
+    ROLE_PERMISSIONS.setdefault(role_code, []).append("menu.computer_executor")
+    ROLE_PERMISSIONS.setdefault(role_code, []).append("menu.device_center")
+    ROLE_PERMISSIONS.setdefault(role_code, []).extend(["computer_executor.read", "computer_executor.manage"])
+    ROLE_PERMISSIONS.setdefault(role_code, []).extend(["device_center.read", "device_center.manage", "device_center.audit"])
+
+
+def _acquire_seed_lock(db: Session) -> None:
+    """Serialize PostgreSQL seed transactions without weakening uniqueness."""
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": SEED_ADVISORY_LOCK_KEY},
+        )
 
 
 def seed_defaults(db: Session):
+    _acquire_seed_lock(db)
     boss_initial_password = get_settings().BOSS_INITIAL_PASSWORD
+    tenant = db.query(Tenant).filter(Tenant.tenant_code == "default").one_or_none()
+    if not tenant:
+        tenant = Tenant(tenant_code="default", tenant_name="Default Tenant", active=True)
+        db.add(tenant)
+        db.flush()
+    company = db.query(Company).filter(
+        Company.tenant_id == tenant.id,
+        Company.company_code == "default",
+    ).one_or_none()
+    if not company:
+        company = Company(
+            tenant_id=tenant.id,
+            company_code="default",
+            company_name="Default Company",
+            active=True,
+        )
+        db.add(company)
+        db.flush()
     permission_by_code = {}
     for code, name in PERMISSIONS:
         permission = db.query(Permission).filter(Permission.code == code).one_or_none()
@@ -111,19 +161,27 @@ def seed_defaults(db: Session):
             db.add(role)
         else:
             role.name = label
-        role.permissions = [permission_by_code[p] for p in ROLE_PERMISSIONS.get(code, [])]
+        role.permissions = [
+            permission_by_code[p]
+            for p in dict.fromkeys(ROLE_PERMISSIONS.get(code, []))
+        ]
 
     boss_user = db.query(User).filter(User.username == BOSS_USERNAME).one_or_none()
+    boss_created = boss_user is None
     if not boss_user:
         boss_user = User(
             username=BOSS_USERNAME,
             password_hash=hash_password(boss_initial_password),
             role="boss",
             display_name="老板",
+            tenant_id=tenant.id,
+            company_id=company.id,
             active=True,
         )
         db.add(boss_user)
     else:
+        if boss_user.tenant_id != tenant.id or boss_user.company_id != company.id:
+            raise ValueError("boss account exists outside the default tenant/company scope")
         boss_user.role = "boss"
         boss_user.display_name = boss_user.display_name or "老板"
         boss_user.active = True
@@ -151,7 +209,23 @@ def seed_defaults(db: Session):
         employee.is_legacy = False
         employee.sort_order = sort_order
 
+    db.flush()
+    if boss_created:
+        for store in db.query(Store).filter(
+            Store.tenant_id == tenant.id,
+            Store.company_id == company.id,
+        ):
+            db.add(
+                UserStoreMembership(
+                    user_id=boss_user.id,
+                    store_id=store.id,
+                    can_read=True,
+                    can_write=True,
+                    active=True,
+                )
+            )
     db.commit()
+    ensure_default_skills(db, created_by=(resolve_manager_user(db).id if resolve_manager_user(db) else None))
 
 PERMISSIONS.extend([
 ])
@@ -187,4 +261,9 @@ for role_code in ("owner", "admin"):
         "orchestrator.read",
         "orchestrator.analyze",
         "orchestrator.confirm",
+        "skills.read",
+        "skills.manage",
+        "skills.install",
+        "skills.invoke",
+        "skills.audit",
     ])

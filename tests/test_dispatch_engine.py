@@ -6,6 +6,7 @@ from alembic.script import ScriptDirectory
 from backend.execution_engine import process_next_execution_task
 from backend.dispatch_models import DispatchRecord, EmployeeExecutionLog
 from backend.models import TaskCenterResult, TaskCenterTask
+from tests.test_helpers import latest_alembic_head
 
 
 def create_task(client, headers, title="实现后端 API", description="新增 backend api 并补 pytest", priority="normal"):
@@ -203,4 +204,4 @@ def test_auto_dispatch_overview_and_reference_data(client, owner_headers):
 def test_auto_dispatch_migration_is_single_head():
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0027_v1_schema_alignment"]
+    assert script.get_heads() == [latest_alembic_head()]

@@ -16,6 +16,7 @@ from ..services.ai_employee_growth_system import (
 )
 from ..services.ai_employee_skills import list_employee_skill_assets
 from ..services.ai_workforce_task_flow import WAITING_CONFIRM_STATUSES, map_task_lifecycle_status, risk_level_for_task
+from ..task_center_ownership import owned_tasks_query
 
 
 def build_growth_overview(db: Session) -> dict:
@@ -114,7 +115,7 @@ def growth_timeline(db: Session, employee_id: str) -> list[dict]:
 
 
 def task_completion_overview(db: Session) -> dict:
-    rows = db.query(TaskCenterTask).all()
+    rows = owned_tasks_query(db).all()
     total = len(rows)
     completed = sum(1 for task in rows if task.status in SUCCESS_STATUSES)
     failed = sum(1 for task in rows if task.status in FAILURE_STATUSES)
@@ -139,7 +140,7 @@ def skill_overview(skills: list[dict]) -> dict:
 
 
 def risk_overview(db: Session) -> dict:
-    tasks = db.query(TaskCenterTask).all()
+    tasks = owned_tasks_query(db).all()
     high_risk = [task for task in tasks if risk_level_for_task(task) == "high"]
     medium_risk = [task for task in tasks if risk_level_for_task(task) == "medium"]
     return {
@@ -184,7 +185,7 @@ def find_employee(db: Session, employee_id: str) -> AiEmployee | None:
 
 def tasks_for_employee(db: Session, employee_id: str) -> list[TaskCenterTask]:
     return (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.assigned_ai_employee_code == employee_id)
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .all()

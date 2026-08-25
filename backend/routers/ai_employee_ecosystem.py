@@ -8,6 +8,7 @@ from ..auth_data import normalize_role
 from ..database import get_db
 from ..models import User
 from ..services.ai_employee_ecosystem_overview import build_ai_employee_ecosystem_overview
+from ..task_center_ownership import bind_session_task_ownership
 
 
 router = APIRouter(prefix="/api/ai-employee-ecosystem")
@@ -18,6 +19,7 @@ ALLOWED_ROLES = {"owner", "admin", "viewer"}
 @router.get("/overview")
 def get_ai_employee_ecosystem_overview(request: Request, db: Session = Depends(get_db)):
     user = require_ai_employee_ecosystem_user(request, db)
+    bind_session_task_ownership(db, user=user)
     return build_ai_employee_ecosystem_overview(db, user)
 
 

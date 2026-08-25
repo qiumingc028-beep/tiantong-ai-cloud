@@ -9,6 +9,7 @@ from ..auth import current_user
 from ..auth_data import normalize_role
 from ..database import get_db
 from ..models import TaskCenterTask
+from ..task_center_ownership import bind_session_task_ownership, owned_tasks_query
 
 
 router = APIRouter(prefix="/api/approval-center")
@@ -19,7 +20,7 @@ HIGH_RISK_PRIORITIES = {"high", "critical", "urgent"}
 
 @router.get("/pending")
 def get_pending_approvals(request: Request, db: Session = Depends(get_db)):
-    require_approval_center_user(request, db)
+    bind_session_task_ownership(db, user=require_approval_center_user(request, db))
     items = build_pending_approval_items(db)
     return {
         "readonly": True,
@@ -38,7 +39,7 @@ def require_approval_center_user(request: Request, db: Session):
 
 def build_pending_approval_items(db: Session) -> list[dict]:
     rows = (
-        db.query(TaskCenterTask)
+        owned_tasks_query(db)
         .filter(TaskCenterTask.status.in_(APPROVAL_STATUSES))
         .order_by(TaskCenterTask.updated_at.desc(), TaskCenterTask.id.desc())
         .limit(50)

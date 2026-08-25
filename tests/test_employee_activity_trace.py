@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 from backend.deploy_models import DeployRecord
 from backend.main import app
-from backend.models import AiEmployee, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask
+from backend.models import AiEmployee, TaskCenterAuditLog, TaskCenterResult, TaskCenterReview, TaskCenterTask, User
 from backend.orchestrator_models import OrchestratorAnalysisRecord, OrchestratorTaskLink
+from tests.task_center_ownership_helpers import (
+    bind_pending_tasks as _bind_pending_tasks,
+    owner_db as _owner_db,
+)
 
 
 BASE = "/api/employee-activity-trace"
@@ -44,7 +49,7 @@ def trace_paths(task_id: int = 1, employee_code: str = "trace_tianwang", log_id:
 
 
 def seed_trace_data(test_db):
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         employee = AiEmployee(
             employee_code="trace_tianwang",
@@ -67,6 +72,7 @@ def seed_trace_data(test_db):
             assigned_ai_employee_name="追溯天王",
         )
         db.add(task)
+        _bind_pending_tasks(db)
         db.flush()
         db.add_all(
             [
@@ -92,6 +98,7 @@ def seed_trace_data(test_db):
             safety_flags_json=json.dumps(["manual_review", {"message": "字典安全标记"}, [["嵌套标记"]]]),
         )
         db.add(analysis)
+        _bind_pending_tasks(db)
         db.flush()
         db.add(
             OrchestratorTaskLink(
@@ -103,6 +110,7 @@ def seed_trace_data(test_db):
             )
         )
         db.add(DeployRecord(deploy_version="Sprint 9", commit_hash="abc123", branch="main", operator="trace_tianwang", status="success", note="deployed"))
+        _bind_pending_tasks(db)
         db.commit()
         return task.id
     finally:
@@ -133,11 +141,84 @@ def test_employee_activity_trace_rejects_low_privilege(client):
 
 def test_employee_activity_trace_allows_privileged_users(client, boss_headers, owner_headers, admin_headers, test_db):
     task_id = seed_trace_data(test_db)
-    paths = trace_paths(task_id=task_id, log_id=f"task_center-{task_id}-task_created")
-    for headers in [boss_headers, owner_headers, admin_headers]:
-        for path in paths:
-            response = client.get(path, headers=headers)
+    db = test_db()
+    try:
+        users = {username: db.query(User).filter(User.username == username).one() for username in ("owner", "admin", "boss")}
+        ownerless = TaskCenterTask(title="Intentional ownerless trace fixture", status="accepted")
+        db.add(ownerless)
+        db.flush()
+        owner_user_id = int(users["owner"].id)
+        admin_user_id = int(users["admin"].id)
+        boss_user_id = int(users["boss"].id)
+        ownerless_id = int(ownerless.id)
+        assert {"owner": owner_user_id, "admin": admin_user_id, "boss": boss_user_id} == {"owner": 1, "admin": 2, "boss": 3}
+        db.commit()
+    finally:
+        db.close()
+
+    def object_state():
+        db = test_db()
+        try:
+            state = {}
+            for model in (TaskCenterTask, TaskCenterResult, TaskCenterAuditLog, TaskCenterReview):
+                rows = db.query(model).order_by(model.id.asc()).all()
+                payloads = [
+                    {column.name: getattr(row, column.name) for column in model.__table__.columns}
+                    for row in rows
+                ]
+                canonical = json.dumps(payloads, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+                state[model.__tablename__] = {
+                    "primary_keys": tuple(row.id for row in rows),
+                    "content_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+                }
+            return state
+        finally:
+            db.close()
+
+    def get_as(headers, expected_user_id, path):
+        client.cookies.clear()
+        identity = client.get("/api/me", headers=headers)
+        assert identity.status_code == 200
+        assert identity.json()["id"] == expected_user_id
+        client.cookies.clear()
+        return client.get(path, headers=headers)
+
+    before = object_state()
+    log_path = f"{BASE}/logs/task_center-{task_id}-task_created/trace"
+    task_path = f"{BASE}/tasks/{task_id}/trace"
+    owner_paths = [log_path, task_path, f"{BASE}/employees/trace_tianwang/trace", f"{BASE}/trace-overview"]
+    for path in owner_paths:
+        response = get_as(owner_headers, owner_user_id, path)
+        assert response.status_code == 200
+        if path in {log_path, task_path}:
+            assert response.json()["task"]["task_id"] == task_id
+
+    missing_id = max(task_id, ownerless_id) + 99999
+    object_paths = [
+        (log_path, f"{BASE}/logs/task_center-{missing_id}-task_created/trace"),
+        (task_path, f"{BASE}/tasks/{missing_id}/trace"),
+    ]
+    for expected_user_id, headers in ((boss_user_id, boss_headers), (admin_user_id, admin_headers)):
+        for foreign_path, missing_path in object_paths:
+            foreign = get_as(headers, expected_user_id, foreign_path)
+            missing = get_as(headers, expected_user_id, missing_path)
+            assert (foreign.status_code, foreign.json()) == (missing.status_code, missing.json())
+            assert foreign.status_code == 404
+        for path in (f"{BASE}/employees/trace_tianwang/trace", f"{BASE}/trace-overview"):
+            response = get_as(headers, expected_user_id, path)
             assert response.status_code == 200
+            assert response.json()["task"] == {} if "employees" in path else response.json()["summary"]["total_tasks"] == 0
+
+    for ownerless_path, missing_path in (
+        (f"{BASE}/logs/task_center-{ownerless_id}-task_created/trace", f"{BASE}/logs/task_center-{missing_id}-task_created/trace"),
+        (f"{BASE}/tasks/{ownerless_id}/trace", f"{BASE}/tasks/{missing_id}/trace"),
+    ):
+        ownerless_response = get_as(owner_headers, owner_user_id, ownerless_path)
+        missing_response = get_as(owner_headers, owner_user_id, missing_path)
+        assert (ownerless_response.status_code, ownerless_response.json()) == (missing_response.status_code, missing_response.json())
+        assert ownerless_response.status_code == 404
+
+    assert object_state() == before
 
 
 def assert_trace_shape(data):
@@ -177,17 +258,159 @@ def test_employee_activity_trace_response_schema_and_content(client, owner_heade
     assert "嵌套标记" in data["safety_flags"]
 
 
-def test_employee_activity_trace_handles_empty_and_missing_data(client, owner_headers):
-    response = client.get(f"{BASE}/employees/missing_employee/trace", headers=owner_headers)
-    assert response.status_code == 200
-    data = response.json()
-    assert_trace_shape(data)
-    assert data["trace_nodes"] == []
-    assert data["employee"]["employee_code"] == "missing_employee"
+def test_employee_activity_trace_handles_empty_and_missing_data(client, owner_headers, test_db):
+    from backend.task_center_ownership import bind_task_ownership
 
-    response = client.get(f"{BASE}/trace-overview", headers=owner_headers)
-    assert response.status_code == 200
-    assert_trace_shape(response.json())
+    trace_keys = {
+        "summary",
+        "trace_nodes",
+        "trace_edges",
+        "employee",
+        "task",
+        "orchestrator_source",
+        "boss_confirmation",
+        "review_status",
+        "audit_status",
+        "deploy_status",
+        "git_commit",
+        "blockers",
+        "missing_steps",
+        "next_suggestion",
+        "safety_flags",
+    }
+
+    def database_state():
+        db = test_db()
+        try:
+            state = {}
+            for model in (
+                AiEmployee,
+                TaskCenterTask,
+                TaskCenterResult,
+                TaskCenterAuditLog,
+                TaskCenterReview,
+                OrchestratorAnalysisRecord,
+                OrchestratorTaskLink,
+                DeployRecord,
+            ):
+                payloads = [
+                    {column.name: getattr(row, column.name) for column in model.__table__.columns}
+                    for row in db.query(model).all()
+                ]
+                canonical_rows = sorted(
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+                    for payload in payloads
+                )
+                state[model.__tablename__] = hashlib.sha256("\n".join(canonical_rows).encode("utf-8")).hexdigest()
+            return state
+        finally:
+            db.close()
+
+    def expected_empty_employee_trace(requested_code):
+        return {
+            "summary": {
+                "trace_type": "employee",
+                "total_nodes": 0,
+                "total_edges": 0,
+                "has_blocker": False,
+                "missing_steps": 0,
+            },
+            "trace_nodes": [],
+            "trace_edges": [],
+            "employee": {"employee_code": requested_code},
+            "task": {},
+            "orchestrator_source": {},
+            "boss_confirmation": {},
+            "review_status": {},
+            "audit_status": {},
+            "deploy_status": {},
+            "git_commit": {},
+            "blockers": [],
+            "missing_steps": [],
+            "next_suggestion": "继续跟进任务流转",
+            "safety_flags": [],
+        }
+
+    def assert_empty_employee_trace(response, requested_code):
+        assert response.status_code == 200
+        data = response.json()
+        assert set(data) == trace_keys
+        assert data == expected_empty_employee_trace(requested_code)
+        return data
+
+    empty_before = database_state()
+    empty = client.get(f"{BASE}/employees/missing_employee/trace", headers=owner_headers)
+    empty_data = assert_empty_employee_trace(empty, "missing_employee")
+    assert database_state() == empty_before
+
+    seed_trace_data(test_db)
+    foreign_employee_code = "trace_foreign_r211"
+    db = test_db()
+    try:
+        boss = db.query(User).filter(User.username == "boss").one()
+        db.add(
+            AiEmployee(
+                employee_code=foreign_employee_code,
+                employee_name="外域追溯员工",
+                legion="外域",
+                duty="外域追溯",
+                status="active",
+                task_types='["foreign"]',
+                default_permissions="[]",
+                is_legacy=False,
+                sort_order=902,
+            )
+        )
+        foreign_task = TaskCenterTask(
+            title="Foreign employee trace task",
+            status="accepted",
+            assigned_ai_employee_code=foreign_employee_code,
+            assigned_ai_employee_name="外域追溯员工",
+        )
+        db.add(foreign_task)
+        bind_task_ownership(db, foreign_task, user=boss)
+        db.add(
+            DeployRecord(
+                deploy_version="R211 foreign",
+                commit_hash="foreign-commit",
+                branch="foreign",
+                operator=foreign_employee_code,
+                status="success",
+                note="must remain invisible",
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    populated_before = database_state()
+    missing = client.get(f"{BASE}/employees/missing_employee/trace", headers=owner_headers)
+    missing_data = assert_empty_employee_trace(missing, "missing_employee")
+    foreign = client.get(f"{BASE}/employees/{foreign_employee_code}/trace", headers=owner_headers)
+    foreign_data = assert_empty_employee_trace(foreign, foreign_employee_code)
+
+    normalized_missing = json.loads(json.dumps(missing_data, ensure_ascii=False))
+    normalized_foreign = json.loads(json.dumps(foreign_data, ensure_ascii=False))
+    normalized_missing["employee"]["employee_code"] = "<requested_employee>"
+    normalized_foreign["employee"]["employee_code"] = "<requested_employee>"
+    assert normalized_missing == normalized_foreign == expected_empty_employee_trace("<requested_employee>")
+    assert foreign_employee_code not in json.dumps(missing_data, ensure_ascii=False)
+    assert "tiandun" not in json.dumps(missing_data, ensure_ascii=False)
+    assert "tiandun" not in json.dumps(foreign_data, ensure_ascii=False)
+
+    owner = client.get(f"{BASE}/employees/trace_tianwang/trace", headers=owner_headers)
+    assert owner.status_code == 200
+    owner_data = owner.json()
+    assert set(owner_data) == trace_keys
+    assert owner_data["trace_nodes"]
+    assert owner_data["summary"]["total_nodes"] == len(owner_data["trace_nodes"])
+    assert owner_data["employee"]["employee_code"] == "trace_tianwang"
+    assert foreign_employee_code not in json.dumps(owner_data, ensure_ascii=False)
+
+    overview = client.get(f"{BASE}/trace-overview", headers=owner_headers)
+    assert overview.status_code == 200
+    assert_trace_shape(overview.json())
+    assert database_state() == populated_before
 
 
 def test_employee_activity_trace_handles_mixed_values_without_500(client, owner_headers, test_db):
@@ -212,7 +435,7 @@ def test_employee_activity_trace_does_not_return_sensitive_fields(client, owner_
 
 def test_employee_activity_trace_is_read_only(client, owner_headers, test_db):
     task_id = seed_trace_data(test_db)
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         before = db.get(TaskCenterTask, task_id).status
     finally:
@@ -221,7 +444,7 @@ def test_employee_activity_trace_is_read_only(client, owner_headers, test_db):
     response = client.get(f"{BASE}/tasks/{task_id}/trace", headers=owner_headers)
     assert response.status_code == 200
 
-    db = test_db()
+    db = _owner_db(test_db)
     try:
         assert db.get(TaskCenterTask, task_id).status == before
     finally:

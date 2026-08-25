@@ -18,6 +18,7 @@ from ..employee_evolution.evolution_engine import (
 )
 from ..evolution_models import EmployeeGrowth, ReviewAnalysis, RiskEvent, SkillSuggestion
 from ..models import TaskCenterTask, User
+from ..task_center_ownership import bind_session_task_ownership, owned_task_or_none
 
 
 router = APIRouter(prefix="/api/employee-evolution")
@@ -122,7 +123,7 @@ def resolve_employee_code(payload: AnalyzePayload, db: Session) -> str | None:
     if payload.employee_code:
         return payload.employee_code
     if payload.task_id:
-        task = db.get(TaskCenterTask, payload.task_id)
+        task = owned_task_or_none(db, task_id=payload.task_id)
         return task.assigned_ai_employee_code if task else None
     return None
 
@@ -133,6 +134,7 @@ def require_evolution_user(request: Request, db: Session) -> User:
     if role == "viewer":
         raise HTTPException(status_code=403, detail="无自学习进化中心访问权限")
     if role in PRIVILEGED_ROLES or role in EMPLOYEE_ROLES or role in AUDIT_ROLES:
+        bind_session_task_ownership(db, user=user)
         return user
     raise HTTPException(status_code=403, detail="无自学习进化中心访问权限")
 
