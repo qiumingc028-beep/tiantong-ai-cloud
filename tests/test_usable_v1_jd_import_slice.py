@@ -1,9 +1,11 @@
 import asyncio
 import contextvars
-from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import date
 from io import BytesIO
-from threading import Barrier, BrokenBarrierError, Lock
+from multiprocessing import get_context
+import os
+from queue import Empty
+from threading import Lock
 from time import monotonic
 from types import MappingProxyType
 
@@ -14,6 +16,105 @@ from sqlalchemy import event, select, text
 from backend.database import Base, get_db
 from backend.main import app
 from backend.models import Company, EmployeeLog, JdDailyMetric, MetricDaily, Permission, Role, Store, Tenant, User, UserStoreMembership
+
+
+def _r248_child_import(worker, owner_headers, store_id, csv_data, entry_barrier, lock_barrier, results):
+    client = None
+    listener_installed = False
+    original_persist = None
+    original_call_count = 0
+    observation = {
+        "kind": "final",
+        "worker": worker,
+        "process_pid": os.getpid(),
+        "client_created": 0,
+        "client_closed": 0,
+        "forced_termination": 0,
+    }
+    try:
+        from backend.database import engine
+        from backend.main import app as child_app
+        from backend.routers import metrics
+
+        original_persist = metrics.persist_metric_import
+        observation["import_lock_id"] = id(metrics.IMPORT_LOCK)
+
+        def synchronize_store_lock(_connection, _cursor, statement, _parameters, _context, _executemany):
+            normalized = " ".join(statement.upper().split())
+            if observation.get("store_for_update_reached") or "FROM STORES" not in normalized or "FOR UPDATE" not in normalized:
+                return
+            observation["store_for_update_reached"] = True
+            lock_barrier.wait(timeout=15)
+
+        def instrumented_persist(db, user, content, rows, selected_store_id):
+            nonlocal original_call_count
+            assert metrics.IMPORT_LOCK.locked()
+            db.execute(text("SET LOCAL statement_timeout = '15s'"))
+            pg_backend_pid, transaction_id, isolation = db.execute(
+                text("SELECT pg_backend_pid(), txid_current(), current_setting('transaction_isolation')")
+            ).one()
+            observation.update(
+                pg_backend_pid=pg_backend_pid,
+                transaction_id=transaction_id,
+                transaction_isolation=isolation,
+                transaction_open=True,
+            )
+            results.put({
+                "kind": "ready",
+                "worker": worker,
+                "process_pid": observation["process_pid"],
+                "import_lock_id": observation["import_lock_id"],
+                "pg_backend_pid": pg_backend_pid,
+                "transaction_id": transaction_id,
+            })
+            entry_barrier.wait(timeout=20)
+            observation["persist_start"] = monotonic()
+            original_call_count += 1
+            try:
+                return original_persist(db, user, content, rows, selected_store_id)
+            finally:
+                observation["persist_end"] = monotonic()
+
+        event.listen(engine, "before_cursor_execute", synchronize_store_lock)
+        listener_installed = True
+        metrics.persist_metric_import = instrumented_persist
+        client = TestClient(child_app)
+        observation["client_created"] = 1
+        observation["cookie_count_before"] = len(client.cookies)
+        assert observation["cookie_count_before"] == 0
+        headers = dict(owner_headers)
+        assert headers.get("Authorization", "").startswith("Bearer ")
+        response = client.post(
+            "/api/metrics/import",
+            headers=headers,
+            data={"store_id": str(store_id)},
+            files={"file": ("same.csv", csv_data, "text/csv")},
+        )
+        observation.update(
+            auth_path="bearer",
+            authorization_present=True,
+            cookie_count_after=len(client.cookies),
+            status=response.status_code,
+            response_json=response.json(),
+            duplicate=response.json().get("duplicate"),
+        )
+    except BaseException as exc:
+        observation["error_type"] = type(exc).__name__
+    finally:
+        if client is not None:
+            client.close()
+            observation["client_closed"] = 1
+        if original_persist is not None:
+            metrics.persist_metric_import = original_persist
+        if listener_installed:
+            event.remove(engine, "before_cursor_execute", synchronize_store_lock)
+            observation["listener_removed"] = not event.contains(
+                engine, "before_cursor_execute", synchronize_store_lock
+            )
+        observation["original_call_count"] = original_call_count
+        if "engine" in locals():
+            engine.dispose()
+        results.put(observation)
 
 
 def test_rbac_guard_is_served_to_real_browser(client):
@@ -203,6 +304,10 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
     finally:
         close_client(fixture_client)
 
+    def _r248_assert_secret_absent(*values):
+        if any(credential in value for value in values):
+            raise AssertionError("credential exposure detected")
+
     with session_factory() as db:
         owner = db.query(User).filter(User.username == "owner").one()
         owner_store = (
@@ -279,26 +384,17 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
             }
 
     baseline = database_snapshot()
-    request_worker = contextvars.ContextVar("r244_request_worker", default=None)
     dml_phase = contextvars.ContextVar("r245_dml_phase", default=None)
-    observations = {"worker-1": {}, "worker-2": {}}
-    observation_lock = Lock()
-    concurrency_counts = {"barrier_timeout": 0, "future_timeout": 0}
+    process_timeout_counts = {"barrier": 0, "future": 0, "process": 0}
+    forced_target_process_termination_count = 0
     sql_counts = {"foreign": 0, "missing": 0, "get": 0}
     dml_counts = {"foreign": 0, "missing": 0, "get": 0}
     engine = session_factory.kw["bind"]
     previous_override = app.dependency_overrides[get_db]
 
-    def update(worker, **values):
-        with observation_lock:
-            observations[worker].update(values)
-
     def isolated_db():
         db = session_factory()
         db.execute(text("SET LOCAL statement_timeout = '10s'"))
-        worker = request_worker.get()
-        if worker:
-            update(worker, session_identity=id(db))
         try:
             yield db
         finally:
@@ -312,31 +408,17 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
             if scope["type"] != "http":
                 return await self.inner(scope, receive, send)
             headers = {key.lower(): value for key, value in scope.get("headers", [])}
-            worker = headers.get(b"x-r244-diagnostic-id", b"").decode("ascii", "strict")
             phase = headers.get(b"x-r245-dml-phase", b"").decode("ascii", "strict")
-            worker_token = request_worker.set(worker) if worker in observations else None
             phase_token = dml_phase.set(phase) if phase in dml_counts else None
-            if worker_token is not None:
-                update(
-                    worker,
-                    request_start=monotonic(),
-                    auth_path="bearer",
-                    authorization_present=headers.get(b"authorization", b"").startswith(b"Bearer "),
-                    cookie_present=b"cookie" in headers,
-                )
             try:
                 async with asyncio.timeout(15):
                     return await self.inner(scope, receive, send)
             finally:
-                if worker_token is not None:
-                    update(worker, request_end=monotonic())
-                    request_worker.reset(worker_token)
                 if phase_token is not None:
                     dml_phase.reset(phase_token)
 
     app.dependency_overrides[get_db] = isolated_db
     request_app = CorrelatedApp(app)
-    barrier = Barrier(2, timeout=10)
 
     def new_client():
         client = TestClient(request_app)
@@ -344,68 +426,147 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
             client_counts["created"] += 1
         return client
 
-    def upload(worker):
-        worker_client = None
-        try:
-            worker_client = new_client()
-            update(worker, cookie_count_before=len(worker_client.cookies), client_closed=False)
-            assert len(worker_client.cookies) == 0
-            headers = dict(owner_headers)
-            headers["X-R244-Diagnostic-ID"] = worker
-            try:
-                barrier.wait(timeout=10)
-            except BrokenBarrierError:
-                with observation_lock:
-                    concurrency_counts["barrier_timeout"] += 1
-                raise
-            response = worker_client.post(
-                "/api/metrics/import",
-                headers=headers,
-                data={"store_id": str(owner_store_id)},
-                files={"file": ("same.csv", csv_data, "text/csv")},
-            )
-            update(
-                worker,
-                cookie_count_after=len(worker_client.cookies),
-                status=response.status_code,
-                duplicate=response.json().get("duplicate"),
-            )
-            return response
-        except BaseException:
-            barrier.abort()
-            raise
-        finally:
-            if worker_client is not None:
-                close_client(worker_client)
-                update(worker, client_closed=True)
-
     try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [executor.submit(upload, worker) for worker in observations]
-            done, not_done = wait(futures, timeout=30)
-            if not_done:
-                concurrency_counts["future_timeout"] += len(not_done)
-                barrier.abort()
-                for future in not_done:
-                    future.cancel()
-                raise AssertionError("concurrent import futures exceeded 30 seconds")
-            responses = [future.result() for future in futures]
+        spawn = get_context("spawn")
+        result_queue = spawn.Queue()
+        entry_barrier = spawn.Barrier(3, timeout=20)
+        lock_barrier = spawn.Barrier(2, timeout=15)
+        database_url = engine.url.render_as_string(hide_password=False)
+        previous_database_url = os.environ.get("DATABASE_URL")
+        processes = [
+            spawn.Process(
+                target=_r248_child_import,
+                args=(
+                    worker,
+                    dict(owner_headers),
+                    owner_store_id,
+                    csv_data,
+                    entry_barrier,
+                    lock_barrier,
+                    result_queue,
+                ),
+                name=f"r248-{worker}",
+            )
+            for worker in ("worker-1", "worker-2")
+        ]
+        ready = {}
+        observations = {}
+        os.environ["DATABASE_URL"] = database_url
+        try:
+            for process in processes:
+                process.start()
+            while len(ready) < 2:
+                try:
+                    message = result_queue.get(timeout=30)
+                except Empty:
+                    process_timeout_counts["process"] += 1
+                    raise AssertionError("R248 child readiness exceeded 30 seconds")
+                if message["kind"] == "ready":
+                    ready[message["worker"]] = message
+                else:
+                    observations[message["worker"]] = message
+                    raise AssertionError(f"{message['worker']} failed before persistence: {message.get('error_type')}")
 
-        assert [response.status_code for response in responses] == [200, 200]
-        assert sorted(response.json()["duplicate"] for response in responses) == [False, True]
-        assert max(row["request_start"] for row in observations.values()) < min(
-            row["request_end"] for row in observations.values()
+            with session_factory() as db:
+                activity = db.execute(
+                    text(
+                        "SELECT pid, state, xact_start IS NOT NULL AS transaction_open "
+                        "FROM pg_stat_activity WHERE pid IN (:pid_1, :pid_2)"
+                    ),
+                    {
+                        "pid_1": ready["worker-1"]["pg_backend_pid"],
+                        "pid_2": ready["worker-2"]["pg_backend_pid"],
+                    },
+                ).mappings().all()
+            assert len(activity) == 2
+            assert all(row["transaction_open"] and row["state"] == "idle in transaction" for row in activity)
+            try:
+                entry_barrier.wait(timeout=20)
+            except Exception:
+                process_timeout_counts["barrier"] += 1
+                raise
+
+            while len(observations) < 2:
+                try:
+                    message = result_queue.get(timeout=40)
+                except Empty:
+                    process_timeout_counts["process"] += 1
+                    raise AssertionError("R248 child result exceeded 40 seconds")
+                assert message["kind"] == "final"
+                observations[message["worker"]] = message
+
+            for process in processes:
+                process.join(timeout=10)
+                if process.is_alive():
+                    process_timeout_counts["process"] += 1
+                    raise AssertionError(f"{process.name} did not exit within 10 seconds")
+                assert process.exitcode == 0
+        finally:
+            cleanup_failures = []
+            try:
+                for barrier in (entry_barrier, lock_barrier):
+                    try:
+                        barrier.abort()
+                    except BaseException as exc:
+                        cleanup_failures.append(type(exc).__name__)
+                for process in processes:
+                    try:
+                        if process.is_alive():
+                            process.terminate()
+                            process.join(timeout=5)
+                            forced_target_process_termination_count += 1
+                        if process.is_alive():
+                            process.kill()
+                            process.join(timeout=5)
+                        if process.is_alive():
+                            cleanup_failures.append("ProcessStillAlive")
+                    except BaseException as exc:
+                        cleanup_failures.append(type(exc).__name__)
+                for process in processes:
+                    try:
+                        if not process.is_alive():
+                            process.close()
+                    except BaseException as exc:
+                        cleanup_failures.append(type(exc).__name__)
+            finally:
+                try:
+                    if previous_database_url is None:
+                        os.environ.pop("DATABASE_URL", None)
+                    else:
+                        os.environ["DATABASE_URL"] = previous_database_url
+                finally:
+                    result_queue.close()
+                    result_queue.join_thread()
+            if cleanup_failures:
+                raise AssertionError("R248 target-process cleanup failed")
+
+        assert all("error_type" not in row for row in observations.values())
+        assert [observations[worker]["status"] for worker in ("worker-1", "worker-2")] == [200, 200]
+        assert sorted(row["duplicate"] for row in observations.values()) == [False, True]
+        response_payloads = [observations[worker]["response_json"] for worker in ("worker-1", "worker-2")]
+        assert len({row["process_pid"] for row in observations.values()}) == 2
+        assert len({(row["process_pid"], row["import_lock_id"]) for row in observations.values()}) == 2
+        assert len({row["pg_backend_pid"] for row in observations.values()}) == 2
+        assert len({row["transaction_id"] for row in observations.values()}) == 2
+        assert all(row["transaction_open"] and row["transaction_isolation"] == "read committed" for row in observations.values())
+        assert max(row["persist_start"] for row in observations.values()) < min(
+            row["persist_end"] for row in observations.values()
         )
-        assert len({row["session_identity"] for row in observations.values()}) == 2
         assert all(
             row["authorization_present"]
             and row["auth_path"] == "bearer"
-            and not row["cookie_present"]
             and row["cookie_count_before"] == row["cookie_count_after"] == 0
-            and row["client_closed"]
+            and row["client_created"] == row["client_closed"] == 1
+            and row["store_for_update_reached"]
+            and row["listener_removed"]
+            and row["original_call_count"] == 1
             for row in observations.values()
         )
-        assert concurrency_counts == {"barrier_timeout": 0, "future_timeout": 0}
+        assert process_timeout_counts == {"barrier": 0, "future": 0, "process": 0}
+        assert forced_target_process_termination_count == 0
+        with client_count_lock:
+            client_counts["created"] += sum(row["client_created"] for row in observations.values())
+            client_counts["closed"] += sum(row["client_closed"] for row in observations.values())
 
         after_import = database_snapshot()
         assert {
@@ -437,7 +598,7 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
             assert owner_metric.created_by == owner_id
             assert owner_jd_metric.store_id == owner_store_id
             assert owner_audit.user_id == owner_id
-            assert credential not in (owner_audit.action + (owner_audit.detail or ""))
+            _r248_assert_secret_absent(owner_audit.action + (owner_audit.detail or ""))
 
         def count_dml(_connection, _cursor, statement, _parameters, _context, _executemany):
             phase = dml_phase.get()
@@ -494,9 +655,16 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
             assert business.json()["summary"]["sales_amount"] == 100.0
             assert [row["store_id"] for row in business.json()["rows"]] == [owner_store_id]
             assert owner_refresh.json() == business.json()
-            checked_responses = (*responses, foreign, missing, records, business, owner_refresh)
-            assert all("r244-foreign" not in response.text.lower() for response in checked_responses)
-            assert all(credential not in response.text for response in checked_responses)
+            checked_response_texts = [
+                *(repr(payload) for payload in response_payloads),
+                foreign.text,
+                missing.text,
+                records.text,
+                business.text,
+                owner_refresh.text,
+            ]
+            assert all("r244-foreign" not in response_text.lower() for response_text in checked_response_texts)
+            _r248_assert_secret_absent(*checked_response_texts)
             assert len(verification_client.cookies) == 0
         finally:
             try:
