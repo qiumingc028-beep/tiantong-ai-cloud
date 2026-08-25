@@ -1,10 +1,15 @@
 import asyncio
+import base64
 import contextvars
 from datetime import date
 from io import BytesIO
-from multiprocessing import get_context
+import json
 import os
-from queue import Empty
+from pathlib import Path
+import select as select_io
+import selectors
+import subprocess
+import sys
 from threading import Lock
 from time import monotonic
 from types import MappingProxyType
@@ -13,42 +18,158 @@ import openpyxl
 from fastapi.testclient import TestClient
 from sqlalchemy import event, select, text
 
+from backend.config import get_settings
 from backend.database import Base, get_db
 from backend.main import app
 from backend.models import Company, EmployeeLog, JdDailyMetric, MetricDaily, Permission, Role, Store, Tenant, User, UserStoreMembership
 
 
-def _r248_child_import(worker, owner_headers, store_id, csv_data, entry_barrier, lock_barrier, results):
+_r250_bootstrap_code = r"""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import select
+import sys
+from time import monotonic
+
+worker = "bootstrap"
+try:
+    deadline = monotonic() + 15
+    bootstrap_bytes = bytearray()
+    while b"\n" not in bootstrap_bytes:
+        remaining = deadline - monotonic()
+        if remaining <= 0 or not select.select([sys.stdin], [], [], remaining)[0]:
+            raise TimeoutError("bootstrap input timeout")
+        chunk = os.read(sys.stdin.fileno(), 4096)
+        if not chunk:
+            raise RuntimeError("bootstrap input closed")
+        bootstrap_bytes.extend(chunk)
+        if len(bootstrap_bytes) > 1_048_576:
+            raise RuntimeError("bootstrap input too large")
+    bootstrap_line, trailing_bytes = bootstrap_bytes.split(b"\n", 1)
+    if trailing_bytes:
+        raise RuntimeError("unexpected bootstrap input")
+    config = json.loads(bootstrap_line.decode("utf-8"))
+    worker = config.get("worker", worker)
+    backend_imported_before = any(
+        name == "backend" or name.startswith("backend.") for name in sys.modules
+    )
+    if backend_imported_before:
+        raise RuntimeError("backend imported before bootstrap")
+    repo_root = Path(config.pop("repo_root")).resolve()
+    test_file = (repo_root / "tests" / "test_usable_v1_jd_import_slice.py").resolve()
+    if test_file.parent.parent != repo_root:
+        raise RuntimeError("invalid repository root")
+    os.environ["APP_ENV"] = "test"
+    os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+    os.environ["DATABASE_URL"] = config.pop("database_url")
+    os.environ["JWT_SECRET"] = config.pop("jwt_secret")
+    sys.path.insert(0, str(repo_root))
+    spec = importlib.util.spec_from_file_location("_r250_jd_import_child", test_file)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("child module loader unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    module._r250_child_main(config, sys.stdin, sys.stdout, backend_imported_before)
+except BaseException as exc:
+    sys.stdout.write(json.dumps({
+        "kind": "RESULT",
+        "worker": worker,
+        "error_type": type(exc).__name__,
+    }, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+"""
+
+
+def _r250_child_main(config, control_in, result_out, backend_imported_before):
     client = None
     listener_installed = False
     original_persist = None
     original_call_count = 0
+    cleanup_failures = []
+    control_buffer = bytearray()
+    worker = config.pop("worker")
+    authorization = config.pop("authorization")
+    store_id = int(config.pop("store_id"))
+    csv_data = base64.b64decode(config.pop("csv_data"), validate=True)
+    config.clear()
     observation = {
-        "kind": "final",
+        "kind": "RESULT",
         "worker": worker,
         "process_pid": os.getpid(),
         "client_created": 0,
         "client_closed": 0,
-        "forced_termination": 0,
+        "backend_imported_after_bootstrap": not backend_imported_before and "backend" in sys.modules,
     }
+
+    def send_ready(phase, **values):
+        result_out.write(json.dumps({
+            "kind": "READY",
+            "phase": phase,
+            "worker": worker,
+            **values,
+        }, separators=(",", ":")) + "\n")
+        result_out.flush()
+
+    def wait_for_go(phase, timeout):
+        deadline = monotonic() + timeout
+        while b"\n" not in control_buffer:
+            remaining = deadline - monotonic()
+            if remaining <= 0 or not select_io.select([control_in], [], [], remaining)[0]:
+                raise TimeoutError(f"{phase} GO timeout")
+            chunk = os.read(control_in.fileno(), 4096)
+            if not chunk:
+                raise RuntimeError("child control pipe closed")
+            control_buffer.extend(chunk)
+            if len(control_buffer) > 65_536:
+                raise RuntimeError("child control message too large")
+        line, remainder = control_buffer.split(b"\n", 1)
+        control_buffer[:] = remainder
+        command = json.loads(line.decode("utf-8"))
+        if command != {"kind": "GO", "phase": phase}:
+            raise RuntimeError(f"invalid {phase} GO command")
+
     try:
         from backend.database import engine
         from backend.main import app as child_app
         from backend.routers import metrics
 
-        original_persist = metrics.persist_metric_import
-        observation["import_lock_id"] = id(metrics.IMPORT_LOCK)
+        route_endpoint = next(
+            route.endpoint
+            for route in metrics.router.routes
+            if route.path == "/api/metrics/import" and "POST" in route.methods
+        )
+        route_globals = route_endpoint.__globals__
+        original_persist = route_globals["persist_metric_import"]
+        observation.update(
+            route_module_path_match=(
+                Path(metrics.__file__).resolve()
+                == (Path(__file__).resolve().parents[1] / "backend" / "routers" / "metrics.py").resolve()
+            ),
+            route_endpoint_binding=route_endpoint is metrics.import_metrics_file,
+            route_module_lock_binding=route_globals["IMPORT_LOCK"] is metrics.IMPORT_LOCK,
+            original_persist_identity=(
+                original_persist is metrics.persist_metric_import
+                and original_persist.__module__ == metrics.__name__
+                and original_persist.__name__ == "persist_metric_import"
+            ),
+        )
 
         def synchronize_store_lock(_connection, _cursor, statement, _parameters, _context, _executemany):
             normalized = " ".join(statement.upper().split())
             if observation.get("store_for_update_reached") or "FROM STORES" not in normalized or "FOR UPDATE" not in normalized:
                 return
             observation["store_for_update_reached"] = True
-            lock_barrier.wait(timeout=15)
+            send_ready("store_lock")
+            wait_for_go("store_lock", 15)
 
         def instrumented_persist(db, user, content, rows, selected_store_id):
             nonlocal original_call_count
-            assert metrics.IMPORT_LOCK.locked()
+            observation["lock_held_at_wrapper_entry"] = metrics.IMPORT_LOCK.locked()
+            if not observation["lock_held_at_wrapper_entry"]:
+                raise AssertionError("route import lock not held")
             db.execute(text("SET LOCAL statement_timeout = '15s'"))
             pg_backend_pid, transaction_id, isolation = db.execute(
                 text("SELECT pg_backend_pid(), txid_current(), current_setting('transaction_isolation')")
@@ -59,15 +180,13 @@ def _r248_child_import(worker, owner_headers, store_id, csv_data, entry_barrier,
                 transaction_isolation=isolation,
                 transaction_open=True,
             )
-            results.put({
-                "kind": "ready",
-                "worker": worker,
-                "process_pid": observation["process_pid"],
-                "import_lock_id": observation["import_lock_id"],
-                "pg_backend_pid": pg_backend_pid,
-                "transaction_id": transaction_id,
-            })
-            entry_barrier.wait(timeout=20)
+            send_ready(
+                "transaction",
+                process_pid=observation["process_pid"],
+                pg_backend_pid=pg_backend_pid,
+                transaction_id=transaction_id,
+            )
+            wait_for_go("transaction", 20)
             observation["persist_start"] = monotonic()
             original_call_count += 1
             try:
@@ -78,12 +197,15 @@ def _r248_child_import(worker, owner_headers, store_id, csv_data, entry_barrier,
         event.listen(engine, "before_cursor_execute", synchronize_store_lock)
         listener_installed = True
         metrics.persist_metric_import = instrumented_persist
+        observation["route_persist_wrapper_binding"] = (
+            route_globals["persist_metric_import"] is instrumented_persist
+        )
         client = TestClient(child_app)
         observation["client_created"] = 1
         observation["cookie_count_before"] = len(client.cookies)
         assert observation["cookie_count_before"] == 0
-        headers = dict(owner_headers)
-        assert headers.get("Authorization", "").startswith("Bearer ")
+        headers = {"Authorization": authorization}
+        assert authorization.startswith("Bearer ")
         response = client.post(
             "/api/metrics/import",
             headers=headers,
@@ -101,20 +223,40 @@ def _r248_child_import(worker, owner_headers, store_id, csv_data, entry_barrier,
     except BaseException as exc:
         observation["error_type"] = type(exc).__name__
     finally:
-        if client is not None:
-            client.close()
-            observation["client_closed"] = 1
-        if original_persist is not None:
-            metrics.persist_metric_import = original_persist
-        if listener_installed:
-            event.remove(engine, "before_cursor_execute", synchronize_store_lock)
-            observation["listener_removed"] = not event.contains(
-                engine, "before_cursor_execute", synchronize_store_lock
-            )
+        try:
+            if client is not None:
+                client.close()
+                observation["client_closed"] = 1
+        except BaseException as exc:
+            cleanup_failures.append(type(exc).__name__)
+        try:
+            if original_persist is not None:
+                metrics.persist_metric_import = original_persist
+        except BaseException as exc:
+            cleanup_failures.append(type(exc).__name__)
+        try:
+            if listener_installed:
+                event.remove(engine, "before_cursor_execute", synchronize_store_lock)
+                observation["listener_removed"] = not event.contains(
+                    engine, "before_cursor_execute", synchronize_store_lock
+                )
+        except BaseException as exc:
+            cleanup_failures.append(type(exc).__name__)
         observation["original_call_count"] = original_call_count
-        if "engine" in locals():
-            engine.dispose()
-        results.put(observation)
+        try:
+            if "engine" in locals():
+                engine.dispose()
+        except BaseException as exc:
+            cleanup_failures.append(type(exc).__name__)
+        authorization = ""
+        if "headers" in locals():
+            headers.clear()
+        os.environ.pop("DATABASE_URL", None)
+        os.environ.pop("JWT_SECRET", None)
+        if cleanup_failures:
+            observation["error_type"] = "CleanupError"
+        result_out.write(json.dumps(observation, separators=(",", ":")) + "\n")
+        result_out.flush()
 
 
 def test_rbac_guard_is_served_to_real_browser(client):
@@ -304,8 +446,8 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
     finally:
         close_client(fixture_client)
 
-    def _r248_assert_secret_absent(*values):
-        if any(credential in value for value in values):
+    def _r250_assert_secret_absent(secrets, *values):
+        if any(secret and secret in value for secret in secrets for value in values):
             raise AssertionError("credential exposure detected")
 
     with session_factory() as db:
@@ -385,7 +527,7 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
 
     baseline = database_snapshot()
     dml_phase = contextvars.ContextVar("r245_dml_phase", default=None)
-    process_timeout_counts = {"barrier": 0, "future": 0, "process": 0}
+    ipc_timeout_counts = {"ready": 0, "go": 0, "result": 0, "wait": 0}
     forced_target_process_termination_count = 0
     sql_counts = {"foreign": 0, "missing": 0, "get": 0}
     dml_counts = {"foreign": 0, "missing": 0, "get": 0}
@@ -427,45 +569,159 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
         return client
 
     try:
-        spawn = get_context("spawn")
-        result_queue = spawn.Queue()
-        entry_barrier = spawn.Barrier(3, timeout=20)
-        lock_barrier = spawn.Barrier(2, timeout=15)
         database_url = engine.url.render_as_string(hide_password=False)
-        previous_database_url = os.environ.get("DATABASE_URL")
-        processes = [
-            spawn.Process(
-                target=_r248_child_import,
-                args=(
-                    worker,
-                    dict(owner_headers),
-                    owner_store_id,
-                    csv_data,
-                    entry_barrier,
-                    lock_barrier,
-                    result_queue,
-                ),
-                name=f"r248-{worker}",
-            )
-            for worker in ("worker-1", "worker-2")
-        ]
-        ready = {}
+        jwt_secret = get_settings().JWT_SECRET
+        sensitive_values = (credential, database_url, jwt_secret)
+        repo_root = Path(__file__).resolve().parents[1]
+        child_env = {
+            key: os.environ[key]
+            for key in ("HOME", "LANG", "LC_ALL", "PATH", "TMPDIR")
+            if os.environ.get(key)
+        }
+        child_env["PYTHONUNBUFFERED"] = "1"
+        child_env["APP_ENV"] = "test"
+        child_env["PYTHON_DOTENV_DISABLED"] = "1"
+        _r250_assert_secret_absent(sensitive_values, repr(child_env))
+        assert not {
+            "DATABASE_URL", "REDIS_URL", "JWT_SECRET", "AUTHORIZATION", "COOKIE"
+        }.intersection(child_env)
+        argv = (sys.executable, "-u", "-c", _r250_bootstrap_code)
+        _r250_assert_secret_absent(sensitive_values, *argv)
+        children = {}
         observations = {}
-        os.environ["DATABASE_URL"] = database_url
+        stderr_chunks = {"worker-1": [], "worker-2": []}
+        stream_buffers = {}
+        child_output_bytes = {"worker-1": 0, "worker-2": 0}
+        selector = selectors.DefaultSelector()
+        cleanup_failures = []
+        max_ipc_buffer_bytes = 1_048_576
+
+        def append_stream_chunk(worker, stream_kind, chunk):
+            child_output_bytes[worker] += len(chunk)
+            if child_output_bytes[worker] > max_ipc_buffer_bytes:
+                raise AssertionError("R250 child output limit exceeded")
+            buffer = stream_buffers[(worker, stream_kind)]
+            buffer.extend(chunk)
+            if len(buffer) > max_ipc_buffer_bytes:
+                raise AssertionError("R250 child IPC buffer limit exceeded")
+            return buffer
+
+        def send_message(process, message, timeout, timeout_key):
+            _, writable, _ = select_io.select([], [process.stdin], [], timeout)
+            if not writable:
+                ipc_timeout_counts[timeout_key] += 1
+                raise AssertionError("R250 child control pipe timeout")
+            process.stdin.write(
+                (json.dumps(message, separators=(",", ":")) + "\n").encode("utf-8")
+            )
+            process.stdin.flush()
+
+        def read_stage(kind, phase, timeout, timeout_key):
+            deadline = monotonic() + timeout
+            pending = set(children)
+            messages = {}
+            while pending:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    ipc_timeout_counts[timeout_key] += 1
+                    raise AssertionError(f"R250 {kind} {phase or ''} timeout")
+                events = selector.select(remaining)
+                if not events:
+                    ipc_timeout_counts[timeout_key] += 1
+                    raise AssertionError(f"R250 {kind} {phase or ''} timeout")
+                for key, _mask in events:
+                    worker, stream_kind = key.data
+                    chunk = os.read(key.fileobj.fileno(), 4096)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        if stream_kind == "stdout" and worker in pending:
+                            raise AssertionError("R250 child stdout closed before protocol completion")
+                        continue
+                    buffer = append_stream_chunk(worker, stream_kind, chunk)
+                    while b"\n" in buffer:
+                        line, remainder = buffer.split(b"\n", 1)
+                        buffer[:] = remainder
+                        if stream_kind == "stderr":
+                            stderr_chunks[worker].append(line.decode("utf-8", "replace"))
+                            continue
+                        try:
+                            message = json.loads(line.decode("utf-8"))
+                        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                            raise AssertionError("R250 child emitted invalid JSON stdout") from exc
+                        if message.get("kind") == "RESULT" and kind != "RESULT":
+                            observations[worker] = message
+                            raise AssertionError("R250 child failed before protocol completion")
+                        if (
+                            message.get("kind") != kind
+                            or (phase is not None and message.get("phase") != phase)
+                            or message.get("worker") != worker
+                            or worker not in pending
+                        ):
+                            raise AssertionError("R250 child protocol mismatch")
+                        messages[worker] = message
+                        pending.remove(worker)
+            return messages
+
+        def drain_child_streams(timeout):
+            deadline = monotonic() + timeout
+            open_streams = {
+                (key.data[0], key.data[1]) for key in selector.get_map().values()
+            }
+            while open_streams:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    ipc_timeout_counts["wait"] += 1
+                    raise AssertionError("R250 child output drain timeout")
+                events = selector.select(remaining)
+                if not events:
+                    ipc_timeout_counts["wait"] += 1
+                    raise AssertionError("R250 child output drain timeout")
+                for key, _mask in events:
+                    worker, stream_kind = key.data
+                    chunk = os.read(key.fileobj.fileno(), 4096)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        open_streams.discard((worker, stream_kind))
+                        continue
+                    append_stream_chunk(worker, stream_kind, chunk)
+
         try:
-            for process in processes:
-                process.start()
-            while len(ready) < 2:
-                try:
-                    message = result_queue.get(timeout=30)
-                except Empty:
-                    process_timeout_counts["process"] += 1
-                    raise AssertionError("R248 child readiness exceeded 30 seconds")
-                if message["kind"] == "ready":
-                    ready[message["worker"]] = message
-                else:
-                    observations[message["worker"]] = message
-                    raise AssertionError(f"{message['worker']} failed before persistence: {message.get('error_type')}")
+            for worker in ("worker-1", "worker-2"):
+                process = subprocess.Popen(
+                    argv,
+                    cwd=repo_root,
+                    env=child_env,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=False,
+                    bufsize=0,
+                    shell=False,
+                )
+                children[worker] = process
+                stream_buffers[(worker, "stdout")] = bytearray()
+                stream_buffers[(worker, "stderr")] = bytearray()
+                selector.register(process.stdout, selectors.EVENT_READ, (worker, "stdout"))
+                selector.register(process.stderr, selectors.EVENT_READ, (worker, "stderr"))
+
+            bootstrap_payloads = {
+                worker: {
+                    "worker": worker,
+                    "repo_root": str(repo_root),
+                    "database_url": database_url,
+                    "jwt_secret": jwt_secret,
+                    "authorization": owner_headers["Authorization"],
+                    "store_id": owner_store_id,
+                    "csv_data": base64.b64encode(csv_data).decode("ascii"),
+                }
+                for worker in children
+            }
+            for worker, process in children.items():
+                send_message(process, bootstrap_payloads[worker], 5, "go")
+            bootstrap_payloads.clear()
+            del bootstrap_payloads
+
+            ready = read_stage("READY", "transaction", 30, "ready")
 
             with session_factory() as db:
                 activity = db.execute(
@@ -480,72 +736,67 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
                 ).mappings().all()
             assert len(activity) == 2
             assert all(row["transaction_open"] and row["state"] == "idle in transaction" for row in activity)
-            try:
-                entry_barrier.wait(timeout=20)
-            except Exception:
-                process_timeout_counts["barrier"] += 1
-                raise
+            for process in children.values():
+                send_message(process, {"kind": "GO", "phase": "transaction"}, 5, "go")
 
-            while len(observations) < 2:
+            read_stage("READY", "store_lock", 30, "ready")
+            for process in children.values():
+                send_message(process, {"kind": "GO", "phase": "store_lock"}, 5, "go")
+
+            observations.update(read_stage("RESULT", None, 40, "result"))
+            drain_child_streams(10)
+            stdout_tails = []
+            for worker, process in children.items():
                 try:
-                    message = result_queue.get(timeout=40)
-                except Empty:
-                    process_timeout_counts["process"] += 1
-                    raise AssertionError("R248 child result exceeded 40 seconds")
-                assert message["kind"] == "final"
-                observations[message["worker"]] = message
-
-            for process in processes:
-                process.join(timeout=10)
-                if process.is_alive():
-                    process_timeout_counts["process"] += 1
-                    raise AssertionError(f"{process.name} did not exit within 10 seconds")
-                assert process.exitcode == 0
+                    exit_code = process.wait(timeout=1)
+                except subprocess.TimeoutExpired as exc:
+                    ipc_timeout_counts["wait"] += 1
+                    raise AssertionError("R250 child process wait timeout") from exc
+                assert exit_code == 0
+                buffered_stdout = bytes(stream_buffers[(worker, "stdout")])
+                buffered_stderr = bytes(stream_buffers[(worker, "stderr")])
+                stdout_tails.append(buffered_stdout.decode("utf-8", "strict"))
+                stderr_chunks[worker].append(buffered_stderr.decode("utf-8", "replace"))
+            assert all(not tail.strip() for tail in stdout_tails)
+            serialized_results = [json.dumps(row, sort_keys=True) for row in observations.values()]
+            _r250_assert_secret_absent(sensitive_values, *serialized_results, *stdout_tails)
+            _r250_assert_secret_absent(
+                sensitive_values,
+                *(chunk for chunks in stderr_chunks.values() for chunk in chunks),
+            )
         finally:
-            cleanup_failures = []
             try:
-                for barrier in (entry_barrier, lock_barrier):
+                selector.close()
+                for process in children.values():
                     try:
-                        barrier.abort()
-                    except BaseException as exc:
-                        cleanup_failures.append(type(exc).__name__)
-                for process in processes:
-                    try:
-                        if process.is_alive():
+                        if process.poll() is None:
                             process.terminate()
-                            process.join(timeout=5)
+                            process.wait(timeout=5)
                             forced_target_process_termination_count += 1
-                        if process.is_alive():
-                            process.kill()
-                            process.join(timeout=5)
-                        if process.is_alive():
-                            cleanup_failures.append("ProcessStillAlive")
                     except BaseException as exc:
                         cleanup_failures.append(type(exc).__name__)
-                for process in processes:
                     try:
-                        if not process.is_alive():
-                            process.close()
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait(timeout=5)
                     except BaseException as exc:
                         cleanup_failures.append(type(exc).__name__)
             finally:
-                try:
-                    if previous_database_url is None:
-                        os.environ.pop("DATABASE_URL", None)
-                    else:
-                        os.environ["DATABASE_URL"] = previous_database_url
-                finally:
-                    result_queue.close()
-                    result_queue.join_thread()
+                for process in children.values():
+                    for stream in (process.stdin, process.stdout, process.stderr):
+                        try:
+                            if stream is not None and not stream.closed:
+                                stream.close()
+                        except BaseException as exc:
+                            cleanup_failures.append(type(exc).__name__)
             if cleanup_failures:
-                raise AssertionError("R248 target-process cleanup failed")
+                raise AssertionError("R250 target-process cleanup failed")
 
         assert all("error_type" not in row for row in observations.values())
         assert [observations[worker]["status"] for worker in ("worker-1", "worker-2")] == [200, 200]
         assert sorted(row["duplicate"] for row in observations.values()) == [False, True]
         response_payloads = [observations[worker]["response_json"] for worker in ("worker-1", "worker-2")]
         assert len({row["process_pid"] for row in observations.values()}) == 2
-        assert len({(row["process_pid"], row["import_lock_id"]) for row in observations.values()}) == 2
         assert len({row["pg_backend_pid"] for row in observations.values()}) == 2
         assert len({row["transaction_id"] for row in observations.values()}) == 2
         assert all(row["transaction_open"] and row["transaction_isolation"] == "read committed" for row in observations.values())
@@ -557,12 +808,19 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
             and row["auth_path"] == "bearer"
             and row["cookie_count_before"] == row["cookie_count_after"] == 0
             and row["client_created"] == row["client_closed"] == 1
+            and row["backend_imported_after_bootstrap"]
+            and row["route_module_path_match"]
+            and row["route_endpoint_binding"]
+            and row["route_module_lock_binding"]
+            and row["route_persist_wrapper_binding"]
+            and row["original_persist_identity"]
+            and row["lock_held_at_wrapper_entry"]
             and row["store_for_update_reached"]
             and row["listener_removed"]
             and row["original_call_count"] == 1
             for row in observations.values()
         )
-        assert process_timeout_counts == {"barrier": 0, "future": 0, "process": 0}
+        assert ipc_timeout_counts == {"ready": 0, "go": 0, "result": 0, "wait": 0}
         assert forced_target_process_termination_count == 0
         with client_count_lock:
             client_counts["created"] += sum(row["client_created"] for row in observations.values())
@@ -598,7 +856,10 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
             assert owner_metric.created_by == owner_id
             assert owner_jd_metric.store_id == owner_store_id
             assert owner_audit.user_id == owner_id
-            _r248_assert_secret_absent(owner_audit.action + (owner_audit.detail or ""))
+            _r250_assert_secret_absent(
+                sensitive_values,
+                owner_audit.action + (owner_audit.detail or ""),
+            )
 
         def count_dml(_connection, _cursor, statement, _parameters, _context, _executemany):
             phase = dml_phase.get()
@@ -664,7 +925,7 @@ def test_concurrent_duplicate_import_is_claimed_once(postgres_alpha_runtime):
                 owner_refresh.text,
             ]
             assert all("r244-foreign" not in response_text.lower() for response_text in checked_response_texts)
-            _r248_assert_secret_absent(*checked_response_texts)
+            _r250_assert_secret_absent(sensitive_values, *checked_response_texts)
             assert len(verification_client.cookies) == 0
         finally:
             try:
