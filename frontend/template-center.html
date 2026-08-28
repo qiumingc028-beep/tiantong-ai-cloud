@@ -18,7 +18,7 @@
   const ROLE_ACCESS = {
     owner: ALL_ACCESS,
     boss: ALL_ACCESS,
-    admin:,
+    admin: ALL_ACCESS,
     operation: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
     operator: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
     ops: ['/stores.html','/jd-dashboard.html','/jd-integrations.html','/metrics.html','/import.html','/workflows.html','/account-center.html','/template-center.html','/brands.html','/store-groups.html'],
@@ -159,7 +159,6 @@ init().then(loadTemplates).catch(e=>{pageState.className='state error';pageState
 </script>
 </body>
 </html>
-
 
 
 
