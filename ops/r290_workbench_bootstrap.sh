@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 ROOT="${1:-$PWD}"
 cd "$ROOT"
+ENV_FILE="${R290_ENV_FILE:-/run/user/$(id -u)/tiantong-r290.env}"
+test -r "$ENV_FILE" || { echo R290_ENV_FILE_MISSING; exit 21; }
+chmod 600 "$ENV_FILE"
 test "$(git status --porcelain=v1 | wc -l | tr -d ' ')" = 0
 test -n "$(git rev-parse HEAD)"
 docker info >/dev/null
