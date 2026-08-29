@@ -166,12 +166,12 @@ jobs:
               for name in ("tests", "failures", "errors", "skipped")
           }
           assert totals == {
-              "tests": 1742,
+              "tests": 1745,
               "failures": 0,
               "errors": 0,
               "skipped": 0,
           }, totals
-          print("CI_PYTEST_RESULT=1742_PASS/0_SKIP/0_FAIL/0_ERROR")
+          print("CI_PYTEST_RESULT=1745_PASS/0_SKIP/0_FAIL/0_ERROR")
           PY
 
       - name: Verify CI Redis queue and lock residue
