@@ -203,6 +203,9 @@ jobs:
           test "$PRODUCTION_ENV_FILE" = ".env.production.example"
           test -f "$PRODUCTION_ENV_FILE"
           git ls-files --error-unmatch -- "$PRODUCTION_ENV_FILE" >/dev/null
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$RELEASE_SOURCE_SHA")"
+          export RELEASE_COMMIT="$RELEASE_SOURCE_SHA"
+          test -n "$SOURCE_DATE_EPOCH"
           for key in POSTGRES_DB POSTGRES_ADMIN_USER POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD TLS_CERT_PATH TLS_KEY_PATH; do
             grep -Eq "^${key}=.+" "$PRODUCTION_ENV_FILE"
           done
