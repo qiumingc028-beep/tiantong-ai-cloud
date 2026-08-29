@@ -1,0 +1,14 @@
+{
+  "name": "@tiantong-ai/jd-workbench",
+  "version": "2.91.0-r291",
+  "private": true,
+  "description": "天统AI京东多店经营工作台只读桌面客户端",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check cloud-client.js && node --check security-policy.js && node --check renderer/app.js && node security-policy.behavior.test.js && node cloud-client.behavior.test.js"
+  },
+  "devDependencies": {
+    "electron": "44.0.0"
+  }
+}

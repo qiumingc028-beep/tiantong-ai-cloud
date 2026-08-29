@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>天统AI京东多店经营工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">TJ</span><strong>天统AI京东多店经营工作台</strong></div>
+    <nav class="topnav" aria-label="工作台导航">
+      <span class="active">经营首页</span><span>店铺管理</span><span>数据同步</span><span>异常预警</span>
+    </nav>
+    <div class="top-actions">
+      <span class="badge lock">只读浏览模式</span>
+      <button id="refreshStores" class="secondary">刷新授权店铺</button>
+      <button id="syncNow" class="primary" disabled title="R291安全壳尚未启用数据采集">立即同步</button>
+    </div>
+  </header>
+
+  <aside class="stores-panel">
+    <div class="panel-title"><strong>京东店铺</strong><span id="storeCount">0 家</span></div>
+    <input id="storeSearch" class="search" type="search" placeholder="搜索店铺名称" autocomplete="off">
+    <div class="tabs"><button class="tab active">全部</button><button class="tab">需处理</button></div>
+    <div id="storeList" class="store-list" aria-live="polite"></div>
+    <form id="pairingForm" class="add-store">
+      <strong>云端设备配对</strong>
+      <p class="pairing-help">请先在天统AI云端生成一次性8位配对码。店铺只能由云端授权后下发，客户端不能手工添加。</p>
+      <label for="deviceName">本机名称</label>
+      <input id="deviceName" required maxlength="120" autocomplete="off" placeholder="例如：运营部电脑01">
+      <label for="pairingCode">8位配对码</label>
+      <input id="pairingCode" required inputmode="numeric" pattern="[0-9]{8}" maxlength="8" autocomplete="one-time-code" spellcheck="false" placeholder="00000000">
+      <button type="submit">安全配对并获取店铺</button>
+      <p id="formMessage" class="form-message"></p>
+    </form>
+  </aside>
+
+  <main class="remote-stage" aria-label="京麦页面区域">
+    <div id="emptyStage" class="empty-stage">
+      <div class="empty-icon">JD</div>
+      <h1>选择左侧店铺，打开真实京麦后台</h1>
+      <p>账号、密码、短信、二维码和验证码只在京东真实页面中由员工手工完成。</p>
+      <p>当前版本不抓取页面、不读取 Cookie、不调用京东内部接口。</p>
+    </div>
+  </main>
+
+  <aside class="status-panel">
+    <section>
+      <div class="panel-title"><strong>客户端状态</strong><span id="clientStatus" class="state good">正常</span></div>
+      <dl class="facts">
+        <div><dt>当前店铺</dt><dd id="activeStore">未选择</dd></div>
+        <div><dt>云端连接</dt><dd id="cloudStatus">尚未配对</dd></div>
+        <div><dt>业务写入证明</dt><dd><span id="businessWrites">BUSINESS_WRITE_COUNT=UNVERIFIED</span></dd></div>
+        <div><dt>拦截请求</dt><dd id="blockedWrites">0</dd></div>
+      </dl>
+    </section>
+
+    <section>
+      <div class="panel-title"><strong>数据同步中心</strong><span class="state muted">未启用</span></div>
+      <ul class="datasets">
+        <li><span>销售数据</span><em>暂无数据</em></li>
+        <li><span>订单数据</span><em>暂无数据</em></li>
+        <li><span>库存数据</span><em>暂无数据</em></li>
+        <li><span>退款数据</span><em>暂无数据</em></li>
+        <li><span>推广费用</span><em>暂无数据</em></li>
+      </ul>
+      <p class="safety-note">P0 安全壳不包含 DOM 采集和未授权接口调用，真实采集器通过安全审查后再接入。</p>
+    </section>
+
+    <section id="humanCard" class="human-card hidden">
+      <strong>需要人工处理</strong>
+      <p id="humanReason">请在中间京东页面完成操作。</p>
+    </section>
+
+    <section class="manual-actions">
+      <strong>人工状态上报</strong>
+      <div class="action-grid">
+        <button data-reason="CAPTCHA">遇到验证码</button>
+        <button data-reason="RISK_CONTROL">遇到风控</button>
+        <button data-reason="LOGIN_EXPIRED">登录已失效</button>
+      </div>
+    </section>
+  </aside>
+
+  <footer class="footer"><span class="dot"></span>本地客户端在线 · 会话按店铺完全隔离</footer>
+  <script src="/app.js"></script>
+</body>
+</html>

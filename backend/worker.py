@@ -8,7 +8,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 from sqlalchemy.exc import SQLAlchemyError
 
-from .config import require_service_role
+from .config import get_settings, require_service_role
 
 from .ai_employees import DEFAULT_COLLECTOR_EMPLOYEE, DEFAULT_STRATEGY_EMPLOYEE, FLOW_EMPLOYEE_CODES, FLOW_TASK_TYPES, employee_name, normalize_employee_code
 from .core.orchestrator import handle_event
@@ -218,6 +218,9 @@ def _handle_task_direct(task):
     attempt = int(task.get("attempt", 0))
     max_retries = int(task.get("max_retries", 3))
     db = SessionLocal()
+    if task_type in {"sync_jd_smart", "sync_jzt", "sync_jd_orders", "sync_jd_products"} and get_settings().IS_PRODUCTION:
+        db.close()
+        raise RuntimeError("旧版京东采集在生产环境已停用，请使用R291只读同步")
     if task_type in {SPRINT17_QUEUE_TYPE, SPRINT18_QUEUE_TYPE}:
         center_id = int(payload["task_center_id"])
         if owned_task_from_context_or_none(db, task_id=center_id, ownership=payload.get("ownership")) is None:

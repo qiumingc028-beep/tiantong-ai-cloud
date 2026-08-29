@@ -1,4 +1,3 @@
-import json
 from datetime import date, datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -87,7 +86,7 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
                 roi=number(row.get("roi")),
                 cpa=number(row.get("cpa")),
                 deal_amount=number(row.get("deal_amount")),
-                raw_payload=json.dumps(row, ensure_ascii=False),
+                raw_payload=None,
             )
         )
         saved += 1
@@ -154,7 +153,7 @@ def save_jd_daily_metric(db: Session, store_id: int, metric_date: date, payload:
     metric.cart_add_count = int(number(payload.get("cart_add_count")))
     metric.conversion_rate = number(payload.get("conversion_rate"))
     metric.source = source
-    metric.raw_payload = json.dumps(payload, ensure_ascii=False)
+    metric.raw_payload = None
     metric.synced_at = datetime.now(timezone.utc)
     db.commit()
     return metric
@@ -171,8 +170,8 @@ def save_order(db: Session, store_id: int, row: dict):
     order.paid_amount = number(row.get("paid_amount"))
     order.profit_amount = number(row.get("profit_amount"))
     order.order_status = row.get("order_status")
-    order.buyer_pin = row.get("buyer_pin")
-    order.raw_payload = json.dumps(row, ensure_ascii=False)
+    order.buyer_pin = None
+    order.raw_payload = None
     return order
 
 
@@ -188,7 +187,7 @@ def save_product(db: Session, store_id: int, row: dict):
         visitors_count=int(number(row.get("visitors_count"))),
         conversion_rate=number(row.get("conversion_rate")),
         stat_date=parse_date(row.get("stat_date")) or date.today(),
-        raw_payload=json.dumps(row, ensure_ascii=False),
+        raw_payload=None,
     )
     db.add(product)
     return product

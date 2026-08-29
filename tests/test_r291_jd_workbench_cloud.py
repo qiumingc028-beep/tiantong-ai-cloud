@@ -1,0 +1,697 @@
+from __future__ import annotations
+
+import base64
+from copy import deepcopy
+from datetime import datetime, timezone
+import hashlib
+import json
+import secrets
+import time
+from uuid import UUID, uuid4
+
+import pytest
+
+from backend.database import Base
+from backend.models import Permission, Role, Store, User, UserStoreMembership
+
+
+CLIENT_VERSION = "2.91.0-test"
+COLLECTED_AT = "2026-08-29T06:00:00Z"
+SOURCE_PERIOD = "2026-08-28"
+TEST_RSA_N_B64 = "qqJk2ZH4W5fP8Y2xulfKp_mafykFYNhou5UX35781QJTy5m3Md3fJfCjXEt1Jn1Qpvy9DjFHyjCrJSiOi50idZRhL6SdJvn66JzNS0SP9aXG-53oVGSnqwMedFE2ByxhI67IHI0ndIgnAtLudX2RU1J-vkPo2BjYztSkxXBX9aePJit_d58i6KkZ4Yd-KVQi8QjsNuzytXZNxymZj_TyGxLXFsySeVZhFNR7TySOWbylrziPNFil3DAPzEP7LcALArb6dUdfAxvHWrRmXd7uWqlciTEaTy7q37fNJyvcggS1FlfpGcrpRG_LuwNN58FSWt-_VBeVQf00emDZ60g0xQ"
+TEST_RSA_D_B64 = "AYKWaeaE0CqzyGt8my2TuZDX8TAnwAeqRZ64K1541lnC7BZcLLDN_MP4biSs0L5jLFcoRSviesObgCSvvkSRvYCmq4lFasbjlZNtrbDZpU7mR-vJ1pVddoH8jwL4-29FHM-7LaWCJ-HcloXPXnLSCm68eGqZcPAnWw0-uBCadq4VOwZ_xPOpkaqGrvlJICwIyEkqr3lm--N7V-BoGw2SU4QvdTlB8HyjaqOVj_SPERvBiljcc5M3P2tyhlKpj5WVpzCBf08orKIk7BJpW58-hNgcC72HAeqncgubTjdlyM6pj2ssweL8t7iKdze3rnL6k-P7rtpUdd7kxZhkSRLSsQ"
+
+
+def _base64url_bytes(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+TEST_RSA_N = int.from_bytes(_base64url_bytes(TEST_RSA_N_B64), "big")
+TEST_RSA_D = int.from_bytes(_base64url_bytes(TEST_RSA_D_B64), "big")
+
+
+def _opaque(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _create_pairing_code(client, owner_headers) -> str:
+    response = client.post("/api/jd-workbench/pairing-codes", headers=owner_headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload.get("code")
+    return payload["code"]
+
+
+def _pair_device(client, owner_headers) -> tuple[str, str]:
+    code = _create_pairing_code(client, owner_headers)
+    client.cookies.clear()
+    response = client.post(
+        "/api/jd-workbench/pair",
+        json={
+            "code": code,
+            "device_name": "R291 test workstation",
+            "client_version": CLIENT_VERSION,
+            "public_key": {"kty": "RSA", "n": TEST_RSA_N_B64, "e": "AQAB"},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload.get("device_token")
+    return payload["device_token"], code
+
+
+def _device_headers(device_token: str, method: str, path: str, body: bytes) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_hex(16)
+    canonical = "\n".join(
+        ("R291", timestamp, nonce, method.upper(), path, hashlib.sha256(body).hexdigest())
+    ).encode("utf-8")
+    digest_info = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(canonical).digest()
+    padding_length = 256 - len(digest_info) - 3
+    encoded = b"\x00\x01" + b"\xff" * padding_length + b"\x00" + digest_info
+    signature = pow(int.from_bytes(encoded, "big"), TEST_RSA_D, TEST_RSA_N).to_bytes(256, "big")
+    return {
+        "Authorization": f"Device {device_token}",
+        "X-R291-Timestamp": timestamp,
+        "X-R291-Nonce": nonce,
+        "X-R291-Signature": base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii"),
+    }
+
+
+def _device_request(client, method: str, path: str, device_token: str, payload: dict | None = None):
+    body = b"" if payload is None else json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    headers = _device_headers(device_token, method, path, body)
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    return client.request(method, path, headers=headers, content=body or None)
+
+
+def _authorized_store(client, device_token: str) -> dict:
+    response = _device_request(client, "GET", "/api/jd-workbench/stores", device_token)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    stores = payload if isinstance(payload, list) else payload.get("stores")
+    assert isinstance(stores, list) and stores
+    assert all("store_id" in store and "subject_id" in store for store in stores)
+    assert all(UUID(store["store_uuid"]).version == 5 for store in stores)
+    assert all(store["partition"] == f"persist:jd-{store['store_uuid']}" for store in stores)
+    return stores[0]
+
+
+def _sync_payload(
+    store: dict,
+    *,
+    dataset_type: str = "sales_daily",
+    records: list[dict] | None = None,
+    idempotency_key: str | None = None,
+) -> dict:
+    return {
+        "store_id": store["store_id"],
+        "subject_id": store["subject_id"],
+        "dataset_type": dataset_type,
+        "source_period": SOURCE_PERIOD,
+        "collected_at": COLLECTED_AT,
+        "idempotency_key": idempotency_key or f"r291-{uuid4()}",
+        "client_version": CLIENT_VERSION,
+        "records": records
+        or [
+            {
+                "source_record_key": _opaque(f"sales:{SOURCE_PERIOD}"),
+                "sales_amount": 123.45,
+                "orders_count": 3,
+            }
+        ],
+    }
+
+
+def _assert_first_sync(response, expected_accepted: int) -> str:
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["duplicate"] is False
+    assert payload["accepted"] == expected_accepted
+    assert payload.get("batch_id")
+    return payload["batch_id"]
+
+
+def _assert_duplicate_sync(response, expected_batch_id: str) -> None:
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload == {
+        "ok": True,
+        "duplicate": True,
+        "accepted": 0,
+        "batch_id": expected_batch_id,
+    }
+
+
+def _assert_canary_absent(test_db, caplog, canary: str) -> None:
+    with test_db() as db:
+        for table in Base.metadata.sorted_tables:
+            rows = db.execute(table.select()).all()
+            assert canary not in repr(rows), f"sensitive canary persisted in {table.name}"
+
+    # Resolve at assertion time so the test_db fixture's isolated Redis override
+    # is observed instead of a module-import-time reference.
+    from backend import database
+
+    redis_client = database.get_redis()
+    assert canary not in repr(getattr(redis_client, "values", {}))
+    assert canary not in repr(getattr(redis_client, "lists", {}))
+    assert canary not in caplog.text
+
+
+def test_pairing_code_requires_jd_permission_and_is_single_use(
+    client,
+    owner_headers,
+    viewer_headers,
+):
+    client.cookies.clear()
+    assert client.post("/api/jd-workbench/pairing-codes").status_code == 401
+    assert client.post(
+        "/api/jd-workbench/pairing-codes",
+        headers=viewer_headers,
+    ).status_code == 403
+
+    code = _create_pairing_code(client, owner_headers)
+    client.cookies.clear()
+    request = {
+        "code": code,
+        "device_name": "R291 one-time pairing test",
+        "client_version": CLIENT_VERSION,
+        "public_key": {"kty": "RSA", "n": TEST_RSA_N_B64, "e": "AQAB"},
+    }
+    first = client.post("/api/jd-workbench/pair", json=request)
+    assert first.status_code == 200, first.text
+    assert first.json().get("device_token")
+
+    reused = client.post("/api/jd-workbench/pair", json=request)
+    assert reused.status_code in {400, 409, 410}, reused.text
+    assert not reused.json().get("device_token")
+
+
+def test_device_auth_is_distinct_from_user_bearer_and_supports_heartbeat(
+    client,
+    owner_headers,
+    test_db,
+):
+    device_token, _ = _pair_device(client, owner_headers)
+
+    assert client.get("/api/jd-workbench/stores").status_code == 401
+    assert client.get(
+        "/api/jd-workbench/stores",
+        headers={"Authorization": f"Bearer {device_token}"},
+    ).status_code == 401
+    assert client.get(
+        "/api/jd-workbench/stores",
+        headers={"Authorization": f"Device {device_token}"},
+    ).status_code == 401
+    signed_headers = _device_headers(device_token, "GET", "/api/jd-workbench/stores", b"")
+    stores = client.get("/api/jd-workbench/stores", headers=signed_headers)
+    assert stores.status_code == 200, stores.text
+    assert client.get("/api/jd-workbench/stores", headers=signed_headers).status_code == 401
+
+    heartbeat = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/heartbeat",
+        device_token,
+        {"client_version": CLIENT_VERSION, "status": "ONLINE"},
+    )
+    assert heartbeat.status_code == 200, heartbeat.text
+    assert heartbeat.json()["ok"] is True
+
+    with test_db() as db:
+        owner_role = db.query(Role).filter(Role.code == "owner").one()
+        ingest_permission = db.query(Permission).filter(Permission.code == "jd_workbench.ingest").one()
+        owner_role.permissions.remove(ingest_permission)
+        db.commit()
+    assert _device_request(
+        client, "GET", "/api/jd-workbench/stores", device_token
+    ).status_code == 401
+
+
+def test_device_sync_accepts_all_p0_datasets(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    datasets = {
+        "sales_daily": {
+            "source_record_key": _opaque(f"sales:{SOURCE_PERIOD}"),
+            "sales_amount": 123.45,
+            "orders_count": 3,
+        },
+        "orders": {
+            "source_record_key": _opaque("orders:2026-08-28"),
+            "order_count": 1,
+            "paid_amount": 88.80,
+        },
+        "refunds": {
+            "source_record_key": _opaque("refunds:2026-08-28"),
+            "refund_order_count": 1,
+            "refund_amount": 18.80,
+        },
+        "products": {
+            "source_record_key": _opaque("product:JD-R291-SKU-001"),
+            "sku_key": _opaque("sku:JD-R291-SKU-001"),
+            "product_name": "R291 test product",
+        },
+        "inventory": {
+            "source_record_key": _opaque("inventory:JD-R291-SKU-001"),
+            "sku_key": _opaque("sku:JD-R291-SKU-001"),
+            "stock_quantity": 12,
+        },
+        "promotion_costs": {
+            "source_record_key": _opaque(f"promotion:jingzhuntong:{SOURCE_PERIOD}"),
+            "channel": "jingzhuntong",
+            "ad_spend": 20.00,
+            "roi": 4.44,
+        },
+    }
+
+    for dataset_type, record in datasets.items():
+        payload = _sync_payload(
+            store,
+            dataset_type=dataset_type,
+            records=[record],
+            idempotency_key=f"r291-{dataset_type}-{uuid4()}",
+        )
+        response = _device_request(
+            client,
+            "POST",
+            "/api/jd-workbench/sync",
+            device_token,
+            payload,
+        )
+        _assert_first_sync(response, 1)
+
+
+def test_cloud_dashboard_uses_explicit_no_data_state_instead_of_mock_zeroes(
+    client,
+    owner_headers,
+):
+    response = client.get("/api/jd-workbench/dashboard", headers=owner_headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["summary"]
+    assert all(value is None for value in payload["summary"].values())
+    assert payload["ready_stores"] == 0
+    assert all(store["empty_message"] == "暂无数据" for store in payload["stores"])
+
+
+def test_cloud_dashboard_reports_only_accepted_normalized_values(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    payload = _sync_payload(store)
+    _assert_first_sync(
+        _device_request(
+            client,
+            "POST",
+            "/api/jd-workbench/sync",
+            device_token,
+            payload,
+        ),
+        1,
+    )
+
+    response = client.get(
+        f"/api/jd-workbench/dashboard?store_id={store['store_id']}",
+        headers=owner_headers,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["source"] == "jd_workbench_readonly"
+    assert result["summary"]["sales_amount"] == "123.45"
+    assert result["summary"]["orders_count"] == 3
+    assert result["summary"]["ad_spend"] is None
+    assert result["stores"][0]["datasets"]["sales_daily"]["source"] == "jd_workbench_readonly"
+
+
+@pytest.mark.parametrize(
+    "required_field",
+    [
+        "store_id",
+        "subject_id",
+        "dataset_type",
+        "source_period",
+        "collected_at",
+        "idempotency_key",
+        "client_version",
+        "records",
+    ],
+)
+def test_sync_rejects_missing_required_envelope_fields(
+    client,
+    owner_headers,
+    required_field,
+):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    payload = _sync_payload(store)
+    payload.pop(required_field)
+
+    response = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        payload,
+    )
+
+    assert response.status_code in {400, 422}, response.text
+
+
+@pytest.mark.parametrize(
+    "forbidden_key",
+    [
+        "password",
+        "cookie",
+        "access_token",
+        "refresh_token",
+        "token",
+        "session",
+        "session_id",
+        "phone",
+        "mobile",
+        "receiver_phone",
+        "address",
+        "receiver_address",
+        "手机号",
+        "地址",
+    ],
+)
+def test_sync_rejects_sensitive_or_personal_fields_without_claiming_idempotency(
+    client,
+    owner_headers,
+    test_db,
+    caplog,
+    forbidden_key,
+):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    idempotency_key = f"r291-sensitive-{_opaque(forbidden_key)}-{uuid4()}"
+    valid = _sync_payload(store, idempotency_key=idempotency_key)
+    rejected = deepcopy(valid)
+    canary = f"R291-SECRET-CANARY-{uuid4()}"
+    rejected["records"][0][forbidden_key] = canary
+
+    response = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        rejected,
+    )
+
+    assert response.status_code in {400, 422}, response.text
+    assert canary not in response.text
+
+    top_level = deepcopy(valid)
+    top_level[forbidden_key] = canary
+    response = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        top_level,
+    )
+    assert response.status_code in {400, 422}, response.text
+    assert canary not in response.text
+    _assert_canary_absent(test_db, caplog, canary)
+
+    accepted = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        valid,
+    )
+    batch_id = _assert_first_sync(accepted, 1)
+    _assert_duplicate_sync(
+        _device_request(
+            client,
+            "POST",
+            "/api/jd-workbench/sync",
+            device_token,
+            valid,
+        ),
+        batch_id,
+    )
+
+
+def test_device_cannot_sync_store_outside_pairing_user_scope(
+    client,
+    owner_headers,
+    test_db,
+):
+    device_token, _ = _pair_device(client, owner_headers)
+    authorized = _authorized_store(client, device_token)
+    with test_db() as db:
+        owner = db.query(User).filter(User.username == "owner").one()
+        unauthorized = Store(
+            platform="jd",
+            store_code="R291-NO-MEMBERSHIP",
+            store_name="R291 Unauthorized Store",
+            tenant_id=owner.tenant_id,
+            company_id=owner.company_id,
+            active=True,
+        )
+        db.add(unauthorized)
+        db.flush()
+        db.add(
+            UserStoreMembership(
+                user_id=owner.id,
+                store_id=unauthorized.id,
+                can_read=True,
+                can_write=False,
+                active=True,
+            )
+        )
+        db.commit()
+        unauthorized_store_id = unauthorized.id
+
+    stores = _device_request(
+        client, "GET", "/api/jd-workbench/stores", device_token
+    ).json()
+    stores = stores if isinstance(stores, list) else stores["stores"]
+    assert unauthorized_store_id not in {store["store_id"] for store in stores}
+
+    payload = _sync_payload(authorized)
+    payload["store_id"] = unauthorized_store_id
+    response = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        payload,
+    )
+
+    assert response.status_code == 403, response.text
+
+
+def test_subject_id_is_derived_from_authorized_store(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    payload = _sync_payload(store)
+    payload["subject_id"] = store["subject_id"] + 1
+
+    response = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        payload,
+    )
+
+    assert response.status_code == 403, response.text
+
+
+def test_same_idempotency_key_is_accepted_once(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    payload = _sync_payload(
+        store,
+        idempotency_key=f"r291-idempotency-{uuid4()}",
+    )
+
+    first = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        payload,
+    )
+    batch_id = _assert_first_sync(first, len(payload["records"]))
+
+    duplicate = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        payload,
+    )
+    _assert_duplicate_sync(duplicate, batch_id)
+
+
+def test_same_scoped_source_record_is_not_inserted_by_a_new_batch_key(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    first_payload = _sync_payload(store, idempotency_key=f"r291-record-first-{uuid4()}")
+    _assert_first_sync(
+        _device_request(
+            client,
+            "POST",
+            "/api/jd-workbench/sync",
+            device_token,
+            first_payload,
+        ),
+        1,
+    )
+    second_payload = deepcopy(first_payload)
+    second_payload["idempotency_key"] = f"r291-record-second-{uuid4()}"
+    response = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        second_payload,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["duplicate"] is False
+    assert response.json()["accepted"] == 0
+
+
+def test_same_idempotency_key_with_different_payload_conflicts_and_preserves_original(
+    client,
+    owner_headers,
+):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    payload = _sync_payload(
+        store,
+        idempotency_key=f"r291-idempotency-conflict-{uuid4()}",
+    )
+    first = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        payload,
+    )
+    batch_id = _assert_first_sync(first, len(payload["records"]))
+
+    changed = deepcopy(payload)
+    changed["records"][0]["sales_amount"] = 999999.99
+    conflict = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        changed,
+    )
+    assert conflict.status_code == 409, conflict.text
+
+    # The conflicting request must neither replace the original batch nor consume
+    # a second idempotency record. Replaying the original still resolves to it.
+    original_replay = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        payload,
+    )
+    _assert_duplicate_sync(original_replay, batch_id)
+
+
+def test_human_action_required_can_be_reported_without_login_material(
+    client,
+    owner_headers,
+    test_db,
+    caplog,
+):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    report = {
+        "client_version": CLIENT_VERSION,
+        "status": "HUMAN_ACTION_REQUIRED",
+        "store_id": store["store_id"],
+        "reason_code": "CAPTCHA_REQUIRED",
+    }
+
+    response = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/heartbeat",
+        device_token,
+        report,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is True
+    assert response.json()["status"] == "HUMAN_ACTION_REQUIRED"
+
+    canary = f"R291-LOGIN-CANARY-{uuid4()}"
+    for forbidden in (
+        {"password": canary},
+        {"cookie": canary},
+        {"token": canary},
+        {"session": canary},
+        {"login_html": canary},
+        {"screenshot": canary},
+    ):
+        rejected = _device_request(
+            client,
+            "POST",
+            "/api/jd-workbench/heartbeat",
+            device_token,
+            {**report, **forbidden},
+        )
+        assert rejected.status_code in {400, 422}, rejected.text
+        assert canary not in rejected.text
+    _assert_canary_absent(test_db, caplog, canary)
+
+
+def test_collected_at_must_be_an_aware_iso8601_timestamp(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    payload = _sync_payload(store)
+    payload["collected_at"] = datetime.now().replace(microsecond=0).isoformat()
+
+    naive = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        payload,
+    )
+    assert naive.status_code in {400, 422}, naive.text
+
+    payload["collected_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    aware = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/sync",
+        device_token,
+        payload,
+    )
+    _assert_first_sync(aware, len(payload["records"]))
+
+
+def test_revoked_device_token_is_rejected_immediately(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    devices = client.get("/api/jd-workbench/devices", headers=owner_headers)
+    assert devices.status_code == 200, devices.text
+    device_id = devices.json()[0]["device_id"]
+
+    revoked = client.post(
+        f"/api/jd-workbench/devices/{device_id}/revoke",
+        headers=owner_headers,
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert _device_request(
+        client, "GET", "/api/jd-workbench/stores", device_token
+    ).status_code == 401
