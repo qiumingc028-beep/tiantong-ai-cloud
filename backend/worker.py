@@ -2,7 +2,7 @@ import logging
 import json
 import os
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -17,7 +17,9 @@ from .brain_execution.worker import process_next_execution as process_next_brain
 from .brain_orchestrator.planner import resolve_graph_ownership
 from .execution_engine import process_next_execution_task
 from .logging_config import configure_json_logging
-from .models import EmployeeLog, JdSyncLog, TaskCenterResult, TaskCenterTask, User
+from .models import EmployeeLog, JdSyncLog, JdWorkbenchSyncPolicy, JdWorkbenchStoreStatus, TaskCenterResult, TaskCenterTask, User
+from .models import JdWorkbenchDevice
+from sqlalchemy import and_, or_
 from .task_center_ownership import (
     bind_task_ownership_from_task,
     owned_task_from_context_or_none,
@@ -54,6 +56,50 @@ SUPPORTED_TASK_TYPES = {
 }
 SPRINT17_QUEUE_TYPE = "sprint17_ai_task"
 SPRINT18_QUEUE_TYPE = "sprint18_business_loop"
+JD_WORKBENCH_LEASE_PREFIX = "tiantong:jd-workbench:lease:"
+JD_RETRY_BACKOFF_SECONDS = (30, 120, 300, 900, 1800)
+
+
+def run_jd_workbench_scheduler(now=None):
+    """Cloud-owned five-minute scheduler; desktop presence is not required."""
+    now = now or datetime.now(timezone.utc)
+    db = SessionLocal()
+    scheduled = 0
+    try:
+        policies = db.query(JdWorkbenchSyncPolicy).filter(JdWorkbenchSyncPolicy.enabled.is_(True)).all()
+        redis = get_redis()
+        for policy in policies:
+            status = db.query(JdWorkbenchStoreStatus).join(
+                JdWorkbenchDevice, JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id
+            ).filter(JdWorkbenchStoreStatus.store_id == policy.store_id, JdWorkbenchDevice.revoked_at.is_(None)).first()
+            if status and status.next_sync_at and status.next_sync_at > now:
+                continue
+            lease = f"{JD_WORKBENCH_LEASE_PREFIX}{policy.tenant_id}:{policy.store_id}"
+            if not redis.set(lease, str(os.getpid()), nx=True, ex=max(policy.interval_seconds, 300)):
+                continue
+            if status:
+                status.status = "SYNCING"
+                status.last_attempt_at = now
+                status.next_sync_at = now + timedelta(seconds=policy.interval_seconds)
+                db.commit()
+            try:
+                enqueue_task("sync_jd_smart", {"store_id": policy.store_id, "source": "cloud_scheduler", "scheduled_at": now.isoformat()}, max_retries=5)
+            except Exception:
+                # Compensate the lease and state so a queue outage cannot strand a store.
+                try:
+                    redis.delete(lease)
+                    if status:
+                        status.status = "ERROR"
+                        status.reason_code = "QUEUE_UNAVAILABLE"
+                        status.next_sync_at = now + timedelta(seconds=JD_RETRY_BACKOFF_SECONDS[0])
+                        status.retry_count = min(status.retry_count + 1, len(JD_RETRY_BACKOFF_SECONDS))
+                        db.commit()
+                finally:
+                    raise
+            scheduled += 1
+    finally:
+        db.close()
+    return scheduled
 
 
 def update_worker_heartbeat():
@@ -654,8 +700,12 @@ def write_employee_log(db, task_type: str, status: str, detail: dict, attempt: i
 
 def main():
     require_service_role("worker")
+    last_jd_schedule = 0.0
     while True:
         update_worker_heartbeat()
+        if time.monotonic() - last_jd_schedule >= 30:
+            run_jd_workbench_scheduler()
+            last_jd_schedule = time.monotonic()
         run_daily_scheduler()
         if not process_next_tian_shang_worker_execution() and not process_next_employee_execution() and not process_next_brain_runtime_execution():
             process_next_task()
