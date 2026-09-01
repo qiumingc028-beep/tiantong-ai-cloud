@@ -11,6 +11,7 @@ import time
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
 from backend.database import Base
 from backend.models import Permission, Role, Store, User, UserStoreMembership
@@ -665,6 +666,11 @@ def test_sync_rejects_missing_required_envelope_fields(
         "receiver_phone",
         "address",
         "receiver_address",
+        "buyer_name",
+        "receiver_name",
+        "consignee_name",
+        "买家姓名",
+        "收货人",
         "手机号",
         "地址",
     ],
@@ -893,11 +899,13 @@ def test_same_idempotency_key_with_different_payload_conflicts_and_preserves_ori
     _assert_duplicate_sync(original_replay, batch_id)
 
 
+@pytest.mark.parametrize("reason_code", ["LOGIN_EXPIRED", "CAPTCHA_REQUIRED", "RISK_CONTROL"])
 def test_human_action_required_can_be_reported_without_login_material(
     client,
     owner_headers,
     test_db,
     caplog,
+    reason_code,
 ):
     device_token, _ = _pair_device(client, owner_headers)
     store = _authorized_store(client, device_token)
@@ -905,7 +913,7 @@ def test_human_action_required_can_be_reported_without_login_material(
         "client_version": CLIENT_VERSION,
         "status": "HUMAN_ACTION_REQUIRED",
         "store_id": store["store_id"],
-        "reason_code": "CAPTCHA_REQUIRED",
+        "reason_code": reason_code,
     }
 
     response = _device_request(
@@ -1047,7 +1055,84 @@ def test_r297_failure_retry_runtime_survives_store_refresh(client, owner_headers
     assert refreshed["last_error_at"]
 
 
-def test_r297_fulfillment_and_aftersale_details_are_clickable_safe_records(client, owner_headers):
+def test_r297_manual_handling_success_report_makes_store_due_for_automatic_resume(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    blocked = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/heartbeat",
+        device_token,
+        {
+            "client_version": CLIENT_VERSION,
+            "status": "HUMAN_ACTION_REQUIRED",
+            "store_id": store["store_id"],
+            "reason_code": "RISK_CONTROL",
+        },
+    )
+    assert blocked.status_code == 200, blocked.text
+    assert _authorized_store(client, device_token)["status"] == "HUMAN_ACTION_REQUIRED"
+
+    resumed = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/heartbeat",
+        device_token,
+        {
+            "client_version": CLIENT_VERSION,
+            "status": "ONLINE",
+            "store_id": store["store_id"],
+        },
+    )
+    assert resumed.status_code == 200, resumed.text
+    refreshed = _authorized_store(client, device_token)
+    assert refreshed["status"] == "ONLINE"
+    assert refreshed["reason_code"] is None
+    assert refreshed["next_sync_at"], "人工处理成功后必须自动恢复为立即可调度状态"
+
+
+def test_r297_device_session_policy_and_status_survive_backend_client_recreation(
+    client,
+    owner_headers,
+):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    policy = client.patch(
+        f"/api/jd-workbench/sync-policies/{store['store_id']}",
+        headers=owner_headers,
+        json={"enabled": True, "interval_seconds": 900},
+    )
+    assert policy.status_code == 200, policy.text
+    failed = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/heartbeat",
+        device_token,
+        {
+            "client_version": CLIENT_VERSION,
+            "status": "ERROR",
+            "store_id": store["store_id"],
+            "reason_code": "COLLECTOR_PAGE_LOAD_FAILED",
+            "next_sync_at": "2026-09-01T08:02:00Z",
+            "retry_count": 2,
+        },
+    )
+    assert failed.status_code == 200, failed.text
+
+    restarted_client = TestClient(client.app)
+    try:
+        restored = _authorized_store(restarted_client, device_token)
+    finally:
+        restarted_client.close()
+
+    assert restored["store_id"] == store["store_id"]
+    assert restored["sync_policy"]["interval_seconds"] == 900
+    assert restored["status"] == "ERROR"
+    assert restored["retry_count"] == 2
+    assert restored["next_sync_at"].startswith("2026-09-01T08:02:00")
+
+
+def test_r297_fulfillment_aftersale_and_abnormal_details_are_clickable_safe_records(client, owner_headers):
     device_token, _ = _pair_device(client, owner_headers)
     store = _authorized_store(client, device_token)
     datasets = {
@@ -1068,6 +1153,14 @@ def test_r297_fulfillment_and_aftersale_details_are_clickable_safe_records(clien
             "refund_amount": "688.00",
             "requested_at": "2026-09-01T07:45:00Z",
             "reason_category": "商品问题",
+        },
+        "abnormal_orders": {
+            "source_record_key": _opaque("abnormal:jd-sensitive-order-number"),
+            "abnormal_state": "物流异常",
+            "product_name": "运动电子表",
+            "quantity": 1,
+            "detected_at": "2026-09-01T07:50:00Z",
+            "reason_category": "物流停滞",
         },
     }
     for dataset_type, record in datasets.items():
@@ -1093,13 +1186,25 @@ def test_r297_fulfillment_and_aftersale_details_are_clickable_safe_records(clien
         f"/api/jd-workbench/dashboard/stores/{store['store_id']}/aftersales",
         headers=owner_headers,
     )
+    abnormal = client.get(
+        f"/api/jd-workbench/dashboard/stores/{store['store_id']}/abnormal",
+        headers=owner_headers,
+    )
     assert fulfillment.status_code == 200, fulfillment.text
     assert aftersales.status_code == 200, aftersales.text
+    assert abnormal.status_code == 200, abnormal.text
     assert fulfillment.json()["records"][0]["order_state"] == "待发货"
     assert aftersales.json()["records"][0]["aftersale_state"] == "待审核"
-    assert "source_record_key" not in fulfillment.text
-    assert "order_no" not in fulfillment.text
-    assert "buyer" not in fulfillment.text
+    assert abnormal.json()["records"][0]["abnormal_state"] == "物流异常"
+    for response in (fulfillment, aftersales, abnormal):
+        assert "source_record_key" not in response.text
+        assert "order_no" not in response.text
+        assert "buyer" not in response.text
+        assert "phone" not in response.text
+        assert "address" not in response.text
+        assert "cookie" not in response.text.lower()
+        assert "token" not in response.text.lower()
+        assert "password" not in response.text.lower()
 
     dashboard = client.get("/api/jd-workbench/dashboard", headers=owner_headers).json()
     assert dashboard["summary"]["pending_shipment_count"] == 1
