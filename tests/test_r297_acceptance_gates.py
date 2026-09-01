@@ -176,9 +176,40 @@ def test_r297_has_one_store_master_no_mock_store_api_or_frontend_store_literals(
 
     stores_page = read(ROOT / "frontend" / "stores.html")
     dashboard_page = read(ROOT / "frontend" / "jd-dashboard.html")
-    assert "await api('/api/stores')" in stores_page
-    assert "await api('/api/jd-workbench/dashboard?'" in dashboard_page
+    shared_store_view = read(ROOT / "frontend" / "r297-store-view.js")
+    assert "/api/stores" in shared_store_view
     for page in (stores_page, dashboard_page):
+        assert 'src="/r297-store-view.js"' in page
+        assert "R297StoreView." in page
+        assert re.search(r"R297StoreView\.loadStoreDirectory\(\s*api\s*\)", page)
+        assert "/api/stores" not in page
+    assert "function mergeStores(directory, dashboardStores)" in shared_store_view
+    assert "id: store.id" in shared_store_view
+    assert "store_id: store.id" in shared_store_view
+    subprocess.run(
+        ["node", "-e", """
+(async () => {
+const assert = require('node:assert/strict');
+const view = require('./frontend/r297-store-view.js');
+assert.equal(typeof view.loadStoreDirectory, 'function');
+const calls = [];
+const directory = await view.loadStoreDirectory(async endpoint => {
+  calls.push(endpoint);
+  return [{id: 101, store_code: 'REAL-101', platform: 'jd', active: true}];
+});
+assert.deepEqual(calls, ['/api/stores']);
+const merged = view.mergeStores(
+  directory,
+  [{id: 999, store_id: 101, summary: {}}, {id: 202, store_id: 202, summary: {}}]
+);
+assert.deepEqual(merged.map(store => [store.id, store.store_id]), [[101, 101]]);
+})().catch(error => { console.error(error); process.exit(1); });
+"""],
+        cwd=ROOT,
+        check=True,
+    )
+    assert "/api/jd-workbench/dashboard?" in dashboard_page
+    for page in (stores_page, dashboard_page, shared_store_view):
         assert not re.search(r"(?:store_id|storeId)\s*:\s*[1-9]\d*", page)
         assert not re.search(
             r"(?:stores|allStores|shops|storeRows|STORE_LIST)\s*=\s*\[\s*{",
