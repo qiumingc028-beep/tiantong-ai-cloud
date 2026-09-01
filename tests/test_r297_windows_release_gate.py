@@ -16,6 +16,10 @@ def test_r297_windows_gate_packages_only_the_official_workbench():
     assert package["devDependencies"]["electron-builder"] == "26.15.3"
     assert "desktop/jd-workbench" in workflow
     assert "apps/jd-desktop-agent" not in workflow
+    assert "actions/checkout@v7" in workflow
+    assert "actions/setup-node@v7" in workflow
+    assert 'node-version: "24"' in workflow
+    assert "actions/upload-artifact@v7" in workflow
     assert "npm ci --no-audit --no-fund" in workflow
     assert "npm run check" in workflow
     assert "npm run dist:win" in workflow
