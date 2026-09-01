@@ -82,7 +82,20 @@ def run_jd_workbench_scheduler(now=None):
                 status.last_attempt_at = now
                 status.next_sync_at = now + timedelta(seconds=policy.interval_seconds)
                 db.commit()
-            enqueue_task("sync_jd_smart", {"store_id": policy.store_id, "source": "cloud_scheduler", "scheduled_at": now.isoformat()}, max_retries=0)
+            try:
+                enqueue_task("sync_jd_smart", {"store_id": policy.store_id, "source": "cloud_scheduler", "scheduled_at": now.isoformat()}, max_retries=5)
+            except Exception:
+                # Compensate the lease and state so a queue outage cannot strand a store.
+                try:
+                    redis.delete(lease)
+                    if status:
+                        status.status = "ERROR"
+                        status.reason_code = "QUEUE_UNAVAILABLE"
+                        status.next_sync_at = now + timedelta(seconds=JD_RETRY_BACKOFF_SECONDS[0])
+                        status.retry_count = min(status.retry_count + 1, len(JD_RETRY_BACKOFF_SECONDS))
+                        db.commit()
+                finally:
+                    raise
             scheduled += 1
     finally:
         db.close()
