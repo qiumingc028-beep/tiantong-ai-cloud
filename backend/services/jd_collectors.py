@@ -1,4 +1,7 @@
 from datetime import date, datetime, timezone
+import json
+import os
+from urllib.request import Request, urlopen
 
 from sqlalchemy.orm import Session
 
@@ -17,29 +20,35 @@ class JdSmartCollector:
     没有授权时不会伪造数据。
     """
 
+    def _capture(self, account: JdAccount, dataset: str):
+        endpoint = os.getenv("JD_CLOUD_BROWSER_ENDPOINT")
+        if not endpoint:
+            raise JdCollectorError("云端浏览器运行时未配置")
+        payload = {"tenant_id": account.tenant_id, "company_id": account.company_id, "store_id": account.store_id, "platform": "jd", "dataset": dataset}
+        try:
+            with urlopen(Request(endpoint.rstrip("/") + "/capture", data=json.dumps(payload).encode(), headers={"content-type": "application/json"}), timeout=45) as response:
+                result = json.loads(response.read(1_000_000))
+        except Exception as exc:
+            raise JdCollectorError("云端浏览器采集失败") from exc
+        if not isinstance(result, dict) or result.get("status") in {"LOGIN_REQUIRED", "CAPTCHA", "RISK_CONTROL"}:
+            raise JdCollectorError("需要人工处理登录或风控")
+        return result.get("data", result)
+
     def fetch_today(self, account: JdAccount) -> dict:
-        if not account.access_token:
-            raise JdCollectorError("京东商智账号未授权，无法采集真实数据")
-        raise JdCollectorError("京东商智真实接口适配尚未配置")
+        return self._capture(account, "metrics")
 
     def fetch_orders_today(self, account: JdAccount) -> list[dict]:
-        if not account.access_token:
-            raise JdCollectorError("京东商智账号未授权，无法采集订单数据")
-        raise JdCollectorError("京东订单真实接口适配尚未配置")
+        return self._capture(account, "orders")
 
     def fetch_products_today(self, account: JdAccount) -> list[dict]:
-        if not account.access_token:
-            raise JdCollectorError("京东商智账号未授权，无法采集商品数据")
-        raise JdCollectorError("京东商品真实接口适配尚未配置")
+        return self._capture(account, "products")
 
 
 class JztCollector:
     """京准通采集适配器。"""
 
     def fetch_ads_today(self, account: JdAccount) -> list[dict]:
-        if not account.access_token:
-            raise JdCollectorError("京准通账号未授权，无法采集真实广告数据")
-        raise JdCollectorError("京准通真实接口适配尚未配置")
+        return JdSmartCollector()._capture(account, "ads")
 
 
 def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):
