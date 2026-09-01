@@ -27,6 +27,7 @@ from ..models import (
     JdWorkbenchRecord,
     JdWorkbenchStoreStatus,
     JdWorkbenchSyncBatch,
+    JdWorkbenchSyncPolicy,
     Store,
     User,
 )
@@ -37,6 +38,9 @@ router = APIRouter(prefix="/api/jd-workbench", tags=["jd-workbench"])
 
 MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_RECORDS = 500
+DEFAULT_SYNC_INTERVAL_SECONDS = 300
+ALLOWED_SYNC_INTERVAL_SECONDS = frozenset({300, 900, 1800, 3600})
+MAX_SYNC_RETRIES = 5
 PAIRING_TTL = timedelta(minutes=10)
 DEVICE_TTL = timedelta(days=30)
 HEX_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -74,13 +78,40 @@ DATASET_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"source_record_key", "channel", "ad_spend"}),
         frozenset({"attributed_sales", "roi", "promotion_rate"}),
     ),
+    "fulfillment_orders": (
+        frozenset({"source_record_key", "order_state", "product_name", "quantity", "paid_amount", "ordered_at"}),
+        frozenset({"promised_ship_at"}),
+    ),
+    "aftersale_orders": (
+        frozenset({"source_record_key", "aftersale_state", "product_name", "quantity", "refund_amount", "requested_at"}),
+        frozenset({"reason_category"}),
+    ),
 }
 MONEY_FIELDS = frozenset({"sales_amount", "paid_amount", "refund_amount", "ad_spend", "attributed_sales"})
 RATIO_FIELDS = frozenset({"roi", "promotion_rate"})
-INTEGER_FIELDS = frozenset({"orders_count", "order_count", "refund_order_count", "stock_quantity"})
-TEXT_LIMITS = {"product_name": 200, "category_name": 120}
+INTEGER_FIELDS = frozenset({"orders_count", "order_count", "refund_order_count", "stock_quantity", "quantity"})
+TEXT_LIMITS = {
+    "product_name": 200,
+    "category_name": 120,
+    "order_state": 64,
+    "aftersale_state": 64,
+    "reason_category": 120,
+}
+DATETIME_FIELDS = frozenset({"ordered_at", "promised_ship_at", "requested_at"})
 PROMOTION_CHANNELS = frozenset({"jd_kuaiche", "haitou", "jingtiaoke", "jingzhuntong", "other"})
-DEVICE_STATUSES = frozenset({"ONLINE", "IDLE", "SYNCING", "OFFLINE", "ERROR", "HUMAN_ACTION_REQUIRED"})
+DEVICE_STATUSES = frozenset({"ONLINE", "IDLE", "SYNCING", "PAUSED", "OFFLINE", "ERROR", "HUMAN_ACTION_REQUIRED"})
+SYNC_ERROR_CODES = frozenset(
+    {
+        "CLOUD_CONNECTION_FAILED",
+        "COLLECTOR_PAGE_LOAD_FAILED",
+        "COLLECTOR_SCHEMA_MISMATCH",
+        "COLLECTOR_EMPTY",
+        "SYNC_UPLOAD_REJECTED",
+        "LOGIN_EXPIRED",
+        "RISK_CONTROL",
+        "CAPTCHA_REQUIRED",
+    }
+)
 HUMAN_REASON_CODES = frozenset(
     {
         "CAPTCHA_REQUIRED",
@@ -118,7 +149,7 @@ def _aware(value: datetime) -> datetime:
 
 
 def _generic_bad_request() -> HTTPException:
-    return HTTPException(status_code=400, detail="请求字段不符合R291只读同步合同")
+    return HTTPException(status_code=400, detail="请求字段不符合R297只读自动同步合同")
 
 
 async def _json_body(request: Request) -> dict[str, Any]:
@@ -332,6 +363,8 @@ def _normalize_record(dataset_type: str, raw: Any) -> dict[str, Any]:
             if not isinstance(value, bool):
                 raise _generic_bad_request()
             normalized[key] = value
+        elif key in DATETIME_FIELDS:
+            normalized[key] = _parse_aware_datetime(value).isoformat()
         elif key in TEXT_LIMITS:
             normalized[key] = _short_text(value, TEXT_LIMITS[key])
         else:
@@ -358,7 +391,8 @@ def _normalize_sync(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(client_version, str) or not CLIENT_VERSION_RE.fullmatch(client_version):
         raise _generic_bad_request()
     records = data.get("records")
-    if not isinstance(records, list) or not (1 <= len(records) <= MAX_RECORDS):
+    minimum_records = 0 if dataset_type in {"fulfillment_orders", "aftersale_orders"} else 1
+    if not isinstance(records, list) or not (minimum_records <= len(records) <= MAX_RECORDS):
         raise _generic_bad_request()
     normalized_records = [_normalize_record(dataset_type, record) for record in records]
     keys = [record["source_record_key"] for record in normalized_records]
@@ -395,6 +429,36 @@ def _status_row(db: Session, device_id: str, store_id: int) -> JdWorkbenchStoreS
         row = JdWorkbenchStoreStatus(device_id=device_id, store_id=store_id, status="OFFLINE")
         db.add(row)
     return row
+
+
+def _sync_policy(db: Session, user: User, store: Store) -> JdWorkbenchSyncPolicy:
+    row = db.query(JdWorkbenchSyncPolicy).filter(
+        JdWorkbenchSyncPolicy.tenant_id == user.tenant_id,
+        JdWorkbenchSyncPolicy.store_id == store.id,
+    ).one_or_none()
+    if row is None:
+        row = JdWorkbenchSyncPolicy(
+            tenant_id=user.tenant_id,
+            company_id=store.company_id,
+            store_id=store.id,
+            enabled=True,
+            interval_seconds=DEFAULT_SYNC_INTERVAL_SECONDS,
+            updated_by_user_id=user.id,
+        )
+        db.add(row)
+    return row
+
+
+def _runtime_payload(status: JdWorkbenchStoreStatus | None) -> dict[str, Any]:
+    return {
+        "status": status.status if status else "OFFLINE",
+        "reason_code": status.reason_code if status else None,
+        "last_attempt_at": status.last_attempt_at.isoformat() if status and status.last_attempt_at else None,
+        "last_sync_at": status.last_sync_at.isoformat() if status and status.last_sync_at else None,
+        "next_sync_at": status.next_sync_at.isoformat() if status and status.next_sync_at else None,
+        "retry_count": status.retry_count if status else 0,
+        "last_error_at": status.last_error_at.isoformat() if status and status.last_error_at else None,
+    }
 
 
 @router.post("/pairing-codes")
@@ -491,10 +555,13 @@ async def list_device_stores(request: Request, db: Session = Depends(get_db)):
             JdWorkbenchStoreStatus.store_id.in_([store.id for store in stores]),
         ).all()
     }
+    policies = {store.id: _sync_policy(db, user, store) for store in stores}
+    db.commit()
     result = []
     for store in stores:
         store_uuid = _store_uuid(store)
         status = statuses.get(store.id)
+        policy = policies[store.id]
         result.append(
             {
                 "store_id": store.id,
@@ -503,9 +570,12 @@ async def list_device_stores(request: Request, db: Session = Depends(get_db)):
                 "partition": f"persist:jd-{store_uuid}",
                 "store_code": store.store_code,
                 "store_name": store.store_name,
-                "status": status.status if status else "OFFLINE",
-                "reason_code": status.reason_code if status else None,
-                "last_sync_at": status.last_sync_at.isoformat() if status and status.last_sync_at else None,
+                **_runtime_payload(status),
+                "sync_policy": {
+                    "enabled": policy.enabled,
+                    "interval_seconds": policy.interval_seconds,
+                    "updated_at": policy.updated_at.isoformat() if policy.updated_at else None,
+                },
             }
         )
     return result
@@ -518,7 +588,7 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
     _exact_keys(
         data,
         frozenset({"client_version", "status"}),
-        frozenset({"store_id", "reason_code"}),
+        frozenset({"store_id", "reason_code", "last_attempt_at", "next_sync_at", "retry_count"}),
     )
     client_version = data.get("client_version")
     status = data.get("status")
@@ -531,8 +601,16 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
     if status == "HUMAN_ACTION_REQUIRED":
         if not isinstance(store_id, int) or isinstance(store_id, bool) or reason_code not in HUMAN_REASON_CODES:
             raise _generic_bad_request()
+    elif status == "ERROR":
+        if not isinstance(store_id, int) or isinstance(store_id, bool) or reason_code not in SYNC_ERROR_CODES:
+            raise _generic_bad_request()
     elif reason_code is not None:
         raise _generic_bad_request()
+    retry_count = data.get("retry_count", 0)
+    if isinstance(retry_count, bool) or not isinstance(retry_count, int) or not (0 <= retry_count <= MAX_SYNC_RETRIES):
+        raise _generic_bad_request()
+    last_attempt_at = _parse_aware_datetime(data["last_attempt_at"]) if "last_attempt_at" in data else None
+    next_sync_at = _parse_aware_datetime(data["next_sync_at"]) if "next_sync_at" in data else None
     now = _now()
     if store_id is not None:
         if not isinstance(store_id, int) or isinstance(store_id, bool):
@@ -541,6 +619,14 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
         row = _status_row(db, device.device_id, store.id)
         row.status = status
         row.reason_code = reason_code
+        if last_attempt_at is not None:
+            row.last_attempt_at = last_attempt_at
+        row.next_sync_at = next_sync_at
+        row.retry_count = retry_count
+        if status in {"ERROR", "HUMAN_ACTION_REQUIRED"}:
+            row.last_error_at = now
+        elif status in {"IDLE", "ONLINE", "SYNCING"}:
+            row.last_error_at = None
         row.updated_at = now
     device.client_version = client_version
     device.status = status
@@ -631,9 +717,14 @@ async def sync_data(request: Request, db: Session = Depends(get_db)):
         accepted += 1
     now = _now()
     status = _status_row(db, device.device_id, store.id)
+    policy = _sync_policy(db, user, store)
     status.status = "IDLE"
     status.reason_code = None
+    status.last_attempt_at = normalized["collected_at"]
     status.last_sync_at = now
+    status.next_sync_at = now + timedelta(seconds=policy.interval_seconds) if policy.enabled else None
+    status.retry_count = 0
+    status.last_error_at = None
     status.updated_at = now
     device.client_version = normalized["client_version"]
     device.status = "ONLINE"
@@ -644,6 +735,51 @@ async def sync_data(request: Request, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=409, detail="来源记录已由另一同步任务写入") from exc
     return {"ok": True, "duplicate": False, "accepted": accepted, "batch_id": batch.batch_id}
+
+
+@router.patch("/sync-policies/{store_id}")
+async def update_sync_policy(store_id: int, request: Request, db: Session = Depends(get_db)):
+    user = require_permission_user(request, db, "stores.manage")
+    store = require_authorized_store(db, user, store_id=store_id, write=True)
+    data = await _json_body(request)
+    _exact_keys(data, frozenset({"enabled"}), frozenset({"interval_seconds"}))
+    enabled = data.get("enabled")
+    interval_seconds = data.get("interval_seconds", DEFAULT_SYNC_INTERVAL_SECONDS)
+    if not isinstance(enabled, bool) or interval_seconds not in ALLOWED_SYNC_INTERVAL_SECONDS:
+        raise _generic_bad_request()
+    policy = _sync_policy(db, user, store)
+    policy.enabled = enabled
+    policy.interval_seconds = interval_seconds
+    policy.updated_by_user_id = user.id
+    now = _now()
+    statuses = db.query(JdWorkbenchStoreStatus).join(
+        JdWorkbenchDevice,
+        JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id,
+    ).filter(
+        JdWorkbenchStoreStatus.store_id == store.id,
+        JdWorkbenchDevice.tenant_id == user.tenant_id,
+        JdWorkbenchDevice.company_id == user.company_id,
+        JdWorkbenchDevice.revoked_at.is_(None),
+    ).all()
+    for status in statuses:
+        if enabled:
+            status.status = "IDLE"
+            status.reason_code = None
+            status.next_sync_at = now
+        else:
+            status.status = "PAUSED"
+            status.reason_code = None
+            status.next_sync_at = None
+            status.retry_count = 0
+        status.updated_at = now
+    db.commit()
+    return {
+        "ok": True,
+        "store_id": store.id,
+        "enabled": policy.enabled,
+        "interval_seconds": policy.interval_seconds,
+        "next_sync_at": now.isoformat() if enabled else None,
+    }
 
 
 @router.get("/dashboard")
@@ -659,6 +795,7 @@ def cloud_dashboard(
     stores = store_query.order_by(Store.id.asc()).all()
     items = []
     for store in stores:
+        policy = _sync_policy(db, user, store)
         latest_status = (
             db.query(JdWorkbenchStoreStatus)
             .join(JdWorkbenchDevice, JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id)
@@ -685,7 +822,7 @@ def cloud_dashboard(
                 JdWorkbenchRecord.company_id == user.company_id,
                 JdWorkbenchRecord.store_id == store.id,
                 JdWorkbenchRecord.dataset_type == dataset_type,
-                JdWorkbenchRecord.source_period == batch.source_period,
+                JdWorkbenchRecord.batch_id == batch.batch_id,
             ).order_by(JdWorkbenchRecord.id.asc()).limit(100).all()
             datasets[dataset_type] = {
                 "source": "jd_workbench_readonly",
@@ -700,9 +837,10 @@ def cloud_dashboard(
                 "store_id": store.id,
                 "subject_id": store.company_id,
                 "store_name": store.store_name,
-                "sync_status": latest_status.status if latest_status else "OFFLINE",
-                "reason_code": latest_status.reason_code if latest_status else None,
-                "last_sync_at": latest_status.last_sync_at.isoformat() if latest_status and latest_status.last_sync_at else None,
+                "sync_status": latest_status.status if latest_status else ("IDLE" if policy.enabled else "PAUSED"),
+                **{key: value for key, value in _runtime_payload(latest_status).items() if key != "status"},
+                "sync_enabled": policy.enabled,
+                "sync_interval_seconds": policy.interval_seconds,
                 "data_state": "READY" if datasets else "NO_DATA",
                 "empty_message": None if datasets else "暂无数据",
                 "datasets": datasets,
@@ -716,6 +854,8 @@ def cloud_dashboard(
         "ad_spend": Decimal("0"),
         "inventory_sku_count": 0,
         "low_stock_count": 0,
+        "pending_shipment_count": 0,
+        "aftersale_count": 0,
     }
     present = {key: False for key in summary_values}
     attributed_sales = Decimal("0")
@@ -750,6 +890,14 @@ def cloud_dashboard(
             if "attributed_sales" in record:
                 attributed_sales += Decimal(record["attributed_sales"])
                 attributed_present = True
+        fulfillment_records = datasets.get("fulfillment_orders", {}).get("records", [])
+        if "fulfillment_orders" in datasets:
+            summary_values["pending_shipment_count"] += len(fulfillment_records)
+            present["pending_shipment_count"] = True
+        aftersale_records = datasets.get("aftersale_orders", {}).get("records", [])
+        if "aftersale_orders" in datasets:
+            summary_values["aftersale_count"] += len(aftersale_records)
+            present["aftersale_count"] = True
     ad_spend = summary_values["ad_spend"]
     summary = {
         key: (
@@ -762,6 +910,7 @@ def cloud_dashboard(
         if attributed_present and present["ad_spend"] and ad_spend > 0
         else None
     )
+    db.commit()
     return {
         "stores": items,
         "total": len(items),
@@ -769,6 +918,56 @@ def cloud_dashboard(
         "summary": summary,
         "ready_stores": sum(item["data_state"] == "READY" for item in items),
         "human_action_required": sum(item["sync_status"] == "HUMAN_ACTION_REQUIRED" for item in items),
+    }
+
+
+@router.get("/dashboard/stores/{store_id}/{detail_type}")
+def cloud_store_order_details(
+    store_id: int,
+    detail_type: str,
+    request: Request,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+):
+    user = require_permission_user(request, db, "menu.jd_data")
+    store = require_authorized_store(db, user, store_id=store_id)
+    dataset_type = {"fulfillment": "fulfillment_orders", "aftersales": "aftersale_orders"}.get(detail_type)
+    if dataset_type is None or not (1 <= limit <= 200):
+        raise HTTPException(status_code=400, detail="明细查询参数不正确")
+    latest_batch = db.query(JdWorkbenchSyncBatch).filter(
+        JdWorkbenchSyncBatch.tenant_id == user.tenant_id,
+        JdWorkbenchSyncBatch.company_id == user.company_id,
+        JdWorkbenchSyncBatch.store_id == store.id,
+        JdWorkbenchSyncBatch.dataset_type == dataset_type,
+    ).order_by(
+        JdWorkbenchSyncBatch.collected_at.desc(),
+        JdWorkbenchSyncBatch.created_at.desc(),
+    ).first()
+    if latest_batch is None:
+        return {
+            "store_id": store.id,
+            "store_name": store.store_name,
+            "detail_type": detail_type,
+            "source_period": None,
+            "collected_at": None,
+            "records": [],
+            "total": 0,
+        }
+    rows = db.query(JdWorkbenchRecord).filter(
+        JdWorkbenchRecord.tenant_id == user.tenant_id,
+        JdWorkbenchRecord.company_id == user.company_id,
+        JdWorkbenchRecord.store_id == store.id,
+        JdWorkbenchRecord.dataset_type == dataset_type,
+        JdWorkbenchRecord.batch_id == latest_batch.batch_id,
+    ).order_by(JdWorkbenchRecord.id.asc()).limit(limit).all()
+    return {
+        "store_id": store.id,
+        "store_name": store.store_name,
+        "detail_type": detail_type,
+        "source_period": latest_batch.source_period,
+        "collected_at": latest_batch.collected_at.isoformat(),
+        "records": [json.loads(row.values_json) for row in rows],
+        "total": len(rows),
     }
 
 

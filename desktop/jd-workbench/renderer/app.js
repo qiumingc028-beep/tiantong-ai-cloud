@@ -9,6 +9,7 @@ const elements = Object.freeze({
   deviceName: document.getElementById('deviceName'),
   pairingCode: document.getElementById('pairingCode'),
   refreshStores: document.getElementById('refreshStores'),
+  syncNow: document.getElementById('syncNow'),
   formMessage: document.getElementById('formMessage'),
   emptyStage: document.getElementById('emptyStage'),
   activeStore: document.getElementById('activeStore'),
@@ -27,7 +28,12 @@ function statusLabel(store) {
     LOADING: '正在打开',
     READY_READ_ONLY: '只读在线',
     SESSION_STOPPED: '会话已停止',
-    HUMAN_ACTION_REQUIRED: '需人工处理'
+    HUMAN_ACTION_REQUIRED: '需人工处理',
+    IDLE: '等待下次同步',
+    SYNCING: '正在自动同步',
+    ERROR: '同步失败，等待重试',
+    PAUSED: '已暂停',
+    ONLINE: '客户端在线'
   };
   return labels[store.status] || '状态未知';
 }
@@ -115,6 +121,7 @@ function render(snapshot) {
     SECURE_STORAGE_BASIC_TEXT_REJECTED: '拒绝不安全的本地密钥存储'
   };
   elements.cloudStatus.textContent = cloudLabels[snapshot.cloudStatus] || '连接异常';
+  elements.syncNow.disabled = snapshot.cloudStatus !== 'CONNECTED';
   elements.businessWrites.textContent = `BUSINESS_WRITE_COUNT=${snapshot.businessWriteStatus}`;
   elements.blockedWrites.textContent = String(snapshot.blockedBusinessWriteAttempts);
   elements.emptyStage.classList.toggle('hidden', Boolean(active));
@@ -164,6 +171,7 @@ elements.pairingForm.addEventListener('submit', (event) => {
 });
 
 elements.refreshStores.addEventListener('click', () => run(() => api.refreshStores()));
+elements.syncNow.addEventListener('click', () => run(() => api.syncNow()));
 
 elements.storeSearch.addEventListener('input', () => {
   if (latest) renderStores(latest);

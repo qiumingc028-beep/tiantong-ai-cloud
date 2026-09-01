@@ -22,6 +22,10 @@ def test_r291_desktop_client_has_minimum_runnable_files_and_fixed_electron():
         "cloud-client.behavior.test.js",
         "security-policy.js",
         "security-policy.behavior.test.js",
+        "sync-scheduler.js",
+        "sync-scheduler.behavior.test.js",
+        "readonly-collector.js",
+        "readonly-collector.behavior.test.js",
         "renderer/index.html",
         "renderer/app.js",
         "renderer/styles.css",
@@ -37,6 +41,21 @@ def test_r291_desktop_client_has_minimum_runnable_files_and_fixed_electron():
     assert package["devDependencies"]["electron"] == "44.0.0"
     assert "security-policy.behavior.test.js" in package["scripts"]["check"]
     assert "cloud-client.behavior.test.js" in package["scripts"]["check"]
+    assert "sync-scheduler.behavior.test.js" in package["scripts"]["check"]
+    assert "readonly-collector.behavior.test.js" in package["scripts"]["check"]
+
+
+def test_r297_deployment_gate_requires_exact_commit_ci_migration_and_rollback():
+    preflight = (ROOT / "ops" / "r297_workbench_preflight.sh").read_text(encoding="utf-8")
+    deploy = (ROOT / "ops" / "r297_workbench_deploy.sh").read_text(encoding="utf-8")
+    assert "R297_CI_RUN_ID" in preflight
+    assert 'payload.get("head_sha") == sys.argv[1]' in preflight
+    assert "0049_r297_jd_multistore_autosync.py" in preflight
+    assert "git -C \"$DEPLOYMENT_DIR\" status --porcelain=v1" in preflight
+    assert "database.before.dump" in deploy
+    assert "rollback()" in deploy
+    assert 'release.get("commit") == os.environ["EXPECTED_COMMIT"]' in deploy
+    assert "FORMAL_RELEASE=BLOCK_PENDING_REAL_JD_ACCEPTANCE" in deploy
 
 
 def test_r291_uses_webcontentsview_and_never_deprecated_or_embedded_views():
@@ -85,7 +104,8 @@ def test_r291_jd_allowlist_is_https_exact_host_only_and_has_no_wildcards():
     assert "ENDPOINT_NOT_AUDITED" in policy
     assert "new Set(['GET', 'HEAD'])" in policy
     assert ".endsWith(" not in policy
-    assert ".startsWith(" not in policy
+    assert "parsed.hostname.startsWith" not in policy
+    assert "parsed.pathname.startsWith(route.pathnamePrefix)" in policy
 
 
 def test_r291_inactive_partition_is_denied_before_url_and_auth_checks():
@@ -124,7 +144,7 @@ def test_r291_node_policy_behavior_includes_negative_cases():
         timeout=15,
     )
     assert completed.returncode == 0, completed.stderr
-    assert "R291_SECURITY_POLICY_BEHAVIOR=13_PASS" in completed.stdout
+    assert "R297_SECURITY_POLICY_BEHAVIOR=14_PASS" in completed.stdout
     cloud_completed = subprocess.run(
         [node, str(CLIENT / "cloud-client.behavior.test.js")],
         cwd=CLIENT,
@@ -134,7 +154,7 @@ def test_r291_node_policy_behavior_includes_negative_cases():
         timeout=30,
     )
     assert cloud_completed.returncode == 0, cloud_completed.stderr
-    assert "R291_CLOUD_CLIENT_BEHAVIOR=3_SIGNED_REQUESTS_PASS" in cloud_completed.stdout
+    assert "R297_CLOUD_CLIENT_BEHAVIOR=4_SIGNED_REQUESTS_PASS" in cloud_completed.stdout
 
 
 def test_r291_does_not_claim_unverified_business_write_count_is_zero():
@@ -152,7 +172,6 @@ def test_r291_blocks_privileged_remote_page_capabilities():
     preload = read("preload.js")
     remote_surface = main + "\n" + preload
     for forbidden in (
-        "executeJavaScript",
         "capturePage",
         ".debugger",
         "shell.openExternal",
@@ -162,6 +181,8 @@ def test_r291_blocks_privileged_remote_page_capabilities():
         "netLog",
     ):
         assert forbidden not in remote_surface
+    assert main.count("executeJavaScript(SNAPSHOT_SCRIPT, true)") == 1
+    assert "executeJavaScript(" not in main.replace("executeJavaScript(SNAPSHOT_SCRIPT, true)", "")
     assert "setWindowOpenHandler" in main
     assert "will-download" in main
     assert "event.preventDefault()" in main
@@ -244,14 +265,16 @@ def test_r291_stores_only_arrive_from_fixed_cloud_pairing_and_token_is_protected
     assert "raw.partition !== partition" in main
 
 
-def test_r291_collection_is_explicitly_disabled_and_has_no_mock_business_data():
+def test_r297_collection_is_fixed_contract_only_and_has_no_mock_business_data():
     main = read("main.js")
     preload = read("preload.js")
     html = read("renderer/index.html")
     assert "querySelector" not in main
     assert "querySelector" not in preload
-    assert "collectionEnabled: false" in main
-    assert "当前版本不抓取页面" in html
+    assert "collectionEnabled: true" in main
+    assert "每5分钟自动" in html
+    assert "syncScheduler.runNow" in main
+    assert "SNAPSHOT_SCRIPT" in main
     assert "暂无数据" in html
     assert not re.search(r"[¥￥]\s*\d", html)
 

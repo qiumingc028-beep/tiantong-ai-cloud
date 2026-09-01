@@ -8,6 +8,7 @@ const CHANNELS = Object.freeze({
   refreshStores: 'workbench:refresh-stores',
   selectStore: 'workbench:select-store',
   humanAction: 'workbench:human-action',
+  syncNow: 'workbench:sync-now',
   status: 'workbench:status'
 });
 
@@ -19,6 +20,7 @@ contextBridge.exposeInMainWorld('tiantongWorkbench', Object.freeze({
   }),
   refreshStores: () => ipcRenderer.invoke(CHANNELS.refreshStores),
   selectStore: (storeUuid) => ipcRenderer.invoke(CHANNELS.selectStore, storeUuid),
+  syncNow: (storeUuid = null) => ipcRenderer.invoke(CHANNELS.syncNow, storeUuid),
   reportHumanAction: (storeUuid, reason) => ipcRenderer.invoke(
     CHANNELS.humanAction,
     storeUuid,

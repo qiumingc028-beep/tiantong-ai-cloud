@@ -32,6 +32,13 @@ const JD_AUTH_ROUTES = Object.freeze([
   Object.freeze({ hostname: 'passport.shop.jd.com', pathname: '/login/index.action/jdm' })
 ]);
 
+// R297 permits only GET/HEAD traffic inside these reviewed scheme+host+port+
+// path-prefix boundaries. POST remains limited to the human login routes below.
+const JD_READONLY_ROUTE_PREFIXES = Object.freeze([
+  Object.freeze({ hostname: 'shop.jd.com', pathnamePrefix: '/jdm/' }),
+  Object.freeze({ hostname: 'trade-order-jdm.jd.com', pathnamePrefix: '/orderList/' })
+]);
+
 const READ_ONLY_METHODS = Object.freeze(new Set(['GET', 'HEAD']));
 const BLOCKED_RESOURCE_TYPES = Object.freeze(new Set(['webSocket', 'ping', 'cspReport']));
 const STATIC_RESOURCE_TYPES = Object.freeze(new Set(['stylesheet', 'script', 'image', 'font', 'media']));
@@ -39,6 +46,7 @@ const JD_STATIC_HOSTS = Object.freeze(new Set([
   'shop.jd.com',
   'passport.shop.jd.com',
   'passport.jd.com',
+  'trade-order-jdm.jd.com',
   'storage.jd.com',
   'storage.360buyimg.com',
   'static.360buyimg.com',
@@ -90,7 +98,17 @@ function isAuditedMainFrameRoute(rawUrl) {
   const parsed = parseAllowedHttpsUrl(rawUrl);
   if (!parsed) return false;
   if (isExactAuthenticationRoute(parsed.href)) return true;
-  return parsed.hostname === 'shop.jd.com' && parsed.pathname === '/';
+  if (parsed.hostname === 'shop.jd.com' && parsed.pathname === '/') return true;
+  return JD_READONLY_ROUTE_PREFIXES.some(
+    (route) => route.hostname === parsed.hostname && parsed.pathname.startsWith(route.pathnamePrefix)
+  );
+}
+
+function isAuditedReadonlyRoute(rawUrl) {
+  const parsed = parseAllowedHttpsUrl(rawUrl);
+  return Boolean(parsed && JD_READONLY_ROUTE_PREFIXES.some(
+    (route) => route.hostname === parsed.hostname && parsed.pathname.startsWith(route.pathnamePrefix)
+  ));
 }
 
 function classifyRequest({
@@ -121,6 +139,9 @@ function classifyRequest({
   if (READ_ONLY_METHODS.has(normalizedMethod)) {
     if (resourceType === 'mainFrame' && isAuditedMainFrameRoute(target.href)) {
       return Object.freeze({ allow: true, code: 'AUDITED_MAIN_FRAME' });
+    }
+    if (isAuditedReadonlyRoute(target.href)) {
+      return Object.freeze({ allow: true, code: 'AUDITED_READ_ONLY_ENDPOINT' });
     }
     if (STATIC_RESOURCE_TYPES.has(resourceType) && JD_STATIC_HOSTS.has(target.hostname)) {
       return Object.freeze({ allow: true, code: 'STATIC_RESOURCE' });
@@ -166,12 +187,14 @@ function hostnameForStatus(rawUrl) {
 module.exports = Object.freeze({
   JD_HTTPS_HOSTS,
   JD_AUTH_ROUTES,
+  JD_READONLY_ROUTE_PREFIXES,
   READ_ONLY_METHODS,
   STATIC_RESOURCE_TYPES,
   classifyRequest,
   detectHumanActionFromUrl,
   hostnameForStatus,
   isAuditedMainFrameRoute,
+  isAuditedReadonlyRoute,
   isExactAuthenticationRoute,
   parseAllowedHttpsUrl
 });

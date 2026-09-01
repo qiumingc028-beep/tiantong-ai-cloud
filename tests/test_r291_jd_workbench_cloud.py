@@ -198,6 +198,7 @@ def test_device_auth_is_distinct_from_user_bearer_and_supports_heartbeat(
     owner_headers,
     test_db,
 ):
+    client.cookies.clear()
     device_token, _ = _pair_device(client, owner_headers)
 
     assert client.get("/api/jd-workbench/stores").status_code == 401
@@ -695,3 +696,126 @@ def test_revoked_device_token_is_rejected_immediately(client, owner_headers):
     assert _device_request(
         client, "GET", "/api/jd-workbench/stores", device_token
     ).status_code == 401
+
+
+def test_r297_default_policy_is_persisted_and_pause_resume_is_cloud_owned(
+    client,
+    owner_headers,
+    operator_headers,
+):
+    client.cookies.clear()
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    assert store["sync_policy"] == {
+        "enabled": True,
+        "interval_seconds": 300,
+        "updated_at": store["sync_policy"]["updated_at"],
+    }
+
+    paused = client.patch(
+        f"/api/jd-workbench/sync-policies/{store['store_id']}",
+        headers=operator_headers,
+        json={"enabled": False, "interval_seconds": 300},
+    )
+    assert paused.status_code == 200, paused.text
+    assert paused.json()["next_sync_at"] is None
+    cloud_store = _authorized_store(client, device_token)
+    assert cloud_store["sync_policy"]["enabled"] is False
+
+    resumed = client.patch(
+        f"/api/jd-workbench/sync-policies/{store['store_id']}",
+        headers=owner_headers,
+        json={"enabled": True, "interval_seconds": 900},
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["next_sync_at"]
+    cloud_store = _authorized_store(client, device_token)
+    assert cloud_store["sync_policy"]["enabled"] is True
+    assert cloud_store["sync_policy"]["interval_seconds"] == 900
+
+
+def test_r297_failure_retry_runtime_survives_store_refresh(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    next_sync = "2026-09-01T08:02:00Z"
+    failed = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/heartbeat",
+        device_token,
+        {
+            "client_version": CLIENT_VERSION,
+            "status": "ERROR",
+            "store_id": store["store_id"],
+            "reason_code": "COLLECTOR_PAGE_LOAD_FAILED",
+            "last_attempt_at": "2026-09-01T08:00:00Z",
+            "next_sync_at": next_sync,
+            "retry_count": 2,
+        },
+    )
+    assert failed.status_code == 200, failed.text
+    refreshed = _authorized_store(client, device_token)
+    assert refreshed["status"] == "ERROR"
+    assert refreshed["reason_code"] == "COLLECTOR_PAGE_LOAD_FAILED"
+    assert refreshed["retry_count"] == 2
+    assert refreshed["next_sync_at"].startswith("2026-09-01T08:02:00")
+    assert refreshed["last_error_at"]
+
+
+def test_r297_fulfillment_and_aftersale_details_are_clickable_safe_records(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    datasets = {
+        "fulfillment_orders": {
+            "source_record_key": _opaque("order:jd-sensitive-order-number"),
+            "order_state": "待发货",
+            "product_name": "商务机械表",
+            "quantity": 1,
+            "paid_amount": "1280.00",
+            "ordered_at": "2026-09-01T07:30:00Z",
+            "promised_ship_at": "2026-09-02T07:30:00Z",
+        },
+        "aftersale_orders": {
+            "source_record_key": _opaque("service:jd-sensitive-service-number"),
+            "aftersale_state": "待审核",
+            "product_name": "女士石英表",
+            "quantity": 1,
+            "refund_amount": "688.00",
+            "requested_at": "2026-09-01T07:45:00Z",
+            "reason_category": "商品问题",
+        },
+    }
+    for dataset_type, record in datasets.items():
+        response = _device_request(
+            client,
+            "POST",
+            "/api/jd-workbench/sync",
+            device_token,
+            _sync_payload(
+                store,
+                dataset_type=dataset_type,
+                records=[record],
+                idempotency_key=f"r297-{dataset_type}-{uuid4()}",
+            ),
+        )
+        _assert_first_sync(response, 1)
+
+    fulfillment = client.get(
+        f"/api/jd-workbench/dashboard/stores/{store['store_id']}/fulfillment",
+        headers=owner_headers,
+    )
+    aftersales = client.get(
+        f"/api/jd-workbench/dashboard/stores/{store['store_id']}/aftersales",
+        headers=owner_headers,
+    )
+    assert fulfillment.status_code == 200, fulfillment.text
+    assert aftersales.status_code == 200, aftersales.text
+    assert fulfillment.json()["records"][0]["order_state"] == "待发货"
+    assert aftersales.json()["records"][0]["aftersale_state"] == "待审核"
+    assert "source_record_key" not in fulfillment.text
+    assert "order_no" not in fulfillment.text
+    assert "buyer" not in fulfillment.text
+
+    dashboard = client.get("/api/jd-workbench/dashboard", headers=owner_headers).json()
+    assert dashboard["summary"]["pending_shipment_count"] == 1
+    assert dashboard["summary"]["aftersale_count"] == 1

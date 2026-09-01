@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const {
@@ -15,6 +16,8 @@ const {
 } = require('electron');
 
 const { createCloudClient } = require('./cloud-client');
+const { ROUTES, SNAPSHOT_SCRIPT, normalizeSnapshot } = require('./readonly-collector');
+const { createSyncScheduler } = require('./sync-scheduler');
 const {
   classifyRequest,
   detectHumanActionFromUrl,
@@ -39,6 +42,7 @@ const CHANNELS = Object.freeze({
   refreshStores: 'workbench:refresh-stores',
   selectStore: 'workbench:select-store',
   humanAction: 'workbench:human-action',
+  syncNow: 'workbench:sync-now',
   status: 'workbench:status'
 });
 
@@ -60,6 +64,7 @@ if (!hasSingleInstanceLock) app.quit();
 
 let shellWindow = null;
 let activeContext = null;
+let collectionContext = null;
 let stores = [];
 let cloudClient = null;
 let cloudStatus = 'NOT_PAIRED';
@@ -68,6 +73,8 @@ let remoteViewAccessPaused = false;
 let viewTransition = Promise.resolve();
 let authorizationLeaseExpiresAt = 0;
 let authorizationRefreshTimer = null;
+let syncScheduler = null;
+let appQuitting = false;
 const statusByStore = new Map();
 const securedPartitions = new Set();
 const remoteSessions = new Map();
@@ -122,7 +129,14 @@ function normalizeCloudStore(raw) {
     storeName: cleanStoreName(raw.store_name),
     cloudStoreStatus: typeof raw.status === 'string' ? raw.status.slice(0, 32) : 'OFFLINE',
     cloudReasonCode: typeof raw.reason_code === 'string' ? raw.reason_code.slice(0, 64) : null,
-    lastSyncAt: typeof raw.last_sync_at === 'string' ? raw.last_sync_at.slice(0, 40) : null
+    lastSyncAt: typeof raw.last_sync_at === 'string' ? raw.last_sync_at.slice(0, 40) : null,
+    lastAttemptAt: typeof raw.last_attempt_at === 'string' ? raw.last_attempt_at.slice(0, 40) : null,
+    nextSyncAt: typeof raw.next_sync_at === 'string' ? raw.next_sync_at.slice(0, 40) : null,
+    retryCount: Number.isInteger(raw.retry_count) ? raw.retry_count : 0,
+    syncEnabled: raw.sync_policy ? raw.sync_policy.enabled === true : true,
+    intervalSeconds: Number.isInteger(raw.sync_policy && raw.sync_policy.interval_seconds)
+      ? raw.sync_policy.interval_seconds
+      : 300
   });
 }
 
@@ -136,7 +150,12 @@ function safeStoreState(store) {
     reason: state.reason || store.cloudReasonCode || null,
     host: state.host || null,
     updatedAt: state.updatedAt || null,
-    lastSyncAt: store.lastSyncAt
+    lastSyncAt: store.lastSyncAt,
+    lastAttemptAt: state.lastAttemptAt || store.lastAttemptAt,
+    nextSyncAt: state.nextSyncAt || store.nextSyncAt,
+    retryCount: Number.isInteger(state.retryCount) ? state.retryCount : store.retryCount,
+    syncEnabled: store.syncEnabled,
+    intervalSeconds: store.intervalSeconds
   });
 }
 
@@ -147,7 +166,7 @@ function snapshot() {
     clientStatus: remoteViewAccessPaused ? 'PAUSED' : 'READY',
     cloudStatus,
     readOnly: true,
-    collectionEnabled: false,
+    collectionEnabled: true,
     businessWriteStatus: 'UNVERIFIED',
     blockedBusinessWriteAttempts
   });
@@ -159,12 +178,13 @@ function sendSnapshot() {
   }
 }
 
-function setStoreStatus(storeUuid, status, reason = null, host = null) {
+function setStoreStatus(storeUuid, status, reason = null, host = null, details = {}) {
   statusByStore.set(storeUuid, {
     status,
     reason,
     host,
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    ...details
   });
   sendSnapshot();
 }
@@ -249,7 +269,7 @@ function installDownloadBlock(targetSession, storeUuid = null) {
 }
 
 function isPartitionActive(storeUuid, partition, targetSession) {
-  return Boolean(
+  const visibleActive = Boolean(
     activeContext &&
     !activeContext.disposed &&
     activeContext.store.storeUuid === storeUuid &&
@@ -258,6 +278,16 @@ function isPartitionActive(storeUuid, partition, targetSession) {
     !activeContext.view.webContents.isDestroyed() &&
     Date.now() < authorizationLeaseExpiresAt
   );
+  const collectorActive = Boolean(
+    collectionContext &&
+    !collectionContext.disposed &&
+    collectionContext.store.storeUuid === storeUuid &&
+    collectionContext.partition === partition &&
+    collectionContext.targetSession === targetSession &&
+    !collectionContext.view.webContents.isDestroyed() &&
+    Date.now() < authorizationLeaseExpiresAt
+  );
+  return visibleActive || collectorActive;
 }
 
 function currentUrlForStore(storeUuid) {
@@ -273,15 +303,12 @@ function currentUrlForStore(storeUuid) {
 }
 
 function isActiveMainFrameSource(details, storeUuid) {
-  if (!activeContext || activeContext.disposed || activeContext.store.storeUuid !== storeUuid) {
-    return false;
+  for (const context of [activeContext, collectionContext]) {
+    if (!context || context.disposed || context.store.storeUuid !== storeUuid) continue;
+    const contents = context.view.webContents;
+    if (details.webContentsId === contents.id && details.frame && details.frame === contents.mainFrame) return true;
   }
-  const contents = activeContext.view.webContents;
-  return Boolean(
-    details.webContentsId === contents.id &&
-    details.frame &&
-    details.frame === contents.mainFrame
-  );
+  return false;
 }
 
 function installRemoteSessionSecurity(targetSession, storeUuid, partition) {
@@ -489,6 +516,126 @@ function queueViewTransition(operation) {
   return result;
 }
 
+function readScheduleState(schedulePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(schedulePath, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return {};
+    return {};
+  }
+}
+
+function writeScheduleState(schedulePath, value) {
+  const temporaryPath = `${schedulePath}.tmp`;
+  fs.writeFileSync(temporaryPath, JSON.stringify(value), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(temporaryPath, schedulePath);
+}
+
+async function closeCollectionView() {
+  if (!collectionContext) return;
+  const context = collectionContext;
+  collectionContext = null;
+  context.disposed = true;
+  if (!context.view.webContents.isDestroyed()) context.view.webContents.stop();
+  await closeRemoteContents(context.view.webContents);
+}
+
+async function loadCollectorSnapshot(store, routeUrl) {
+  const partition = store.partition;
+  const targetSession = session.fromPartition(partition, { cache: true });
+  if (!targetSession.isPersistent()) throw new Error('COLLECTOR_PAGE_LOAD_FAILED');
+  installRemoteSessionSecurity(targetSession, store.storeUuid, partition);
+  const view = new WebContentsView({
+    webPreferences: {
+      partition,
+      nodeIntegration: false,
+      nodeIntegrationInWorker: false,
+      nodeIntegrationInSubFrames: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      devTools: false,
+      navigateOnDragDrop: false,
+      spellcheck: false,
+      plugins: false
+    }
+  });
+  collectionContext = { store, partition, targetSession, view, disposed: false };
+  view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  try {
+    await view.webContents.loadURL(routeUrl);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const currentUrl = view.webContents.getURL();
+    if (isExactAuthenticationRoute(currentUrl) || /passport\./i.test(currentUrl)) {
+      throw Object.assign(new Error('LOGIN_EXPIRED'), { code: 'LOGIN_EXPIRED' });
+    }
+    if (!isAuditedMainFrameRoute(currentUrl) || detectHumanActionFromUrl(currentUrl)) {
+      throw Object.assign(new Error('COLLECTOR_PAGE_LOAD_FAILED'), { code: 'COLLECTOR_PAGE_LOAD_FAILED' });
+    }
+    return await view.webContents.executeJavaScript(SNAPSHOT_SCRIPT, true);
+  } catch (error) {
+    if (error && ['LOGIN_EXPIRED', 'RISK_CONTROL', 'CAPTCHA_REQUIRED'].includes(error.code)) throw error;
+    throw Object.assign(new Error('COLLECTOR_PAGE_LOAD_FAILED'), { code: 'COLLECTOR_PAGE_LOAD_FAILED' });
+  } finally {
+    await closeCollectionView();
+  }
+}
+
+async function runStoreCollection(store) {
+  if (remoteViewAccessPaused || cloudStatus !== 'CONNECTED' || Date.now() >= authorizationLeaseExpiresAt) {
+    throw Object.assign(new Error('CLOUD_CONNECTION_FAILED'), { code: 'CLOUD_CONNECTION_FAILED' });
+  }
+  const collectedAt = new Date().toISOString();
+  const routeKinds = [
+    ['dashboard', ROUTES.dashboard],
+    ['fulfillment', ROUTES.fulfillment],
+    ['aftersales', ROUTES.aftersales]
+  ];
+  let uploaded = 0;
+  for (const [kind, routeUrl] of routeKinds) {
+    const pageSnapshot = await loadCollectorSnapshot(store, routeUrl);
+    const datasets = normalizeSnapshot(kind, pageSnapshot, collectedAt);
+    for (const dataset of datasets) {
+      await cloudClient.syncDataset({
+        store,
+        datasetType: dataset.datasetType,
+        sourcePeriod: dataset.sourcePeriod,
+        collectedAt,
+        records: dataset.records
+      });
+      uploaded += 1;
+    }
+  }
+  if (uploaded < 2) throw Object.assign(new Error('COLLECTOR_EMPTY'), { code: 'COLLECTOR_EMPTY' });
+}
+
+function initializeSyncScheduler(schedulePath) {
+  syncScheduler = createSyncScheduler({
+    loadState: () => readScheduleState(schedulePath),
+    saveState: (value) => writeScheduleState(schedulePath, value),
+    runStore: runStoreCollection,
+    reportState: async (store, state) => {
+      setStoreStatus(store.storeUuid, state.status, state.reasonCode || null, null, {
+        lastAttemptAt: state.lastAttemptAt,
+        nextSyncAt: state.nextSyncAt,
+        retryCount: state.retryCount
+      });
+      await cloudClient.heartbeat({
+        status: state.status,
+        storeId: store.storeId,
+        reasonCode: state.reasonCode || null,
+        lastAttemptAt: state.lastAttemptAt,
+        nextSyncAt: state.nextSyncAt,
+        retryCount: state.retryCount
+      });
+    }
+  });
+  syncScheduler.start();
+}
+
 async function selectStoreInternal(storeUuidInput) {
   if (remoteViewAccessPaused) throw new Error('REMOTE_VIEW_PAUSED');
   if (cloudStatus !== 'CONNECTED' || Date.now() >= authorizationLeaseExpiresAt) {
@@ -565,6 +712,7 @@ async function refreshAuthorizedStoresInternal() {
       await destroyActiveView('AUTHORIZATION_REVOKED');
     }
     stores = normalized;
+    if (syncScheduler) syncScheduler.replaceStores(stores);
     for (const storeUuid of [...statusByStore.keys()]) {
       if (!uuids.includes(storeUuid)) statusByStore.delete(storeUuid);
     }
@@ -582,6 +730,7 @@ async function refreshAuthorizedStoresInternal() {
     if (code === 'AUTHORIZATION_REVOKED') {
       const revokedStores = stores;
       stores = [];
+      if (syncScheduler) syncScheduler.replaceStores([]);
       await Promise.all(revokedStores.map((store) => purgeStoreSession(store)));
     }
     sendSnapshot();
@@ -636,6 +785,12 @@ function registerIpcHandlers() {
     validateShellSender(event);
     return reportManualHumanAction(storeUuid, reason);
   });
+  ipcMain.handle(CHANNELS.syncNow, async (event, storeUuid = null) => {
+    validateShellSender(event);
+    if (!syncScheduler) throw new Error('SYNC_SCHEDULER_NOT_READY');
+    await syncScheduler.runNow(storeUuid);
+    return snapshot();
+  });
 }
 
 function registerAppProtocol() {
@@ -654,7 +809,7 @@ function registerAppProtocol() {
   });
 }
 
-function createShellWindow() {
+function createShellWindow(showOnReady = true) {
   shellWindow = new BrowserWindow({
     width: 1500,
     height: 900,
@@ -682,7 +837,13 @@ function createShellWindow() {
 
   shellWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   shellWindow.on('resize', setRemoteBounds);
-  shellWindow.on('close', () => {
+  shellWindow.on('close', (event) => {
+    if (!appQuitting) {
+      event.preventDefault();
+      shellWindow.hide();
+      shellWindow.setSkipTaskbar(true);
+      return;
+    }
     if (activeContext) {
       activeContext.disposed = true;
       activeContext.view.webContents.stop();
@@ -695,7 +856,14 @@ function createShellWindow() {
       await quiesceAllRemoteSessions();
     }).catch(() => undefined);
   });
-  shellWindow.once('ready-to-show', () => shellWindow.show());
+  shellWindow.once('ready-to-show', () => {
+    if (showOnReady) {
+      shellWindow.setSkipTaskbar(false);
+      shellWindow.show();
+    } else {
+      shellWindow.setSkipTaskbar(true);
+    }
+  });
   shellWindow.loadURL(SHELL_URL);
 }
 
@@ -706,6 +874,7 @@ function stopForSystemEvent(reason) {
   remoteViewAccessPaused = true;
   sendSnapshot();
   Promise.resolve(destroyActiveView(reason))
+    .then(closeCollectionView)
     .then(quiesceAllRemoteSessions)
     .catch(() => undefined);
 }
@@ -738,16 +907,26 @@ if (hasSingleInstanceLock) {
   app.on('second-instance', () => {
     if (!shellWindow || shellWindow.isDestroyed()) return;
     if (shellWindow.isMinimized()) shellWindow.restore();
+    shellWindow.setSkipTaskbar(false);
     shellWindow.show();
     shellWindow.focus();
   });
 
   app.whenReady().then(() => {
+    const userDataPath = app.getPath('userData');
     cloudClient = createCloudClient({
       net,
       safeStorage,
-      identityPath: path.join(app.getPath('userData'), 'jd-workbench-device.json')
+      identityPath: path.join(userDataPath, 'jd-workbench-device.json')
     });
+    initializeSyncScheduler(path.join(userDataPath, 'jd-workbench-schedule.json'));
+    let wasOpenedAsHidden = false;
+    try {
+      app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
+      wasOpenedAsHidden = app.getLoginItemSettings().wasOpenedAsHidden === true;
+    } catch (_error) {
+      // Linux distributions without an autostart provider continue normally.
+    }
     try {
       cloudStatus = cloudClient.readIdentity() ? 'CONNECTING' : 'NOT_PAIRED';
     } catch (error) {
@@ -757,7 +936,7 @@ if (hasSingleInstanceLock) {
     registerAppProtocol();
     installDownloadBlock(session.defaultSession);
     registerIpcHandlers();
-    createShellWindow();
+    createShellWindow(!wasOpenedAsHidden);
 
     powerMonitor.on('lock-screen', () => stopForSystemEvent('WORKSTATION_LOCKED'));
     powerMonitor.on('unlock-screen', resumeAfterSystemEvent);
@@ -777,7 +956,12 @@ if (hasSingleInstanceLock) {
 }
 
 app.on('before-quit', () => {
+  appQuitting = true;
   if (authorizationRefreshTimer) clearInterval(authorizationRefreshTimer);
+  if (syncScheduler) syncScheduler.stop();
   stopForSystemEvent('APPLICATION_QUIT');
 });
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => {
+  // R297 remains in the Electron main process so the five-minute scheduler is
+  // independent from the visible management window.
+});

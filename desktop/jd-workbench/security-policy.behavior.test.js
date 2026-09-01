@@ -87,6 +87,11 @@ assert.deepEqual(
   'GET must not be treated as read-only without endpoint semantics'
 );
 assert.deepEqual(
+  decide({ url: 'https://trade-order-jdm.jd.com/orderList/waitOut/data', method: 'GET', resourceType: 'xhr' }),
+  { allow: true, code: 'AUDITED_READ_ONLY_ENDPOINT' },
+  'R297 permits GET only inside an exact reviewed host and path prefix'
+);
+assert.deepEqual(
   decide({ url: 'https://shop.jd.com/api/delete', method: 'GET', resourceType: 'mainFrame' }),
   { allow: false, code: 'ENDPOINT_NOT_AUDITED' },
   'main-frame paths outside the audited route set must fail closed'
@@ -107,4 +112,4 @@ assert.deepEqual(
   'the exact audited login route remains usable by the active main frame'
 );
 
-console.log('R291_SECURITY_POLICY_BEHAVIOR=13_PASS');
+console.log('R297_SECURITY_POLICY_BEHAVIOR=14_PASS');

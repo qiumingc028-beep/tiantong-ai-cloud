@@ -16,7 +16,7 @@
     <div class="top-actions">
       <span class="badge lock">只读浏览模式</span>
       <button id="refreshStores" class="secondary">刷新授权店铺</button>
-      <button id="syncNow" class="primary" disabled title="R291安全壳尚未启用数据采集">立即同步</button>
+      <button id="syncNow" class="primary" title="立即执行一次全部已启用店铺同步">立即同步</button>
     </div>
   </header>
 
@@ -58,7 +58,7 @@
     </section>
 
     <section>
-      <div class="panel-title"><strong>数据同步中心</strong><span class="state muted">未启用</span></div>
+      <div class="panel-title"><strong>数据同步中心</strong><span class="state good">每5分钟自动</span></div>
       <ul class="datasets">
         <li><span>销售数据</span><em>暂无数据</em></li>
         <li><span>订单数据</span><em>暂无数据</em></li>
@@ -66,7 +66,7 @@
         <li><span>退款数据</span><em>暂无数据</em></li>
         <li><span>推广费用</span><em>暂无数据</em></li>
       </ul>
-      <p class="safety-note">P0 安全壳不包含 DOM 采集和未授权接口调用，真实采集器通过安全审查后再接入。</p>
+      <p class="safety-note">只读取审核通过的京麦页面字段；订单号仅在本机哈希，账号、Cookie、买家姓名、电话、地址和原始页面不会上传。</p>
     </section>
 
     <section id="humanCard" class="human-card hidden">
@@ -84,7 +84,7 @@
     </section>
   </aside>
 
-  <footer class="footer"><span class="dot"></span>本地客户端在线 · 会话按店铺完全隔离</footer>
+  <footer class="footer"><span class="dot"></span>本地客户端在线 · 关闭窗口后仍在后台同步 · 会话按店铺完全隔离</footer>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -7,7 +7,8 @@ const CLOUD_ORIGIN = 'https://internal.tiantongai.com';
 const PAIR_URL = `${CLOUD_ORIGIN}/api/jd-workbench/pair`;
 const STORES_URL = `${CLOUD_ORIGIN}/api/jd-workbench/stores`;
 const HEARTBEAT_URL = `${CLOUD_ORIGIN}/api/jd-workbench/heartbeat`;
-const CLIENT_VERSION = '2.91.0-r291';
+const SYNC_URL = `${CLOUD_ORIGIN}/api/jd-workbench/sync`;
+const CLIENT_VERSION = '2.97.0-r297';
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const DEVICE_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -117,7 +118,7 @@ function createCloudClient({ net, safeStorage, identityPath }) {
   }
 
   async function requestJson({ url, method, body, authenticated }) {
-    if (url !== PAIR_URL && url !== STORES_URL && url !== HEARTBEAT_URL) {
+    if (url !== PAIR_URL && url !== STORES_URL && url !== HEARTBEAT_URL && url !== SYNC_URL) {
       throw clientError('CLOUD_ENDPOINT_REJECTED');
     }
     if (authenticated && !identity) throw clientError('DEVICE_NOT_PAIRED');
@@ -225,8 +226,8 @@ function createCloudClient({ net, safeStorage, identityPath }) {
     return result;
   }
 
-  async function heartbeat({ status = 'ONLINE', storeId = null, reasonCode = null } = {}) {
-    const allowedStatuses = new Set(['ONLINE', 'IDLE', 'SYNCING', 'OFFLINE', 'ERROR', 'HUMAN_ACTION_REQUIRED']);
+  async function heartbeat({ status = 'ONLINE', storeId = null, reasonCode = null, lastAttemptAt = null, nextSyncAt = null, retryCount = 0 } = {}) {
+    const allowedStatuses = new Set(['ONLINE', 'IDLE', 'SYNCING', 'PAUSED', 'OFFLINE', 'ERROR', 'HUMAN_ACTION_REQUIRED']);
     if (!allowedStatuses.has(status)) throw clientError('HEARTBEAT_REQUEST_INVALID');
     const body = { client_version: CLIENT_VERSION, status };
     if (storeId !== null) {
@@ -239,11 +240,47 @@ function createCloudClient({ net, safeStorage, identityPath }) {
       }
       body.reason_code = reasonCode;
     }
+    if (!Number.isInteger(retryCount) || retryCount < 0 || retryCount > 5) {
+      throw clientError('HEARTBEAT_REQUEST_INVALID');
+    }
+    body.retry_count = retryCount;
+    for (const [field, value] of [['last_attempt_at', lastAttemptAt], ['next_sync_at', nextSyncAt]]) {
+      if (value === null) continue;
+      if (!Number.isFinite(Date.parse(value))) throw clientError('HEARTBEAT_REQUEST_INVALID');
+      body[field] = new Date(Date.parse(value)).toISOString();
+    }
     return requestJson({
       url: HEARTBEAT_URL,
       method: 'POST',
       authenticated: true,
       body
+    });
+  }
+
+  async function syncDataset({ store, datasetType, sourcePeriod, collectedAt, records }) {
+    if (!store || !Number.isSafeInteger(store.storeId) || !Number.isSafeInteger(store.subjectId)) {
+      throw clientError('SYNC_REQUEST_INVALID');
+    }
+    if (typeof datasetType !== 'string' || !Array.isArray(records) || !Number.isFinite(Date.parse(collectedAt))) {
+      throw clientError('SYNC_REQUEST_INVALID');
+    }
+    const digest = crypto.createHash('sha256')
+      .update(JSON.stringify({ storeId: store.storeId, datasetType, sourcePeriod, records }), 'utf8')
+      .digest('hex');
+    return requestJson({
+      url: SYNC_URL,
+      method: 'POST',
+      authenticated: true,
+      body: {
+        store_id: store.storeId,
+        subject_id: store.subjectId,
+        dataset_type: datasetType,
+        source_period: sourcePeriod,
+        collected_at: new Date(Date.parse(collectedAt)).toISOString(),
+        idempotency_key: `r297:${sourcePeriod}:${datasetType}:${digest}`,
+        client_version: CLIENT_VERSION,
+        records
+      }
     });
   }
 
@@ -254,7 +291,8 @@ function createCloudClient({ net, safeStorage, identityPath }) {
     isPaired: () => Boolean(identity),
     listStores,
     pair,
-    readIdentity
+    readIdentity,
+    syncDataset
   });
 }
 
@@ -263,6 +301,7 @@ module.exports = Object.freeze({
   CLOUD_ORIGIN,
   HEARTBEAT_URL,
   PAIR_URL,
+  SYNC_URL,
   STORES_URL,
   createCloudClient,
   requireProtectedSafeStorage

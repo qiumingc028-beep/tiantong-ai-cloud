@@ -90,29 +90,6 @@ async def create_store(request: Request, db: Session = Depends(get_db)):
     return {"ok": True, "id": store.id}
 
 
-@router.post("/api/stores/seed-jd")
-def seed_jd_stores(request: Request, db: Session = Depends(get_db)):
-    user = require_permission_user(request, db, "stores.manage")
-    created = 0
-    for i in range(1, 61):
-        code = f"JD{i:02d}"
-        if not db.query(Store).filter(Store.tenant_id == user.tenant_id, Store.store_code == code).first():
-            store = Store(
-                platform="jd",
-                store_code=code,
-                store_name=f"京东店铺{i:02d}",
-                tenant_id=user.tenant_id,
-                company_id=user.company_id,
-                active=True,
-            )
-            db.add(store)
-            db.flush()
-            db.add(UserStoreMembership(user_id=user.id, store_id=store.id, can_read=True, can_write=True, active=True))
-            created += 1
-    db.commit()
-    return {"ok": True, "created": created, "message": f"已生成 {created} 个京东店铺"}
-
-
 @router.post("/api/stores/{store_id}/assign")
 async def assign_store(store_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_permission_user(request, db, "stores.manage")
