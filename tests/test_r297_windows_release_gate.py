@@ -30,7 +30,9 @@ def test_r297_windows_gate_has_complete_trigger_and_artifact_contract():
 
     assert "pull_request:" in workflow
     assert "workflow_dispatch:" in workflow
+    assert "      - main" in workflow
     assert "codex/r297-jd-multistore-autosync" in workflow
+    assert "      - codex/r297-cloud-integration" in workflow
     assert "codex/r291-windows-installer" not in workflow
     assert "ELECTRON_RUN_AS_NODE" in workflow
     assert "fs.writeFileSync" in workflow
