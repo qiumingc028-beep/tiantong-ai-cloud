@@ -20,11 +20,11 @@ class JdSmartCollector:
     没有授权时不会伪造数据。
     """
 
-    def _capture(self, account: JdAccount, dataset: str):
-        endpoint = os.getenv("JD_CLOUD_BROWSER_ENDPOINT")
+    def _capture(self, account: JdAccount, dataset: str, store: Store):
+        endpoint = os.getenv("JD_CLOUD_BROWSER_ENDPOINT", "http://jd-browser-runtime:8787/internal/jd-browser")
         if not endpoint:
             raise JdCollectorError("云端浏览器运行时未配置")
-        payload = {"tenant_id": account.tenant_id, "company_id": account.company_id, "store_id": account.store_id, "platform": "jd", "dataset": dataset}
+        payload = {"tenant_id": store.tenant_id, "company_id": store.company_id, "store_id": store.id, "platform": store.platform, "dataset": dataset}
         try:
             with urlopen(Request(endpoint.rstrip("/") + "/capture", data=json.dumps(payload).encode(), headers={"content-type": "application/json"}), timeout=45) as response:
                 result = json.loads(response.read(1_000_000))
@@ -35,20 +35,20 @@ class JdSmartCollector:
         return result.get("data", result)
 
     def fetch_today(self, account: JdAccount) -> dict:
-        return self._capture(account, "metrics")
+        return self._capture(account, "metrics", account.store)
 
     def fetch_orders_today(self, account: JdAccount) -> list[dict]:
-        return self._capture(account, "orders")
+        return self._capture(account, "orders", account.store)
 
     def fetch_products_today(self, account: JdAccount) -> list[dict]:
-        return self._capture(account, "products")
+        return self._capture(account, "products", account.store)
 
 
 class JztCollector:
     """京准通采集适配器。"""
 
     def fetch_ads_today(self, account: JdAccount) -> list[dict]:
-        return JdSmartCollector()._capture(account, "ads")
+        return JdSmartCollector()._capture(account, "ads", account.store)
 
 
 def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):

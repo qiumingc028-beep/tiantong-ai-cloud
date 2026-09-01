@@ -87,33 +87,8 @@ const JD_AUTH_API_OPERATIONS = Object.freeze(new Set([
   'dsm.account.service.VenderAccountConfigFacade.getConfig',
   'dsm.account.service.LoginFacade.login'
 ]));
-const JD_AUTH_API_OPERATION_PREFIXES = Object.freeze([
-  'dsm.account.service.'
-]);
-const JD_READ_ONLY_RPC_METHOD_PREFIXES = Object.freeze([
-  'get',
-  'find',
-  'query',
-  'list',
-  'search',
-  'check',
-  'count',
-  'load',
-  'fetch',
-  'read',
-  'detail',
-  'view',
-  'preview',
-  'config',
-  'version',
-  'info',
-  'menu',
-  'exists',
-  'has',
-  'validate',
-  'verify',
-  'init'
-]);
+const JD_AUTH_API_OPERATION_PREFIXES = Object.freeze([]);
+const JD_READ_ONLY_RPC_METHOD_PREFIXES = Object.freeze([]);
 const JD_WRITE_RPC_MARKERS = Object.freeze([
   'create', 'update', 'save', 'delete', 'remove', 'add', 'set',
   'submit', 'commit', 'confirm', 'cancel', 'close', 'refund',

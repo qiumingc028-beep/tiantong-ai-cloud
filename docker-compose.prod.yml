@@ -1,4 +1,13 @@
 services:
+  jd-browser-runtime:
+    build: {context: ./services/jd-cloud-browser-runtime}
+    restart: unless-stopped
+    env_file: [${PRODUCTION_ENV_FILE:-.env.production}]
+    environment: {PORT: "8787"}
+    expose: ["8787"]
+    networks: [default]
+    healthcheck: {test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/internal/jd-browser/health').then(r=>process.exit(r.ok?0:1))"], interval: 15s, timeout: 5s, retries: 5}
+
   postgres:
     image: postgres:16
     restart: unless-stopped
