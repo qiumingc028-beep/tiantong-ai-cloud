@@ -209,11 +209,28 @@ jobs:
           test "$status" = 200
           echo "RUNTIME_HEALTH_STATUS=200"
 
-          curl --silent --show-error --fail \
+          session_status="$(curl --silent --show-error --output /tmp/runtime-session.json --write-out '%{http_code}' \
             --header "content-type: application/json" \
             --header "x-internal-token: $internal_token" \
             --data '{"tenant_id":1,"company_id":1,"store_id":1,"platform":"jd"}' \
-            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions" >/tmp/runtime-session.json
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
+          if test "$session_status" != 200; then
+            docker logs "$container"
+            docker exec "$container" node --input-type=module -e '
+              import { chromium } from "playwright";
+              try {
+                const context = await chromium.launchPersistentContext("/tmp/chromium-diagnostic", {
+                  headless: false,
+                  chromiumSandbox: true
+                });
+                await context.close();
+              } catch (error) {
+                console.error(error);
+                process.exit(1);
+              }
+            '
+            exit 1
+          fi
 
           process_pid() {
             docker exec "$container" sh -c '
