@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 import json
 import os
+import hmac
 from urllib.request import Request, urlopen
 
 from sqlalchemy.orm import Session
@@ -21,18 +22,24 @@ class JdSmartCollector:
     """
 
     def _capture(self, account: JdAccount, dataset: str, store: Store):
-        endpoint = os.getenv("JD_CLOUD_BROWSER_ENDPOINT", "http://jd-browser-runtime:8787/internal/jd-browser")
+        endpoint = "http://jd-browser-runtime:8787/internal/jd-browser"
+        token = os.getenv("JD_BROWSER_INTERNAL_TOKEN", "")
+        if len(token.encode()) < 32:
+            raise JdCollectorError("云端浏览器内部认证未配置")
         if not endpoint:
             raise JdCollectorError("云端浏览器运行时未配置")
         payload = {"tenant_id": store.tenant_id, "company_id": store.company_id, "store_id": store.id, "platform": store.platform, "dataset": dataset}
         try:
-            with urlopen(Request(endpoint.rstrip("/") + "/capture", data=json.dumps(payload).encode(), headers={"content-type": "application/json"}), timeout=45) as response:
+            with urlopen(Request(endpoint + "/capture", data=json.dumps(payload).encode(), headers={"content-type": "application/json", "x-internal-token": token}), timeout=45) as response:
                 result = json.loads(response.read(1_000_000))
         except Exception as exc:
             raise JdCollectorError("云端浏览器采集失败") from exc
-        if not isinstance(result, dict) or result.get("status") in {"LOGIN_REQUIRED", "CAPTCHA", "RISK_CONTROL"}:
+        if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") in {"LOGIN_REQUIRED", "CAPTCHA", "RISK_CONTROL"}:
             raise JdCollectorError("需要人工处理登录或风控")
-        return result.get("data", result)
+        data = result["data"]
+        if not isinstance(data, dict) or data.get("store_id") != store.id or data.get("source") != "jd_cloud_playwright":
+            raise JdCollectorError("云端采集响应校验失败")
+        return data
 
     def fetch_today(self, account: JdAccount) -> dict:
         return self._capture(account, "metrics", account.store)

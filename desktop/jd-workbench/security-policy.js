@@ -89,6 +89,7 @@ const JD_AUTH_API_OPERATIONS = Object.freeze(new Set([
 ]));
 const JD_AUTH_API_OPERATION_PREFIXES = Object.freeze([]);
 const JD_READ_ONLY_RPC_METHOD_PREFIXES = Object.freeze([]);
+const JD_READ_ONLY_RPC_OPERATIONS = Object.freeze(new Set(['dsm.order.queryOrderList']));
 const JD_WRITE_RPC_MARKERS = Object.freeze([
   'create', 'update', 'save', 'delete', 'remove', 'add', 'set',
   'submit', 'commit', 'confirm', 'cancel', 'close', 'refund',
@@ -200,7 +201,7 @@ function isSffReadOnlyRpcTarget(rawUrl) {
   if (JD_WRITE_RPC_MARKERS.some((marker) => methodName.includes(marker))) {
     return false;
   }
-  return JD_READ_ONLY_RPC_METHOD_PREFIXES.some(
+  return JD_READ_ONLY_RPC_OPERATIONS.has(operation) || JD_READ_ONLY_RPC_METHOD_PREFIXES.some(
     (prefix) => methodName.startsWith(prefix)
   );
 }
