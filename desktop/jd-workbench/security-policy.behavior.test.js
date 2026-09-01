@@ -79,9 +79,29 @@ const request = (overrides = {}) => classifyRequest({
 assert.equal(request().allow, true);
 assert.equal(request({ isActive: false }).code, 'INACTIVE_PARTITION');
 assert.equal(request({ url: 'https://shop.jd.com.attacker.example/' }).allow, false);
-assert.equal(request({
-  url: 'https://sff.jd.com/api?api=dsm.order.updateOrder', method: 'POST', resourceType: 'xhr'
-}).code, 'READ_ONLY_WRITE_BLOCKED');
+const policySource = fs.readFileSync(path.join(__dirname, 'security-policy.js'), 'utf8');
+const writeMarkerSource = policySource.match(/const JD_WRITE_RPC_MARKERS = Object\.freeze\(\[([\s\S]*?)\]\);/);
+assert.ok(writeMarkerSource, 'write marker contract must remain explicit');
+const writeMarkers = [...writeMarkerSource[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+const expectedWriteMarkers = [
+  'create', 'update', 'save', 'delete', 'remove', 'add', 'set',
+  'submit', 'commit', 'confirm', 'cancel', 'close', 'refund',
+  'return', 'ship', 'deliver', 'publish', 'modify', 'edit', 'change',
+  'bind', 'unbind', 'pay', 'upload', 'import', 'export', 'sync',
+  'execute', 'batch', 'operate', 'enable', 'disable', 'approve',
+  'reject', 'adjust', 'lock', 'unlock', 'write', 'send', 'issue',
+  'grant', 'revoke'
+];
+assert.deepEqual(writeMarkers, expectedWriteMarkers, 'the independently reviewed JD write marker set must not shrink');
+for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']) {
+  for (const operation of expectedWriteMarkers) {
+    assert.equal(request({
+      url: `https://sff.jd.com/api?api=dsm.order.${operation}Order`,
+      method,
+      resourceType: 'xhr'
+    }).code, 'READ_ONLY_WRITE_BLOCKED');
+  }
+}
 assert.equal(request({
   url: 'https://sff.jd.com/api?api=dsm.order.queryOrderList', method: 'POST', resourceType: 'xhr'
 }).allow, true);

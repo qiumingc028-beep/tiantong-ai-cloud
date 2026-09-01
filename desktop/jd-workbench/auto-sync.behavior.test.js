@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { createAutoSyncCoordinator } = require('./auto-sync');
+const { createAutoSyncCoordinator, RETRY_DELAYS_MS } = require('./auto-sync');
 
 function fixture(overrides = {}) {
   let currentTime = Date.parse('2026-08-31T00:00:00.000Z');
@@ -28,6 +28,8 @@ function fixture(overrides = {}) {
 }
 
 (async () => {
+  assert.deepEqual(RETRY_DELAYS_MS, [30_000, 120_000, 300_000, 900_000, 1_800_000]);
+
   {
     const { coordinator, timers } = fixture();
     coordinator.start();
@@ -89,7 +91,7 @@ function fixture(overrides = {}) {
     coordinator.start();
     const result = await coordinator.runNow();
     assert.equal(result.failed, 1);
-    assert.equal(timers.at(-1).delay, 60_000);
+    assert.equal(timers.at(-1).delay, 30_000);
   }
 
   {

@@ -33,7 +33,8 @@ def test_r297_main_starts_multi_store_automatic_sync_and_windows_autostart():
 def test_r297_auto_sync_has_five_minute_cycle_and_bounded_retries():
     coordinator = read(CLIENT / "auto-sync.js")
     assert "const DEFAULT_INTERVAL_MS = 5 * 60 * 1000" in coordinator
-    assert "60 * 1000, 3 * 60 * 1000, 10 * 60 * 1000" in coordinator
+    assert "30 * 1000, 2 * 60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 30 * 60 * 1000" in coordinator
+    assert "60 * 1000, 3 * 60 * 1000, 10 * 60 * 1000" not in coordinator
     assert "HUMAN_ACTION_REQUIRED" in coordinator
     assert "CAPTCHA_REQUIRED" in coordinator
     assert "LOGIN_EXPIRED" in coordinator
