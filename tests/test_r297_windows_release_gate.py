@@ -29,6 +29,7 @@ def test_r297_windows_gate_has_complete_trigger_and_artifact_contract():
     assert "codex/r297-jd-multistore-autosync" in workflow
     assert "codex/r291-windows-installer" not in workflow
     assert "ELECTRON_RUN_AS_NODE" in workflow
+    assert "fs.writeFileSync" in workflow
     assert "process.execPath" in workflow
     assert "process.versions.chrome" in workflow
     assert "chromium-info.json" in workflow
