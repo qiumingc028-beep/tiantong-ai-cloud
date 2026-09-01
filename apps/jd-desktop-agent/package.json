@@ -1,0 +1,17 @@
+{
+  "name": "tiantong-jd-desktop-agent",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {"build": "tsc -p tsconfig.json", "test": "node --test dist/policy.test.js", "start": "electron .", "package:win": "electron-builder --win nsis zip --publish never"},
+  "dependencies": {"electron": "32.2.0", "playwright": "1.47.2"},
+  "devDependencies": {"@types/node": "22.5.5", "electron-builder": "24.13.3", "typescript": "5.6.2"},
+  "build": {
+    "appId": "com.tiantong.jd.desktop-agent",
+    "productName": "Tiantong JD Readonly Agent",
+    "directories": {"output": "dist-electron"},
+    "files": ["dist/**/*", "package.json", "node_modules/**/*"],
+    "extraResources": [{"from": "node_modules/playwright-core/.local-browsers", "to": "playwright-browsers", "filter": ["**/*"]}],
+    "win": {"target": [{"target":"nsis","arch":["x64"]},{"target":"zip","arch":["x64"]}], "artifactName": "Tiantong-JD-Readonly-Agent-${version}-${arch}.${ext}", "nsis": {"artifactName":"Tiantong-JD-Readonly-Agent-Setup-${version}-${arch}.${ext}"}}
+  }
+}

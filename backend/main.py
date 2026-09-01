@@ -22,7 +22,7 @@ from .agent_runtime.executors.computer.actions import models as computer_action_
 from .alpha_workflow import models as alpha_workflow_models  # noqa: F401
 from .routers import auto_dispatch
 from .brain_execution import router as brain_execution_router
-from .routers import account_center, agent_runtime, ai_capabilities, ai_employee_ecosystem, ai_employee_growth, ai_employee_growth_system, ai_employee_health, ai_employee_skills, ai_employees, ai_execution, ai_product_assets, ai_workforce, approval_center, brain_tool_router, business_loop, ceo_dashboard, computer_executor_v2, deploy_center, device_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_evolution, employee_execution, employee_workspace, enterprise_brain_console, execution_engine, jd_collection, jd_integrations, knowledge_center, knowledge_center_v2, metrics, model_routing, observability, orchestrator, orchestrator_hotfix, orchestrator_task_links, release_center, research_runtime, reviews, skill_plugin_center, skill_plugin_research, skills_engine_v2, sop_skill_center, stores, task_center, tiancang, tool_center, tool_permissions, tool_router, users
+from .routers import account_center, agent_runtime, ai_capabilities, ai_employee_ecosystem, ai_employee_growth, ai_employee_growth_system, ai_employee_health, ai_employee_skills, ai_employees, ai_execution, ai_product_assets, ai_workforce, approval_center, brain_tool_router, business_loop, ceo_dashboard, computer_executor_v2, deploy_center, device_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_evolution, employee_execution, employee_workspace, enterprise_brain_console, execution_engine, jd_capture, jd_collection, jd_integrations, knowledge_center, knowledge_center_v2, metrics, model_routing, observability, orchestrator, orchestrator_hotfix, orchestrator_task_links, release_center, research_runtime, reviews, skill_plugin_center, skill_plugin_research, skills_engine_v2, sop_skill_center, stores, task_center, tiancang, tool_center, tool_permissions, tool_router, users
 from .routers import alpha_workflow, computer_workflows
 from .skills_engine import models as skills_engine_models  # noqa: F401
 from .device_center import models as device_center_models  # noqa: F401
@@ -113,6 +113,7 @@ app.include_router(account_center.router)
 app.include_router(jd_integrations.router)
 app.include_router(jd_collection.router)
 app.include_router(metrics.router)
+app.include_router(jd_capture.router)
 app.include_router(ai_employees.router)
 app.include_router(tool_center.router)
 app.include_router(tool_router.router)
