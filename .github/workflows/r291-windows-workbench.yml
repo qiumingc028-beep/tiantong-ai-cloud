@@ -1,12 +1,25 @@
-name: R291 Windows Workbench
+name: R297 Windows Workbench Release Gate
 
 on:
   workflow_dispatch:
-  push:
+  pull_request:
     branches:
-      - codex/r291-windows-installer
+      - codex/r297-jd-multistore-autosync
     paths:
       - desktop/jd-workbench/**
+      - tests/test_r291_jd_workbench_client_static.py
+      - tests/test_r297_jd_workbench_auto_sync_static.py
+      - tests/test_r297_windows_release_gate.py
+      - .github/workflows/r291-windows-workbench.yml
+  push:
+    branches:
+      - codex/r297-jd-multistore-autosync
+      - codex/r297-release-gates
+    paths:
+      - desktop/jd-workbench/**
+      - tests/test_r291_jd_workbench_client_static.py
+      - tests/test_r297_jd_workbench_auto_sync_static.py
+      - tests/test_r297_windows_release_gate.py
       - .github/workflows/r291-windows-workbench.yml
 
 permissions:
@@ -21,32 +34,68 @@ jobs:
 
     steps:
       - name: Checkout immutable source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: desktop/jd-workbench/package-lock.json
 
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Run R291 desktop safety checks
+      - name: Run syntax and security policy checks
         run: npm run check
 
-      - name: Build Windows x64 installer and archive
+      - name: Build Windows x64 NSIS installer and portable ZIP
         run: npm run dist:win
+
+      - name: Verify packaged Chromium runtime
+        shell: pwsh
+        run: |
+          $executables = @(Get-ChildItem -Path dist/win-unpacked -Filter *.exe -File)
+          if ($executables.Count -ne 1) {
+            throw "Expected one packaged Electron executable, found $($executables.Count)"
+          }
+
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          $infoPath = Join-Path (Resolve-Path dist) 'chromium-info.json'
+          $probePath = Join-Path (Resolve-Path dist) 'chromium-probe.cjs'
+          'const fs=require("node:fs");fs.writeFileSync(process.argv[2],JSON.stringify({chromiumExecutablePath:process.execPath,chromiumVersion:process.versions.chrome,electronVersion:process.versions.electron}))' |
+            Set-Content -LiteralPath $probePath -Encoding utf8NoBOM
+          $probe = Start-Process -FilePath $executables[0].FullName -ArgumentList @($probePath, $infoPath) -Wait -PassThru
+          Remove-Item -LiteralPath $probePath
+          if ($probe.ExitCode -ne 0) {
+            throw "Packaged Chromium runtime probe failed with exit code $($probe.ExitCode)"
+          }
+          $info = Get-Content -Raw -LiteralPath $infoPath | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace($info.chromiumVersion)) {
+            throw 'Packaged Chromium version is missing'
+          }
+          $expectedPath = [IO.Path]::GetFullPath($executables[0].FullName)
+          $actualPath = [IO.Path]::GetFullPath($info.chromiumExecutablePath)
+          if (-not [string]::Equals($actualPath, $expectedPath, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Packaged Chromium path mismatch: expected $expectedPath, got $actualPath"
+          }
+          Write-Host "Packaged Chromium executable: $actualPath"
+          Write-Host "Packaged Chromium version: $($info.chromiumVersion)"
 
       - name: Generate SHA-256 checksums
         shell: pwsh
         run: |
           $files = Get-ChildItem -Path dist -File | Where-Object { $_.Extension -in '.exe', '.zip' }
-          if ($files.Count -ne 2) {
-            throw "Expected one NSIS installer and one ZIP archive, found $($files.Count)"
+          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $expectedNames = @(
+            "TiantongAI-JD-Workbench-$version-x64.exe",
+            "TiantongAI-JD-Workbench-$version-x64.zip"
+          )
+          $actualNames = @($files.Name | Sort-Object)
+          if ($files.Count -ne 2 -or (Compare-Object ($expectedNames | Sort-Object) $actualNames)) {
+            throw "Expected one NSIS installer and one portable ZIP named $($expectedNames -join ', '); found $($actualNames -join ', ')"
           }
           $lines = foreach ($file in $files | Sort-Object Name) {
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
@@ -59,12 +108,13 @@ jobs:
           )
 
       - name: Upload internal acceptance artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: tiantong-ai-jd-workbench-r291-windows-${{ github.sha }}
+          name: tiantong-ai-jd-workbench-r297-windows
           path: |
             desktop/jd-workbench/dist/*.exe
             desktop/jd-workbench/dist/*.zip
             desktop/jd-workbench/dist/SHA256SUMS.txt
+            desktop/jd-workbench/dist/chromium-info.json
           if-no-files-found: error
           retention-days: 14
