@@ -574,7 +574,12 @@ def test_r297_dashboard_page_exposes_tasks_search_drilldown_and_auto_refresh():
     assert 'data-filter="pending_shipments"' in page
     assert 'data-filter="pending_refunds"' in page
     assert 'id="detailDrawer"' in page
-    assert "等待自动轮询" in page
+    assert "api('/api/stores')" in page
+    assert 'id="platformFilter"' in page
+    assert 'id="enabledFilter"' in page
+    assert 'id="loginFilter"' in page
+    assert "自动同步中" in page
+    assert "暂无真实数据" in page
     for metric in (
         "sales_amount",
         "sales_customers",
@@ -591,7 +596,7 @@ def test_r297_dashboard_page_exposes_tasks_search_drilldown_and_auto_refresh():
         "ad_cpc",
     ):
         assert metric in page
-    assert "模拟数据" in page
+    assert "模拟数据" not in page
     assert "Cookie" in page
 
 
