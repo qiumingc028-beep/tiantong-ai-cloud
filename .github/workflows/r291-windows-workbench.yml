@@ -64,10 +64,13 @@ jobs:
 
           $env:ELECTRON_RUN_AS_NODE = '1'
           $infoPath = Join-Path (Resolve-Path dist) 'chromium-info.json'
-          $script = 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({chromiumExecutablePath:process.execPath,chromiumVersion:process.versions.chrome,electronVersion:process.versions.electron}))'
-          & $executables[0].FullName -e $script $infoPath
-          if ($LASTEXITCODE -ne 0) {
-            throw "Packaged Chromium runtime probe failed with exit code $LASTEXITCODE"
+          $probePath = Join-Path (Resolve-Path dist) 'chromium-probe.cjs'
+          'const fs=require("node:fs");fs.writeFileSync(process.argv[2],JSON.stringify({chromiumExecutablePath:process.execPath,chromiumVersion:process.versions.chrome,electronVersion:process.versions.electron}))' |
+            Set-Content -LiteralPath $probePath -Encoding utf8NoBOM
+          $probe = Start-Process -FilePath $executables[0].FullName -ArgumentList @($probePath, $infoPath) -Wait -PassThru
+          Remove-Item -LiteralPath $probePath
+          if ($probe.ExitCode -ne 0) {
+            throw "Packaged Chromium runtime probe failed with exit code $($probe.ExitCode)"
           }
           $info = Get-Content -Raw -LiteralPath $infoPath | ConvertFrom-Json
           if ([string]::IsNullOrWhiteSpace($info.chromiumVersion)) {
