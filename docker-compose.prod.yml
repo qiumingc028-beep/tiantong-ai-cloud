@@ -22,6 +22,7 @@ services:
     volumes:
       - jd_session_archives:/data/jd-session-archives
     cap_drop: [ALL]
+    cap_add: [SYS_CHROOT]
     security_opt:
       - no-new-privileges:true
       - seccomp=services/jd-cloud-browser-runtime/seccomp_profile.json

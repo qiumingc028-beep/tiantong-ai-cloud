@@ -43,6 +43,8 @@ def test_runtime_compose_uses_only_minimal_secrets_and_is_not_publicly_exposed()
     assert "/tmp/jd-cloud-profiles" in runtime and "tmpfs" in runtime
     assert "jd_session_archives:/data/jd-session-archives" in runtime
     assert "read_only: true" in runtime
+    assert "cap_drop: [ALL]" in runtime
+    assert "cap_add: [SYS_CHROOT]" in runtime
     assert "seccomp=services/jd-cloud-browser-runtime/seccomp_profile.json" in runtime
     assert "ports:" not in runtime
     assert '"6080"' in runtime

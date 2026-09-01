@@ -179,6 +179,7 @@ jobs:
           docker run --detach \
             --name "$container" \
             --cap-drop ALL \
+            --cap-add SYS_CHROOT \
             --read-only \
             --security-opt no-new-privileges:true \
             --security-opt seccomp=services/jd-cloud-browser-runtime/seccomp_profile.json \
