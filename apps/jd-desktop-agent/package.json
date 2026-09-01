@@ -11,6 +11,6 @@
     "productName": "Tiantong JD Readonly Agent",
     "files": ["dist/**/*", "package.json", "node_modules/**/*"],
     "extraResources": [{"from": "node_modules/playwright-core/.local-browsers", "to": "playwright-browsers", "filter": ["**/*"]}],
-    "win": {"target": ["nsis", "portable"], "artifactName": "${productName}-${version}-${arch}.${ext}"}
+    "win": {"target": [{"target":"nsis","arch":["x64"]},{"target":"zip","arch":["x64"]}], "artifactName": "Tiantong-JD-Readonly-Agent-${version}-${arch}.${ext}", "nsis": {"artifactName":"Tiantong-JD-Readonly-Agent-Setup-${version}-${arch}.${ext}"}}
   }
 }

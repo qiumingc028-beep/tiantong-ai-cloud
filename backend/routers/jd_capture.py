@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from typing import Optional
 from sqlalchemy.orm import Session
 from ..auth import require_permission_user
 from ..database import get_db
@@ -11,12 +12,12 @@ router = APIRouter(prefix="/api/jd/capture")
 
 class Metrics(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    paid_amount: float = 0
-    paid_order_count: int = 0
-    sold_quantity: int = 0
-    refund_count: int = 0
-    refund_amount: float = 0
-    ad_spend: float = 0
+    paid_amount: Optional[float] = None
+    paid_order_count: Optional[int] = None
+    sold_quantity: Optional[int] = None
+    refund_count: Optional[int] = None
+    refund_amount: Optional[float] = None
+    ad_spend: Optional[float] = None
 
 class CapturePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -36,15 +37,19 @@ def receive_capture(payload: CapturePayload, request: Request, db: Session = Dep
         raise HTTPException(status_code=422, detail="店铺归属校验失败")
     if payload.business_write_count != 0:
         raise HTTPException(status_code=403, detail="只读审计失败")
+    provided = payload.metrics.model_dump(exclude_none=True)
+    if not provided:
+        raise HTTPException(status_code=422, detail="JD_METRIC_NOT_FOUND")
     metric = db.query(JdDailyMetric).filter(JdDailyMetric.store_id == payload.store_id, JdDailyMetric.metric_date == payload.captured_at.date()).one_or_none()
     if not metric:
         metric = JdDailyMetric(store_id=payload.store_id, metric_date=payload.captured_at.date())
         db.add(metric)
-    metric.gmv = payload.metrics.paid_amount
-    metric.paid_orders_count = payload.metrics.paid_order_count
-    metric.refunds_count = payload.metrics.refund_count
-    metric.ad_spend = payload.metrics.ad_spend
-    metric.roi = payload.metrics.paid_amount / payload.metrics.ad_spend if payload.metrics.ad_spend else 0
+    if payload.metrics.paid_amount is not None: metric.gmv = payload.metrics.paid_amount
+    if payload.metrics.paid_order_count is not None: metric.paid_orders_count = payload.metrics.paid_order_count
+    if payload.metrics.refund_count is not None: metric.refunds_count = payload.metrics.refund_count
+    if payload.metrics.ad_spend is not None:
+        metric.ad_spend = payload.metrics.ad_spend
+        if payload.metrics.paid_amount is not None: metric.roi = payload.metrics.paid_amount / payload.metrics.ad_spend if payload.metrics.ad_spend else 0
     metric.source = "jd_desktop_readonly"
     metric.synced_at = datetime.now(timezone.utc)
     db.commit()

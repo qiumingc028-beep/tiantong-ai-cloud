@@ -11,7 +11,6 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: apps/jd-desktop-agent/package-lock.json
-      - shell: bash
       - run: npm ci
         working-directory: apps/jd-desktop-agent
       - run: npx playwright install chromium
@@ -27,6 +26,10 @@ jobs:
         working-directory: apps/jd-desktop-agent
         env: {PLAYWRIGHT_BROWSERS_PATH: "0"}
       - shell: pwsh
-        run: Get-ChildItem apps/jd-desktop-agent/dist-electron -File | Get-FileHash -Algorithm SHA256 | Format-Table
+        run: |
+          $nsis = "apps/jd-desktop-agent/dist-electron/Tiantong-JD-Readonly-Agent-Setup-0.1.0-x64.exe"
+          $zip = "apps/jd-desktop-agent/dist-electron/Tiantong-JD-Readonly-Agent-Portable-0.1.0-x64.zip"
+          if (!(Test-Path $nsis) -or !(Test-Path $zip)) { throw "installer outputs missing" }
+          Get-FileHash $nsis,$zip -Algorithm SHA256
       - uses: actions/upload-artifact@v4
         with: {name: tiantong-jd-desktop-agent-unsigned, path: apps/jd-desktop-agent/dist-electron/*}
