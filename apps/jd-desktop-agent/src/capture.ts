@@ -1,0 +1,5 @@
+import {BrowserContext,Page} from 'playwright';
+import {isAllowedPage,isBusinessWrite} from './policy';
+export function attachReadonlyAudit(context:BrowserContext,onWrite:(url:string)=>void){context.on('request',r=>{if(isAllowedPage(r.url())&&isBusinessWrite(r.url(),r.method(),r.postData()||''))onWrite(r.url())})}
+export function attachReadonlyResponses(context:BrowserContext,onResponse:(url:string,body:unknown)=>void){context.on('response',async r=>{if(!isAllowedPage(r.url())||!r.headers()['content-type']?.includes('application/json'))return;try{onResponse(r.url(),await r.json())}catch{}})}
+export async function readVisibleMetrics(page:Page){if(!isAllowedPage(page.url()))throw new Error('JD_PAGE_NOT_ALLOWLISTED');return page.evaluate(()=>{const out:Record<string,number>={};document.querySelectorAll('[data-metric]').forEach(n=>{const k=n.getAttribute('data-metric');const v=Number((n.textContent||'').replace(/[^0-9.-]/g,''));if(k&&Number.isFinite(v))out[k]=v});return out})}
