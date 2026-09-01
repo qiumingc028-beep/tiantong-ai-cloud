@@ -63,11 +63,13 @@ jobs:
           }
 
           $env:ELECTRON_RUN_AS_NODE = '1'
-          $json = & $executables[0].FullName -e "process.stdout.write(JSON.stringify({chromiumExecutablePath:process.execPath,chromiumVersion:process.versions.chrome,electronVersion:process.versions.electron}))"
+          $infoPath = Join-Path (Resolve-Path dist) 'chromium-info.json'
+          $script = 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({chromiumExecutablePath:process.execPath,chromiumVersion:process.versions.chrome,electronVersion:process.versions.electron}))'
+          & $executables[0].FullName -e $script $infoPath
           if ($LASTEXITCODE -ne 0) {
             throw "Packaged Chromium runtime probe failed with exit code $LASTEXITCODE"
           }
-          $info = $json | ConvertFrom-Json
+          $info = Get-Content -Raw -LiteralPath $infoPath | ConvertFrom-Json
           if ([string]::IsNullOrWhiteSpace($info.chromiumVersion)) {
             throw 'Packaged Chromium version is missing'
           }
@@ -76,7 +78,6 @@ jobs:
           if (-not [string]::Equals($actualPath, $expectedPath, [StringComparison]::OrdinalIgnoreCase)) {
             throw "Packaged Chromium path mismatch: expected $expectedPath, got $actualPath"
           }
-          $info | ConvertTo-Json | Set-Content -LiteralPath dist/chromium-info.json -Encoding utf8NoBOM
           Write-Host "Packaged Chromium executable: $actualPath"
           Write-Host "Packaged Chromium version: $($info.chromiumVersion)"
 
