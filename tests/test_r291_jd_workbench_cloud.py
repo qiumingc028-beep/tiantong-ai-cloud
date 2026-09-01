@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 import secrets
 import time
 from uuid import UUID, uuid4
@@ -300,6 +301,7 @@ def test_cloud_dashboard_uses_explicit_no_data_state_instead_of_mock_zeroes(
     assert all(value is None for value in payload["summary"].values())
     assert payload["ready_stores"] == 0
     assert all(store["empty_message"] == "暂无数据" for store in payload["stores"])
+    assert all(store["store_code"] for store in payload["stores"])
 
 
 def test_cloud_dashboard_reports_only_accepted_normalized_values(client, owner_headers):
@@ -328,6 +330,290 @@ def test_cloud_dashboard_reports_only_accepted_normalized_values(client, owner_h
     assert result["summary"]["orders_count"] == 3
     assert result["summary"]["ad_spend"] is None
     assert result["stores"][0]["datasets"]["sales_daily"]["source"] == "jd_workbench_readonly"
+
+
+def test_r295_page_metrics_sync_is_store_scoped_and_dashboard_uses_latest_batch(
+    client,
+    owner_headers,
+):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    first = _sync_payload(
+        store,
+        dataset_type="operating_metrics",
+        records=[
+            {
+                "source_record_key": _opaque("r295-page-snapshot-first"),
+                "visitors": 304,
+                "page_views": 583,
+                "ad_spend": 345.70,
+                "ad_ctr": 3.65,
+            }
+        ],
+        idempotency_key=f"r295-operating-first-{uuid4()}",
+    )
+    _assert_first_sync(
+        _device_request(client, "POST", "/api/jd-workbench/sync", device_token, first),
+        1,
+    )
+
+    second = deepcopy(first)
+    second["collected_at"] = "2026-08-29T06:05:00Z"
+    second["idempotency_key"] = f"r295-operating-second-{uuid4()}"
+    second["records"] = [
+        {
+            "source_record_key": _opaque("r295-page-snapshot-second"),
+            "visitors": 310,
+            "page_views": 600,
+            "pending_shipments": 0,
+            "ad_spend": 350.25,
+        }
+    ]
+    _assert_first_sync(
+        _device_request(client, "POST", "/api/jd-workbench/sync", device_token, second),
+        1,
+    )
+
+    response = client.get(
+        f"/api/jd-workbench/dashboard?store_id={store['store_id']}",
+        headers=owner_headers,
+    )
+    assert response.status_code == 200, response.text
+    dataset = response.json()["stores"][0]["datasets"]["operating_metrics"]
+    assert dataset["record_count"] == 1
+    assert dataset["records"] == [
+        {"ad_spend": "350.25", "page_views": 600, "pending_shipments": 0, "visitors": 310}
+    ]
+    assert response.json()["summary"]["ad_spend"] == "350.25"
+
+
+def test_r296_dashboard_filters_periods_and_aggregates_operating_metrics(
+    client,
+    owner_headers,
+):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    daily_records = [
+        (
+            "2026-08-29",
+            "2026-08-29T06:00:00Z",
+            {
+                "source_record_key": _opaque("r296-operating-2026-08-29"),
+                "visitors": 100,
+                "page_views": 200,
+                "sales_orders": 10,
+                "pending_shipments": 4,
+                "ad_spend": 100.00,
+                "ad_impressions": 1000,
+                "ad_clicks": 50,
+            },
+        ),
+        (
+            "2026-08-29",
+            "2026-08-29T16:30:00Z",
+            {
+                "source_record_key": _opaque("r296-operating-2026-08-30"),
+                "visitors": 200,
+                "page_views": 400,
+                "sales_orders": 20,
+                "pending_shipments": 7,
+                "ad_spend": 200.00,
+                "ad_impressions": 2000,
+                "ad_clicks": 100,
+            },
+        ),
+    ]
+    for source_period, collected_at, record in daily_records:
+        payload = _sync_payload(
+            store,
+            dataset_type="operating_metrics",
+            records=[record],
+            idempotency_key=f"r296-{source_period}-{uuid4()}",
+        )
+        payload["source_period"] = source_period
+        payload["collected_at"] = collected_at
+        _assert_first_sync(
+            _device_request(client, "POST", "/api/jd-workbench/sync", device_token, payload),
+            1,
+        )
+
+    today = client.get(
+        f"/api/jd-workbench/dashboard?store_id={store['store_id']}&period=today&anchor_date=2026-08-30",
+        headers=owner_headers,
+    )
+    assert today.status_code == 200, today.text
+    today_payload = today.json()
+    assert today_payload["period_start"] == "2026-08-30"
+    assert today_payload["period_end"] == "2026-08-30"
+    assert today_payload["summary"]["visitors"] == 200
+    assert today_payload["summary"]["page_views"] == 400
+    assert today_payload["summary"]["ad_spend"] == "200.00"
+    assert today_payload["summary"]["ad_ctr"] == "5.0000"
+    assert today_payload["summary"]["ad_cpc"] == "2.00"
+
+    yesterday = client.get(
+        f"/api/jd-workbench/dashboard?store_id={store['store_id']}&period=yesterday&anchor_date=2026-08-30",
+        headers=owner_headers,
+    )
+    assert yesterday.status_code == 200, yesterday.text
+    assert yesterday.json()["summary"]["visitors"] == 100
+    assert yesterday.json()["period_start"] == "2026-08-29"
+
+    seven_days = client.get(
+        f"/api/jd-workbench/dashboard?store_id={store['store_id']}&period=7d&anchor_date=2026-08-30",
+        headers=owner_headers,
+    )
+    assert seven_days.status_code == 200, seven_days.text
+    seven_payload = seven_days.json()
+    assert seven_payload["period_start"] == "2026-08-24"
+    assert seven_payload["period_end"] == "2026-08-30"
+    assert seven_payload["summary"]["visitors"] == 300
+    assert seven_payload["summary"]["page_views"] == 600
+    assert seven_payload["summary"]["sales_orders"] == 30
+    assert seven_payload["summary"]["pending_shipments"] == 7
+    assert seven_payload["summary"]["ad_spend"] == "300.00"
+    assert seven_payload["stores"][0]["datasets"]["operating_metrics"]["source_periods"] == [
+        "2026-08-29",
+        "2026-08-30",
+    ]
+
+
+def test_r296_dashboard_keeps_store_totals_isolated_and_supports_all_store_summary(
+    client,
+    owner_headers,
+    test_db,
+):
+    with test_db() as db:
+        owner = db.query(User).filter(User.username == "owner").one()
+        second_store = Store(
+            platform="jd",
+            store_code="JD02",
+            store_name="JD Store 02",
+            tenant_id=owner.tenant_id,
+            company_id=owner.company_id,
+            active=True,
+        )
+        db.add(second_store)
+        db.flush()
+        db.add(
+            UserStoreMembership(
+                user_id=owner.id,
+                store_id=second_store.id,
+                can_read=True,
+                can_write=True,
+                active=True,
+            )
+        )
+        db.commit()
+
+    device_token, _ = _pair_device(client, owner_headers)
+    stores_response = _device_request(client, "GET", "/api/jd-workbench/stores", device_token)
+    assert stores_response.status_code == 200, stores_response.text
+    stores = stores_response.json()
+    assert len(stores) == 2
+    for index, store in enumerate(stores, start=1):
+        payload = _sync_payload(
+            store,
+            dataset_type="operating_metrics",
+            records=[
+                {
+                    "source_record_key": _opaque(f"r296-store-{store['store_id']}"),
+                    "visitors": index * 100,
+                    "page_views": index * 200,
+                    "ad_spend": index * 10,
+                    "ad_impressions": index * 1000,
+                    "ad_clicks": index * 50,
+                }
+            ],
+            idempotency_key=f"r296-store-{store['store_id']}-{uuid4()}",
+        )
+        payload["source_period"] = "2026-08-30"
+        payload["collected_at"] = "2026-08-30T08:00:00Z"
+        _assert_first_sync(
+            _device_request(client, "POST", "/api/jd-workbench/sync", device_token, payload),
+            1,
+        )
+
+    all_stores = client.get(
+        "/api/jd-workbench/dashboard?period=today&anchor_date=2026-08-30",
+        headers=owner_headers,
+    )
+    assert all_stores.status_code == 200, all_stores.text
+    all_payload = all_stores.json()
+    assert all_payload["total"] == 2
+    assert all_payload["ready_stores"] == 2
+    assert all_payload["summary"]["visitors"] == 300
+    assert all_payload["summary"]["page_views"] == 600
+    assert all_payload["summary"]["ad_spend"] == "30.00"
+    assert {item["summary"]["visitors"] for item in all_payload["stores"]} == {100, 200}
+
+    second = stores[1]
+    filtered = client.get(
+        f"/api/jd-workbench/dashboard?store_id={second['store_id']}&period=today&anchor_date=2026-08-30",
+        headers=owner_headers,
+    )
+    assert filtered.status_code == 200, filtered.text
+    filtered_payload = filtered.json()
+    assert filtered_payload["total"] == 1
+    assert filtered_payload["stores"][0]["store_id"] == second["store_id"]
+    assert filtered_payload["summary"]["visitors"] == 200
+    assert filtered_payload["summary"]["ad_spend"] == "20.00"
+
+
+def test_r297_dashboard_page_exposes_tasks_search_drilldown_and_auto_refresh():
+    page = (
+        Path(__file__).resolve().parents[1] / "frontend" / "jd-dashboard.html"
+    ).read_text(encoding="utf-8")
+
+    assert "R297" in page
+    assert "30000" in page
+    assert "30秒自动刷新" in page
+    assert page.count("data-period=") == 3
+    assert 'id="storeSearch"' in page
+    assert 'data-filter="pending_shipments"' in page
+    assert 'data-filter="pending_refunds"' in page
+    assert 'id="detailDrawer"' in page
+    assert "等待自动轮询" in page
+    for metric in (
+        "sales_amount",
+        "sales_customers",
+        "product_units",
+        "visitors",
+        "page_views",
+        "sales_orders",
+        "pending_shipments",
+        "pending_refunds",
+        "ad_spend",
+        "ad_impressions",
+        "ad_clicks",
+        "ad_ctr",
+        "ad_cpc",
+    ):
+        assert metric in page
+    assert "模拟数据" in page
+    assert "Cookie" in page
+
+
+def test_r295_page_metrics_rejects_empty_or_unknown_fields(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    for record in (
+        {"source_record_key": _opaque("r295-empty")},
+        {"source_record_key": _opaque("r295-unknown"), "cookie": "forbidden"},
+    ):
+        response = _device_request(
+            client,
+            "POST",
+            "/api/jd-workbench/sync",
+            device_token,
+            _sync_payload(
+                store,
+                dataset_type="operating_metrics",
+                records=[record],
+                idempotency_key=f"r295-rejected-{uuid4()}",
+            ),
+        )
+        assert response.status_code in {400, 422}, response.text
 
 
 @pytest.mark.parametrize(
@@ -695,3 +981,126 @@ def test_revoked_device_token_is_rejected_immediately(client, owner_headers):
     assert _device_request(
         client, "GET", "/api/jd-workbench/stores", device_token
     ).status_code == 401
+
+
+def test_r297_default_policy_is_persisted_and_pause_resume_is_cloud_owned(
+    client,
+    owner_headers,
+    operator_headers,
+):
+    client.cookies.clear()
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    assert store["sync_policy"] == {
+        "enabled": True,
+        "interval_seconds": 300,
+        "updated_at": store["sync_policy"]["updated_at"],
+    }
+
+    paused = client.patch(
+        f"/api/jd-workbench/sync-policies/{store['store_id']}",
+        headers=operator_headers,
+        json={"enabled": False, "interval_seconds": 300},
+    )
+    assert paused.status_code == 200, paused.text
+    assert paused.json()["next_sync_at"] is None
+    cloud_store = _authorized_store(client, device_token)
+    assert cloud_store["sync_policy"]["enabled"] is False
+
+    resumed = client.patch(
+        f"/api/jd-workbench/sync-policies/{store['store_id']}",
+        headers=owner_headers,
+        json={"enabled": True, "interval_seconds": 900},
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["next_sync_at"]
+    cloud_store = _authorized_store(client, device_token)
+    assert cloud_store["sync_policy"]["enabled"] is True
+    assert cloud_store["sync_policy"]["interval_seconds"] == 900
+
+
+def test_r297_failure_retry_runtime_survives_store_refresh(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    next_sync = "2026-09-01T08:02:00Z"
+    failed = _device_request(
+        client,
+        "POST",
+        "/api/jd-workbench/heartbeat",
+        device_token,
+        {
+            "client_version": CLIENT_VERSION,
+            "status": "ERROR",
+            "store_id": store["store_id"],
+            "reason_code": "COLLECTOR_PAGE_LOAD_FAILED",
+            "last_attempt_at": "2026-09-01T08:00:00Z",
+            "next_sync_at": next_sync,
+            "retry_count": 2,
+        },
+    )
+    assert failed.status_code == 200, failed.text
+    refreshed = _authorized_store(client, device_token)
+    assert refreshed["status"] == "ERROR"
+    assert refreshed["reason_code"] == "COLLECTOR_PAGE_LOAD_FAILED"
+    assert refreshed["retry_count"] == 2
+    assert refreshed["next_sync_at"].startswith("2026-09-01T08:02:00")
+    assert refreshed["last_error_at"]
+
+
+def test_r297_fulfillment_and_aftersale_details_are_clickable_safe_records(client, owner_headers):
+    device_token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, device_token)
+    datasets = {
+        "fulfillment_orders": {
+            "source_record_key": _opaque("order:jd-sensitive-order-number"),
+            "order_state": "待发货",
+            "product_name": "商务机械表",
+            "quantity": 1,
+            "paid_amount": "1280.00",
+            "ordered_at": "2026-09-01T07:30:00Z",
+            "promised_ship_at": "2026-09-02T07:30:00Z",
+        },
+        "aftersale_orders": {
+            "source_record_key": _opaque("service:jd-sensitive-service-number"),
+            "aftersale_state": "待审核",
+            "product_name": "女士石英表",
+            "quantity": 1,
+            "refund_amount": "688.00",
+            "requested_at": "2026-09-01T07:45:00Z",
+            "reason_category": "商品问题",
+        },
+    }
+    for dataset_type, record in datasets.items():
+        response = _device_request(
+            client,
+            "POST",
+            "/api/jd-workbench/sync",
+            device_token,
+            _sync_payload(
+                store,
+                dataset_type=dataset_type,
+                records=[record],
+                idempotency_key=f"r297-{dataset_type}-{uuid4()}",
+            ),
+        )
+        _assert_first_sync(response, 1)
+
+    fulfillment = client.get(
+        f"/api/jd-workbench/dashboard/stores/{store['store_id']}/fulfillment",
+        headers=owner_headers,
+    )
+    aftersales = client.get(
+        f"/api/jd-workbench/dashboard/stores/{store['store_id']}/aftersales",
+        headers=owner_headers,
+    )
+    assert fulfillment.status_code == 200, fulfillment.text
+    assert aftersales.status_code == 200, aftersales.text
+    assert fulfillment.json()["records"][0]["order_state"] == "待发货"
+    assert aftersales.json()["records"][0]["aftersale_state"] == "待审核"
+    assert "source_record_key" not in fulfillment.text
+    assert "order_no" not in fulfillment.text
+    assert "buyer" not in fulfillment.text
+
+    dashboard = client.get("/api/jd-workbench/dashboard", headers=owner_headers).json()
+    assert dashboard["summary"]["pending_shipment_count"] == 1
+    assert dashboard["summary"]["aftersale_count"] == 1

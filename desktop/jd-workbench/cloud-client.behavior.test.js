@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { createCloudClient, HEARTBEAT_URL, PAIR_URL, STORES_URL } = require('./cloud-client');
+const { createCloudClient, HEARTBEAT_URL, PAIR_URL, STORES_URL, SYNC_URL } = require('./cloud-client');
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'r291-cloud-client-'));
 const identityPath = path.join(temporaryRoot, 'identity.json');
@@ -49,7 +49,7 @@ const net = Object.freeze({
       });
     }
 
-    assert.ok(url === STORES_URL || url === HEARTBEAT_URL);
+    assert.ok(url === STORES_URL || url === HEARTBEAT_URL || url === SYNC_URL);
     assert.ok(publicKey);
     assert.match(options.headers.Authorization, /^Device /);
     assert.match(options.headers['X-R291-Timestamp'], /^\d{10,11}$/);
@@ -76,7 +76,9 @@ const net = Object.freeze({
       ),
       true
     );
-    return jsonResponse(url === STORES_URL ? [] : { ok: true, status: 'ONLINE' });
+    if (url === STORES_URL) return jsonResponse([]);
+    if (url === SYNC_URL) return jsonResponse({ ok: true, duplicate: false, accepted: 1, batch_id: 'r297-test-batch' });
+    return jsonResponse({ ok: true, status: 'ONLINE' });
   }
 });
 
@@ -87,6 +89,7 @@ const net = Object.freeze({
     assert.equal(first.isPaired(), true);
     assert.deepEqual(await first.listStores(), []);
     assert.equal((await first.heartbeat({ status: 'ONLINE' })).ok, true);
+    assert.equal((await first.sync({ dataset_type: 'operating_metrics' })).accepted, 1);
     const stored = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
     assert.equal(typeof stored.encryptedPrivateKey, 'string');
     assert.equal(stored.deviceToken, undefined);
@@ -95,8 +98,8 @@ const net = Object.freeze({
     const restarted = createCloudClient({ net, safeStorage, identityPath });
     assert.equal(restarted.readIdentity(), true);
     assert.deepEqual(await restarted.listStores(), []);
-    assert.equal(seenNonces.size, 3);
-    console.log('R291_CLOUD_CLIENT_BEHAVIOR=3_SIGNED_REQUESTS_PASS');
+    assert.equal(seenNonces.size, 4);
+console.log('R297_CLOUD_CLIENT_BEHAVIOR=4_SIGNED_REQUESTS_PASS');
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }

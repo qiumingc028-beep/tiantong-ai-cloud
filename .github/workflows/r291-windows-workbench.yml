@@ -1,0 +1,70 @@
+name: R291 Windows Workbench
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/r291-windows-installer
+    paths:
+      - desktop/jd-workbench/**
+      - .github/workflows/r291-windows-workbench.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop/jd-workbench
+
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/jd-workbench/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run R291 desktop safety checks
+        run: npm run check
+
+      - name: Build Windows x64 installer and archive
+        run: npm run dist:win
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path dist -File | Where-Object { $_.Extension -in '.exe', '.zip' }
+          if ($files.Count -ne 2) {
+            throw "Expected one NSIS installer and one ZIP archive, found $($files.Count)"
+          }
+          $lines = foreach ($file in $files | Sort-Object Name) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path (Resolve-Path dist) 'SHA256SUMS.txt'),
+            $lines,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Upload internal acceptance artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiantong-ai-jd-workbench-r291-windows-${{ github.sha }}
+          path: |
+            desktop/jd-workbench/dist/*.exe
+            desktop/jd-workbench/dist/*.zip
+            desktop/jd-workbench/dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
