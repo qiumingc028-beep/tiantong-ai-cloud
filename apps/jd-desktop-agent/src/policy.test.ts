@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {isAllowedPage,isBusinessWrite} from './policy';
+test('readonly policy blocks non-GET and unknown pages',()=>{assert.equal(isAllowedPage('https://shop.jd.com/shop/home'),true);assert.equal(isAllowedPage('https://shop.jd.com/other'),false);assert.equal(isBusinessWrite('https://shop.jd.com/shop/home','GET'),false);assert.equal(isBusinessWrite('https://shop.jd.com/api/order/confirm','POST'),true)});
