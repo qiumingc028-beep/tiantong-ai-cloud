@@ -158,6 +158,17 @@ def _database_url(*, production: bool) -> str:
 def _redis_url(*, production: bool) -> str:
     state, values = _split_state(REDIS_SPLIT_FIELDS, ("REDIS_USERNAME",))
     if state == "PARTIAL":
+        # The production Compose file must expose REDIS_PASSWORD to the Redis
+        # service itself. When the same root-only env file is also mounted into
+        # backend/worker, that lone variable is not an attempted split client
+        # configuration and must not shadow an authenticated REDIS_URL. Any
+        # host/port/db/username split field still fails closed below.
+        provided_split_fields = {
+            name for name, value in values.items() if value is not None
+        }
+        legacy_url = os.getenv("REDIS_URL")
+        if provided_split_fields == {"REDIS_PASSWORD"} and legacy_url is not None:
+            return _required("REDIS_URL") if production else legacy_url
         raise ConfigurationError(
             f"REDIS split configuration is incomplete: missing {_missing_required(REDIS_SPLIT_FIELDS, values)}"
         )

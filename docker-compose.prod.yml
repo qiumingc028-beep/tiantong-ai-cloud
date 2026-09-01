@@ -46,11 +46,17 @@ services:
       dockerfile: Dockerfile.backend
       args:
         REQUIREMENTS_LOCK: ${REQUIREMENTS_LOCK:-artifacts/wheelhouse/linux-amd64-cp312/requirements-linux-amd64-cp312.lock}
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:?set SOURCE_DATE_EPOCH from the immutable release commit}
+        RELEASE_COMMIT: ${RELEASE_COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     restart: unless-stopped
     env_file:
       - ${PRODUCTION_ENV_FILE:-.env.production}
     environment:
       ASSET_STORAGE_ROOT: /data/product-assets
+      SERVICE_ROLE: backend
+      POSTGRES_ADMIN_USER: ""
+      POSTGRES_ADMIN_PASSWORD: ""
     volumes:
       - product_assets:/data/product-assets
     expose:
@@ -78,9 +84,18 @@ services:
       dockerfile: Dockerfile.worker
       args:
         REQUIREMENTS_LOCK: ${REQUIREMENTS_LOCK:-artifacts/wheelhouse/linux-amd64-cp312/requirements-linux-amd64-cp312.lock}
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:?set SOURCE_DATE_EPOCH from the immutable release commit}
+        RELEASE_COMMIT: ${RELEASE_COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     restart: unless-stopped
     env_file:
       - ${PRODUCTION_ENV_FILE:-.env.production}
+    environment:
+      SERVICE_ROLE: worker
+      JWT_SECRET: ""
+      BOSS_INITIAL_PASSWORD: ""
+      POSTGRES_ADMIN_USER: ""
+      POSTGRES_ADMIN_PASSWORD: ""
     command: ["python", "-m", "backend.worker"]
     logging:
       driver: json-file
@@ -101,6 +116,8 @@ services:
       dockerfile: Dockerfile.frontend
       args:
         NGINX_CONF: nginx/production.conf
+        RELEASE_COMMIT: ${RELEASE_COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     restart: unless-stopped
     ports:
       - "${HTTP_PORT:-80}:80"

@@ -307,6 +307,7 @@ def seed_database(session_factory):
             Permission(code="menu.import", name="Import"),
             Permission(code="menu.stores", name="Stores"),
             Permission(code="data.metrics.write", name="Metrics Write"),
+            Permission(code="jd_workbench.ingest", name="JD Workbench Ingest"),
             Permission(code="stores.manage", name="Stores Manage"),
             Permission(code="ai.tasks.manage", name="AI Tasks Manage"),
             Permission(code="ai.tasks.read", name="AI Tasks Read"),
@@ -342,6 +343,7 @@ def seed_database(session_factory):
             p
             for p in permissions
             if not p.code.startswith("task_center.")
+            and p.code != "jd_workbench.ingest"
             and not p.code.startswith("ai_employees.")
             and not p.code.startswith("skills.")
             and not p.code.startswith("computer_executor.")

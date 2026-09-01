@@ -1,0 +1,35 @@
+name: tiantong-ai-public
+
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.public
+      args:
+        RELEASE_COMMIT: ${RELEASE_COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    container_name: tiantong-ai-public-nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - public_nginx_logs:/var/log/nginx
+      - ${PUBLIC_TLS_CERT_PATH:?set PUBLIC_TLS_CERT_PATH}:/etc/nginx/certs/public-fullchain.pem:ro
+      - ${PUBLIC_TLS_KEY_PATH:?set PUBLIC_TLS_KEY_PATH}:/etc/nginx/certs/public-privkey.pem:ro
+      - ${LEGACY_TLS_CERT_PATH:?set LEGACY_TLS_CERT_PATH}:/etc/nginx/certs/legacy-fullchain.pem:ro
+      - ${LEGACY_TLS_KEY_PATH:?set LEGACY_TLS_KEY_PATH}:/etc/nginx/certs/legacy-privkey.pem:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1/health | grep -q '\"status\":\"ok\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+volumes:
+  public_nginx_logs:
