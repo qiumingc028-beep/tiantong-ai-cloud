@@ -198,7 +198,6 @@ def test_device_auth_is_distinct_from_user_bearer_and_supports_heartbeat(
     owner_headers,
     test_db,
 ):
-    client.cookies.clear()
     device_token, _ = _pair_device(client, owner_headers)
 
     assert client.get("/api/jd-workbench/stores").status_code == 401
