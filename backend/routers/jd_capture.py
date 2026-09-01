@@ -25,6 +25,7 @@ class CapturePayload(BaseModel):
     subject_id_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     session_status: str = Field(pattern=r"^(online|expired|captcha|stopped)$")
     captured_at: datetime
+    business_write_count: int = Field(ge=0)
     metrics: Metrics
 
 @router.post("")
@@ -33,6 +34,8 @@ def receive_capture(payload: CapturePayload, request: Request, db: Session = Dep
     store = db.get(Store, payload.store_id)
     if not store or store.store_name != payload.store_name:
         raise HTTPException(status_code=422, detail="店铺归属校验失败")
+    if payload.business_write_count != 0:
+        raise HTTPException(status_code=403, detail="只读审计失败")
     metric = db.query(JdDailyMetric).filter(JdDailyMetric.store_id == payload.store_id, JdDailyMetric.metric_date == payload.captured_at.date()).one_or_none()
     if not metric:
         metric = JdDailyMetric(store_id=payload.store_id, metric_date=payload.captured_at.date())
@@ -42,10 +45,10 @@ def receive_capture(payload: CapturePayload, request: Request, db: Session = Dep
     metric.refunds_count = payload.metrics.refund_count
     metric.ad_spend = payload.metrics.ad_spend
     metric.roi = payload.metrics.paid_amount / payload.metrics.ad_spend if payload.metrics.ad_spend else 0
-    metric.source = "jd_openclaw_readonly"
+    metric.source = "jd_desktop_readonly"
     metric.synced_at = datetime.now(timezone.utc)
     db.commit()
-    return {"ok": True, "store_id": payload.store_id, "business_write_count": 0, "readonly_verified": True}
+    return {"ok": True, "store_id": payload.store_id, "business_write_count": payload.business_write_count, "readonly_verified": payload.business_write_count == 0}
 
 @router.get("/policy")
 def capture_policy(request: Request, db: Session = Depends(get_db)):

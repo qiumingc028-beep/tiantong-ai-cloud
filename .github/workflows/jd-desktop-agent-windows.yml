@@ -1,20 +1,23 @@
 name: jd-desktop-agent-windows
 on:
+  pull_request:
   workflow_dispatch:
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with: {ref: 56ce44a471035709e696ed79066019fb9242197f, fetch-depth: 1}
+        with: {fetch-depth: 1}
       - uses: actions/setup-node@v4
         with: {node-version: 20, cache: npm, cache-dependency-path: apps/jd-desktop-agent/package-lock.json}
       - shell: bash
-        run: test "$(git rev-parse HEAD)" = "56ce44a471035709e696ed79066019fb9242197f"
       - run: npm ci
         working-directory: apps/jd-desktop-agent
       - run: npx playwright install chromium
         working-directory: apps/jd-desktop-agent
+        env: {PLAYWRIGHT_BROWSERS_PATH: "0"}
+      - shell: pwsh
+        run: if (-not (Test-Path "apps/jd-desktop-agent/node_modules/playwright-core/.local-browsers")) { throw "Chromium missing" }
       - run: npm run build
         working-directory: apps/jd-desktop-agent
       - run: npm test
