@@ -1,12 +1,37 @@
 services:
   jd-browser-runtime:
-    build: {context: ./services/jd-cloud-browser-runtime}
+    build:
+      context: .
+      dockerfile: services/jd-cloud-browser-runtime/Dockerfile
     restart: unless-stopped
-    env_file: [${PRODUCTION_ENV_FILE:-.env.production}]
-    environment: {PORT: "8787"}
-    expose: ["8787"]
+    environment:
+      JD_BROWSER_INTERNAL_TOKEN: ${JD_BROWSER_INTERNAL_TOKEN:?set JD_BROWSER_INTERNAL_TOKEN in .env.production}
+      JD_SESSION_MASTER_KEY: ${JD_SESSION_MASTER_KEY:?set JD_SESSION_MASTER_KEY in .env.production}
+      PORT: "8787"
+      DISPLAY: ":99"
+      JD_PROFILE_ROOT: /tmp/jd-cloud-profiles
+      JD_SESSION_ARCHIVE_ROOT: /data/jd-session-archives
+      HOME: /tmp/runtime-home
+    expose: ["8787", "6080"]
+    read_only: true
+    shm_size: "1gb"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=512m,uid=10001,gid=10001,mode=1777
+      - /tmp/.X11-unix:rw,nosuid,nodev,noexec,size=1m,uid=0,gid=0,mode=1777
+      - /tmp/jd-cloud-profiles:rw,nosuid,nodev,size=1g,uid=10001,gid=10001,mode=0700
+    volumes:
+      - jd_session_archives:/data/jd-session-archives
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=services/jd-cloud-browser-runtime/seccomp_profile.json
     networks: [default]
-    healthcheck: {test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/internal/jd-browser/health').then(r=>process.exit(r.ok?0:1))"], interval: 15s, timeout: 5s, retries: 5}
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8787/internal/jd-browser/health',{headers:{'x-internal-token':process.env.JD_BROWSER_INTERNAL_TOKEN}}).then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   postgres:
     image: postgres:16
@@ -64,6 +89,7 @@ services:
     environment:
       ASSET_STORAGE_ROOT: /data/product-assets
       SERVICE_ROLE: backend
+      JD_SESSION_MASTER_KEY: ""
       POSTGRES_ADMIN_USER: ""
       POSTGRES_ADMIN_PASSWORD: ""
     volumes:
@@ -101,6 +127,7 @@ services:
       - ${PRODUCTION_ENV_FILE:-.env.production}
     environment:
       SERVICE_ROLE: worker
+      JD_SESSION_MASTER_KEY: ""
       JWT_SECRET: ""
       BOSS_INITIAL_PASSWORD: ""
       POSTGRES_ADMIN_USER: ""
@@ -113,6 +140,8 @@ services:
         max-file: "10"
     depends_on:
       backend:
+        condition: service_healthy
+      jd-browser-runtime:
         condition: service_healthy
       postgres:
         condition: service_healthy
@@ -155,3 +184,4 @@ volumes:
   redis_data:
   nginx_logs:
   product_assets:
+  jd_session_archives:
