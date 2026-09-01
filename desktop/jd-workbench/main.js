@@ -1329,4 +1329,4 @@ app.on('before-quit', () => {
   automaticSyncCoordinator && automaticSyncCoordinator.stop();
   stopForSystemEvent('APPLICATION_QUIT');
 });
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => { /* keep local scheduler alive; quit explicitly */ });
