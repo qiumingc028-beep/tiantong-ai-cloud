@@ -5,7 +5,10 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..auth import get_role_permissions, normalize_role, require_permission_user, current_user
 from ..database import get_db
-from ..models import JdDailyMetric, MetricDaily, Store, User, UserStoreMembership
+from ..models import (
+    Company, JdDailyMetric, JdWorkbenchDevice, JdWorkbenchStoreStatus,
+    MetricDaily, Store, User, UserStoreMembership,
+)
 from ..store_authorization import authorized_stores, require_authorized_store
 
 
@@ -27,7 +30,27 @@ def store_users(request: Request, db: Session = Depends(get_db)):
 def list_stores(request: Request, db: Session = Depends(get_db)):
     user = require_store_read(request, db)
     stores = authorized_stores(db, user, active_only=False).options(joinedload(Store.manager)).order_by(Store.id.asc()).all()
-    return [store_to_dict(s) for s in stores]
+    companies = {
+        company.id: company
+        for company in db.query(Company).filter(
+            Company.tenant_id == user.tenant_id,
+            Company.id.in_([store.company_id for store in stores]),
+        ).all()
+    }
+    latest_statuses = {}
+    for store in stores:
+        latest_statuses[store.id] = (
+            db.query(JdWorkbenchStoreStatus)
+            .join(JdWorkbenchDevice, JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id)
+            .filter(
+                JdWorkbenchStoreStatus.store_id == store.id,
+                JdWorkbenchDevice.tenant_id == user.tenant_id,
+                JdWorkbenchDevice.revoked_at.is_(None),
+            )
+            .order_by(JdWorkbenchStoreStatus.updated_at.desc())
+            .first()
+        )
+    return [store_to_dict(s, companies.get(s.company_id), latest_statuses.get(s.id)) for s in stores]
 
 
 @router.get("/api/jd/dashboard")
@@ -158,16 +181,22 @@ def toggle_store(store_id: int, request: Request, db: Session = Depends(get_db))
     return {"ok": True, "store_name": store.store_name, "active": store.active}
 
 
-def store_to_dict(store: Store):
+def store_to_dict(store: Store, company: Company | None = None, sync_status: JdWorkbenchStoreStatus | None = None):
     return {
         "id": store.id,
         "platform": store.platform,
         "store_code": store.store_code,
         "store_name": store.store_name,
+        "subject_id": store.company_id,
+        "subject_code": company.company_code if company else None,
+        "subject_name": company.company_name if company else None,
         "active": store.active,
         "notes": store.notes,
         "created_at": store.created_at.isoformat() if store.created_at else None,
         "manager": {"id": store.manager.id, "username": store.manager.username, "display_name": store.manager.display_name} if store.manager else None,
+        "login_status": sync_status.status if sync_status else "OFFLINE",
+        "login_reason": sync_status.reason_code if sync_status else None,
+        "last_sync_at": sync_status.last_sync_at.isoformat() if sync_status and sync_status.last_sync_at else None,
     }
 
 

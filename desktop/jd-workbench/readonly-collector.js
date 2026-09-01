@@ -5,7 +5,8 @@ const crypto = require('node:crypto');
 const ROUTES = Object.freeze({
   dashboard: 'https://shop.jd.com/jdm/home',
   fulfillment: 'https://trade-order-jdm.jd.com/orderList/waitOut',
-  aftersales: 'https://shop.jd.com/jdm/trade/after-sale'
+  aftersales: 'https://shop.jd.com/jdm/trade/after-sale',
+  abnormal: 'https://trade-order-jdm.jd.com/orderList'
 });
 
 const SNAPSHOT_SCRIPT = `(() => {
@@ -161,6 +162,34 @@ function aftersaleDataset(snapshot, collectedAt) {
   return { datasetType: 'aftersale_orders', sourcePeriod: todayPeriod(collectedAt), records };
 }
 
+function abnormalDataset(snapshot, collectedAt) {
+  const found = matchingTable(snapshot, {
+    identity: [/订单号/, /订单编号/],
+    state: [/状态/, /订单状态/],
+    product: [/商品/, /商品信息/],
+    quantity: [/数量/]
+  });
+  if (!found) throw collectorError('COLLECTOR_SCHEMA_MISMATCH');
+  const reason = column(found.table.headers, [/异常原因/, /原因/, /问题类型/]);
+  const detected = column(found.table.headers, [/更新时间/, /下单时间/, /订单时间/]);
+  const abnormalPattern = /异常|超时|锁定|风控|失败|纠纷|拒收/;
+  const records = found.table.rows.map((row) => {
+    const identity = cleanText(row[found.indexes.identity], 160);
+    const state = cleanText(row[found.indexes.state], 64);
+    if (!identity || !abnormalPattern.test(state)) return null;
+    const record = {
+      source_record_key: opaque(`abnormal:${identity}:${state}:${collectedAt}`),
+      abnormal_state: state,
+      product_name: cleanText(row[found.indexes.product], 200) || '商品信息未展示',
+      quantity: number(row[found.indexes.quantity], true) ?? 0,
+      detected_at: detected >= 0 ? dateTime(row[detected], collectedAt) : collectedAt
+    };
+    if (reason >= 0 && cleanText(row[reason])) record.reason_category = cleanText(row[reason], 120);
+    return record;
+  }).filter(Boolean);
+  return { datasetType: 'abnormal_orders', sourcePeriod: todayPeriod(collectedAt), records };
+}
+
 function normalizeSnapshot(kind, snapshot, collectedAt = new Date().toISOString()) {
   if (/验证码|安全验证|风险验证|风控/.test(cleanText(`${snapshot && snapshot.title} ${snapshot && snapshot.text}`, 100000))) {
     throw collectorError('RISK_CONTROL');
@@ -168,6 +197,7 @@ function normalizeSnapshot(kind, snapshot, collectedAt = new Date().toISOString(
   if (kind === 'dashboard') return dashboardDatasets(snapshot, collectedAt);
   if (kind === 'fulfillment') return [fulfillmentDataset(snapshot, collectedAt)];
   if (kind === 'aftersales') return [aftersaleDataset(snapshot, collectedAt)];
+  if (kind === 'abnormal') return [abnormalDataset(snapshot, collectedAt)];
   throw collectorError('COLLECTOR_SCHEMA_MISMATCH');
 }
 

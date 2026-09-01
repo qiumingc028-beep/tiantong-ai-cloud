@@ -9,9 +9,10 @@ import re
 import secrets
 import unicodedata
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
@@ -28,6 +29,7 @@ from ..models import (
     JdWorkbenchStoreStatus,
     JdWorkbenchSyncBatch,
     JdWorkbenchSyncPolicy,
+    Company,
     Store,
     User,
 )
@@ -78,6 +80,32 @@ DATASET_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"source_record_key", "channel", "ad_spend"}),
         frozenset({"attributed_sales", "roi", "promotion_rate"}),
     ),
+    "operating_metrics": (
+        frozenset({"source_record_key"}),
+        frozenset(
+            {
+                "sales_amount",
+                "sales_orders",
+                "sales_customers",
+                "conversion_rate",
+                "product_units",
+                "visitors",
+                "page_views",
+                "month_sales",
+                "year_sales",
+                "ad_spend",
+                "ad_impressions",
+                "ad_clicks",
+                "ad_ctr",
+                "ad_cpm",
+                "ad_cpc",
+                "pending_shipments",
+                "pending_refunds",
+                "inventory_risk",
+                "abnormal_orders",
+            }
+        ),
+    ),
     "fulfillment_orders": (
         frozenset({"source_record_key", "order_state", "product_name", "quantity", "paid_amount", "ordered_at"}),
         frozenset({"promised_ship_at"}),
@@ -86,32 +114,48 @@ DATASET_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"source_record_key", "aftersale_state", "product_name", "quantity", "refund_amount", "requested_at"}),
         frozenset({"reason_category"}),
     ),
+    "abnormal_orders": (
+        frozenset({"source_record_key", "abnormal_state", "product_name", "quantity", "detected_at"}),
+        frozenset({"reason_category"}),
+    ),
 }
-MONEY_FIELDS = frozenset({"sales_amount", "paid_amount", "refund_amount", "ad_spend", "attributed_sales"})
-RATIO_FIELDS = frozenset({"roi", "promotion_rate"})
-INTEGER_FIELDS = frozenset({"orders_count", "order_count", "refund_order_count", "stock_quantity", "quantity"})
-TEXT_LIMITS = {
-    "product_name": 200,
-    "category_name": 120,
-    "order_state": 64,
-    "aftersale_state": 64,
-    "reason_category": 120,
-}
-DATETIME_FIELDS = frozenset({"ordered_at", "promised_ship_at", "requested_at"})
-PROMOTION_CHANNELS = frozenset({"jd_kuaiche", "haitou", "jingtiaoke", "jingzhuntong", "other"})
-DEVICE_STATUSES = frozenset({"ONLINE", "IDLE", "SYNCING", "PAUSED", "OFFLINE", "ERROR", "HUMAN_ACTION_REQUIRED"})
-SYNC_ERROR_CODES = frozenset(
+MONEY_FIELDS = frozenset(
     {
-        "CLOUD_CONNECTION_FAILED",
-        "COLLECTOR_PAGE_LOAD_FAILED",
-        "COLLECTOR_SCHEMA_MISMATCH",
-        "COLLECTOR_EMPTY",
-        "SYNC_UPLOAD_REJECTED",
-        "LOGIN_EXPIRED",
-        "RISK_CONTROL",
-        "CAPTCHA_REQUIRED",
+        "sales_amount", "paid_amount", "refund_amount", "ad_spend", "attributed_sales",
+        "month_sales", "year_sales", "ad_cpm", "ad_cpc",
     }
 )
+RATIO_FIELDS = frozenset({"roi", "promotion_rate", "conversion_rate", "ad_ctr"})
+INTEGER_FIELDS = frozenset(
+    {
+        "orders_count", "order_count", "refund_order_count", "stock_quantity",
+        "sales_orders", "sales_customers", "product_units", "visitors", "page_views",
+        "ad_impressions", "ad_clicks", "pending_shipments", "pending_refunds", "inventory_risk",
+        "abnormal_orders", "quantity",
+    }
+)
+TEXT_LIMITS = {
+    "product_name": 200, "category_name": 120, "order_state": 64,
+    "aftersale_state": 64, "abnormal_state": 64, "reason_category": 120,
+}
+DATETIME_FIELDS = frozenset({"ordered_at", "promised_ship_at", "requested_at", "detected_at"})
+PROMOTION_CHANNELS = frozenset({"jd_kuaiche", "haitou", "jingtiaoke", "jingzhuntong", "other"})
+DEVICE_STATUSES = frozenset({"ONLINE", "IDLE", "SYNCING", "PAUSED", "OFFLINE", "ERROR", "HUMAN_ACTION_REQUIRED"})
+CHINA_TIMEZONE = ZoneInfo("Asia/Shanghai")
+DashboardPeriod = Literal["latest", "today", "yesterday", "7d"]
+OPERATING_MONEY_SUM_FIELDS = ("sales_amount", "ad_spend")
+OPERATING_INTEGER_SUM_FIELDS = (
+    "sales_orders",
+    "sales_customers",
+    "product_units",
+    "visitors",
+    "page_views",
+    "ad_impressions",
+    "ad_clicks",
+)
+OPERATING_LATEST_MONEY_FIELDS = ("month_sales", "year_sales")
+OPERATING_LATEST_INTEGER_FIELDS = ("pending_shipments", "pending_refunds", "inventory_risk", "abnormal_orders")
+OPERATING_DERIVED_FIELDS = ("conversion_rate", "ad_ctr", "ad_cpm", "ad_cpc")
 HUMAN_REASON_CODES = frozenset(
     {
         "CAPTCHA_REQUIRED",
@@ -122,6 +166,13 @@ HUMAN_REASON_CODES = frozenset(
         "UNKNOWN_DOMAIN",
         "AUTHORIZATION_REVOKED",
         "STORE_IDENTITY_MISMATCH",
+    }
+)
+SYNC_ERROR_CODES = frozenset(
+    {
+        "CLOUD_CONNECTION_FAILED", "COLLECTOR_PAGE_LOAD_FAILED", "COLLECTOR_SCHEMA_MISMATCH",
+        "COLLECTOR_EMPTY", "SYNC_UPLOAD_REJECTED", "LOGIN_EXPIRED", "RISK_CONTROL",
+        "CAPTCHA_REQUIRED",
     }
 )
 SYNC_TOP_LEVEL = frozenset(
@@ -338,6 +389,8 @@ def _normalize_record(dataset_type: str, raw: Any) -> dict[str, Any]:
         raise _generic_bad_request()
     required, optional = DATASET_FIELDS[dataset_type]
     _exact_keys(raw, required, optional)
+    if dataset_type == "operating_metrics" and not (set(raw) - {"source_record_key"}):
+        raise _generic_bad_request()
     source_record_key = raw.get("source_record_key")
     if not isinstance(source_record_key, str) or not HEX_KEY_RE.fullmatch(source_record_key):
         raise _generic_bad_request()
@@ -363,10 +416,10 @@ def _normalize_record(dataset_type: str, raw: Any) -> dict[str, Any]:
             if not isinstance(value, bool):
                 raise _generic_bad_request()
             normalized[key] = value
-        elif key in DATETIME_FIELDS:
-            normalized[key] = _parse_aware_datetime(value).isoformat()
         elif key in TEXT_LIMITS:
             normalized[key] = _short_text(value, TEXT_LIMITS[key])
+        elif key in DATETIME_FIELDS:
+            normalized[key] = _parse_aware_datetime(value).isoformat()
         else:
             raise _generic_bad_request()
     return normalized
@@ -391,7 +444,7 @@ def _normalize_sync(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(client_version, str) or not CLIENT_VERSION_RE.fullmatch(client_version):
         raise _generic_bad_request()
     records = data.get("records")
-    minimum_records = 0 if dataset_type in {"fulfillment_orders", "aftersale_orders"} else 1
+    minimum_records = 0 if dataset_type in {"fulfillment_orders", "aftersale_orders", "abnormal_orders"} else 1
     if not isinstance(records, list) or not (minimum_records <= len(records) <= MAX_RECORDS):
         raise _generic_bad_request()
     normalized_records = [_normalize_record(dataset_type, record) for record in records]
@@ -753,42 +806,138 @@ async def update_sync_policy(store_id: int, request: Request, db: Session = Depe
     policy.updated_by_user_id = user.id
     now = _now()
     statuses = db.query(JdWorkbenchStoreStatus).join(
-        JdWorkbenchDevice,
-        JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id,
+        JdWorkbenchDevice, JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id,
     ).filter(
         JdWorkbenchStoreStatus.store_id == store.id,
         JdWorkbenchDevice.tenant_id == user.tenant_id,
         JdWorkbenchDevice.company_id == user.company_id,
         JdWorkbenchDevice.revoked_at.is_(None),
     ).all()
-    for status in statuses:
-        if enabled:
-            status.status = "IDLE"
-            status.reason_code = None
-            status.next_sync_at = now
-        else:
-            status.status = "PAUSED"
-            status.reason_code = None
-            status.next_sync_at = None
-            status.retry_count = 0
-        status.updated_at = now
+    for status_row in statuses:
+        status_row.status = "IDLE" if enabled else "PAUSED"
+        status_row.reason_code = None
+        status_row.next_sync_at = now if enabled else None
+        status_row.retry_count = 0
+        status_row.updated_at = now
     db.commit()
     return {
-        "ok": True,
-        "store_id": store.id,
-        "enabled": policy.enabled,
+        "ok": True, "store_id": store.id, "enabled": policy.enabled,
         "interval_seconds": policy.interval_seconds,
         "next_sync_at": now.isoformat() if enabled else None,
     }
+
+
+def _dashboard_period_bounds(
+    period: DashboardPeriod,
+    anchor_date: date | None,
+) -> tuple[date | None, date | None]:
+    if period == "latest":
+        return None, None
+    anchor = anchor_date or _now().astimezone(CHINA_TIMEZONE).date()
+    if period == "today":
+        return anchor, anchor
+    if period == "yesterday":
+        previous = anchor - timedelta(days=1)
+        return previous, previous
+    return anchor - timedelta(days=6), anchor
+
+
+def _china_date(value: datetime) -> date:
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return aware.astimezone(CHINA_TIMEZONE).date()
+
+
+def _mean(values: list[Decimal]) -> Decimal | None:
+    return sum(values, Decimal("0")) / len(values) if values else None
+
+
+def _summarize_operating_records(
+    records: list[dict[str, Any]],
+) -> dict[str, str | int | None]:
+    money_sums = {field: Decimal("0") for field in OPERATING_MONEY_SUM_FIELDS}
+    integer_sums = {field: 0 for field in OPERATING_INTEGER_SUM_FIELDS}
+    latest_money: dict[str, Decimal] = {}
+    latest_integer: dict[str, int] = {}
+    raw_rates: dict[str, list[Decimal]] = {field: [] for field in OPERATING_DERIVED_FIELDS}
+    present: set[str] = set()
+
+    for record in records:
+        for field in OPERATING_MONEY_SUM_FIELDS:
+            if field in record:
+                money_sums[field] += Decimal(str(record[field]))
+                present.add(field)
+        for field in OPERATING_INTEGER_SUM_FIELDS:
+            if field in record:
+                integer_sums[field] += int(record[field])
+                present.add(field)
+        for field in OPERATING_LATEST_MONEY_FIELDS:
+            if field in record:
+                latest_money[field] = Decimal(str(record[field]))
+                present.add(field)
+        for field in OPERATING_LATEST_INTEGER_FIELDS:
+            if field in record:
+                latest_integer[field] = int(record[field])
+                present.add(field)
+        for field in OPERATING_DERIVED_FIELDS:
+            if field in record:
+                raw_rates[field].append(Decimal(str(record[field])))
+
+    result: dict[str, str | int | None] = {}
+    for field, value in money_sums.items():
+        result[field] = format(value, ".2f") if field in present else None
+    for field, value in integer_sums.items():
+        result[field] = value if field in present else None
+    for field in OPERATING_LATEST_MONEY_FIELDS:
+        result[field] = format(latest_money[field], ".2f") if field in latest_money else None
+    for field in OPERATING_LATEST_INTEGER_FIELDS:
+        result[field] = latest_integer.get(field)
+
+    visitors = integer_sums["visitors"]
+    orders = integer_sums["sales_orders"]
+    impressions = integer_sums["ad_impressions"]
+    clicks = integer_sums["ad_clicks"]
+    spend = money_sums["ad_spend"]
+    derived: dict[str, Decimal | None] = {
+        "conversion_rate": (
+            Decimal(orders) * Decimal("100") / Decimal(visitors)
+            if "sales_orders" in present and "visitors" in present and visitors > 0
+            else _mean(raw_rates["conversion_rate"])
+        ),
+        "ad_ctr": (
+            Decimal(clicks) * Decimal("100") / Decimal(impressions)
+            if "ad_clicks" in present and "ad_impressions" in present and impressions > 0
+            else _mean(raw_rates["ad_ctr"])
+        ),
+        "ad_cpm": (
+            spend * Decimal("1000") / Decimal(impressions)
+            if "ad_spend" in present and "ad_impressions" in present and impressions > 0
+            else _mean(raw_rates["ad_cpm"])
+        ),
+        "ad_cpc": (
+            spend / Decimal(clicks)
+            if "ad_spend" in present and "ad_clicks" in present and clicks > 0
+            else _mean(raw_rates["ad_cpc"])
+        ),
+    }
+    for field, value in derived.items():
+        result[field] = (
+            format(value, ".2f" if field in {"ad_cpm", "ad_cpc"} else ".4f")
+            if value is not None
+            else None
+        )
+    return result
 
 
 @router.get("/dashboard")
 def cloud_dashboard(
     request: Request,
     store_id: int | None = None,
+    period: DashboardPeriod = "latest",
+    anchor_date: date | None = None,
     db: Session = Depends(get_db),
 ):
     user = require_permission_user(request, db, "menu.jd_data")
+    period_start, period_end = _dashboard_period_bounds(period, anchor_date)
     store_query = authorized_stores(db, user).filter(Store.platform == "jd")
     if store_id is not None:
         store_query = store_query.filter(Store.id == store_id)
@@ -796,6 +945,7 @@ def cloud_dashboard(
     items = []
     for store in stores:
         policy = _sync_policy(db, user, store)
+        company = db.get(Company, store.company_id)
         latest_status = (
             db.query(JdWorkbenchStoreStatus)
             .join(JdWorkbenchDevice, JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id)
@@ -808,34 +958,79 @@ def cloud_dashboard(
             .order_by(JdWorkbenchStoreStatus.updated_at.desc())
             .first()
         )
-        latest_batches: dict[str, JdWorkbenchSyncBatch] = {}
-        for batch in db.query(JdWorkbenchSyncBatch).filter(
+        batch_query = db.query(JdWorkbenchSyncBatch).filter(
             JdWorkbenchSyncBatch.tenant_id == user.tenant_id,
             JdWorkbenchSyncBatch.company_id == user.company_id,
             JdWorkbenchSyncBatch.store_id == store.id,
-        ).order_by(JdWorkbenchSyncBatch.collected_at.desc(), JdWorkbenchSyncBatch.created_at.desc()).all():
-            latest_batches.setdefault(batch.dataset_type, batch)
-        datasets = {}
-        for dataset_type, batch in latest_batches.items():
+        )
+        if period_start is not None and period_end is not None:
+            start_at = datetime.combine(
+                period_start, datetime.min.time(), tzinfo=CHINA_TIMEZONE
+            ).astimezone(timezone.utc)
+            end_at = datetime.combine(
+                period_end + timedelta(days=1), datetime.min.time(), tzinfo=CHINA_TIMEZONE
+            ).astimezone(timezone.utc)
+            batch_query = batch_query.filter(
+                JdWorkbenchSyncBatch.collected_at >= start_at,
+                JdWorkbenchSyncBatch.collected_at < end_at,
+            )
+        batches = batch_query.order_by(
+            JdWorkbenchSyncBatch.source_period.desc(),
+            JdWorkbenchSyncBatch.collected_at.desc(),
+            JdWorkbenchSyncBatch.created_at.desc(),
+        ).all()
+        latest_batches: dict[str | tuple[str, str], JdWorkbenchSyncBatch] = {}
+        for batch in batches:
+            key: str | tuple[str, str] = (
+                batch.dataset_type
+                if period == "latest"
+                else (batch.dataset_type, _china_date(batch.collected_at).isoformat())
+            )
+            latest_batches.setdefault(key, batch)
+        selected_batches = sorted(
+            latest_batches.values(),
+            key=lambda batch: (batch.dataset_type, batch.source_period, batch.collected_at),
+        )
+        datasets: dict[str, dict[str, Any]] = {}
+        for batch in selected_batches:
+            display_period = _china_date(batch.collected_at).isoformat()
             records = db.query(JdWorkbenchRecord).filter(
                 JdWorkbenchRecord.tenant_id == user.tenant_id,
                 JdWorkbenchRecord.company_id == user.company_id,
                 JdWorkbenchRecord.store_id == store.id,
-                JdWorkbenchRecord.dataset_type == dataset_type,
+                JdWorkbenchRecord.dataset_type == batch.dataset_type,
                 JdWorkbenchRecord.batch_id == batch.batch_id,
             ).order_by(JdWorkbenchRecord.id.asc()).limit(100).all()
-            datasets[dataset_type] = {
-                "source": "jd_workbench_readonly",
-                "source_period": batch.source_period,
-                "collected_at": batch.collected_at.isoformat(),
-                "client_version": batch.client_version,
-                "record_count": len(records),
-                "records": [json.loads(record.values_json) for record in records],
-            }
+            dataset = datasets.setdefault(
+                batch.dataset_type,
+                {
+                    "source": "jd_workbench_readonly",
+                    "source_period": display_period,
+                    "source_periods": [],
+                    "collected_at": batch.collected_at.isoformat(),
+                    "client_version": batch.client_version,
+                    "record_count": 0,
+                    "records": [],
+                },
+            )
+            dataset["source_periods"].append(display_period)
+            dataset["source_period"] = (
+                display_period
+                if len(dataset["source_periods"]) == 1
+                else f"{dataset['source_periods'][0]}/{dataset['source_periods'][-1]}"
+            )
+            dataset["collected_at"] = batch.collected_at.isoformat()
+            dataset["client_version"] = batch.client_version
+            normalized_records = [json.loads(record.values_json) for record in records]
+            dataset["records"].extend(normalized_records)
+            dataset["record_count"] += len(normalized_records)
+        operating_records = datasets.get("operating_metrics", {}).get("records", [])
         items.append(
             {
                 "store_id": store.id,
                 "subject_id": store.company_id,
+                "subject_name": company.company_name if company else None,
+                "store_code": store.store_code,
                 "store_name": store.store_name,
                 "sync_status": latest_status.status if latest_status else ("IDLE" if policy.enabled else "PAUSED"),
                 **{key: value for key, value in _runtime_payload(latest_status).items() if key != "status"},
@@ -844,6 +1039,7 @@ def cloud_dashboard(
                 "data_state": "READY" if datasets else "NO_DATA",
                 "empty_message": None if datasets else "暂无数据",
                 "datasets": datasets,
+                "summary": _summarize_operating_records(operating_records),
             }
         )
     summary_values: dict[str, Decimal | int] = {
@@ -856,24 +1052,37 @@ def cloud_dashboard(
         "low_stock_count": 0,
         "pending_shipment_count": 0,
         "aftersale_count": 0,
+        "abnormal_order_count": 0,
     }
     present = {key: False for key in summary_values}
     attributed_sales = Decimal("0")
     attributed_present = False
     for item in items:
         datasets = item["datasets"]
-        for record in datasets.get("sales_daily", {}).get("records", []):
+        operating_records = datasets.get("operating_metrics", {}).get("records", [])
+        sales_records = datasets.get("sales_daily", {}).get("records", [])
+        for record in sales_records:
             summary_values["sales_amount"] += Decimal(record["sales_amount"])
             present["sales_amount"] = True
+        if not sales_records:
+            for record in operating_records:
+                if "sales_amount" in record:
+                    summary_values["sales_amount"] += Decimal(record["sales_amount"])
+                    present["sales_amount"] = True
         order_records = datasets.get("orders", {}).get("records")
         if order_records is None:
-            order_records = datasets.get("sales_daily", {}).get("records", [])
+            order_records = sales_records
             order_field = "orders_count"
         else:
             order_field = "order_count"
         for record in order_records:
             summary_values["orders_count"] += int(record[order_field])
             present["orders_count"] = True
+        if not order_records:
+            for record in operating_records:
+                if "sales_orders" in record:
+                    summary_values["orders_count"] += int(record["sales_orders"])
+                    present["orders_count"] = True
         for record in datasets.get("refunds", {}).get("records", []):
             summary_values["refund_amount"] += Decimal(record["refund_amount"])
             summary_values["refund_order_count"] += int(record["refund_order_count"])
@@ -884,20 +1093,27 @@ def cloud_dashboard(
             summary_values["low_stock_count"] += int(bool(record.get("low_stock")))
             present["inventory_sku_count"] = True
             present["low_stock_count"] = True
-        for record in datasets.get("promotion_costs", {}).get("records", []):
+        promotion_records = datasets.get("promotion_costs", {}).get("records", [])
+        for record in promotion_records:
             summary_values["ad_spend"] += Decimal(record["ad_spend"])
             present["ad_spend"] = True
             if "attributed_sales" in record:
                 attributed_sales += Decimal(record["attributed_sales"])
                 attributed_present = True
-        fulfillment_records = datasets.get("fulfillment_orders", {}).get("records", [])
-        if "fulfillment_orders" in datasets:
-            summary_values["pending_shipment_count"] += len(fulfillment_records)
-            present["pending_shipment_count"] = True
-        aftersale_records = datasets.get("aftersale_orders", {}).get("records", [])
-        if "aftersale_orders" in datasets:
-            summary_values["aftersale_count"] += len(aftersale_records)
-            present["aftersale_count"] = True
+        if not promotion_records:
+            for record in operating_records:
+                if "ad_spend" in record:
+                    summary_values["ad_spend"] += Decimal(record["ad_spend"])
+                    present["ad_spend"] = True
+        detail_counts = {
+            "fulfillment_orders": "pending_shipment_count",
+            "aftersale_orders": "aftersale_count",
+            "abnormal_orders": "abnormal_order_count",
+        }
+        for dataset_type, summary_key in detail_counts.items():
+            if dataset_type in datasets:
+                summary_values[summary_key] += len(datasets[dataset_type].get("records", []))
+                present[summary_key] = True
     ad_spend = summary_values["ad_spend"]
     summary = {
         key: (
@@ -910,15 +1126,119 @@ def cloud_dashboard(
         if attributed_present and present["ad_spend"] and ad_spend > 0
         else None
     )
+    combined_operating_records = [
+        record
+        for item in items
+        for record in item["datasets"].get("operating_metrics", {}).get("records", [])
+    ]
+    operating_summary = _summarize_operating_records(combined_operating_records)
+    for key, value in operating_summary.items():
+        if key not in {"sales_amount", "sales_orders", "ad_spend"}:
+            summary[key] = value
+    summary["sales_orders"] = summary["orders_count"]
     db.commit()
+    failure_items = [
+        item for item in items
+        if item["sync_status"] in {"ERROR", "HUMAN_ACTION_REQUIRED"}
+    ]
     return {
         "stores": items,
         "total": len(items),
         "source": "jd_workbench_readonly",
         "summary": summary,
+        "period": period,
+        "period_start": period_start.isoformat() if period_start else None,
+        "period_end": period_end.isoformat() if period_end else None,
         "ready_stores": sum(item["data_state"] == "READY" for item in items),
         "human_action_required": sum(item["sync_status"] == "HUMAN_ACTION_REQUIRED" for item in items),
+        "running_stores": sum(item["sync_enabled"] and item["sync_status"] not in {"ERROR", "HUMAN_ACTION_REQUIRED"} for item in items),
+        "paused_stores": sum(not item["sync_enabled"] or item["sync_status"] == "PAUSED" for item in items),
+        "successful_stores": sum(item["last_sync_at"] is not None and item["sync_status"] not in {"ERROR", "HUMAN_ACTION_REQUIRED"} for item in items),
+        "failed_stores": len(failure_items),
+        "failure_reasons": [
+            {"store_id": item["store_id"], "store_name": item["store_name"], "reason_code": item["reason_code"]}
+            for item in failure_items
+        ],
     }
+
+
+@router.get("/dashboard/details/{detail_type}")
+def cloud_order_details(
+    detail_type: str,
+    request: Request,
+    store_id: int | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    user = require_permission_user(request, db, "menu.jd_data")
+    dataset_type = {
+        "fulfillment": "fulfillment_orders",
+        "aftersales": "aftersale_orders",
+        "abnormal": "abnormal_orders",
+    }.get(detail_type)
+    if dataset_type is None or not (1 <= limit <= 500) or (start_date and end_date and start_date > end_date):
+        raise HTTPException(status_code=400, detail="明细查询参数不正确")
+    store_query = authorized_stores(db, user).filter(Store.platform == "jd")
+    if store_id is not None:
+        store_query = store_query.filter(Store.id == store_id)
+    stores = store_query.order_by(Store.id.asc()).all()
+    store_map = {store.id: store for store in stores}
+    if store_id is not None and store_id not in store_map:
+        raise HTTPException(status_code=404, detail="店铺不存在或无权访问")
+    if not store_map:
+        return {"detail_type": detail_type, "records": [], "total": 0}
+    batches_query = db.query(JdWorkbenchSyncBatch).filter(
+        JdWorkbenchSyncBatch.tenant_id == user.tenant_id,
+        JdWorkbenchSyncBatch.company_id == user.company_id,
+        JdWorkbenchSyncBatch.store_id.in_(store_map),
+        JdWorkbenchSyncBatch.dataset_type == dataset_type,
+    )
+    if start_date:
+        batches_query = batches_query.filter(JdWorkbenchSyncBatch.source_period >= start_date.isoformat())
+    if end_date:
+        batches_query = batches_query.filter(JdWorkbenchSyncBatch.source_period <= end_date.isoformat())
+    batches = batches_query.order_by(
+        JdWorkbenchSyncBatch.collected_at.desc(), JdWorkbenchSyncBatch.created_at.desc()
+    ).all()
+    latest_batches: dict[tuple[int, str], JdWorkbenchSyncBatch] = {}
+    for batch in batches:
+        latest_batches.setdefault((batch.store_id, batch.source_period), batch)
+    batch_ids = [batch.batch_id for batch in latest_batches.values()]
+    if not batch_ids:
+        return {"detail_type": detail_type, "records": [], "total": 0}
+    state_field = {
+        "fulfillment": "order_state",
+        "aftersales": "aftersale_state",
+        "abnormal": "abnormal_state",
+    }[detail_type]
+    result = []
+    rows = db.query(JdWorkbenchRecord).filter(
+        JdWorkbenchRecord.tenant_id == user.tenant_id,
+        JdWorkbenchRecord.company_id == user.company_id,
+        JdWorkbenchRecord.batch_id.in_(batch_ids),
+    ).order_by(JdWorkbenchRecord.created_at.desc(), JdWorkbenchRecord.id.desc()).limit(limit * 3).all()
+    for row in rows:
+        values = json.loads(row.values_json)
+        if status and values.get(state_field) != status:
+            continue
+        store = store_map[row.store_id]
+        result.append(
+            {
+                "store_id": store.id,
+                "store_code": store.store_code,
+                "store_name": store.store_name,
+                "order_reference": f"JD-{row.source_record_key[:12].upper()}",
+                "source_period": row.source_period,
+                "current_status": values.get(state_field),
+                **values,
+            }
+        )
+        if len(result) >= limit:
+            break
+    return {"detail_type": detail_type, "records": result, "total": len(result)}
 
 
 @router.get("/dashboard/stores/{store_id}/{detail_type}")
@@ -929,46 +1249,14 @@ def cloud_store_order_details(
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
-    user = require_permission_user(request, db, "menu.jd_data")
-    store = require_authorized_store(db, user, store_id=store_id)
-    dataset_type = {"fulfillment": "fulfillment_orders", "aftersales": "aftersale_orders"}.get(detail_type)
-    if dataset_type is None or not (1 <= limit <= 200):
-        raise HTTPException(status_code=400, detail="明细查询参数不正确")
-    latest_batch = db.query(JdWorkbenchSyncBatch).filter(
-        JdWorkbenchSyncBatch.tenant_id == user.tenant_id,
-        JdWorkbenchSyncBatch.company_id == user.company_id,
-        JdWorkbenchSyncBatch.store_id == store.id,
-        JdWorkbenchSyncBatch.dataset_type == dataset_type,
-    ).order_by(
-        JdWorkbenchSyncBatch.collected_at.desc(),
-        JdWorkbenchSyncBatch.created_at.desc(),
-    ).first()
-    if latest_batch is None:
-        return {
-            "store_id": store.id,
-            "store_name": store.store_name,
-            "detail_type": detail_type,
-            "source_period": None,
-            "collected_at": None,
-            "records": [],
-            "total": 0,
-        }
-    rows = db.query(JdWorkbenchRecord).filter(
-        JdWorkbenchRecord.tenant_id == user.tenant_id,
-        JdWorkbenchRecord.company_id == user.company_id,
-        JdWorkbenchRecord.store_id == store.id,
-        JdWorkbenchRecord.dataset_type == dataset_type,
-        JdWorkbenchRecord.batch_id == latest_batch.batch_id,
-    ).order_by(JdWorkbenchRecord.id.asc()).limit(limit).all()
-    return {
-        "store_id": store.id,
-        "store_name": store.store_name,
-        "detail_type": detail_type,
-        "source_period": latest_batch.source_period,
-        "collected_at": latest_batch.collected_at.isoformat(),
-        "records": [json.loads(row.values_json) for row in rows],
-        "total": len(rows),
-    }
+    """Backward-compatible per-store route used by the R297 desktop and existing links."""
+    return cloud_order_details(
+        detail_type=detail_type,
+        request=request,
+        store_id=store_id,
+        limit=limit,
+        db=db,
+    )
 
 
 @router.get("/devices")

@@ -2,13 +2,14 @@
 
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const https = require('node:https');
 
 const CLOUD_ORIGIN = 'https://internal.tiantongai.com';
 const PAIR_URL = `${CLOUD_ORIGIN}/api/jd-workbench/pair`;
 const STORES_URL = `${CLOUD_ORIGIN}/api/jd-workbench/stores`;
 const HEARTBEAT_URL = `${CLOUD_ORIGIN}/api/jd-workbench/heartbeat`;
 const SYNC_URL = `${CLOUD_ORIGIN}/api/jd-workbench/sync`;
-const CLIENT_VERSION = '2.97.0-r297';
+const CLIENT_VERSION = '2.98.0-r298';
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const DEVICE_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -30,6 +31,62 @@ function requireProtectedSafeStorage(safeStorage) {
   ) {
     throw clientError('SECURE_STORAGE_BASIC_TEXT_REJECTED');
   }
+}
+
+function nodeHttpsRequest({ url, method, headers, bodyText }) {
+  const parsedUrl = new URL(url);
+  if (parsedUrl.protocol !== 'https:' || parsedUrl.origin !== CLOUD_ORIGIN) {
+    return Promise.reject(clientError('CLOUD_ENDPOINT_REJECTED'));
+  }
+  const requestHeaders = { ...headers };
+  if (bodyText) requestHeaders['Content-Length'] = String(Buffer.byteLength(bodyText, 'utf8'));
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (operation) => {
+      if (settled) return;
+      settled = true;
+      operation();
+    };
+    const request = https.request({
+      protocol: 'https:',
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || 443,
+      path: `${parsedUrl.pathname}${parsedUrl.search}`,
+      method,
+      headers: requestHeaders,
+      minVersion: 'TLSv1.2',
+      rejectUnauthorized: true,
+      servername: parsedUrl.hostname,
+      agent: false
+    }, (response) => {
+      const chunks = [];
+      let size = 0;
+      response.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > MAX_RESPONSE_BYTES) {
+          request.destroy(clientError('CLOUD_RESPONSE_TOO_LARGE'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', () => finish(() => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        const status = Number(response.statusCode || 0);
+        resolve(Object.freeze({
+          ok: status >= 200 && status < 300,
+          status,
+          text: async () => text
+        }));
+      }));
+      response.on('error', (error) => finish(() => reject(error)));
+    });
+    request.setTimeout(REQUEST_TIMEOUT_MS, () => {
+      request.destroy(clientError('CLOUD_CONNECTION_FAILED'));
+    });
+    request.on('error', (error) => finish(() => reject(error)));
+    request.end(bodyText || undefined);
+  });
 }
 
 function createCloudClient({ net, safeStorage, identityPath }) {
@@ -123,8 +180,6 @@ function createCloudClient({ net, safeStorage, identityPath }) {
     }
     if (authenticated && !identity) throw clientError('DEVICE_NOT_PAIRED');
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     const headers = Object.create(null);
     headers.Accept = 'application/json';
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -149,19 +204,27 @@ function createCloudClient({ net, safeStorage, identityPath }) {
 
     let response;
     try {
-      response = await net.fetch(url, {
-        method,
-        headers,
-        body: body === undefined ? undefined : bodyText,
-        cache: 'no-store',
-        credentials: 'omit',
-        redirect: 'error',
-        signal: controller.signal
-      });
-    } catch (_error) {
-      throw clientError('CLOUD_CONNECTION_FAILED');
-    } finally {
-      clearTimeout(timeout);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      try {
+        response = await net.fetch(url, {
+          method,
+          headers,
+          body: body === undefined ? undefined : bodyText,
+          cache: 'no-store',
+          credentials: 'omit',
+          redirect: 'error',
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (_electronNetworkError) {
+      try {
+        response = await nodeHttpsRequest({ url, method, headers, bodyText });
+      } catch (_nodeNetworkError) {
+        throw clientError('CLOUD_CONNECTION_FAILED');
+      }
     }
 
     if (response.status === 401 || response.status === 403) {
@@ -226,8 +289,8 @@ function createCloudClient({ net, safeStorage, identityPath }) {
     return result;
   }
 
-  async function heartbeat({ status = 'ONLINE', storeId = null, reasonCode = null, lastAttemptAt = null, nextSyncAt = null, retryCount = 0 } = {}) {
-    const allowedStatuses = new Set(['ONLINE', 'IDLE', 'SYNCING', 'PAUSED', 'OFFLINE', 'ERROR', 'HUMAN_ACTION_REQUIRED']);
+  async function heartbeat({ status = 'ONLINE', storeId = null, reasonCode = null } = {}) {
+    const allowedStatuses = new Set(['ONLINE', 'IDLE', 'SYNCING', 'OFFLINE', 'ERROR', 'HUMAN_ACTION_REQUIRED']);
     if (!allowedStatuses.has(status)) throw clientError('HEARTBEAT_REQUEST_INVALID');
     const body = { client_version: CLIENT_VERSION, status };
     if (storeId !== null) {
@@ -240,15 +303,6 @@ function createCloudClient({ net, safeStorage, identityPath }) {
       }
       body.reason_code = reasonCode;
     }
-    if (!Number.isInteger(retryCount) || retryCount < 0 || retryCount > 5) {
-      throw clientError('HEARTBEAT_REQUEST_INVALID');
-    }
-    body.retry_count = retryCount;
-    for (const [field, value] of [['last_attempt_at', lastAttemptAt], ['next_sync_at', nextSyncAt]]) {
-      if (value === null) continue;
-      if (!Number.isFinite(Date.parse(value))) throw clientError('HEARTBEAT_REQUEST_INVALID');
-      body[field] = new Date(Date.parse(value)).toISOString();
-    }
     return requestJson({
       url: HEARTBEAT_URL,
       method: 'POST',
@@ -257,30 +311,15 @@ function createCloudClient({ net, safeStorage, identityPath }) {
     });
   }
 
-  async function syncDataset({ store, datasetType, sourcePeriod, collectedAt, records }) {
-    if (!store || !Number.isSafeInteger(store.storeId) || !Number.isSafeInteger(store.subjectId)) {
-      throw clientError('SYNC_REQUEST_INVALID');
+  async function sync(payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw clientError('SYNC_PAYLOAD_INVALID');
     }
-    if (typeof datasetType !== 'string' || !Array.isArray(records) || !Number.isFinite(Date.parse(collectedAt))) {
-      throw clientError('SYNC_REQUEST_INVALID');
-    }
-    const digest = crypto.createHash('sha256')
-      .update(JSON.stringify({ storeId: store.storeId, datasetType, sourcePeriod, records }), 'utf8')
-      .digest('hex');
     return requestJson({
       url: SYNC_URL,
       method: 'POST',
       authenticated: true,
-      body: {
-        store_id: store.storeId,
-        subject_id: store.subjectId,
-        dataset_type: datasetType,
-        source_period: sourcePeriod,
-        collected_at: new Date(Date.parse(collectedAt)).toISOString(),
-        idempotency_key: `r297:${sourcePeriod}:${datasetType}:${digest}`,
-        client_version: CLIENT_VERSION,
-        records
-      }
+      body: payload
     });
   }
 
@@ -292,7 +331,7 @@ function createCloudClient({ net, safeStorage, identityPath }) {
     listStores,
     pair,
     readIdentity,
-    syncDataset
+    sync
   });
 }
 

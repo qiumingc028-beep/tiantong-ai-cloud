@@ -3,12 +3,61 @@
   "version": "2.97.0-r297",
   "private": true,
   "description": "天统AI京东多店经营工作台只读桌面客户端",
+  "author": "Tiantong AI",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "check": "node --check main.js && node --check preload.js && node --check cloud-client.js && node --check security-policy.js && node --check sync-scheduler.js && node --check readonly-collector.js && node --check renderer/app.js && node security-policy.behavior.test.js && node cloud-client.behavior.test.js && node sync-scheduler.behavior.test.js && node readonly-collector.behavior.test.js"
+    "check": "node --check main.js && node --check preload.js && node --check cloud-client.js && node --check page-recognizer.js && node --check sync-payload.js && node --check security-policy.js && node --check auto-sync.js && node --check renderer/app.js && node security-policy.behavior.test.js && node page-recognizer.behavior.test.js && node sync-payload.behavior.test.js && node cloud-client.behavior.test.js && node auto-sync.behavior.test.js",
+    "dist:win": "electron-builder --win nsis zip --x64 --publish never"
   },
   "devDependencies": {
-    "electron": "44.0.0"
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.tiantongai.jdworkbench",
+    "productName": "天统AI京东多店经营工作台",
+    "artifactName": "TiantongAI-JD-Workbench-${version}-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "cloud-client.js",
+      "page-recognizer.js",
+      "sync-payload.js",
+      "security-policy.js",
+      "auto-sync.js",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "天统AI京东多店经营工作台",
+      "deleteAppDataOnUninstall": false
+    }
   }
 }

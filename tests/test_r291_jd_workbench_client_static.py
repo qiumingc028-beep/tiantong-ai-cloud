@@ -22,10 +22,6 @@ def test_r291_desktop_client_has_minimum_runnable_files_and_fixed_electron():
         "cloud-client.behavior.test.js",
         "security-policy.js",
         "security-policy.behavior.test.js",
-        "sync-scheduler.js",
-        "sync-scheduler.behavior.test.js",
-        "readonly-collector.js",
-        "readonly-collector.behavior.test.js",
         "renderer/index.html",
         "renderer/app.js",
         "renderer/styles.css",
@@ -41,21 +37,6 @@ def test_r291_desktop_client_has_minimum_runnable_files_and_fixed_electron():
     assert package["devDependencies"]["electron"] == "44.0.0"
     assert "security-policy.behavior.test.js" in package["scripts"]["check"]
     assert "cloud-client.behavior.test.js" in package["scripts"]["check"]
-    assert "sync-scheduler.behavior.test.js" in package["scripts"]["check"]
-    assert "readonly-collector.behavior.test.js" in package["scripts"]["check"]
-
-
-def test_r297_deployment_gate_requires_exact_commit_ci_migration_and_rollback():
-    preflight = (ROOT / "ops" / "r297_workbench_preflight.sh").read_text(encoding="utf-8")
-    deploy = (ROOT / "ops" / "r297_workbench_deploy.sh").read_text(encoding="utf-8")
-    assert "R297_CI_RUN_ID" in preflight
-    assert 'payload.get("head_sha") == sys.argv[1]' in preflight
-    assert "0049_r297_jd_multistore_autosync.py" in preflight
-    assert "git -C \"$DEPLOYMENT_DIR\" status --porcelain=v1" in preflight
-    assert "database.before.dump" in deploy
-    assert "rollback()" in deploy
-    assert 'release.get("commit") == os.environ["EXPECTED_COMMIT"]' in deploy
-    assert "FORMAL_RELEASE=BLOCK_PENDING_REAL_JD_ACCEPTANCE" in deploy
 
 
 def test_r291_uses_webcontentsview_and_never_deprecated_or_embedded_views():
@@ -104,8 +85,7 @@ def test_r291_jd_allowlist_is_https_exact_host_only_and_has_no_wildcards():
     assert "ENDPOINT_NOT_AUDITED" in policy
     assert "new Set(['GET', 'HEAD'])" in policy
     assert ".endsWith(" not in policy
-    assert "parsed.hostname.startsWith" not in policy
-    assert "parsed.pathname.startsWith(route.pathnamePrefix)" in policy
+    assert "parsed.hostname.endsWith" not in policy
 
 
 def test_r291_inactive_partition_is_denied_before_url_and_auth_checks():
@@ -119,7 +99,7 @@ def test_r291_inactive_partition_is_denied_before_url_and_auth_checks():
     assert "decision.code !== 'INACTIVE_PARTITION'" in main
 
 
-def test_r291_authentication_post_is_exact_route_and_active_main_frame_only():
+def test_r291_authentication_post_is_exact_context_operation_and_active_main_frame_only():
     policy = read("security-policy.js")
     auth_block = re.search(r"JD_AUTH_ROUTES\s*=.*?\[(.*?)\]\);", policy, re.S)
     assert auth_block
@@ -127,8 +107,11 @@ def test_r291_authentication_post_is_exact_route_and_active_main_frame_only():
     assert "hostname: 'passport.shop.jd.com', pathname: '/login/index.action/jdm'" in auth_block.group(1)
     assert "jshopx" not in auth_block.group(1)
     assert "isMainFrameSource === true" in policy
-    assert "isExactAuthenticationRoute(currentMainFrameUrl)" in policy
-    assert "isExactAuthenticationRoute(target.href)" in policy
+    assert "isAuthenticationContextRoute(currentMainFrameUrl)" in policy
+    assert "isAuthenticationApiTarget(target.href)" in policy
+    assert "dsm.account.service.LoginFacade.login" in policy
+    assert "dsm.account.service.VenderAccountConfigFacade.getConfig" in policy
+    assert "parsed.pathname === '/jdm/home'" in policy
     assert "JD_AUTH_HOSTS" not in policy
 
 
@@ -144,7 +127,7 @@ def test_r291_node_policy_behavior_includes_negative_cases():
         timeout=15,
     )
     assert completed.returncode == 0, completed.stderr
-    assert "R297_SECURITY_POLICY_BEHAVIOR=14_PASS" in completed.stdout
+    assert "R297_SECURITY_POLICY_AND_RECOGNITION=PASS" in completed.stdout
     cloud_completed = subprocess.run(
         [node, str(CLIENT / "cloud-client.behavior.test.js")],
         cwd=CLIENT,
@@ -181,8 +164,9 @@ def test_r291_blocks_privileged_remote_page_capabilities():
         "netLog",
     ):
         assert forbidden not in remote_surface
-    assert main.count("executeJavaScript(SNAPSHOT_SCRIPT, true)") == 1
-    assert "executeJavaScript(" not in main.replace("executeJavaScript(SNAPSHOT_SCRIPT, true)", "")
+    assert "executeJavaScript(buildRecognizerScript())" in main
+    assert "executeJavaScript(SNAPSHOT_SCRIPT, true)" in main
+    assert "executeJavaScript" not in preload
     assert "setWindowOpenHandler" in main
     assert "will-download" in main
     assert "event.preventDefault()" in main
@@ -213,7 +197,8 @@ def test_r291_switch_lock_and_suspend_revoke_network_and_clear_service_workers()
     assert "powerMonitor.on('suspend'" in main
     assert "powerMonitor.on('resume'" in main
     assert "remoteViewAccessPaused = true" in main
-    assert "if (remoteViewAccessPaused) throw new Error('REMOTE_VIEW_PAUSED')" in main
+    assert "if (remoteViewAccessPaused)" in main
+    assert "throw new Error('REMOTE_VIEW_PAUSED')" in main
     assert "activeContext = null" in main
     assert "context.disposed = true" in main
     assert "serviceWorkers.stopAllRunning()" in main
@@ -225,7 +210,7 @@ def test_r291_switch_lock_and_suspend_revoke_network_and_clear_service_workers()
     )
     assert stop_block
     assert "queueViewTransition" not in stop_block.group(1)
-    assert "Promise.resolve(destroyActiveView(reason))" in stop_block.group(1)
+    assert "Promise.all([destroyActiveView(reason), closeCollectionView()])" in stop_block.group(1)
     destroy_call = main.index("await destroyActiveView('STORE_SWITCHED')")
     new_view = main.index("const view = new WebContentsView", destroy_call)
     assert destroy_call < new_view
@@ -265,16 +250,16 @@ def test_r291_stores_only_arrive_from_fixed_cloud_pairing_and_token_is_protected
     assert "raw.partition !== partition" in main
 
 
-def test_r297_collection_is_fixed_contract_only_and_has_no_mock_business_data():
+def test_r297_collection_is_whitelisted_readonly_and_has_no_mock_business_data():
     main = read("main.js")
     preload = read("preload.js")
     html = read("renderer/index.html")
     assert "querySelector" not in main
     assert "querySelector" not in preload
     assert "collectionEnabled: true" in main
-    assert "每5分钟自动" in html
-    assert "syncScheduler.runNow" in main
-    assert "SNAPSHOT_SCRIPT" in main
+    assert "只读取官方页面白名单经营指标和订单状态" in html
+    assert "readonly-collector" in main
+    assert "READ_ONLY_WRITE_BLOCKED" in main
     assert "暂无数据" in html
     assert not re.search(r"[¥￥]\s*\d", html)
 

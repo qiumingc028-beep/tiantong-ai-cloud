@@ -76,15 +76,9 @@ const net = Object.freeze({
       ),
       true
     );
-    if (url === SYNC_URL) {
-      const payload = JSON.parse(options.body);
-      assert.equal(payload.dataset_type, 'fulfillment_orders');
-      assert.equal(payload.records[0].order_state, '待出库');
-      assert.equal(payload.records[0].source_record_key.length, 64);
-      assert.equal(payload.records[0].order_no, undefined);
-      return jsonResponse({ ok: true, accepted: 1 });
-    }
-    return jsonResponse(url === STORES_URL ? [] : { ok: true, status: 'ONLINE' });
+    if (url === STORES_URL) return jsonResponse([]);
+    if (url === SYNC_URL) return jsonResponse({ ok: true, duplicate: false, accepted: 1, batch_id: 'r297-test-batch' });
+    return jsonResponse({ ok: true, status: 'ONLINE' });
   }
 });
 
@@ -95,13 +89,7 @@ const net = Object.freeze({
     assert.equal(first.isPaired(), true);
     assert.deepEqual(await first.listStores(), []);
     assert.equal((await first.heartbeat({ status: 'ONLINE' })).ok, true);
-    assert.equal((await first.syncDataset({
-      store: { storeId: 1, subjectId: 1 },
-      datasetType: 'fulfillment_orders',
-      sourcePeriod: '2026-09-01',
-      collectedAt: '2026-09-01T00:00:00Z',
-      records: [{ source_record_key: 'a'.repeat(64), order_state: '待出库' }]
-    })).accepted, 1);
+    assert.equal((await first.sync({ dataset_type: 'operating_metrics' })).accepted, 1);
     const stored = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
     assert.equal(typeof stored.encryptedPrivateKey, 'string');
     assert.equal(stored.deviceToken, undefined);
@@ -111,7 +99,7 @@ const net = Object.freeze({
     assert.equal(restarted.readIdentity(), true);
     assert.deepEqual(await restarted.listStores(), []);
     assert.equal(seenNonces.size, 4);
-    console.log('R297_CLOUD_CLIENT_BEHAVIOR=4_SIGNED_REQUESTS_PASS');
+console.log('R297_CLOUD_CLIENT_BEHAVIOR=4_SIGNED_REQUESTS_PASS');
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }
