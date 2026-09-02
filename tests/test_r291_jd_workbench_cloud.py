@@ -574,7 +574,9 @@ def test_r297_dashboard_page_exposes_tasks_search_drilldown_and_auto_refresh():
     assert 'data-filter="pending_shipments"' in page
     assert 'data-filter="pending_refunds"' in page
     assert 'id="detailDrawer"' in page
-    assert "api('/api/stores')" in page
+    assert 'src="/r297-store-view.js"' in page
+    assert "R297StoreView.loadStoreDirectory(api)" in page
+    assert "api('/api/stores')" not in page
     assert 'id="platformFilter"' in page
     assert 'id="enabledFilter"' in page
     assert 'id="loginFilter"' in page
