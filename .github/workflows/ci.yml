@@ -12,6 +12,7 @@ on:
   pull_request:
     branches:
       - main
+      - codex/r297-cloud-integration
 
 permissions:
   contents: read
