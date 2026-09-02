@@ -78,7 +78,7 @@ def test_runtime_local_proxy_is_the_only_authenticated_novnc_path():
     assert "jd-browser-runtime:6080" not in nginx
     assert "auth_request /_viewer_auth" in runtime_nginx
     assert "proxy_pass http://127.0.0.1:6080" in runtime_nginx
-    assert "viewer/exchange/$store" in runtime_nginx
+    assert "viewer/exchange/$store$is_args$args" in runtime_nginx
     assert "access_log off" in runtime_nginx
     assert "access_log off" in nginx
     assert "127.0.0.1:6080" in start
