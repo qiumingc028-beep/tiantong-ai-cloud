@@ -1,1 +1,1 @@
-{"name":"jd-cloud-browser-runtime","private":true,"version":"1.0.0","type":"module","scripts":{"start":"node server.mjs","test":"node --test test/*.test.mjs"},"dependencies":{"@playwright/test":"1.47.2","fastify":"4.28.1"}}
+{"name":"jd-cloud-browser-runtime","private":true,"version":"1.0.0","type":"module","scripts":{"start":"./start-runtime.sh","test":"node --test test/*.test.mjs"},"dependencies":{"fastify":"5.12.1","playwright":"1.62.1"}}
