@@ -21,7 +21,6 @@ from backend.models import Store, User, UserStoreMembership
 
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "desktop" / "jd-workbench"
-BASELINE_COMMIT = "aedf8a93abacfe48cf2d5c8278232f2a1baf2be0"
 FINAL_REVISION = "0049_r297_jd_multistore_autosync"
 
 
@@ -35,6 +34,20 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def release_source_sha() -> str:
+    expected = os.getenv("RELEASE_SOURCE_SHA")
+    assert expected, "缺少RELEASE_SOURCE_SHA，无法绑定当前验收Checkout"
+    actual = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    assert expected == actual, "RELEASE_SOURCE_SHA与当前Checkout HEAD不一致"
+    return expected
 
 
 def validate_raw_evidence(evidence: dict, result_sections: tuple[str, ...]) -> None:
@@ -83,7 +96,7 @@ def process_acceptance_evidence() -> dict:
     path = Path(raw_path)
     assert path.is_file()
     evidence = json.loads(read(path))
-    assert evidence["commit"] == BASELINE_COMMIT
+    assert evidence["commit"] == release_source_sha()
     assert evidence["mode"] == "real_process"
     assert evidence["mock_count"] == 0
     assert evidence["source_code_write_count"] == 0
@@ -355,7 +368,7 @@ def test_r297_windows_installer_and_portable_have_runtime_acceptance_evidence():
     path = Path(evidence_path)
     assert path.is_file()
     evidence = json.loads(read(path))
-    assert evidence["commit"] == BASELINE_COMMIT
+    assert evidence["commit"] == release_source_sha()
     assert evidence["mode"] == "real_windows_process"
     assert evidence["mock_count"] == 0
     validate_raw_evidence(evidence, ("installer", "portable_zip"))
