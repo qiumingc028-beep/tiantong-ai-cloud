@@ -43,6 +43,30 @@
     });
   }
 
+  function loadStoreDirectory(api) {
+    return api('/api/stores');
+  }
+
+  function createStore(api, store) {
+    return api('/api/stores', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(store)
+    });
+  }
+
+  function assignStore(api, storeId, managerUserId) {
+    return api(`/api/stores/${storeId}/assign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manager_user_id: managerUserId ? Number(managerUserId) : null })
+    });
+  }
+
+  function toggleStore(api, storeId) {
+    return api(`/api/stores/${storeId}/toggle`, { method: 'POST' });
+  }
+
   function filterStores(stores, filters = {}) {
     const query = String(filters.query || '').trim().toLowerCase();
     return (stores || []).filter(store => {
@@ -63,5 +87,5 @@
     return Object.freeze({ begin: () => ++latest, isCurrent: token => token === latest });
   }
 
-  return Object.freeze({ PLATFORM_LABELS, storeStatus, mergeStores, filterStores, createLatestRequestGate });
+  return Object.freeze({ PLATFORM_LABELS, storeStatus, mergeStores, loadStoreDirectory, createStore, assignStore, toggleStore, filterStores, createLatestRequestGate });
 });
