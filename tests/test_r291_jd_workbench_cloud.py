@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.database import Base
+from backend.config import get_settings
 from backend.models import Permission, Role, Store, User, UserStoreMembership
 
 
@@ -22,6 +23,35 @@ COLLECTED_AT = "2026-08-29T06:00:00Z"
 SOURCE_PERIOD = "2026-08-28"
 TEST_RSA_N_B64 = "qqJk2ZH4W5fP8Y2xulfKp_mafykFYNhou5UX35781QJTy5m3Md3fJfCjXEt1Jn1Qpvy9DjFHyjCrJSiOi50idZRhL6SdJvn66JzNS0SP9aXG-53oVGSnqwMedFE2ByxhI67IHI0ndIgnAtLudX2RU1J-vkPo2BjYztSkxXBX9aePJit_d58i6KkZ4Yd-KVQi8QjsNuzytXZNxymZj_TyGxLXFsySeVZhFNR7TySOWbylrziPNFil3DAPzEP7LcALArb6dUdfAxvHWrRmXd7uWqlciTEaTy7q37fNJyvcggS1FlfpGcrpRG_LuwNN58FSWt-_VBeVQf00emDZ60g0xQ"
 TEST_RSA_D_B64 = "AYKWaeaE0CqzyGt8my2TuZDX8TAnwAeqRZ64K1541lnC7BZcLLDN_MP4biSs0L5jLFcoRSviesObgCSvvkSRvYCmq4lFasbjlZNtrbDZpU7mR-vJ1pVddoH8jwL4-29FHM-7LaWCJ-HcloXPXnLSCm68eGqZcPAnWw0-uBCadq4VOwZ_xPOpkaqGrvlJICwIyEkqr3lm--N7V-BoGw2SU4QvdTlB8HyjaqOVj_SPERvBiljcc5M3P2tyhlKpj5WVpzCBf08orKIk7BJpW58-hNgcC72HAeqncgubTjdlyM6pj2ssweL8t7iKdze3rnL6k-P7rtpUdd7kxZhkSRLSsQ"
+
+
+def test_browser_runtime_control_scope_must_match_an_active_database_store(client, test_db, monkeypatch):
+    token = "r" * 32
+    monkeypatch.setenv("JD_BROWSER_CONTROL_TOKEN", token)
+    get_settings.cache_clear()
+    with test_db() as db:
+        store = db.query(Store).filter(Store.store_code == "JD01").one()
+    scope = {
+        "tenant_id": store.tenant_id,
+        "company_id": store.company_id,
+        "store_id": store.id,
+        "platform": store.platform,
+    }
+    try:
+        assert client.post(
+            "/api/jd-workbench/internal/browser-session-authorize",
+            headers={"x-internal-token": token}, json=scope,
+        ).status_code == 204
+        assert client.post(
+            "/api/jd-workbench/internal/browser-session-authorize",
+            headers={"x-internal-token": token}, json={**scope, "store_id": store.id + 1000},
+        ).status_code == 404
+        assert client.post(
+            "/api/jd-workbench/internal/browser-session-authorize",
+            headers={"x-internal-token": "x" * 32}, json=scope,
+        ).status_code == 401
+    finally:
+        get_settings.cache_clear()
 
 
 def _base64url_bytes(value: str) -> bytes:

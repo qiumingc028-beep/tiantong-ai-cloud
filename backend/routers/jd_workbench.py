@@ -203,6 +203,32 @@ def _generic_bad_request() -> HTTPException:
     return HTTPException(status_code=400, detail="请求字段不符合R297只读自动同步合同")
 
 
+@router.post("/internal/browser-session-authorize", status_code=204)
+async def authorize_browser_session(request: Request, db: Session = Depends(get_db)):
+    """Fail-closed capability check used only by the isolated browser runtime."""
+    expected = get_settings().JD_BROWSER_CONTROL_TOKEN
+    supplied = request.headers.get("x-internal-token", "")
+    if len(expected) < 32 or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="浏览器控制凭据无效")
+    body = await _json_body(request)
+    required = {"tenant_id", "company_id", "store_id", "platform"}
+    if set(body) != required:
+        raise _generic_bad_request()
+    try:
+        tenant_id, company_id, store_id = (int(body[name]) for name in ("tenant_id", "company_id", "store_id"))
+    except (TypeError, ValueError) as exc:
+        raise _generic_bad_request() from exc
+    found = db.query(Store.id).filter(
+        Store.id == store_id,
+        Store.tenant_id == tenant_id,
+        Store.company_id == company_id,
+        Store.platform == str(body["platform"]),
+        Store.active.is_(True),
+    ).one_or_none()
+    if not found:
+        raise HTTPException(status_code=404, detail="店铺会话作用域不存在")
+
+
 async def _json_body(request: Request) -> dict[str, Any]:
     length = request.headers.get("content-length", "")
     if length:

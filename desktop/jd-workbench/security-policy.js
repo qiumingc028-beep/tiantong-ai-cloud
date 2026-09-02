@@ -76,10 +76,6 @@ const JD_MAIN_FRAME_ROUTES = Object.freeze([
 // credential exchange through these exact first-party authentication targets.
 // Access is still conditional on the active visible main frame being one of
 // JD_AUTH_ROUTES, so this authority disappears as soon as login completes.
-const JD_AUTH_API_HOSTS = Object.freeze(new Set([
-  'passport.shop.jd.com',
-  'passport.jd.com'
-]));
 const JD_AUTH_API_ROUTES = Object.freeze([
   Object.freeze({ hostname: 'sff.jd.com', pathname: '/api' })
 ]);
@@ -162,14 +158,21 @@ function isExactAuthenticationRoute(rawUrl) {
   ));
 }
 
+function singleApiOperation(parsed) {
+  const operations = parsed.searchParams.getAll('api');
+  return operations.length === 1 ? operations[0] : '';
+}
+
 function isAuthenticationApiTarget(rawUrl) {
   const parsed = parseAllowedHttpsUrl(rawUrl);
   if (!parsed) return false;
-  if (JD_AUTH_API_HOSTS.has(parsed.hostname)) return true;
+  if (JD_AUTH_ROUTES.some(
+    (route) => route.hostname === parsed.hostname && route.pathname === parsed.pathname
+  )) return true;
   const isExactGatewayRoute = JD_AUTH_API_ROUTES.some(
     (route) => route.hostname === parsed.hostname && route.pathname === parsed.pathname
   );
-  const operation = parsed.searchParams.get('api') || '';
+  const operation = singleApiOperation(parsed);
   const isAccountOperation = JD_AUTH_API_OPERATION_PREFIXES.some(
     (prefix) => operation.startsWith(prefix)
   );
@@ -185,7 +188,7 @@ function isSffAuthenticationAccountTarget(rawUrl) {
     parsed.hostname === 'sff.jd.com' &&
     parsed.pathname === '/api' &&
     JD_AUTH_API_OPERATION_PREFIXES.some(
-      (prefix) => (parsed.searchParams.get('api') || '').startsWith(prefix)
+      (prefix) => singleApiOperation(parsed).startsWith(prefix)
     )
   );
 }
@@ -195,7 +198,7 @@ function isSffReadOnlyRpcTarget(rawUrl) {
   if (!parsed || parsed.hostname !== 'sff.jd.com' || parsed.pathname !== '/api') {
     return false;
   }
-  const operation = parsed.searchParams.get('api') || '';
+  const operation = singleApiOperation(parsed);
   if (!/^[A-Za-z0-9._-]{1,200}$/.test(operation)) return false;
   const methodName = operation.split('.').pop().toLowerCase();
   if (JD_WRITE_RPC_MARKERS.some((marker) => methodName.includes(marker))) {
@@ -211,17 +214,14 @@ function isSffWriteRpcTarget(rawUrl) {
   if (!parsed || parsed.hostname !== 'sff.jd.com' || parsed.pathname !== '/api') {
     return false;
   }
-  const operation = parsed.searchParams.get('api') || '';
+  const operation = singleApiOperation(parsed);
   if (!/^[A-Za-z0-9._-]{1,200}$/.test(operation)) return false;
   const methodName = operation.split('.').pop().toLowerCase();
   return JD_WRITE_RPC_MARKERS.some((marker) => methodName.includes(marker));
 }
 
 function isAuthenticationPreflightTarget(rawUrl) {
-  const parsed = parseAllowedHttpsUrl(rawUrl);
-  return Boolean(parsed && JD_AUTH_API_ROUTES.some(
-    (route) => route.hostname === parsed.hostname && route.pathname === parsed.pathname
-  ));
+  return isAuthenticationApiTarget(rawUrl) || isSffReadOnlyRpcTarget(rawUrl);
 }
 
 function isTrustedAuthenticationInitiator(rawUrl, currentMainFrameUrl) {
@@ -306,16 +306,6 @@ function classifyRequest({
     isAuthenticationPreflightTarget(target.href)
   ) {
     return Object.freeze({ allow: true, code: 'HUMAN_AUTHENTICATION_PREFLIGHT' });
-  }
-
-  // Preflight never carries the business payload. Allow it only while the
-  // exact reviewed JD shell/login route is visible; the actual request is
-  // classified independently below and write operations still fail closed.
-  if (
-    normalizedMethod === 'OPTIONS' &&
-    isAuthenticationContextRoute(currentMainFrameUrl)
-  ) {
-    return Object.freeze({ allow: true, code: 'READ_ONLY_PREFLIGHT' });
   }
 
   // This is a narrowly scoped human-login exception, not a business-write

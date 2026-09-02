@@ -94,6 +94,17 @@ jobs:
               connection.close()
           PY
 
+      - name: Verify R297 database restore and failure injection contract
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: ci
+          PGPASSWORD: ci
+          R297_RESTORE_ACCEPTANCE_ISOLATED: "1"
+        run: |
+          bash ops/r297_database_restore_contract_test.sh
+          R297_SELF_TEST_FAILURE_INJECTION=1 bash ops/r297_workbench_deploy.sh
+
       - name: Verify CI Redis isolation
         run: |
           python - <<'PY'
@@ -156,17 +167,37 @@ jobs:
 
       - name: Build JD cloud browser runtime image
         run: |
+          source_date_epoch="$(git show -s --format=%ct "$RELEASE_SOURCE_SHA")"
+          build_time="$(date -u --date "@$source_date_epoch" +%Y-%m-%dT%H:%M:%SZ)"
           docker build \
             --pull=false \
+            --build-arg "RELEASE_COMMIT=$RELEASE_SOURCE_SHA" \
+            --build-arg "BUILD_TIME=$build_time" \
             --file services/jd-cloud-browser-runtime/Dockerfile \
             --tag "$S12_JD_RUNTIME_IMAGE" \
             .
+          test "$(docker image inspect --format '{{.Architecture}}' "$S12_JD_RUNTIME_IMAGE")" = amd64
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$S12_JD_RUNTIME_IMAGE")" = "$RELEASE_SOURCE_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' "$S12_JD_RUNTIME_IMAGE")" = sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+          test "$(docker image inspect --format '{{ index .Config.Labels "com.microsoft.playwright.version" }}' "$S12_JD_RUNTIME_IMAGE")" = 1.62.1
+          docker run --rm --entrypoint node "$S12_JD_RUNTIME_IMAGE" -e \
+            'const {chromium}=require("playwright");const p=chromium.executablePath();if(!p.startsWith("/ms-playwright/")||!require("fs").existsSync(p))process.exit(1);console.log(`RUNTIME_CHROMIUM_PATH=${p}`)'
+          docker run --rm --entrypoint sh "$S12_JD_RUNTIME_IMAGE" -c \
+            'sha256sum "$(node -e '\''process.stdout.write(require("playwright").chromium.executablePath())'\'')"'
 
       - name: Verify JD cloud browser runtime container
         run: |
           set -euo pipefail
           container="jd-browser-runtime-${RELEASE_SOURCE_SHA:0:12}"
-          cleanup() { docker rm --force "$container" >/dev/null 2>&1 || true; }
+          network="jd-browser-runtime-${RELEASE_SOURCE_SHA:0:12}"
+          volume="jd-browser-runtime-archives-${RELEASE_SOURCE_SHA:0:12}-${GITHUB_RUN_ID}"
+          auth_pid=""
+          cleanup() {
+            test -z "$auth_pid" || kill "$auth_pid" >/dev/null 2>&1 || true
+            docker rm --force "$container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
           trap cleanup EXIT
 
           if docker run --rm "$S12_JD_RUNTIME_IMAGE" >/tmp/runtime-missing-token.log 2>&1; then
@@ -177,10 +208,39 @@ jobs:
 
           capture_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           control_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
-          viewer_signing_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          viewer_ticket_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          viewer_cookie_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           master_key="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
+          docker network create "$network" >/dev/null
+          docker volume create "$volume" >/dev/null
+          MOCK_CONTROL_TOKEN="$control_token" python - <<'PY' &
+          import json
+          import os
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_POST(self):
+                  try:
+                      body = json.loads(self.rfile.read(int(self.headers.get('content-length', '0'))))
+                  except (ValueError, json.JSONDecodeError):
+                      body = None
+                  valid = (
+                      self.path == '/api/jd-workbench/internal/browser-session-authorize'
+                      and self.headers.get('x-internal-token') == os.environ['MOCK_CONTROL_TOKEN']
+                      and isinstance(body, dict)
+                      and set(body) == {'tenant_id', 'company_id', 'store_id', 'platform'}
+                  )
+                  self.send_response(204 if valid else 403)
+                  self.end_headers()
+              def log_message(self, *_args):
+                  pass
+          HTTPServer(('0.0.0.0', 18787), Handler).serve_forever()
+          PY
+          auth_pid=$!
           docker run --detach \
             --name "$container" \
+            --network "$network" \
+            --add-host host.docker.internal:host-gateway \
             --cap-drop ALL \
             --cap-add SYS_CHROOT \
             --read-only \
@@ -189,21 +249,21 @@ jobs:
             --shm-size=1g \
             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m,uid=10001,gid=10001,mode=1777 \
             --tmpfs /tmp/.X11-unix:rw,nosuid,nodev,noexec,size=1m,uid=0,gid=0,mode=1777 \
-            --tmpfs /data/jd-session-archives:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
+            --mount type=volume,source="$volume",target=/data/jd-session-archives \
             --publish 127.0.0.1::8787 \
-            --publish 127.0.0.1::6080 \
             --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" \
             --env "JD_BROWSER_CONTROL_TOKEN=$control_token" \
-            --env "JD_BROWSER_VIEWER_SIGNING_KEY=$viewer_signing_key" \
+            --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" \
+            --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" \
             --env "JD_SESSION_MASTER_KEY=$master_key" \
-            --env PORT=8787 \
+            --env JD_BROWSER_SESSION_AUTH_URL=http://host.docker.internal:18787/api/jd-workbench/internal/browser-session-authorize \
+            --env RUNTIME_API_PORT=8788 \
             --env DISPLAY=:99 \
             --env JD_PROFILE_ROOT=/tmp/jd-cloud-profiles \
             --env JD_SESSION_ARCHIVE_ROOT=/data/jd-session-archives \
             "$S12_JD_RUNTIME_IMAGE" >/dev/null
 
           runtime_port="$(docker port "$container" 8787/tcp | awk -F: 'END {print $NF}')"
-          novnc_port="$(docker port "$container" 6080/tcp | awk -F: 'END {print $NF}')"
           status=000
           for _ in $(seq 1 60); do
             status="$(curl --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
@@ -261,21 +321,62 @@ jobs:
           for forbidden in DATABASE_URL REDIS_URL POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD JWT_SECRET BOSS_INITIAL_PASSWORD; do
             ! docker exec "$container" env | grep -q "^${forbidden}="
           done
-          echo "RUNTIME_ENV_NAMES=DISPLAY,HOME,JD_BROWSER_CAPTURE_TOKEN,JD_BROWSER_CONTROL_TOKEN,JD_BROWSER_VIEWER_SIGNING_KEY,JD_PROFILE_ROOT,JD_SESSION_ARCHIVE_ROOT,JD_SESSION_MASTER_KEY,PORT"
+          echo "RUNTIME_ENV_NAMES=DISPLAY,HOME,JD_BROWSER_CAPTURE_TOKEN,JD_BROWSER_CONTROL_TOKEN,JD_BROWSER_VIEWER_TICKET_SIGNING_KEY,JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY,JD_PROFILE_ROOT,JD_SESSION_ARCHIVE_ROOT,JD_SESSION_MASTER_KEY,RUNTIME_API_PORT"
 
-          for _ in $(seq 1 30); do
-            curl --silent --fail "http://127.0.0.1:$novnc_port/vnc.html" >/dev/null && break
-            sleep 1
-          done
-          python - "$novnc_port" <<'PY'
+          unauth_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          forged_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Cookie: jd_browser_session=forged' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          echo "RUNTIME_NOVNC_UNAUTH_STATUS=$unauth_status"
+          echo "RUNTIME_NOVNC_FORGED_COOKIE_STATUS=$forged_status"
+          test "$unauth_status" = 401
+          test "$forged_status" = 401
+          if docker run --rm --network "$network" --entrypoint node "$S12_JD_RUNTIME_IMAGE" \
+            -e "fetch('http://$container:6080/vnc.html').then(()=>process.exit(1)).catch(()=>process.exit(0))"; then
+            echo "RUNTIME_SHARED_NETWORK_6080=REFUSED"
+          else
+            echo "RUNTIME_SHARED_NETWORK_6080=EXPOSED" >&2
+            exit 1
+          fi
+
+          ticket="$(curl --silent --fail --header 'content-type: application/json' \
+            --header "x-internal-token: $control_token" --data '{"session_id":"1:1:1:jd"}' \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets" |
+            python -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
+          echo "RUNTIME_VIEWER_TICKET_ISSUED=YES"
+          cookie="$(curl --silent --show-error --dump-header - --output /dev/null \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange" |
+            awk -F': ' 'tolower($1)=="set-cookie" {sub(/\r$/, "", $2); print $2}')"
+          test -n "$cookie"
+          echo "RUNTIME_VIEWER_COOKIE_ISSUED=YES"
+          viewer_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          cross_store_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/2/vnc.html")"
+          replay_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
+          query_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange?ticket=forbidden")"
+          echo "RUNTIME_NOVNC_VIEWER_STATUS=$viewer_status"
+          echo "RUNTIME_NOVNC_CROSS_STORE_STATUS=$cross_store_status"
+          echo "RUNTIME_NOVNC_REPLAY_STATUS=$replay_status"
+          echo "RUNTIME_NOVNC_QUERY_STATUS=$query_status"
+          test "$viewer_status" = 200
+          test "$cross_store_status" = 401
+          test "$replay_status" = 401
+          test "$query_status" = 400
+          python - "$runtime_port" "$cookie" <<'PY'
           import socket
           import sys
 
           port = int(sys.argv[1])
+          cookie = sys.argv[2]
           with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
               request = (
-                  "GET /websockify HTTP/1.1\r\n"
+                  "GET /jd-browser/novnc/1/websockify HTTP/1.1\r\n"
                   "Host: 127.0.0.1\r\n"
+                  f"Cookie: {cookie}\r\n"
                   "Upgrade: websocket\r\n"
                   "Connection: Upgrade\r\n"
                   "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
@@ -298,6 +399,16 @@ jobs:
             sleep 1
           done
           test "$status" = 200
+          restored="$(curl --silent --fail --header 'content-type: application/json' \
+            --header "x-internal-token: $control_token" \
+            --data '{"tenant_id":1,"company_id":1,"store_id":1,"platform":"jd"}' \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
+          test "$(printf '%s' "$restored" | python -c 'import json,sys; print(str(json.load(sys.stdin)["restored"]).lower())')" = true
+          docker exec "$container" pgrep -x chrome >/dev/null
+          curl --silent --fail --request DELETE --header "x-internal-token: $control_token" \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions/1%3A1%3A1%3Ajd" >/dev/null
+          test -z "$(docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles /data/jd-session-archives -type f -print')"
+          test -z "$(docker exec "$container" pgrep -x chrome || true)"
           echo "RUNTIME_RESTART=PASS"
 
       - name: Run tests
@@ -321,12 +432,12 @@ jobs:
               for name in ("tests", "failures", "errors", "skipped")
           }
           assert totals == {
-              "tests": 1793,
+              "tests": 1795,
               "failures": 0,
               "errors": 0,
               "skipped": 0,
           }, totals
-          print("CI_PYTEST_RESULT=1793_PASS/0_SKIP/0_FAIL/0_ERROR")
+          print("CI_PYTEST_RESULT=1795_PASS/0_SKIP/0_FAIL/0_ERROR")
           PY
 
       - name: Verify CI Redis queue and lock residue
@@ -363,7 +474,8 @@ jobs:
           export RELEASE_COMMIT="$RELEASE_SOURCE_SHA"
           export JD_BROWSER_CAPTURE_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           export JD_BROWSER_CONTROL_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
-          export JD_BROWSER_VIEWER_SIGNING_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export JD_BROWSER_VIEWER_TICKET_SIGNING_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           export JD_SESSION_MASTER_KEY="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
           test -n "$SOURCE_DATE_EPOCH"
           for key in POSTGRES_DB POSTGRES_ADMIN_USER POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD TLS_CERT_PATH TLS_KEY_PATH; do

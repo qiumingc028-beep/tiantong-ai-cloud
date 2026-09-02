@@ -79,6 +79,39 @@ const request = (overrides = {}) => classifyRequest({
 assert.equal(request().allow, true);
 assert.equal(request({ isActive: false }).code, 'INACTIVE_PARTITION');
 assert.equal(request({ url: 'https://shop.jd.com.attacker.example/' }).allow, false);
+assert.equal(request({
+  url: 'https://passport.jd.com/arbitrary/write', method: 'POST', resourceType: 'xhr',
+  currentMainFrameUrl: 'https://passport.jd.com/new/login.aspx',
+  initiator: 'https://passport.jd.com/new/login.aspx'
+}).allow, false, 'passport hosts are never authorized at host scope');
+assert.equal(request({
+  url: 'https://sff.jd.com/api?api=dsm.account.service.LoginFacade.login',
+  method: 'POST', resourceType: 'xhr',
+  currentMainFrameUrl: 'https://passport.jd.com/new/login.aspx',
+  initiator: 'https://passport.jd.com/new/login.aspx'
+}).allow, true, 'the reviewed login operation remains available');
+assert.equal(request({
+  url: 'https://sff.jd.com/api?api=dsm.account.service.LoginFacade.login',
+  method: 'OPTIONS', resourceType: 'xhr',
+  currentMainFrameUrl: 'https://passport.jd.com/new/login.aspx',
+  initiator: 'https://passport.jd.com/new/login.aspx'
+}).allow, true, 'OPTIONS is allowed only for the exact reviewed target');
+assert.equal(request({
+  url: 'https://sff.jd.com/api?api=dsm.product.publishProduct',
+  method: 'OPTIONS', resourceType: 'xhr',
+  currentMainFrameUrl: 'https://passport.jd.com/new/login.aspx',
+  initiator: 'https://passport.jd.com/new/login.aspx'
+}).allow, false, 'OPTIONS cannot bypass the operation allowlist');
+assert.equal(request({
+  url: 'https://sff.jd.com/api?api=dsm.order.queryOrderList&api=dsm.order.deleteAll',
+  method: 'POST', resourceType: 'xhr', currentMainFrameUrl: 'https://shop.jd.com/',
+  initiator: 'https://shop.jd.com/'
+}).allow, false, 'duplicate api parameters cannot smuggle a write operation');
+assert.equal(request({
+  url: 'https://sff.jd.com/api?api=dsm.account.service.LoginFacade.login&api=dsm.product.publishProduct',
+  method: 'POST', resourceType: 'xhr', currentMainFrameUrl: 'https://passport.jd.com/new/login.aspx',
+  initiator: 'https://passport.jd.com/new/login.aspx'
+}).allow, false, 'duplicate api parameters cannot pollute the login operation');
 const policySource = fs.readFileSync(path.join(__dirname, 'security-policy.js'), 'utf8');
 const writeMarkerSource = policySource.match(/const JD_WRITE_RPC_MARKERS = Object\.freeze\(\[([\s\S]*?)\]\);/);
 assert.ok(writeMarkerSource, 'write marker contract must remain explicit');
