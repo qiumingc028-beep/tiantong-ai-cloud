@@ -348,16 +348,24 @@ jobs:
             awk -F': ' 'tolower($1)=="set-cookie" {sub(/\r$/, "", $2); print $2}')"
           test -n "$cookie"
           echo "RUNTIME_VIEWER_COOKIE_ISSUED=YES"
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
-            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")" = 200
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
-            "http://127.0.0.1:$runtime_port/jd-browser/novnc/2/vnc.html")" = 401
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+          viewer_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          cross_store_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/2/vnc.html")"
+          replay_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
-            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")" = 401
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
+          query_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
-            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange?ticket=forbidden")" = 400
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange?ticket=forbidden")"
+          echo "RUNTIME_NOVNC_VIEWER_STATUS=$viewer_status"
+          echo "RUNTIME_NOVNC_CROSS_STORE_STATUS=$cross_store_status"
+          echo "RUNTIME_NOVNC_REPLAY_STATUS=$replay_status"
+          echo "RUNTIME_NOVNC_QUERY_STATUS=$query_status"
+          test "$viewer_status" = 200
+          test "$cross_store_status" = 401
+          test "$replay_status" = 401
+          test "$query_status" = 400
           python - "$runtime_port" "$cookie" <<'PY'
           import socket
           import sys
