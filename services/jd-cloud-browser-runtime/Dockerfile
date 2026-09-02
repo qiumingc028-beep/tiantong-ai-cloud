@@ -1,5 +1,10 @@
 FROM node:20-bookworm-slim
 
+ARG RELEASE_COMMIT=unknown
+ARG BUILD_TIME=unknown
+LABEL org.opencontainers.image.revision=$RELEASE_COMMIT \
+      org.opencontainers.image.created=$BUILD_TIME
+
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     HOME=/tmp/runtime-home
 
