@@ -323,20 +323,31 @@ jobs:
           done
           echo "RUNTIME_ENV_NAMES=DISPLAY,HOME,JD_BROWSER_CAPTURE_TOKEN,JD_BROWSER_CONTROL_TOKEN,JD_BROWSER_VIEWER_TICKET_SIGNING_KEY,JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY,JD_PROFILE_ROOT,JD_SESSION_ARCHIVE_ROOT,JD_SESSION_MASTER_KEY,RUNTIME_API_PORT"
 
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")" = 401
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Cookie: jd_browser_session=forged' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")" = 401
-          docker run --rm --network "$network" --entrypoint node "$S12_JD_RUNTIME_IMAGE" \
-            -e "fetch('http://$container:6080/vnc.html').then(()=>process.exit(1)).catch(()=>process.exit(0))"
+          unauth_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          forged_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Cookie: jd_browser_session=forged' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          echo "RUNTIME_NOVNC_UNAUTH_STATUS=$unauth_status"
+          echo "RUNTIME_NOVNC_FORGED_COOKIE_STATUS=$forged_status"
+          test "$unauth_status" = 401
+          test "$forged_status" = 401
+          if docker run --rm --network "$network" --entrypoint node "$S12_JD_RUNTIME_IMAGE" \
+            -e "fetch('http://$container:6080/vnc.html').then(()=>process.exit(1)).catch(()=>process.exit(0))"; then
+            echo "RUNTIME_SHARED_NETWORK_6080=REFUSED"
+          else
+            echo "RUNTIME_SHARED_NETWORK_6080=EXPOSED" >&2
+            exit 1
+          fi
 
           ticket="$(curl --silent --fail --header 'content-type: application/json' \
             --header "x-internal-token: $control_token" --data '{"session_id":"1:1:1:jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets" |
             python -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
+          echo "RUNTIME_VIEWER_TICKET_ISSUED=YES"
           cookie="$(curl --silent --show-error --dump-header - --output /dev/null \
             --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange" |
             awk -F': ' 'tolower($1)=="set-cookie" {sub(/\r$/, "", $2); print $2}')"
           test -n "$cookie"
+          echo "RUNTIME_VIEWER_COOKIE_ISSUED=YES"
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")" = 200
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
