@@ -23,7 +23,7 @@ class JdSmartCollector:
 
     def _capture(self, account: JdAccount, dataset: str, store: Store):
         endpoint = "http://jd-browser-runtime:8787/internal/jd-browser"
-        token = os.getenv("JD_BROWSER_INTERNAL_TOKEN", "")
+        token = os.getenv("JD_BROWSER_CAPTURE_TOKEN", "")
         if len(token.encode()) < 32:
             raise JdCollectorError("云端浏览器内部认证未配置")
         if not endpoint:

@@ -48,6 +48,33 @@ function ticketFromRequest(request) {
   }
 }
 
+function storeFromRequest(request) {
+  try {
+    const original = new URL(String(request.headers['x-original-uri'] || ''), 'https://internal.invalid');
+    const match = original.pathname.match(/^\/jd-browser\/novnc\/([^/]+)(?:\/|$)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  } catch (_error) {
+    return '';
+  }
+}
+
+function signedValue(payload, key) {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `${body}.${crypto.createHmac('sha256', key).update(body).digest('base64url')}`;
+}
+
+function verifiedValue(value, key) {
+  const [body, signature, ...extra] = String(value || '').split('.');
+  if (!body || !signature || extra.length) return null;
+  const expected = crypto.createHmac('sha256', key).update(body).digest('base64url');
+  if (!safeEqual(signature, expected)) return null;
+  try {
+    return JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+  } catch (_error) {
+    return null;
+  }
+}
+
 function installReadOnlyPolicy(context) {
   return context.route('**/*', async (route) => {
     const request = route.request();
@@ -87,7 +114,9 @@ async function archiveSession(context, id, archiveRoot, masterKey) {
 }
 
 export function buildApp({
-  internalToken,
+  captureToken,
+  controlToken,
+  viewerSigningKey,
   masterKey,
   now = Date.now,
   profileRoot = '/tmp/jd-cloud-profiles',
@@ -97,43 +126,67 @@ export function buildApp({
     chromiumSandbox: true
   })
 }) {
-  if (Buffer.byteLength(String(internalToken || '')) < 32) {
-    throw new Error('JD_BROWSER_INTERNAL_TOKEN_REQUIRED');
-  }
+  if (Buffer.byteLength(String(captureToken || '')) < 32) throw new Error('JD_BROWSER_CAPTURE_TOKEN_REQUIRED');
+  if (Buffer.byteLength(String(controlToken || '')) < 32) throw new Error('JD_BROWSER_CONTROL_TOKEN_REQUIRED');
+  if (Buffer.byteLength(String(viewerSigningKey || '')) < 32) throw new Error('JD_BROWSER_VIEWER_SIGNING_KEY_REQUIRED');
   const encryptionKey = decodeMasterKey(masterKey);
+  if (new Set([captureToken, controlToken, viewerSigningKey]).size !== 3) {
+    throw new Error('JD_BROWSER_CAPABILITY_TOKENS_MUST_BE_DISTINCT');
+  }
   const app = Fastify({ logger: false });
   const browserSessions = new Map();
-  const tickets = new Map();
-  const viewerSessions = new Map();
 
   async function closeSession(id, session) {
-    await archiveSession(session.context, id, archiveRoot, encryptionKey);
-    await session.context.close();
-    browserSessions.delete(id);
-    for (const [viewer, record] of viewerSessions) {
-      if (record.id === id) viewerSessions.delete(viewer);
+    if (!browserSessions.delete(id)) return;
+    try {
+      await archiveSession(session.context, id, archiveRoot, encryptionKey);
+    } finally {
+      await session.context.close();
     }
   }
 
   async function purgeExpired() {
-    for (const [ticket, record] of tickets) if (record.expiresAt <= now()) tickets.delete(ticket);
-    for (const [session, record] of viewerSessions) if (record.expiresAt <= now()) viewerSessions.delete(session);
     for (const [id, session] of browserSessions) {
       if (session.expiresAt <= now()) await closeSession(id, session);
     }
-  }
-
-  const expiryTimer = setInterval(() => void purgeExpired(), 30_000);
-  expiryTimer.unref();
-  app.addHook('onClose', async () => clearInterval(expiryTimer));
-
-  async function verifyInternal(request, reply) {
-    if (!safeEqual(request.headers['x-internal-token'], internalToken)) {
-      return reply.code(401).send({ error: 'UNAUTHORIZED' });
+    const ticketDirectory = path.join(archiveRoot, '.used-viewer-tickets');
+    try {
+      for (const name of await fs.readdir(ticketDirectory)) {
+        const filename = path.join(ticketDirectory, name);
+        if (Number(await fs.readFile(filename, 'utf8')) <= now()) await fs.unlink(filename);
+      }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
     }
   }
 
-  app.get('/internal/jd-browser/health', { preHandler: verifyInternal }, async () => {
+  async function consumeTicket(record) {
+    const directory = path.join(archiveRoot, '.used-viewer-tickets');
+    const filename = crypto.createHash('sha256').update(record.nonce).digest('hex');
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    try {
+      await fs.writeFile(path.join(directory, filename), String(record.expiresAt), { flag: 'wx', mode: 0o600 });
+      return true;
+    } catch (error) {
+      if (error?.code === 'EEXIST') return false;
+      throw error;
+    }
+  }
+
+  const expiryTimer = setInterval(() => void purgeExpired().catch((error) => app.log.error(error)), 30_000);
+  expiryTimer.unref();
+  app.addHook('onClose', async () => clearInterval(expiryTimer));
+
+  function verifyToken(expected) {
+    return async (request, reply) => {
+      if (safeEqual(request.headers['x-internal-token'], expected)) return;
+      return reply.code(401).send({ error: 'UNAUTHORIZED' });
+    };
+  }
+  const verifyControl = verifyToken(controlToken);
+  const verifyCapture = verifyToken(captureToken);
+
+  app.get('/internal/jd-browser/health', { preHandler: verifyControl }, async () => {
     await purgeExpired();
     return {
       ok: true,
@@ -144,37 +197,43 @@ export function buildApp({
     };
   });
 
-  app.post('/internal/jd-browser/tickets', { preHandler: verifyInternal }, async (request, reply) => {
+  app.post('/internal/jd-browser/tickets', { preHandler: verifyControl }, async (request, reply) => {
     const id = String(request.body?.session_id || '').trim();
-    if (!id || id.length > 240) return reply.code(400).send({ error: 'SESSION_ID_REQUIRED' });
+    const storeId = String(id.split(':')[2] || '').trim();
+    const requestedStoreId = request.body?.store_id == null ? storeId : String(request.body.store_id).trim();
+    if (!id || id.length > 240 || !storeId) return reply.code(400).send({ error: 'SESSION_ID_REQUIRED' });
+    if (requestedStoreId !== storeId) return reply.code(400).send({ error: 'STORE_SCOPE_MISMATCH' });
     await purgeExpired();
-    if (browserSessions.size && !browserSessions.has(id)) {
-      return reply.code(409).send({ error: 'SESSION_NOT_ACTIVE' });
-    }
-    const ticket = crypto.randomBytes(32).toString('hex');
-    tickets.set(ticket, { id, expiresAt: now() + TICKET_TTL_MS });
+    if (!browserSessions.has(id)) return reply.code(409).send({ error: 'SESSION_NOT_ACTIVE' });
+    const ticket = signedValue({ id, storeId, nonce: crypto.randomBytes(16).toString('hex'), expiresAt: now() + TICKET_TTL_MS }, viewerSigningKey);
     return { ticket, expires_in: TICKET_TTL_MS / 1000 };
   });
 
   app.get('/internal/jd-browser/novnc-auth', async (request, reply) => {
     await purgeExpired();
+    const storeId = storeFromRequest(request);
+    if (!storeId) return reply.code(401).send({ error: 'STORE_SCOPE_REQUIRED' });
     const existing = cookieValue(request.headers.cookie, 'jd_browser_session');
-    if (existing && viewerSessions.has(existing)) return reply.code(204).send();
+    const viewer = verifiedValue(existing, viewerSigningKey);
+    if (viewer && viewer.expiresAt > now() && viewer.storeId === storeId && browserSessions.has(viewer.id)) {
+      return reply.code(204).send();
+    }
 
     const ticket = ticketFromRequest(request);
-    const record = tickets.get(ticket);
-    if (!record || record.expiresAt <= now()) return reply.code(401).send({ error: 'TICKET_INVALID' });
-    tickets.delete(ticket);
-    const viewerSession = crypto.randomBytes(32).toString('hex');
-    viewerSessions.set(viewerSession, { id: record.id, expiresAt: now() + SESSION_TTL_MS });
+    const record = verifiedValue(ticket, viewerSigningKey);
+    if (!record || record.expiresAt <= now() || record.storeId !== storeId || !browserSessions.has(record.id)) {
+      return reply.code(401).send({ error: 'TICKET_INVALID' });
+    }
+    if (!await consumeTicket(record)) return reply.code(401).send({ error: 'TICKET_INVALID' });
+    const viewerSession = signedValue({ id: record.id, storeId, expiresAt: now() + SESSION_TTL_MS }, viewerSigningKey);
     reply.header(
       'set-cookie',
-      `jd_browser_session=${viewerSession}; Max-Age=${SESSION_TTL_MS / 1000}; Path=/jd-browser/novnc/; HttpOnly; Secure; SameSite=Strict`
+      `jd_browser_session=${viewerSession}; Max-Age=${SESSION_TTL_MS / 1000}; Path=/jd-browser/novnc/${encodeURIComponent(storeId)}/; HttpOnly; Secure; SameSite=Strict`
     );
     return reply.code(204).send();
   });
 
-  app.post('/internal/jd-browser/sessions', { preHandler: verifyInternal }, async (request, reply) => {
+  app.post('/internal/jd-browser/sessions', { preHandler: verifyControl }, async (request, reply) => {
     const payload = request.body || {};
     const id = sessionId(payload);
     await purgeExpired();
@@ -192,7 +251,7 @@ export function buildApp({
     return { session_id: id, expires_in: SESSION_TTL_MS / 1000 };
   });
 
-  app.post('/internal/jd-browser/capture', { preHandler: verifyInternal }, async (request, reply) => {
+  app.post('/internal/jd-browser/capture', { preHandler: verifyCapture }, async (request, reply) => {
     const payload = request.body || {};
     await purgeExpired();
     const session = browserSessions.get(sessionId(payload));
@@ -216,12 +275,12 @@ export function buildApp({
     };
   });
 
-  app.get('/internal/jd-browser/sessions/:sid', { preHandler: verifyInternal }, async (request) => {
+  app.get('/internal/jd-browser/sessions/:sid', { preHandler: verifyControl }, async (request) => {
     await purgeExpired();
     return { status: browserSessions.has(request.params.sid) ? 'ACTIVE' : 'REVOKED' };
   });
 
-  app.delete('/internal/jd-browser/sessions/:sid', { preHandler: verifyInternal }, async (request) => {
+  app.delete('/internal/jd-browser/sessions/:sid', { preHandler: verifyControl }, async (request) => {
     const session = browserSessions.get(request.params.sid);
     if (session) await closeSession(request.params.sid, session);
     return { ok: true };
@@ -232,7 +291,9 @@ export function buildApp({
 
 export async function startFromEnv() {
   const app = buildApp({
-    internalToken: process.env.JD_BROWSER_INTERNAL_TOKEN,
+    captureToken: process.env.JD_BROWSER_CAPTURE_TOKEN,
+    controlToken: process.env.JD_BROWSER_CONTROL_TOKEN,
+    viewerSigningKey: process.env.JD_BROWSER_VIEWER_SIGNING_KEY,
     masterKey: process.env.JD_SESSION_MASTER_KEY,
     profileRoot: process.env.JD_PROFILE_ROOT,
     archiveRoot: process.env.JD_SESSION_ARCHIVE_ROOT

@@ -31,12 +31,14 @@ def test_runtime_image_contains_complete_non_root_x11_novnc_stack():
 
 def test_runtime_compose_uses_only_minimal_secrets_and_is_not_publicly_exposed():
     compose = read("docker-compose.prod.yml")
+    collector = read("backend/services/jd_collectors.py")
     runtime = compose.split("\n  postgres:\n", 1)[0]
     backend = compose.split("\n  backend:\n", 1)[1].split("\n  worker:\n", 1)[0]
     worker = compose.split("\n  worker:\n", 1)[1].split("\n  nginx:\n", 1)[0]
 
     assert "env_file" not in runtime
-    assert "JD_BROWSER_INTERNAL_TOKEN" in runtime
+    for name in ("JD_BROWSER_CAPTURE_TOKEN", "JD_BROWSER_CONTROL_TOKEN", "JD_BROWSER_VIEWER_SIGNING_KEY"):
+        assert name in runtime
     assert "JD_SESSION_MASTER_KEY" in runtime
     assert 'shm_size: "1gb"' in runtime
     assert "/tmp/.X11-unix" in runtime
@@ -50,6 +52,14 @@ def test_runtime_compose_uses_only_minimal_secrets_and_is_not_publicly_exposed()
     assert '"6080"' in runtime
     assert 'JD_SESSION_MASTER_KEY: ""' in backend
     assert 'JD_SESSION_MASTER_KEY: ""' in worker
+    assert 'JD_BROWSER_CAPTURE_TOKEN: ""' in backend
+    assert 'JD_BROWSER_CONTROL_TOKEN: ""' in worker
+    assert 'JD_BROWSER_VIEWER_SIGNING_KEY: ""' in worker
+    assert "JD_BROWSER_CAPTURE_TOKEN" in worker
+    assert "JD_BROWSER_CONTROL_TOKEN" in backend
+    assert "JD_BROWSER_VIEWER_SIGNING_KEY" in backend
+    assert 'os.getenv("JD_BROWSER_CAPTURE_TOKEN"' in collector
+    assert "JD_BROWSER_CONTROL_TOKEN" not in collector
 
 
 def test_nginx_controls_novnc_with_one_time_ticket_auth_and_websocket_proxy():
@@ -58,6 +68,8 @@ def test_nginx_controls_novnc_with_one_time_ticket_auth_and_websocket_proxy():
     assert "location = /_jd_browser_ticket_auth" in nginx
     assert "internal;" in nginx
     assert "auth_request /_jd_browser_ticket_auth" in nginx
+    assert "proxy_set_header X-Original-URI $request_uri" in nginx
+    assert "rewrite ^/jd-browser/novnc/[^/]+/(.*)$ /$1 break" in nginx
     assert "proxy_pass http://jd-browser-runtime:6080" in nginx
     assert "proxy_set_header Upgrade $http_upgrade" in nginx
     assert "proxy_set_header Connection \"upgrade\"" in nginx
@@ -71,7 +83,8 @@ def test_ci_builds_and_runs_runtime_with_real_health_xvfb_chromium_and_novnc_che
     assert "codex/r297-cloud-integration" in workflow
     assert "services/jd-cloud-browser-runtime/Dockerfile" in workflow
     assert "npm test" in workflow
-    assert "JD_BROWSER_INTERNAL_TOKEN_REQUIRED" in workflow
+    for name in ("JD_BROWSER_CAPTURE_TOKEN_REQUIRED", "JD_BROWSER_CONTROL_TOKEN", "JD_BROWSER_VIEWER_SIGNING_KEY"):
+        assert name in workflow
     for evidence in (
         "RUNTIME_HEALTH_STATUS=200",
         "RUNTIME_XVFB_PID=",
@@ -90,3 +103,11 @@ def test_runtime_package_uses_runtime_playwright_dependency_only():
 
     assert package["dependencies"]["playwright"] == "1.62.1"
     assert "@playwright/test" not in package["dependencies"]
+
+
+def test_database_restore_contract_is_fail_closed():
+    deploy = read("ops/r297_workbench_deploy.sh")
+
+    assert "pg_restore --clean --if-exists" in deploy
+    assert "sha256sum --check" in deploy
+    assert "Alembic downgrade does not restore deleted business data" in deploy
