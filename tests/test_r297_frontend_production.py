@@ -22,6 +22,25 @@ assert.equal(merged.length, 2);
 assert.equal(merged[1].store_name, '天猫二店');
 assert.equal(merged[1].summary.pending_shipments, undefined);
 
+const calls = [];
+const loaded = await view.loadStoreDirectory(async endpoint => {
+  calls.push(endpoint);
+  return directory;
+});
+assert.deepEqual(calls, ['/api/stores']);
+assert.equal(loaded, directory);
+assert.deepEqual(view.mergeStores(directory, [{store_id: 999, store_name: '伪造店铺'}]).map(store => store.id), [1, 2]);
+let createRequest;
+await view.createStore(async (endpoint, options) => { createRequest = {endpoint, options}; }, {store_name: '真实店铺'});
+assert.equal(createRequest.endpoint, '/api/stores');
+assert.equal(createRequest.options.method, 'POST');
+assert.deepEqual(JSON.parse(createRequest.options.body), {store_name: '真实店铺'});
+const operations = [];
+await view.assignStore(async (endpoint, options) => operations.push({endpoint, options}), 7, '9');
+await view.toggleStore(async (endpoint, options) => operations.push({endpoint, options}), 7);
+assert.deepEqual(operations.map(item => item.endpoint), ['/api/stores/7/assign', '/api/stores/7/toggle']);
+assert.deepEqual(JSON.parse(operations[0].options.body), {manager_user_id: 9});
+
 assert.equal(view.filterStores(merged, {query: 'sub-02'}).length, 1);
 assert.equal(view.filterStores(merged, {query: '902'}).length, 1);
 assert.equal(view.filterStores(merged, {query: '天统一号'}).length, 1);
@@ -64,8 +83,10 @@ def test_store_and_dashboard_pages_share_real_store_directory_and_filters():
 
     assert "r297-store-view.js" in stores
     assert "r297-store-view.js" in dashboard
-    assert "api('/api/stores')" in stores
-    assert "api('/api/stores')" in dashboard
+    assert "R297StoreView.loadStoreDirectory(api)" in stores
+    assert "R297StoreView.loadStoreDirectory(api)" in dashboard
+    assert "/api/stores" not in stores
+    assert "/api/stores" not in dashboard
     assert 'id="storeSearch"' in dashboard
     assert 'id="platformFilter"' in dashboard
     assert 'id="enabledFilter"' in dashboard
