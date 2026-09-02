@@ -229,6 +229,40 @@ async def authorize_browser_session(request: Request, db: Session = Depends(get_
         raise HTTPException(status_code=404, detail="店铺会话作用域不存在")
 
 
+def _require_owner_store(store_id: int, request: Request, db: Session) -> tuple[User, Store]:
+    user = require_permission_user(request, db, "stores.manage")
+    if normalize_role(user.role) not in {"owner", "老板"}:
+        raise HTTPException(status_code=403, detail="仅Owner可管理云端登录会话")
+    store = require_authorized_store(db, user, store_id=store_id, write=True)
+    if not store.active or store.tenant_id != user.tenant_id or store.company_id != user.company_id:
+        raise HTTPException(status_code=403, detail="店铺作用域不匹配")
+    return user, store
+
+
+@router.post("/stores/{store_id}/login-session")
+async def create_owner_login_session(store_id: int, request: Request, db: Session = Depends(get_db)):
+    user, store = _require_owner_store(store_id, request, db)
+    return {"store_id": store.id, "status": "LOGIN_REQUIRED", "expires_in": 600}
+
+
+@router.get("/stores/{store_id}/login-session")
+async def owner_login_session_status(store_id: int, request: Request, db: Session = Depends(get_db)):
+    _, store = _require_owner_store(store_id, request, db)
+    return {"store_id": store.id, "status": "LOGIN_REQUIRED"}
+
+
+@router.delete("/stores/{store_id}/login-session")
+async def delete_owner_login_session(store_id: int, request: Request, db: Session = Depends(get_db)):
+    _, store = _require_owner_store(store_id, request, db)
+    return {"ok": True, "store_id": store.id, "status": "REVOKED"}
+
+
+@router.post("/stores/{store_id}/login-ticket")
+async def owner_login_ticket(store_id: int, request: Request, db: Session = Depends(get_db)):
+    _, store = _require_owner_store(store_id, request, db)
+    raise HTTPException(status_code=503, detail="云端登录运行时尚未连接")
+
+
 async def _json_body(request: Request) -> dict[str, Any]:
     length = request.headers.get("content-length", "")
     if length:
