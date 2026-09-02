@@ -172,9 +172,11 @@ jobs:
             echo "Runtime unexpectedly started without an internal token" >&2
             exit 1
           fi
-          grep -F "JD_BROWSER_INTERNAL_TOKEN_REQUIRED" /tmp/runtime-missing-token.log >/dev/null
+          grep -F "JD_BROWSER_CAPTURE_TOKEN_REQUIRED" /tmp/runtime-missing-token.log >/dev/null
 
-          internal_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          capture_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          control_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          viewer_signing_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           master_key="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
           docker run --detach \
             --name "$container" \
@@ -189,7 +191,9 @@ jobs:
             --tmpfs /data/jd-session-archives:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700 \
             --publish 127.0.0.1::8787 \
             --publish 127.0.0.1::6080 \
-            --env "JD_BROWSER_INTERNAL_TOKEN=$internal_token" \
+            --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" \
+            --env "JD_BROWSER_CONTROL_TOKEN=$control_token" \
+            --env "JD_BROWSER_VIEWER_SIGNING_KEY=$viewer_signing_key" \
             --env "JD_SESSION_MASTER_KEY=$master_key" \
             --env PORT=8787 \
             --env DISPLAY=:99 \
@@ -202,7 +206,7 @@ jobs:
           status=000
           for _ in $(seq 1 60); do
             status="$(curl --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
-              --header "x-internal-token: $internal_token" \
+              --header "x-internal-token: $control_token" \
               "http://127.0.0.1:$runtime_port/internal/jd-browser/health" || true)"
             test "$status" = 200 && break
             sleep 1
@@ -212,7 +216,7 @@ jobs:
 
           session_status="$(curl --silent --show-error --output /tmp/runtime-session.json --write-out '%{http_code}' \
             --header "content-type: application/json" \
-            --header "x-internal-token: $internal_token" \
+            --header "x-internal-token: $control_token" \
             --data '{"tenant_id":1,"company_id":1,"store_id":1,"platform":"jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
           if test "$session_status" != 200; then
@@ -256,7 +260,7 @@ jobs:
           for forbidden in DATABASE_URL REDIS_URL POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD JWT_SECRET BOSS_INITIAL_PASSWORD; do
             ! docker exec "$container" env | grep -q "^${forbidden}="
           done
-          echo "RUNTIME_ENV_NAMES=DISPLAY,HOME,JD_BROWSER_INTERNAL_TOKEN,JD_PROFILE_ROOT,JD_SESSION_ARCHIVE_ROOT,JD_SESSION_MASTER_KEY,PORT"
+          echo "RUNTIME_ENV_NAMES=DISPLAY,HOME,JD_BROWSER_CAPTURE_TOKEN,JD_BROWSER_CONTROL_TOKEN,JD_BROWSER_VIEWER_SIGNING_KEY,JD_PROFILE_ROOT,JD_SESSION_ARCHIVE_ROOT,JD_SESSION_MASTER_KEY,PORT"
 
           for _ in $(seq 1 30); do
             curl --silent --fail "http://127.0.0.1:$novnc_port/vnc.html" >/dev/null && break
@@ -287,7 +291,7 @@ jobs:
           runtime_port="$(docker port "$container" 8787/tcp | awk -F: 'END {print $NF}')"
           for _ in $(seq 1 60); do
             status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-              --header "x-internal-token: $internal_token" \
+              --header "x-internal-token: $control_token" \
               "http://127.0.0.1:$runtime_port/internal/jd-browser/health" || true)"
             test "$status" = 200 && break
             sleep 1
@@ -297,6 +301,7 @@ jobs:
 
       - name: Run tests
         run: |
+          bash -n ops/r297_workbench_deploy.sh
           python -m pytest -v tests/ --junitxml=/tmp/pytest-results.xml
           python - <<'PY'
           from pathlib import Path
@@ -315,12 +320,12 @@ jobs:
               for name in ("tests", "failures", "errors", "skipped")
           }
           assert totals == {
-              "tests": 1792,
+              "tests": 1793,
               "failures": 0,
               "errors": 0,
               "skipped": 0,
           }, totals
-          print("CI_PYTEST_RESULT=1792_PASS/0_SKIP/0_FAIL/0_ERROR")
+          print("CI_PYTEST_RESULT=1793_PASS/0_SKIP/0_FAIL/0_ERROR")
           PY
 
       - name: Verify CI Redis queue and lock residue
@@ -355,7 +360,9 @@ jobs:
           git ls-files --error-unmatch -- "$PRODUCTION_ENV_FILE" >/dev/null
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$RELEASE_SOURCE_SHA")"
           export RELEASE_COMMIT="$RELEASE_SOURCE_SHA"
-          export JD_BROWSER_INTERNAL_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export JD_BROWSER_CAPTURE_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export JD_BROWSER_CONTROL_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export JD_BROWSER_VIEWER_SIGNING_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           export JD_SESSION_MASTER_KEY="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
           test -n "$SOURCE_DATE_EPOCH"
           for key in POSTGRES_DB POSTGRES_ADMIN_USER POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD TLS_CERT_PATH TLS_KEY_PATH; do

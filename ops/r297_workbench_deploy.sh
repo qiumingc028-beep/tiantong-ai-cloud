@@ -17,6 +17,8 @@ STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 BACKUP_DIR=$BACKUP_ROOT/${STAMP}-${EXPECTED_COMMIT:0:12}
 PUBLIC_HEALTH_URL=https://internal.tiantongai.com/api/health
 ROLLBACK_ACTIVE=0
+CUTOVER_ACTIVE=0
+QUIESCED=0
 export PRODUCTION_ENV_FILE=$ENV_FILE
 
 compose() {
@@ -27,12 +29,40 @@ compose() {
     "$@"
 }
 
+database_inventory() {
+  compose exec --no-TTY postgres sh -eu -c \
+    'exec psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --tuples-only --no-align' <<'SQL'
+SELECT 'REVISION|' || version_num FROM alembic_version
+UNION ALL
+SELECT schemaname || '.' || tablename || '|' ||
+  ((xpath('/row/count/text()', query_to_xml(
+    format('SELECT count(*) AS count FROM %I.%I', schemaname, tablename), false, true, ''
+  )))[1])::text
+FROM pg_tables
+WHERE schemaname = 'public'
+ORDER BY 1;
+SQL
+}
+
 rollback() {
   exit_code=$?
   trap - ERR
   if [[ $ROLLBACK_ACTIVE -eq 1 \
     && -s $BACKUP_DIR/images.before.tsv \
     && -s $BACKUP_DIR/compose.before.resolved.yml ]]; then
+    (cd "$BACKUP_DIR" && sha256sum --check SHA256SUMS)
+    compose stop backend worker nginx jd-browser-runtime
+    compose exec --no-TTY postgres sh -eu -c \
+      'psql --username="$POSTGRES_USER" --dbname=postgres --command="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '\''$POSTGRES_DB'\'' AND pid <> pg_backend_pid()" >/dev/null'
+    compose exec --no-TTY postgres sh -eu -c \
+      'dropdb --force --if-exists --username="$POSTGRES_USER" "$POSTGRES_DB" && createdb --username="$POSTGRES_USER" "$POSTGRES_DB"'
+    compose exec --no-TTY postgres sh -eu -c \
+      'exec pg_restore --clean --if-exists --no-owner --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
+      < "$BACKUP_DIR/database.before.dump"
+    database_inventory > "$BACKUP_DIR/database.after-restore.inventory"
+    cmp "$BACKUP_DIR/database.before.inventory" "$BACKUP_DIR/database.after-restore.inventory"
+    echo "R297_DATABASE_RESTORED_FROM_VERIFIED_BACKUP" >&2
+    echo "Alembic downgrade does not restore deleted business data" >&2
     while IFS=$'\t' read -r _service image_ref image_id; do
       [[ -n $image_ref && -n $image_id ]] || continue
       docker image tag "$image_id" "$image_ref"
@@ -40,7 +70,7 @@ rollback() {
     docker compose \
       --project-name "$PROJECT_NAME" \
       --file "$BACKUP_DIR/compose.before.resolved.yml" \
-      up --detach --no-build backend worker nginx
+      up --detach --no-build backend worker jd-browser-runtime nginx
     rollback_healthy=0
     for _rollback_attempt in $(seq 1 24); do
       if curl --fail --silent --show-error --max-time 10 "$PUBLIC_HEALTH_URL" >/dev/null; then
@@ -54,6 +84,26 @@ rollback() {
     else
       echo "R297_AUTOMATIC_IMAGE_CONFIG_ROLLBACK_HEALTHCHECK_FAILED" >&2
     fi
+  elif [[ $CUTOVER_ACTIVE -eq 1 ]]; then
+    while IFS=$'\t' read -r _service image_ref image_id; do
+      [[ -n $image_ref && -n $image_id ]] || continue
+      docker image tag "$image_id" "$image_ref"
+    done < "$BACKUP_DIR/images.before.tsv"
+    docker compose \
+      --project-name "$PROJECT_NAME" \
+      --file "$BACKUP_DIR/compose.before.resolved.yml" \
+      up --detach --no-build backend worker jd-browser-runtime nginx
+    echo "R297_POST_MIGRATION_IMAGE_CONFIG_ROLLBACK_COMPLETED_DATABASE_PRESERVED" >&2
+  elif [[ $QUIESCED -eq 1 ]]; then
+    while IFS=$'\t' read -r _service image_ref image_id; do
+      [[ -n $image_ref && -n $image_id ]] || continue
+      docker image tag "$image_id" "$image_ref"
+    done < "$BACKUP_DIR/images.before.tsv"
+    docker compose \
+      --project-name "$PROJECT_NAME" \
+      --file "$BACKUP_DIR/compose.before.resolved.yml" \
+      up --detach --no-build backend worker jd-browser-runtime nginx
+    echo "R297_PRE_MIGRATION_FAILURE_SERVICES_RESTARTED" >&2
   fi
   exit "$exit_code"
 }
@@ -92,35 +142,19 @@ docker compose \
 chmod 0600 "$BACKUP_DIR/compose.before.resolved.yml"
 
 : > "$BACKUP_DIR/images.before.tsv"
-for service in backend worker nginx; do
+for service in backend worker jd-browser-runtime nginx; do
   container_id=$(compose ps --quiet "$service")
   image_ref=$(docker inspect --format '{{.Config.Image}}' "$container_id")
   image_id=$(docker inspect --format '{{.Image}}' "$container_id")
   printf '%s\t%s\t%s\n' "$service" "$image_ref" "$image_id" >> "$BACKUP_DIR/images.before.tsv"
 done
 
-compose exec --no-TTY postgres sh -eu -c \
-  'exec pg_dump --format=custom --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
-  > "$BACKUP_DIR/database.before.dump"
-compose exec --no-TTY postgres pg_restore --list \
-  < "$BACKUP_DIR/database.before.dump" \
-  > /dev/null
-
-sha256sum \
-  "$BACKUP_DIR/candidate-compose.prod.yml" \
-  "$BACKUP_DIR/compose.before.resolved.yml" \
-  "$BACKUP_DIR/production.env" \
-  "$BACKUP_DIR/images.before.tsv" \
-  "$BACKUP_DIR/database.before.dump" \
-  > "$BACKUP_DIR/SHA256SUMS"
-
-ROLLBACK_ACTIVE=1
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 export RELEASE_COMMIT=$EXPECTED_COMMIT
 export BUILD_TIME=$STAMP
-compose build --pull=false backend worker nginx
+compose build --pull=false backend worker jd-browser-runtime nginx
 
-for service in backend worker nginx; do
+for service in backend worker jd-browser-runtime nginx; do
   built_image=$(compose images --quiet "$service" | head -n 1)
   [[ -n $built_image ]] || { echo "R297_BUILT_IMAGE_MISSING" >&2; false; }
   built_arch=$(docker image inspect --format '{{.Architecture}}' "$built_image")
@@ -128,6 +162,26 @@ for service in backend worker nginx; do
   built_commit=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$built_image")
   [[ $built_commit == "$EXPECTED_COMMIT" ]] || { echo "R297_IMAGE_COMMIT_LABEL_MISMATCH" >&2; false; }
 done
+
+# Quiesce every database-writing application before taking the rollback snapshot.
+compose stop nginx worker backend
+QUIESCED=1
+compose exec --no-TTY postgres sh -eu -c \
+  'exec pg_dump --format=custom --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
+  > "$BACKUP_DIR/database.before.dump"
+compose exec --no-TTY postgres pg_restore --list \
+  < "$BACKUP_DIR/database.before.dump" \
+  > /dev/null
+database_inventory > "$BACKUP_DIR/database.before.inventory"
+
+sha256sum \
+  "$BACKUP_DIR/candidate-compose.prod.yml" \
+  "$BACKUP_DIR/compose.before.resolved.yml" \
+  "$BACKUP_DIR/production.env" \
+  "$BACKUP_DIR/images.before.tsv" \
+  "$BACKUP_DIR/database.before.dump" \
+  "$BACKUP_DIR/database.before.inventory" \
+  > "$BACKUP_DIR/SHA256SUMS"
 
 migration_image=$(compose images --quiet backend | head -n 1)
 postgres_container_id=$(compose ps --quiet postgres)
@@ -137,6 +191,7 @@ postgres_network=$(docker inspect \
   | head -n 1)
 [[ -n $migration_image ]] || { echo "R297_MIGRATION_IMAGE_MISSING" >&2; false; }
 [[ -n $postgres_network ]] || { echo "R297_POSTGRES_NETWORK_MISSING" >&2; false; }
+ROLLBACK_ACTIVE=1
 docker run --rm --interactive \
   --network "$postgres_network" \
   --env-file "$ENV_FILE" \
@@ -162,7 +217,9 @@ os.environ["DATABASE_URL"] = URL.create(
 ).render_as_string(hide_password=False)
 command.upgrade(Config("/app/alembic.ini"), "head")
 PY
-compose up --detach --no-build backend worker nginx
+ROLLBACK_ACTIVE=0
+CUTOVER_ACTIVE=1
+compose up --detach --no-build backend worker jd-browser-runtime nginx
 
 healthy=0
 for _attempt in $(seq 1 36); do
@@ -215,7 +272,8 @@ if user.get("role_code") != "owner":
     raise SystemExit("R297_BOSS_LOGIN_IDENTITY_MISMATCH")
 PY
 
-ROLLBACK_ACTIVE=0
+CUTOVER_ACTIVE=0
+QUIESCED=0
 trap - ERR
 printf '%s\n' \
   'CLOUD_DEPLOYMENT=PASS' \
