@@ -559,6 +559,13 @@ class JdWorkbenchSyncPolicy(Base):
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    active_task_id: Mapped[str | None] = mapped_column(String(36), unique=True)
+    queue_state: Mapped[str | None] = mapped_column(String(16))
+    lease_worker_id: Mapped[str | None] = mapped_column(String(120))
+    lease_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    visibility_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

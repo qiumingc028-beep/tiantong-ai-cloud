@@ -758,6 +758,31 @@ async def list_device_stores(request: Request, db: Session = Depends(get_db)):
     return result
 
 
+def resume_store_after_human_action(
+    db: Session,
+    device: JdWorkbenchDevice,
+    store: Store,
+    row: JdWorkbenchStoreStatus,
+    now: datetime,
+) -> None:
+    row.reason_code = None
+    row.retry_count = 0
+    row.last_error_at = None
+    row.next_sync_at = now
+    policy = db.query(JdWorkbenchSyncPolicy).filter(
+        JdWorkbenchSyncPolicy.tenant_id == device.tenant_id,
+        JdWorkbenchSyncPolicy.company_id == device.company_id,
+        JdWorkbenchSyncPolicy.store_id == store.id,
+    ).with_for_update().one_or_none()
+    if policy:
+        policy.active_task_id = None
+        policy.queue_state = None
+        policy.lease_worker_id = None
+        policy.lease_started_at = None
+        policy.lease_heartbeat_at = None
+        policy.visibility_deadline = None
+
+
 @router.post("/heartbeat")
 async def heartbeat(request: Request, db: Session = Depends(get_db)):
     device, user = await _device_context(request, db)
@@ -794,6 +819,7 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
             raise _generic_bad_request()
         store = require_authorized_store(db, user, store_id=store_id, write=True)
         row = _status_row(db, device.device_id, store.id)
+        prior_status = row.status
         row.status = status
         row.reason_code = reason_code
         if last_attempt_at is not None:
@@ -804,6 +830,8 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
             row.last_error_at = now
         elif status in {"IDLE", "ONLINE", "SYNCING"}:
             row.last_error_at = None
+        if prior_status in {"ERROR", "HUMAN_ACTION_REQUIRED"} and status in {"IDLE", "ONLINE"}:
+            resume_store_after_human_action(db, device, store, row, now)
         row.updated_at = now
     device.client_version = client_version
     device.status = status

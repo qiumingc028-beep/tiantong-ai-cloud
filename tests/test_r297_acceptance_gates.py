@@ -21,7 +21,7 @@ from backend.models import Store, User, UserStoreMembership
 
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "desktop" / "jd-workbench"
-FINAL_REVISION = "0049_r297_jd_multistore_autosync"
+FINAL_REVISION = "0050_r297_reliable_sync_queue"
 
 
 def read(path: Path) -> str:

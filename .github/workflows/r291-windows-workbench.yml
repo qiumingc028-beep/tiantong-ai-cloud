@@ -5,12 +5,14 @@ on:
   pull_request:
     branches:
       - main
+      - codex/r297-cloud-integration
       - codex/r297-jd-multistore-autosync
     paths:
       - desktop/jd-workbench/**
       - tests/test_r291_jd_workbench_client_static.py
       - tests/test_r297_jd_workbench_auto_sync_static.py
       - tests/test_r297_windows_release_gate.py
+      - ops/r297_windows_acceptance.ps1
       - .github/workflows/r291-windows-workbench.yml
   push:
     branches:
@@ -22,6 +24,7 @@ on:
       - tests/test_r291_jd_workbench_client_static.py
       - tests/test_r297_jd_workbench_auto_sync_static.py
       - tests/test_r297_windows_release_gate.py
+      - ops/r297_windows_acceptance.ps1
       - .github/workflows/r291-windows-workbench.yml
 
 permissions:
@@ -109,6 +112,18 @@ jobs:
             [System.Text.UTF8Encoding]::new($false)
           )
 
+      - name: Generate real Windows process acceptance evidence
+        shell: pwsh
+        working-directory: .
+        env:
+          R297_WINDOWS_CANARY_PAIRING_CODE: ${{ secrets.R297_WINDOWS_CANARY_PAIRING_CODE }}
+          R297_WINDOWS_CANARY_HEALTH_URL: ${{ vars.R297_WINDOWS_CANARY_HEALTH_URL }}
+          R297_WINDOWS_CANARY_SCHEDULER_URL: ${{ vars.R297_WINDOWS_CANARY_SCHEDULER_URL }}
+        run: |
+          ./ops/r297_windows_acceptance.ps1 `
+            -DistDirectory desktop/jd-workbench/dist `
+            -OutputDirectory desktop/jd-workbench/dist/acceptance
+
       - name: Upload internal acceptance artifact
         uses: actions/upload-artifact@v7
         with:
@@ -118,5 +133,7 @@ jobs:
             desktop/jd-workbench/dist/*.zip
             desktop/jd-workbench/dist/SHA256SUMS.txt
             desktop/jd-workbench/dist/chromium-info.json
+            desktop/jd-workbench/dist/acceptance/R297_WINDOWS_ACCEPTANCE_EVIDENCE.json
+            desktop/jd-workbench/dist/acceptance/R297_WINDOWS_ACCEPTANCE_EVIDENCE.json.sha256
           if-no-files-found: error
           retention-days: 14
