@@ -2,6 +2,25 @@
 set -Eeuo pipefail
 umask 077
 
+fail_if_requested() {
+  if [[ ${R297_FAILURE_INJECTION:-} == "$1" ]]; then
+    echo "R297_INJECTED_FAILURE_AT_$1" >&2
+    return 97
+  fi
+}
+
+if [[ ${R297_SELF_TEST_FAILURE_INJECTION:-0} == 1 ]]; then
+  for stage in AFTER_ISOLATED_RESTORE AFTER_MIGRATION AFTER_HEALTH AFTER_LOGIN; do
+    R297_FAILURE_INJECTION=$stage
+    if fail_if_requested "$stage"; then
+      echo "R297_FAILURE_INJECTION_SELF_TEST_DID_NOT_FAIL=$stage" >&2
+      exit 1
+    fi
+  done
+  echo "R297_FAILURE_INJECTION_SELF_TEST=PASS"
+  exit 0
+fi
+
 if [[ $# -ne 2 ]]; then
   echo "usage: r297_workbench_deploy.sh DEPLOYMENT_DIR EXPECTED_COMMIT" >&2
   exit 64
@@ -17,8 +36,8 @@ STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 BACKUP_DIR=$BACKUP_ROOT/${STAMP}-${EXPECTED_COMMIT:0:12}
 PUBLIC_HEALTH_URL=https://internal.tiantongai.com/api/health
 ROLLBACK_ACTIVE=0
-CUTOVER_ACTIVE=0
 QUIESCED=0
+RESTORE_TEST_DB=""
 export PRODUCTION_ENV_FILE=$ENV_FILE
 
 compose() {
@@ -30,8 +49,10 @@ compose() {
 }
 
 database_inventory() {
+  local database_name=${1:-}
+  [[ -n $database_name ]] || database_name=$(compose exec --no-TTY postgres printenv POSTGRES_DB)
   compose exec --no-TTY postgres sh -eu -c \
-    'exec psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --tuples-only --no-align' <<'SQL'
+    'exec psql --set=ON_ERROR_STOP=1 --username="$POSTGRES_USER" --dbname="$1" --tuples-only --no-align' sh "$database_name" <<'SQL'
 SELECT 'REVISION|' || version_num FROM alembic_version
 UNION ALL
 SELECT schemaname || '.' || tablename || '|' ||
@@ -44,9 +65,26 @@ ORDER BY 1;
 SQL
 }
 
+database_constraints() {
+  local database_name=$1
+  compose exec --no-TTY postgres sh -eu -c \
+    'exec psql --set=ON_ERROR_STOP=1 --username="$POSTGRES_USER" --dbname="$1" --tuples-only --no-align' sh "$database_name" <<'SQL'
+SELECT n.nspname || '.' || c.relname || '|' || con.conname || '|' ||
+       con.contype::text || '|' || pg_get_constraintdef(con.oid)
+FROM pg_constraint con
+JOIN pg_class c ON c.oid = con.conrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+ORDER BY 1;
+SQL
+}
+
 rollback() {
   exit_code=$?
   trap - ERR
+  if [[ -n $RESTORE_TEST_DB ]]; then
+    compose exec --no-TTY postgres dropdb --force --if-exists --username="$(compose exec --no-TTY postgres printenv POSTGRES_USER)" "$RESTORE_TEST_DB" >/dev/null 2>&1 || true
+  fi
   if [[ $ROLLBACK_ACTIVE -eq 1 \
     && -s $BACKUP_DIR/images.before.tsv \
     && -s $BACKUP_DIR/compose.before.resolved.yml ]]; then
@@ -60,7 +98,9 @@ rollback() {
       'exec pg_restore --clean --if-exists --no-owner --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' \
       < "$BACKUP_DIR/database.before.dump"
     database_inventory > "$BACKUP_DIR/database.after-restore.inventory"
+    database_constraints "$(compose exec --no-TTY postgres printenv POSTGRES_DB)" > "$BACKUP_DIR/database.after-restore.constraints"
     cmp "$BACKUP_DIR/database.before.inventory" "$BACKUP_DIR/database.after-restore.inventory"
+    cmp "$BACKUP_DIR/database.before.constraints" "$BACKUP_DIR/database.after-restore.constraints"
     echo "R297_DATABASE_RESTORED_FROM_VERIFIED_BACKUP" >&2
     echo "Alembic downgrade does not restore deleted business data" >&2
     while IFS=$'\t' read -r _service image_ref image_id; do
@@ -84,16 +124,6 @@ rollback() {
     else
       echo "R297_AUTOMATIC_IMAGE_CONFIG_ROLLBACK_HEALTHCHECK_FAILED" >&2
     fi
-  elif [[ $CUTOVER_ACTIVE -eq 1 ]]; then
-    while IFS=$'\t' read -r _service image_ref image_id; do
-      [[ -n $image_ref && -n $image_id ]] || continue
-      docker image tag "$image_id" "$image_ref"
-    done < "$BACKUP_DIR/images.before.tsv"
-    docker compose \
-      --project-name "$PROJECT_NAME" \
-      --file "$BACKUP_DIR/compose.before.resolved.yml" \
-      up --detach --no-build backend worker jd-browser-runtime nginx
-    echo "R297_POST_MIGRATION_IMAGE_CONFIG_ROLLBACK_COMPLETED_DATABASE_PRESERVED" >&2
   elif [[ $QUIESCED -eq 1 ]]; then
     while IFS=$'\t' read -r _service image_ref image_id; do
       [[ -n $image_ref && -n $image_id ]] || continue
@@ -173,6 +203,22 @@ compose exec --no-TTY postgres pg_restore --list \
   < "$BACKUP_DIR/database.before.dump" \
   > /dev/null
 database_inventory > "$BACKUP_DIR/database.before.inventory"
+database_constraints "$(compose exec --no-TTY postgres printenv POSTGRES_DB)" > "$BACKUP_DIR/database.before.constraints"
+
+RESTORE_TEST_DB="r297_restore_${EXPECTED_COMMIT:0:12}_${STAMP//[^0-9]/}"
+postgres_user=$(compose exec --no-TTY postgres printenv POSTGRES_USER)
+compose exec --no-TTY postgres createdb --username="$postgres_user" "$RESTORE_TEST_DB"
+compose exec --no-TTY postgres pg_restore --exit-on-error --no-owner \
+  --username="$postgres_user" --dbname="$RESTORE_TEST_DB" \
+  < "$BACKUP_DIR/database.before.dump" \
+  > "$BACKUP_DIR/database.restore-test.log" 2>&1
+database_inventory "$RESTORE_TEST_DB" > "$BACKUP_DIR/database.restore-test.inventory"
+database_constraints "$RESTORE_TEST_DB" > "$BACKUP_DIR/database.restore-test.constraints"
+cmp "$BACKUP_DIR/database.before.inventory" "$BACKUP_DIR/database.restore-test.inventory"
+cmp "$BACKUP_DIR/database.before.constraints" "$BACKUP_DIR/database.restore-test.constraints"
+compose exec --no-TTY postgres dropdb --force --username="$postgres_user" "$RESTORE_TEST_DB"
+RESTORE_TEST_DB=""
+fail_if_requested AFTER_ISOLATED_RESTORE
 
 sha256sum \
   "$BACKUP_DIR/candidate-compose.prod.yml" \
@@ -181,6 +227,10 @@ sha256sum \
   "$BACKUP_DIR/images.before.tsv" \
   "$BACKUP_DIR/database.before.dump" \
   "$BACKUP_DIR/database.before.inventory" \
+  "$BACKUP_DIR/database.before.constraints" \
+  "$BACKUP_DIR/database.restore-test.log" \
+  "$BACKUP_DIR/database.restore-test.inventory" \
+  "$BACKUP_DIR/database.restore-test.constraints" \
   > "$BACKUP_DIR/SHA256SUMS"
 
 migration_image=$(compose images --quiet backend | head -n 1)
@@ -217,8 +267,7 @@ os.environ["DATABASE_URL"] = URL.create(
 ).render_as_string(hide_password=False)
 command.upgrade(Config("/app/alembic.ini"), "head")
 PY
-ROLLBACK_ACTIVE=0
-CUTOVER_ACTIVE=1
+fail_if_requested AFTER_MIGRATION
 compose up --detach --no-build backend worker jd-browser-runtime nginx
 
 healthy=0
@@ -230,11 +279,15 @@ import os
 
 payload = json.loads(os.environ["HEALTH_JSON"])
 release = payload.get("release") or {}
-assert payload.get("status") == "running"
-assert payload.get("database") is True
-assert payload.get("redis") is True
-assert payload.get("worker") is True
-assert release.get("commit") == os.environ["EXPECTED_COMMIT"]
+checks = (
+    payload.get("status") == "running",
+    payload.get("database") is True,
+    payload.get("redis") is True,
+    payload.get("worker") is True,
+    release.get("commit") == os.environ["EXPECTED_COMMIT"],
+)
+if not all(checks):
+    raise SystemExit("R297_HEALTH_PAYLOAD_MISMATCH")
 PY
     then
       healthy=1
@@ -244,6 +297,7 @@ PY
   sleep 5
 done
 [[ $healthy -eq 1 ]] || { echo "R297_PUBLIC_HEALTHCHECK_FAILED" >&2; false; }
+fail_if_requested AFTER_HEALTH
 
 compose exec --no-TTY backend python - <<'PY'
 import http.cookiejar
@@ -272,7 +326,8 @@ if user.get("role_code") != "owner":
     raise SystemExit("R297_BOSS_LOGIN_IDENTITY_MISMATCH")
 PY
 
-CUTOVER_ACTIVE=0
+fail_if_requested AFTER_LOGIN
+ROLLBACK_ACTIVE=0
 QUIESCED=0
 trap - ERR
 printf '%s\n' \

@@ -40,10 +40,14 @@ curl --fail --silent --show-error --max-time 20 \
 import json
 import sys
 payload = json.load(sys.stdin)
-assert payload.get("name") == "CI"
-assert payload.get("head_sha") == sys.argv[1]
-assert payload.get("status") == "completed"
-assert payload.get("conclusion") == "success"
+if payload.get("name") != "CI":
+    raise SystemExit("R297_CI_NAME_MISMATCH")
+if payload.get("head_sha") != sys.argv[1]:
+    raise SystemExit("R297_CI_HEAD_MISMATCH")
+if payload.get("status") != "completed":
+    raise SystemExit("R297_CI_NOT_COMPLETED")
+if payload.get("conclusion") != "success":
+    raise SystemExit("R297_CI_NOT_SUCCESSFUL")
 ' "$EXPECTED_COMMIT"
 
 actual_commit=$(git -C "$DEPLOYMENT_DIR" rev-parse HEAD)
@@ -72,7 +76,7 @@ docker compose \
   --file "$COMPOSE_FILE" \
   config --quiet
 
-for service in postgres redis backend worker nginx; do
+for service in postgres redis backend worker jd-browser-runtime nginx; do
   container_id=$(docker compose \
     --project-name "$PROJECT_NAME" \
     --env-file "$ENV_FILE" \
