@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from backend import queue
 
@@ -162,6 +163,36 @@ class Pipeline:
 
     def execute(self):
         return [getattr(self.client, name)(*args, **kwargs) for name, args, kwargs in self.operations]
+
+
+def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypatch):
+    from backend.services import jd_collectors
+
+    captured = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, *_args):
+            return json.dumps({
+                "status": "OK",
+                "data": {"store_id": 3, "source": "jd_cloud_playwright", "metrics": {"gmv": "1"}},
+            }).encode()
+
+    monkeypatch.setenv("JD_BROWSER_CAPTURE_TOKEN", "c" * 32)
+    monkeypatch.setenv("JD_BROWSER_CAPTURE_BASE_URL", "http://127.0.0.1:18787/internal/jd-browser/")
+    monkeypatch.setattr(jd_collectors, "urlopen", lambda request, timeout: captured.append(request.full_url) or Response())
+    store = SimpleNamespace(id=3, tenant_id=1, company_id=2, platform="jd")
+    account = SimpleNamespace(store=store)
+
+    result = jd_collectors.JdSmartCollector()._capture(account, "metrics", store)
+
+    assert captured == ["http://127.0.0.1:18787/internal/jd-browser/capture"]
+    assert result["store_id"] == 3
 
 
 def test_claim_moves_ready_task_to_processing_and_ack_removes_it(monkeypatch):

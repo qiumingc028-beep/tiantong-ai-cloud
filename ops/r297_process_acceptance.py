@@ -351,7 +351,15 @@ def main() -> int:
         chromium_pid = int(run("docker", "exec", runtime_name, "pgrep", "-x", "chrome").splitlines()[0])
 
         commands.append("start two independent worker processes")
-        worker_env = {**environment, "SERVICE_ROLE": "worker", "JWT_SECRET": "", "BOSS_INITIAL_PASSWORD": "", "JD_BROWSER_CONTROL_TOKEN": "", "JD_BROWSER_CAPTURE_TOKEN": capture_token}
+        worker_env = {
+            **environment,
+            "SERVICE_ROLE": "worker",
+            "JWT_SECRET": "",
+            "BOSS_INITIAL_PASSWORD": "",
+            "JD_BROWSER_CONTROL_TOKEN": "",
+            "JD_BROWSER_CAPTURE_TOKEN": capture_token,
+            "JD_BROWSER_CAPTURE_BASE_URL": f"http://127.0.0.1:{runtime_port}/internal/jd-browser",
+        }
         workers = [start_python("backend.worker", worker_env, worker_logs[index]) for index in range(2)]
         processes.extend(workers)
         if workers[0].pid == workers[1].pid:
