@@ -254,13 +254,13 @@ def _claim_jd_workbench_task(task: dict, worker_id: str, now: datetime) -> str:
         db.close()
 
 
-def _clear_completed_jd_workbench_policy(task: dict, now: datetime) -> None:
+def _clear_completed_jd_workbench_policy(task: dict, now: datetime) -> bool:
     """Converge a cloud policy after PostgreSQL proves the attempt completed."""
     if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
-        return
+        return False
     payload = task["payload"]
     if task.get("db_claim_generation") is None:
-        return
+        return False
     db = SessionLocal()
     try:
         policy = db.query(JdWorkbenchSyncPolicy).filter(
@@ -271,7 +271,7 @@ def _clear_completed_jd_workbench_policy(task: dict, now: datetime) -> None:
         ).with_for_update().one_or_none()
         if policy is None or policy.active_task_id != task["task_id"]:
             db.rollback()
-            return
+            return False
         statuses = _status_rows(db, policy)
         _clear_policy_lease(policy)
         for status in statuses:
@@ -281,14 +281,15 @@ def _clear_completed_jd_workbench_policy(task: dict, now: datetime) -> None:
             status.retry_count = 0
             status.last_error_at = None
         db.commit()
+        return True
     finally:
         db.close()
 
 
-def _clear_failed_jd_workbench_policy(task: dict, now: datetime) -> None:
+def _clear_failed_jd_workbench_policy(task: dict, now: datetime) -> bool:
     """Converge a failed cloud task after its terminal log commit."""
     if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
-        return
+        return False
     payload = task["payload"]
     db = SessionLocal()
     try:
@@ -300,7 +301,7 @@ def _clear_failed_jd_workbench_policy(task: dict, now: datetime) -> None:
         ).with_for_update().one_or_none()
         if policy is None or policy.active_task_id != task["task_id"]:
             db.rollback()
-            return
+            return False
         statuses = _status_rows(db, policy)
         _clear_policy_lease(policy)
         attempt = min(int(task.get("attempt", 0)) + 1, len(JD_RETRY_BACKOFF_SECONDS))
@@ -311,6 +312,7 @@ def _clear_failed_jd_workbench_policy(task: dict, now: datetime) -> None:
             status.last_error_at = now
             status.next_sync_at = now + timedelta(seconds=JD_RETRY_BACKOFF_SECONDS[attempt - 1])
         db.commit()
+        return True
     finally:
         db.close()
 
@@ -467,9 +469,11 @@ def reconcile_completed_jd_workbench_tasks() -> int:
         fenced_task = {**task, "db_claim_generation": terminal[1]}
         cloud = task.get("task_type") == "sync_jd_smart" and task.get("payload", {}).get("source") == "cloud_scheduler"
         if status == "success":
-            _clear_completed_jd_workbench_policy(fenced_task, datetime.now(timezone.utc))
+            if cloud and not _clear_completed_jd_workbench_policy(fenced_task, datetime.now(timezone.utc)):
+                continue
         elif status == "failed" and cloud:
-            _clear_failed_jd_workbench_policy(fenced_task, datetime.now(timezone.utc))
+            if not _clear_failed_jd_workbench_policy(fenced_task, datetime.now(timezone.utc)):
+                continue
         elif status != "failed" or int(task.get("attempt", 0)) < int(task.get("max_retries", 3)):
             continue
         if discard_processing_task(task, raw):
@@ -663,6 +667,7 @@ def _handle_task_direct(task):
     payload = task.get("payload", {})
     attempt = int(task.get("attempt", 0))
     max_retries = int(task.get("max_retries", 3))
+    cloud_scheduled = task_type == "sync_jd_smart" and payload.get("source") == "cloud_scheduler"
     db = SessionLocal()
     if task_type in {SPRINT17_QUEUE_TYPE, SPRINT18_QUEUE_TYPE}:
         center_id = int(payload["task_center_id"])
@@ -697,6 +702,14 @@ def _handle_task_direct(task):
             attempt=attempt,
         )
         db.add(log)
+    if cloud_scheduled:
+        # Fence the initial running-log write as well as the later business commit.
+        try:
+            _assert_jd_workbench_claim_owned(db, task, task["_worker_id"])
+        except Exception:
+            db.rollback()
+            db.close()
+            raise
     log.claim_generation = task.get("db_claim_generation")
     log.status = "running"
     log.started_at = datetime.now(timezone.utc)
@@ -734,7 +747,6 @@ def _handle_task_direct(task):
         update_task_status(task_id, "success", task_type, payload, message="任务执行成功", attempt=attempt, max_retries=max_retries)
     except Exception as exc:
         db.rollback()
-        cloud_scheduled = task_type == "sync_jd_smart" and payload.get("source") == "cloud_scheduler"
         if cloud_scheduled:
             # A stale worker must not overwrite the log owned by a newer claim.
             _assert_jd_workbench_claim_owned(db, task, task["_worker_id"])

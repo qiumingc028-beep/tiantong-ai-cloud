@@ -502,6 +502,17 @@ def test_stale_worker_cannot_overwrite_new_claim_with_failed_log(postgres_databa
         policy = db.query(JdWorkbenchSyncPolicy).one()
         assert (log.status, log.claim_generation) == ("running", 2)
         assert (policy.lease_worker_id, policy.claim_generation) == ("worker-new", 2)
+        log.status = "success"
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(JdCollectorError, match="任务租约已失效"):
+        worker._handle_task_direct(task)
+    db = sessions()
+    try:
+        log = db.query(JdSyncLog).filter_by(task_id=task_id, attempt=0).one()
+        assert (log.status, log.claim_generation) == ("success", 2)
     finally:
         db.close()
         engine.dispose()

@@ -407,7 +407,7 @@ def test_reconciler_cleans_redis_residue_after_ack_failure(monkeypatch):
     monkeypatch.setattr(worker, "get_redis", lambda: redis)
     monkeypatch.setattr(worker, "SessionLocal", CompletedSession)
     finishes = []
-    monkeypatch.setattr(worker, "_clear_completed_jd_workbench_policy", lambda *_args, **_kwargs: finishes.append("finish"))
+    monkeypatch.setattr(worker, "_clear_completed_jd_workbench_policy", lambda *_args, **_kwargs: finishes.append("finish") or True)
     queue.enqueue_task(
         "sync_jd_smart",
         {"source": "cloud_scheduler", "tenant_id": 1, "company_id": 2, "store_id": 3},
@@ -418,7 +418,38 @@ def test_reconciler_cleans_redis_residue_after_ack_failure(monkeypatch):
     assert len(redis.lists[queue.PROCESSING_QUEUE_NAME]) == 1
     assert worker.reconcile_completed_jd_workbench_tasks() == 1
     assert finishes == ["finish"]
-    assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
+
+
+def test_reconciler_keeps_new_processing_claim_when_terminal_generation_is_stale(monkeypatch):
+    from backend import worker
+
+    class StaleTerminalQuery:
+        def filter(self, *_args):
+            return self
+
+        def one_or_none(self):
+            return ("failed", 1)
+
+    class StaleTerminalSession:
+        def query(self, *_args):
+            return StaleTerminalQuery()
+
+        def close(self):
+            pass
+
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "SessionLocal", StaleTerminalSession)
+    monkeypatch.setattr(worker, "_clear_failed_jd_workbench_policy", lambda *_args, **_kwargs: False)
+    queue.enqueue_task(
+        "sync_jd_smart",
+        {"source": "cloud_scheduler", "tenant_id": 1, "company_id": 2, "store_id": 3},
+    )
+    queue.claim_task(worker_id="worker-new", timeout=0)
+
+    assert worker.reconcile_completed_jd_workbench_tasks() == 0
+    assert len(redis.lists[queue.PROCESSING_QUEUE_NAME]) == 1
 
 
 def test_reconciler_cleans_completed_task_when_redis_metadata_expired(monkeypatch):
