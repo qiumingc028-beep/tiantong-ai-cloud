@@ -570,7 +570,8 @@ def main() -> int:
         db.refresh(status_row)
         manual_after = {"status": status_row.status, "reason_code": status_row.reason_code, "retry_count": status_row.retry_count, "next_sync_at": status_row.next_sync_at.isoformat(), "active_task_id": policy.active_task_id}
         db.close()
-        scheduled = run_jd_workbench_scheduler(datetime.now(timezone.utc))
+        scheduled = run_jd_workbench_scheduler(schedule_cursor)
+        schedule_cursor += timedelta(seconds=300)
         if scheduled != 1:
             raise RuntimeError(f"MANUAL_RESUME_NOT_AUTO_QUEUED:{scheduled}")
         db = SessionLocal()
