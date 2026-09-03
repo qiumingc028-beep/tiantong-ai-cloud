@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
@@ -76,6 +78,127 @@ def test_task_attempt_has_persistent_database_idempotency_key(postgres_database_
         else:
             raise AssertionError("duplicate task_id/attempt must be rejected")
         assert db.query(JdSyncLog).filter(JdSyncLog.task_id == task_id, JdSyncLog.attempt == 0).count() == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_migration_rejects_historical_duplicate_task_attempts(postgres_database_factory):
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_duplicate_preflight")
+    _alembic(database_url, "upgrade", "0050_r297_reliable_sync_queue")
+    engine = create_engine(database_url)
+    task_id = str(uuid.uuid4())
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO jd_sync_logs (task_id, task_type, status, attempt) VALUES (%s, %s, %s, 0), (%s, %s, %s, 0)",
+                (task_id, "sync_jd_smart", "failed", task_id, "sync_jd_smart", "failed"),
+            )
+        with pytest.raises(subprocess.CalledProcessError) as failure:
+            _alembic(database_url, "upgrade", "0051_r297_queue_fencing_and_idempotency")
+        assert "R297_DUPLICATE_TASK_ATTEMPT" in (failure.value.stdout + failure.value.stderr)
+    finally:
+        engine.dispose()
+
+
+def test_non_cloud_successful_task_replay_is_ack_only(postgres_database_factory, monkeypatch):
+    from backend import worker
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_non_cloud_replay")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    task_id = str(uuid.uuid4())
+    db = sessions()
+    try:
+        db.add(JdSyncLog(task_id=task_id, task_type="ai_store_manager_daily", attempt=0, status="success"))
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(worker, "SessionLocal", sessions)
+    task = {
+        "task_id": task_id,
+        "task_type": "ai_store_manager_daily",
+        "payload": {"date": "2026-09-03"},
+        "attempt": 0,
+        "claim_generation": 1,
+    }
+    try:
+        assert worker._claim_jd_workbench_task(task, "worker-replay", datetime.now(timezone.utc)) == "completed"
+    finally:
+        engine.dispose()
+
+
+def test_store_window_task_type_is_a_persistent_business_idempotency_key(postgres_database_factory):
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_business_idempotency")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = sessions()
+    try:
+        tenant = Tenant(tenant_code="R297-I", tenant_name="R297 idempotency")
+        db.add(tenant)
+        db.flush()
+        company = Company(tenant_id=tenant.id, company_code="R297-I", company_name="R297 idempotency")
+        db.add(company)
+        db.flush()
+        store = Store(
+            tenant_id=tenant.id,
+            company_id=company.id,
+            platform="jd",
+            store_code="R297-I",
+            store_name="R297 idempotency",
+            active=True,
+        )
+        db.add(store)
+        db.flush()
+        window = datetime.now(timezone.utc).replace(microsecond=0)
+        values = {
+            "tenant_id": tenant.id,
+            "company_id": company.id,
+            "store_id": store.id,
+            "sync_window_started_at": window,
+            "task_type": "sync_jd_smart",
+            "source": "cloud_scheduler",
+            "attempt": 0,
+            "status": "success",
+        }
+        task_id = str(uuid.uuid4())
+        db.add(JdSyncLog(task_id=task_id, **values))
+        db.commit()
+        db.add(JdSyncLog(task_id=str(uuid.uuid4()), **values))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+        retry_values = dict(values, attempt=1, status="running")
+        db.add(JdSyncLog(task_id=task_id, **retry_values))
+        db.commit()
+        other_company = Company(
+            tenant_id=tenant.id,
+            company_code="R297-OTHER",
+            company_name="R297 other company",
+        )
+        db.add(other_company)
+        db.commit()
+        db.add(JdSyncLog(
+            task_id=str(uuid.uuid4()),
+            tenant_id=tenant.id,
+            company_id=other_company.id,
+            store_id=store.id,
+            sync_window_started_at=window + timedelta(minutes=5),
+            task_type="sync_jd_smart",
+            attempt=0,
+            status="success",
+        ))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
     finally:
         db.close()
         engine.dispose()
@@ -197,6 +320,27 @@ def test_two_schedulers_create_one_store_window_task(postgres_database_factory, 
         assert policy.queue_state == "ready"
         assert policy.lease_worker_id is None
         assert policy.visibility_deadline is None
+        status = db.query(JdWorkbenchStoreStatus).one()
+        window = policy.sync_window_started_at
+        completed_task_id = policy.active_task_id
+        policy.active_task_id = None
+        policy.queue_state = None
+        status.next_sync_at = window + timedelta(seconds=10)
+        db.add(JdSyncLog(
+            task_id=completed_task_id,
+            tenant_id=policy.tenant_id,
+            company_id=policy.company_id,
+            store_id=policy.store_id,
+            task_type="sync_jd_smart",
+            source="cloud_scheduler",
+            attempt=0,
+            status="success",
+            sync_window_started_at=window,
+        ))
+        db.commit()
     finally:
         db.close()
-        engine.dispose()
+    redis.lists[queue.QUEUE_NAME] = []
+    assert worker.run_jd_workbench_scheduler(window + timedelta(seconds=20)) == 0
+    assert redis.lists[queue.QUEUE_NAME] == []
+    engine.dispose()

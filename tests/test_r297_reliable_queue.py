@@ -133,13 +133,34 @@ class ReliableFakeRedis:
                 return 0
             if not self.lrem(processing, 1, raw):
                 return 0
-            self.lpush(ready, raw)
+            self.rpush(ready, raw)
             self.delete(metadata)
             self.zrem(deadlines, f"{task_id}:{generation}")
             return 1
-        processing, ready, metadata, deadlines, raw, task_id, now = args
+        if script == queue._RETRY_CLAIMED_SCRIPT:
+            processing, metadata, deadlines, ready, raw, worker_id, task_id, generation, next_raw = args
+            if self.hashes.get(metadata, {}).get("claimed_by") != worker_id:
+                return 0
+            if self.hashes.get(metadata, {}).get("task_id") != task_id:
+                return 0
+            if self.hashes.get(metadata, {}).get("claim_generation") != generation:
+                return 0
+            if not self.lrem(processing, 1, raw):
+                return 0
+            self.rpush(ready, next_raw)
+            self.delete(metadata)
+            self.zrem(deadlines, f"{task_id}:{generation}")
+            return 1
+        if script == queue._DISCARD_PROCESSING_SCRIPT:
+            processing, metadata, deadlines, raw, lease_id = args
+            if not self.lrem(processing, 1, raw):
+                return 0
+            self.delete(metadata)
+            self.zrem(deadlines, lease_id)
+            return 1
+        processing, ready, metadata, deadlines, raw, task_id, now, database_authorized = args
         deadline = self.hashes.get(metadata, {}).get("visibility_deadline")
-        if deadline and deadline > now:
+        if database_authorized != "1" and deadline and deadline > now:
             return 0
         if not self.lrem(processing, 1, raw):
             return 0
@@ -244,6 +265,20 @@ def test_nack_requeues_a_temporarily_unclaimable_task_with_next_generation(monke
     assert queue.ack_task(second, "worker-2") is True
 
 
+def test_nack_moves_contended_task_to_queue_tail(monkeypatch):
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    first = queue.enqueue_task("sync_jd_smart", {"store_id": 1})
+    second = queue.enqueue_task("sync_jd_smart", {"store_id": 2})
+    claimed = queue.claim_task(worker_id="worker-1", timeout=0)
+
+    assert claimed["task_id"] == first["task_id"]
+    assert queue.nack_task(claimed, "worker-1") is True
+
+    next_claim = queue.claim_task(worker_id="worker-2", timeout=0)
+    assert next_claim["task_id"] == second["task_id"]
+
+
 def test_stale_worker_cannot_ack_reassigned_task(monkeypatch):
     redis = ReliableFakeRedis()
     monkeypatch.setattr(queue, "get_redis", lambda: redis)
@@ -301,6 +336,23 @@ def test_worker_nacks_temporary_database_claim_contention(monkeypatch):
     assert calls == ["nack"]
 
 
+def test_failed_non_cloud_attempt_is_atomically_requeued(monkeypatch):
+    from backend import worker
+
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "_worker_id", lambda: "worker-1")
+    monkeypatch.setattr(worker, "_claim_jd_workbench_task", lambda *_args: "claimed")
+    monkeypatch.setattr(worker, "handle_task", lambda *_args: (_ for _ in ()).throw(RuntimeError("expected")))
+    queue.enqueue_task("ai_store_manager_daily", {"date": "2026-09-03"}, max_retries=2)
+
+    assert worker.process_next_task() is True
+    assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
+    retried = json.loads(redis.lists[queue.QUEUE_NAME][0])
+    assert retried["attempt"] == 1
+
+
 def test_completed_database_replay_skips_collection_and_only_acks(monkeypatch):
     from backend import worker
 
@@ -330,7 +382,7 @@ def test_reconciler_cleans_redis_residue_after_ack_failure(monkeypatch):
             return self
 
         def one_or_none(self):
-            return (1,)
+            return ("success",)
 
     class CompletedSession:
         def query(self, *_args):
@@ -355,7 +407,7 @@ def test_reconciler_cleans_redis_residue_after_ack_failure(monkeypatch):
     monkeypatch.setattr(worker, "get_redis", lambda: redis)
     monkeypatch.setattr(worker, "SessionLocal", CompletedSession)
     finishes = []
-    monkeypatch.setattr(worker, "_finish_jd_workbench_task", lambda *_args, **_kwargs: finishes.append("finish") or True)
+    monkeypatch.setattr(worker, "_clear_completed_jd_workbench_policy", lambda *_args, **_kwargs: finishes.append("finish"))
     queue.enqueue_task(
         "sync_jd_smart",
         {"source": "cloud_scheduler", "tenant_id": 1, "company_id": 2, "store_id": 3},
@@ -366,6 +418,63 @@ def test_reconciler_cleans_redis_residue_after_ack_failure(monkeypatch):
     assert len(redis.lists[queue.PROCESSING_QUEUE_NAME]) == 1
     assert worker.reconcile_completed_jd_workbench_tasks() == 1
     assert finishes == ["finish"]
+    assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
+
+
+def test_reconciler_cleans_completed_task_when_redis_metadata_expired(monkeypatch):
+    from backend import worker
+
+    class CompletedQuery:
+        def filter(self, *_args):
+            return self
+
+        def one_or_none(self):
+            return ("success",)
+
+    class CompletedSession:
+        def query(self, *_args):
+            return CompletedQuery()
+
+        def close(self):
+            pass
+
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "SessionLocal", CompletedSession)
+    item = queue.enqueue_task("ai_store_manager_daily", {"date": "2026-09-03"})
+    claimed = queue.claim_task(worker_id="worker-1", timeout=0)
+    redis.hashes.pop(queue._metadata_key(claimed))
+
+    assert worker.reconcile_completed_jd_workbench_tasks() == 1
+    assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
+
+
+def test_reconciler_cleans_terminal_failed_task(monkeypatch):
+    from backend import worker
+
+    class FailedQuery:
+        def filter(self, *_args):
+            return self
+
+        def one_or_none(self):
+            return ("failed",)
+
+    class FailedSession:
+        def query(self, *_args):
+            return FailedQuery()
+
+        def close(self):
+            pass
+
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "SessionLocal", FailedSession)
+    queue.enqueue_task("ai_store_manager_daily", {"date": "2026-09-03"}, max_retries=0)
+    queue.claim_task(worker_id="worker-1", timeout=0)
+
+    assert worker.reconcile_completed_jd_workbench_tasks() == 1
     assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
 
 
@@ -416,6 +525,38 @@ def test_heartbeat_extends_visibility_and_reaper_recovers_only_expired_task(monk
     assert callback_states == [1]
     assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
     assert json.loads(redis.lists[queue.QUEUE_NAME][0])["task_id"] == item["task_id"]
+
+
+def test_database_authorized_reaper_recovers_when_redis_metadata_expired(monkeypatch):
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    item = queue.enqueue_task("sync_jd_smart", {"store_id": 3})
+    claimed = queue.claim_task(worker_id="worker-1", timeout=0)
+    redis.hashes.pop(queue._metadata_key(claimed))
+    redis.sorted_sets[queue.PROCESSING_DEADLINES_KEY].clear()
+
+    recovered = queue.reap_expired_tasks(
+        now=datetime.now(timezone.utc),
+        before_requeue=lambda task: task["task_id"] == item["task_id"],
+    )
+
+    assert [task["task_id"] for task in recovered] == [item["task_id"]]
+    assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
+
+
+def test_non_cloud_reaper_waits_for_redis_deadline(monkeypatch):
+    from backend import worker
+
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    item = queue.enqueue_task("ai_store_manager_daily", {"date": "2026-09-03"})
+    queue.claim_task(worker_id="worker-1", timeout=0, visibility_timeout=120)
+
+    assert queue.reap_expired_tasks(
+        now=datetime.now(timezone.utc),
+        before_requeue=lambda task: worker._recover_jd_workbench_task(task, datetime.now(timezone.utc)),
+    ) == []
+    assert json.loads(redis.lists[queue.PROCESSING_QUEUE_NAME][0])["task_id"] == item["task_id"]
 
 
 def test_retry_backoff_contract_is_exactly_five_levels():

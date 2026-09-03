@@ -66,6 +66,45 @@ def requeue_task(task: dict, message: str):
     )
 
 
+_RETRY_CLAIMED_SCRIPT = """
+if redis.call('HGET', KEYS[2], 'claimed_by') ~= ARGV[2] then return 0 end
+if redis.call('HGET', KEYS[2], 'task_id') ~= ARGV[3] then return 0 end
+if redis.call('HGET', KEYS[2], 'claim_generation') ~= ARGV[4] then return 0 end
+if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
+redis.call('RPUSH', KEYS[4], ARGV[5])
+redis.call('DEL', KEYS[2])
+redis.call('ZREM', KEYS[3], ARGV[3] .. ':' .. ARGV[4])
+return 1
+"""
+
+
+def retry_claimed_task(task: dict, worker_id: str, raw: str, message: str) -> bool:
+    """Atomically replace a failed processing attempt with its next attempt."""
+    next_task = {key: value for key, value in task.items() if not key.startswith("_")}
+    next_task["attempt"] = int(task.get("attempt", 0)) + 1
+    next_task["queued_at"] = utc_now()
+    next_raw = json.dumps(next_task, ensure_ascii=False)
+    moved = bool(get_redis().eval(
+        _RETRY_CLAIMED_SCRIPT,
+        4,
+        PROCESSING_QUEUE_NAME,
+        _metadata_key(task),
+        PROCESSING_DEADLINES_KEY,
+        QUEUE_NAME,
+        raw,
+        worker_id,
+        task["task_id"],
+        str(task.get("claim_generation", "")),
+        next_raw,
+    ))
+    if moved:
+        update_task_status(
+            task["task_id"], "retrying", task["task_type"], task.get("payload", {}),
+            message=message, attempt=next_task["attempt"], max_retries=int(task.get("max_retries", 3)),
+        )
+    return moved
+
+
 _CLAIM_SCRIPT = """
 local raw = redis.call('LPOP', KEYS[1])
 if not raw then return nil end
@@ -96,6 +135,9 @@ redis.call('EXPIRE', metadata, ARGV[5])
 redis.call('ZADD', KEYS[3], ARGV[6], lease_id)
 return raw
 """
+
+# This counter fences Redis transport operations only. PostgreSQL independently
+# increments and owns the durable claim_generation used by workers and reapers.
 
 
 def _lease_id(task: dict) -> str:
@@ -211,12 +253,36 @@ def ack_task(task: dict, worker_id: str, raw: str | None = None) -> bool:
     ))
 
 
+_DISCARD_PROCESSING_SCRIPT = """
+if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
+redis.call('DEL', KEYS[2])
+redis.call('ZREM', KEYS[3], ARGV[2])
+return 1
+"""
+
+
+def discard_processing_task(task: dict, raw: str | None = None) -> bool:
+    """Remove transport residue only after PostgreSQL proves the task terminal."""
+    raw = raw or task.get("_processing_raw")
+    if not raw:
+        return False
+    return bool(get_redis().eval(
+        _DISCARD_PROCESSING_SCRIPT,
+        3,
+        PROCESSING_QUEUE_NAME,
+        _metadata_key(task),
+        PROCESSING_DEADLINES_KEY,
+        raw,
+        _lease_id(task),
+    ))
+
+
 _NACK_SCRIPT = """
 if redis.call('HGET', KEYS[2], 'claimed_by') ~= ARGV[2] then return 0 end
 if redis.call('HGET', KEYS[2], 'task_id') ~= ARGV[3] then return 0 end
 if redis.call('HGET', KEYS[2], 'claim_generation') ~= ARGV[4] then return 0 end
 if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
-redis.call('LPUSH', KEYS[4], ARGV[1])
+redis.call('RPUSH', KEYS[4], ARGV[1])
 redis.call('DEL', KEYS[2])
 redis.call('ZREM', KEYS[3], ARGV[3] .. ':' .. ARGV[4])
 return 1
@@ -224,7 +290,7 @@ return 1
 
 
 def nack_task(task: dict, worker_id: str, raw: str | None = None) -> bool:
-    """Return a temporarily unclaimable task without losing its lease identity."""
+    """Move a temporarily unclaimable task to the ready tail to avoid hot-looping."""
     raw = raw or task.get("_processing_raw")
     if not raw:
         return False
@@ -244,7 +310,7 @@ def nack_task(task: dict, worker_id: str, raw: str | None = None) -> bool:
 
 _REAP_EXPIRED_SCRIPT = """
 local deadline = redis.call('HGET', KEYS[3], 'visibility_deadline')
-if deadline and deadline > ARGV[3] then return 0 end
+if ARGV[4] ~= '1' and deadline and deadline > ARGV[3] then return 0 end
 if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
 redis.call('RPUSH', KEYS[2], ARGV[1])
 redis.call('DEL', KEYS[3])
@@ -262,9 +328,13 @@ def reap_expired_tasks(*, now: datetime | None = None, before_requeue=None) -> l
     for raw in redis_client.lrange(PROCESSING_QUEUE_NAME, 0, -1):
         task = json.loads(raw)
         lease_id = _lease_id(task)
-        if lease_id not in expired_ids:
-            continue
-        if before_requeue is not None and not before_requeue(task):
+        database_authorized = False
+        if before_requeue is not None:
+            decision = before_requeue(task)
+            if decision is False:
+                continue
+            database_authorized = decision is True
+        if not database_authorized and lease_id not in expired_ids:
             continue
         if redis_client.eval(
             _REAP_EXPIRED_SCRIPT,
@@ -276,6 +346,7 @@ def reap_expired_tasks(*, now: datetime | None = None, before_requeue=None) -> l
             raw,
             lease_id,
             now.isoformat(),
+            "1" if database_authorized else "0",
         ):
             recovered.append(task)
     return recovered

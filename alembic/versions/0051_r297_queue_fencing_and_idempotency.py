@@ -19,6 +19,20 @@ def upgrade():
         "jd_workbench_sync_policies",
         sa.Column("claim_generation", sa.Integer(), nullable=False, server_default="0"),
     )
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM jd_sync_logs
+            WHERE task_id IS NOT NULL
+            GROUP BY task_id, attempt HAVING COUNT(*) > 1
+          ) THEN
+            RAISE EXCEPTION 'R297_DUPLICATE_TASK_ATTEMPT';
+          END IF;
+        END $$;
+        """
+    )
     op.create_unique_constraint(
         "uq_jd_sync_logs_task_attempt",
         "jd_sync_logs",

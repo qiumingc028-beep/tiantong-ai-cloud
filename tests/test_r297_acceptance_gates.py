@@ -21,7 +21,7 @@ from backend.models import Store, User, UserStoreMembership
 
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "desktop" / "jd-workbench"
-FINAL_REVISION = "0051_r297_queue_fencing_and_idempotency"
+FINAL_REVISION = "0052_r297_postgresql_queue_authority"
 
 
 def read(path: Path) -> str:
