@@ -13,6 +13,8 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
@@ -29,6 +31,7 @@ from ..models import (
     JdWorkbenchStoreStatus,
     JdWorkbenchSyncBatch,
     JdWorkbenchSyncPolicy,
+    EmployeeLog,
     Company,
     Store,
     User,
@@ -239,28 +242,89 @@ def _require_owner_store(store_id: int, request: Request, db: Session) -> tuple[
     return user, store
 
 
+RUNTIME_BASE = "http://jd-browser-runtime:8787/internal/jd-browser"
+
+
+def _runtime_session_id(store: Store) -> str:
+    return f"{store.tenant_id}:{store.company_id}:{store.id}:{store.platform}"
+
+
+def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    token = get_settings().JD_BROWSER_CONTROL_TOKEN
+    if not isinstance(token, str) or len(token.encode("utf-8")) < 32:
+        raise HTTPException(status_code=503, detail="云端登录运行时控制凭据未配置")
+    body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    request = Request(
+        f"{RUNTIME_BASE}{path}",
+        data=body,
+        headers={"content-type": "application/json", "x-internal-token": token},
+        method=method,
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            raw = response.read(512 * 1024)
+        result = json.loads(raw)
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError) as exc:
+        raise HTTPException(status_code=503, detail="云端登录运行时不可用") from exc
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
+    return result
+
+
+def _audit_owner_action(db: Session, user: User, store: Store, action: str) -> None:
+    db.add(EmployeeLog(user_id=user.id, store_id=store.id, action=action, detail="owner_login_session"))
+    db.commit()
+
+
 @router.post("/stores/{store_id}/login-session")
 async def create_owner_login_session(store_id: int, request: Request, db: Session = Depends(get_db)):
     user, store = _require_owner_store(store_id, request, db)
-    return {"store_id": store.id, "status": "LOGIN_REQUIRED", "expires_in": 600}
+    body = await _json_body(request)
+    if body:
+        raise _generic_bad_request()
+    sid = _runtime_session_id(store)
+    result = _runtime_call("POST", "/sessions", {"tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": str(store.platform)})
+    if result.get("session_id") != sid or not isinstance(result.get("expires_in"), int):
+        raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
+    _audit_owner_action(db, user, store, "owner_login_session_create")
+    return {"session_id": sid, "store_id": store.id, "status": "LOGIN_REQUIRED", "expires_in": result["expires_in"]}
 
 
 @router.get("/stores/{store_id}/login-session")
 async def owner_login_session_status(store_id: int, request: Request, db: Session = Depends(get_db)):
-    _, store = _require_owner_store(store_id, request, db)
-    return {"store_id": store.id, "status": "LOGIN_REQUIRED"}
+    user, store = _require_owner_store(store_id, request, db)
+    sid = _runtime_session_id(store)
+    result = _runtime_call("GET", f"/sessions/{sid}")
+    status = result.get("status")
+    if not isinstance(status, str):
+        raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
+    _audit_owner_action(db, user, store, "owner_login_session_status")
+    return {"store_id": store.id, "status": status}
 
 
 @router.delete("/stores/{store_id}/login-session")
 async def delete_owner_login_session(store_id: int, request: Request, db: Session = Depends(get_db)):
-    _, store = _require_owner_store(store_id, request, db)
+    user, store = _require_owner_store(store_id, request, db)
+    sid = _runtime_session_id(store)
+    result = _runtime_call("DELETE", f"/sessions/{sid}")
+    if result.get("ok") is not True:
+        raise HTTPException(status_code=503, detail="云端登录会话销毁失败")
+    _audit_owner_action(db, user, store, "owner_login_session_revoke")
     return {"ok": True, "store_id": store.id, "status": "REVOKED"}
 
 
 @router.post("/stores/{store_id}/login-ticket")
 async def owner_login_ticket(store_id: int, request: Request, db: Session = Depends(get_db)):
-    _, store = _require_owner_store(store_id, request, db)
-    raise HTTPException(status_code=503, detail="云端登录运行时尚未连接")
+    user, store = _require_owner_store(store_id, request, db)
+    body = await _json_body(request)
+    if body:
+        raise _generic_bad_request()
+    sid = _runtime_session_id(store)
+    result = _runtime_call("POST", "/tickets", {"session_id": sid})
+    if not isinstance(result.get("ticket"), str) or not isinstance(result.get("expires_in"), int):
+        raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
+    _audit_owner_action(db, user, store, "owner_login_ticket")
+    return {"ticket": result["ticket"], "expires_in": result["expires_in"]}
 
 
 async def _json_body(request: Request) -> dict[str, Any]:
