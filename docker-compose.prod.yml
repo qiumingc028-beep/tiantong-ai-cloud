@@ -1,5 +1,6 @@
 services:
   jd-browser-runtime:
+    image: ${S12_JD_RUNTIME_IMAGE:-tiantong-jd-browser-runtime:local}
     build:
       context: .
       dockerfile: services/jd-cloud-browser-runtime/Dockerfile
@@ -82,6 +83,7 @@ services:
       start_period: 10s
 
   backend:
+    image: ${S12_BACKEND_IMAGE:-tiantong-backend:local}
     build:
       context: .
       dockerfile: Dockerfile.backend
@@ -125,6 +127,7 @@ services:
         condition: service_healthy
 
   worker:
+    image: ${S12_WORKER_IMAGE:-tiantong-worker:local}
     build:
       context: .
       dockerfile: Dockerfile.worker

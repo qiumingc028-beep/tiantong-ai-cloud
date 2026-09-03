@@ -22,7 +22,10 @@ class JdSmartCollector:
     """
 
     def _capture(self, account: JdAccount, dataset: str, store: Store):
-        endpoint = "http://jd-browser-runtime:8787/internal/jd-browser"
+        endpoint = os.getenv(
+            "JD_BROWSER_CAPTURE_BASE_URL",
+            "http://jd-browser-runtime:8787/internal/jd-browser",
+        ).rstrip("/")
         token = os.getenv("JD_BROWSER_CAPTURE_TOKEN", "")
         if len(token.encode()) < 32:
             raise JdCollectorError("云端浏览器内部认证未配置")
@@ -37,7 +40,7 @@ class JdSmartCollector:
         if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") in {"LOGIN_REQUIRED", "CAPTCHA", "RISK_CONTROL"}:
             raise JdCollectorError("需要人工处理登录或风控")
         data = result["data"]
-        if not isinstance(data, dict) or data.get("store_id") != store.id or data.get("source") != "jd_cloud_playwright":
+        if not isinstance(data, dict) or str(data.get("store_id")) != str(store.id) or data.get("source") != "jd_cloud_playwright":
             raise JdCollectorError("云端采集响应校验失败")
         return data
 
@@ -58,7 +61,7 @@ class JztCollector:
         return JdSmartCollector()._capture(account, "ads", account.store)
 
 
-def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):
+def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None, completion_log=None):
     store = db.get(Store, store_id)
     if not store:
         raise JdCollectorError("店铺不存在")
@@ -74,6 +77,10 @@ def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):
     account.last_sync_at = datetime.now(timezone.utc)
     account.login_status = "ok"
     account.cookie_status = "ok"
+    if completion_log is not None:
+        completion_log.status = "success"
+        completion_log.message = str(result)
+        completion_log.finished_at = datetime.now(timezone.utc)
     db.commit()
     return result
 
@@ -171,7 +178,7 @@ def save_jd_daily_metric(db: Session, store_id: int, metric_date: date, payload:
     metric.source = source
     metric.raw_payload = None
     metric.synced_at = datetime.now(timezone.utc)
-    db.commit()
+    db.flush()
     return metric
 
 

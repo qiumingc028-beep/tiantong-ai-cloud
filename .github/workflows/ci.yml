@@ -411,7 +411,25 @@ jobs:
           test -z "$(docker exec "$container" pgrep -x chrome || true)"
           echo "RUNTIME_RESTART=PASS"
 
+      - name: Generate R297 real-process acceptance evidence
+        run: |
+          PYTHONPATH=. python ops/r297_process_acceptance.py /tmp/r297-process-acceptance \
+            --runtime-image "$S12_JD_RUNTIME_IMAGE"
+
+      - name: Upload R297 process acceptance evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-process-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_RAW.jsonl
+            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
+            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json.sha256
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Run tests
+        env:
+          R297_PROCESS_ACCEPTANCE_EVIDENCE: /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
         run: |
           bash -n ops/r297_workbench_deploy.sh
           python -m pytest -v tests/ --junitxml=/tmp/pytest-results.xml
@@ -432,12 +450,12 @@ jobs:
               for name in ("tests", "failures", "errors", "skipped")
           }
           assert totals == {
-              "tests": 1795,
+              "tests": 1846,
               "failures": 0,
               "errors": 0,
               "skipped": 0,
           }, totals
-          print("CI_PYTEST_RESULT=1795_PASS/0_SKIP/0_FAIL/0_ERROR")
+          print("CI_PYTEST_RESULT=1846_PASS/0_SKIP/0_FAIL/0_ERROR")
           PY
 
       - name: Verify CI Redis queue and lock residue

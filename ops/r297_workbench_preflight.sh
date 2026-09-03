@@ -65,7 +65,7 @@ for preserved_commit in \
   }
 done
 
-[[ -f $DEPLOYMENT_DIR/alembic/versions/0049_r297_jd_multistore_autosync.py ]] || {
+[[ -f $DEPLOYMENT_DIR/alembic/versions/0050_r297_reliable_sync_queue.py ]] || {
   echo "R297_MIGRATION_MISSING" >&2
   exit 81
 }

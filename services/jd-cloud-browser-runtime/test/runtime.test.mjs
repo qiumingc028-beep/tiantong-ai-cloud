@@ -79,6 +79,47 @@ test('capture and control credentials cannot be used interchangeably', async (t)
   assert.equal((await app.inject({ method: 'POST', url: '/internal/jd-browser/capture', headers: controlHeaders })).statusCode, 401);
 });
 
+test('explicit controlled dashboard is used by the real capture path', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-runtime-canary-'));
+  const visited = [];
+  const page = {
+    goto: async (url) => { visited.push(url); },
+    evaluate: async () => ({ gmv: '1.00', orders: '1' })
+  };
+  const app = buildApp({
+    captureToken,
+    controlToken,
+    viewerTicketSigningKey: viewerSigningKey,
+    viewerCookieSigningKey,
+    masterKey,
+    dashboardUrl: 'http://host.docker.internal:18789/controlled-canary',
+    authorizeSession: async () => true,
+    profileRoot: path.join(root, 'profiles'),
+    archiveRoot: path.join(root, 'archives'),
+    launchContext: async () => ({
+      route: async () => {},
+      storageState: async () => ({ cookies: [] }),
+      close: async () => {},
+      pages: () => [page]
+    })
+  });
+  t.after(async () => { await app.close(); await fs.rm(root, { recursive: true, force: true }); });
+  const headers = { 'x-internal-token': controlToken };
+  assert.equal((await app.inject({
+    method: 'POST', url: '/internal/jd-browser/sessions', headers,
+    payload: { tenant_id: 1, company_id: 2, store_id: 3, platform: 'jd' }
+  })).statusCode, 200);
+  const captured = await app.inject({
+    method: 'POST', url: '/internal/jd-browser/capture',
+    headers: { 'x-internal-token': captureToken },
+    payload: { tenant_id: 1, company_id: 2, store_id: 3, platform: 'jd', dataset: 'metrics' }
+  });
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.json().status, 'OK');
+  assert.equal(captured.json().data.gmv, '1.00');
+  assert.deepEqual(visited, ['http://host.docker.internal:18789/controlled-canary']);
+});
+
 test('capability credentials must be distinct', () => {
   assert.throws(
     () => buildApp({ captureToken: controlToken, controlToken, viewerTicketSigningKey: viewerSigningKey, viewerCookieSigningKey, masterKey }),

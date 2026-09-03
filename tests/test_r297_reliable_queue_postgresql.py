@@ -1,0 +1,202 @@
+from __future__ import annotations
+
+import json
+import os
+import threading
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
+
+from backend.models import (
+    Company,
+    JdSyncLog,
+    JdWorkbenchDevice,
+    JdWorkbenchStoreStatus,
+    JdWorkbenchSyncPolicy,
+    Store,
+    Tenant,
+    User,
+)
+
+
+class SchedulerRedis:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.values = {}
+        self.lists = {}
+
+    def set(self, key, value, nx=False, ex=None):
+        with self.lock:
+            if nx and key in self.values:
+                return False
+            self.values[key] = value
+            return True
+
+    def delete(self, key):
+        with self.lock:
+            self.values.pop(key, None)
+
+    def rpush(self, key, value):
+        with self.lock:
+            self.lists.setdefault(key, []).append(value)
+
+    def setex(self, key, _ttl, value):
+        with self.lock:
+            self.values[key] = value
+
+    def lpush(self, key, value):
+        with self.lock:
+            self.lists.setdefault(key, []).insert(0, value)
+
+    def ltrim(self, key, start, end):
+        with self.lock:
+            self.lists[key] = self.lists.get(key, [])[start : end + 1]
+
+
+def test_task_attempt_has_persistent_database_idempotency_key(postgres_database_factory):
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_task_idempotency")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    task_id = str(uuid.uuid4())
+    db = sessions()
+    try:
+        db.add(JdSyncLog(task_id=task_id, task_type="sync_jd_smart", attempt=0, status="success"))
+        db.commit()
+        db.add(JdSyncLog(task_id=task_id, task_type="sync_jd_smart", attempt=0, status="running"))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError("duplicate task_id/attempt must be rejected")
+        assert db.query(JdSyncLog).filter(JdSyncLog.task_id == task_id, JdSyncLog.attempt == 0).count() == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_two_schedulers_create_one_store_window_task(postgres_database_factory, monkeypatch):
+    from backend import queue, worker
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_queue_claim")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = sessions()
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    try:
+        tenant = Tenant(tenant_code="R297-Q", tenant_name="R297 queue")
+        db.add(tenant)
+        db.flush()
+        company = Company(tenant_id=tenant.id, company_code="R297-Q", company_name="R297 queue")
+        db.add(company)
+        db.flush()
+        user = User(
+            username="r297-queue-owner",
+            password_hash="not-a-real-secret",
+            role="owner",
+            display_name="R297 queue owner",
+            tenant_id=tenant.id,
+            company_id=company.id,
+            active=True,
+        )
+        db.add(user)
+        db.flush()
+        store = Store(
+            tenant_id=tenant.id,
+            company_id=company.id,
+            platform="jd",
+            store_code="R297-Q",
+            store_name="R297 queue",
+            active=True,
+        )
+        db.add(store)
+        db.flush()
+        device = JdWorkbenchDevice(
+            device_id="00000000-0000-4000-8000-000000000297",
+            token_hash="a" * 64,
+            public_key_n="a" * 256,
+            public_key_e=65537,
+            tenant_id=tenant.id,
+            company_id=company.id,
+            user_id=user.id,
+            device_name="queue-test",
+            client_version="2.97.0",
+            status="ONLINE",
+            expires_at=now + timedelta(days=1),
+        )
+        db.add(device)
+        db.flush()
+        db.add_all([
+            JdWorkbenchStoreStatus(
+                device_id=device.device_id,
+                store_id=store.id,
+                status="IDLE",
+                next_sync_at=now,
+            ),
+            JdWorkbenchSyncPolicy(
+                tenant_id=tenant.id,
+                company_id=company.id,
+                store_id=store.id,
+                enabled=True,
+                interval_seconds=300,
+            ),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    redis = SchedulerRedis()
+    monkeypatch.setattr(worker, "SessionLocal", sessions)
+    monkeypatch.setattr(worker, "get_redis", lambda: redis)
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    barrier = threading.Barrier(3)
+    results = []
+
+    def schedule():
+        barrier.wait()
+        results.append(worker.run_jd_workbench_scheduler(now))
+
+    threads = [threading.Thread(target=schedule) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert sorted(results) == [0, 1]
+    assert len(redis.lists[queue.QUEUE_NAME]) == 1
+    db = sessions()
+    try:
+        policy = db.query(JdWorkbenchSyncPolicy).one()
+        assert policy.queue_state == "ready"
+        assert policy.active_task_id
+        assert policy.sync_window_started_at == worker._sync_window(now, 300)
+        task = json.loads(redis.lists[queue.QUEUE_NAME][0])
+        task["claim_generation"] = 1
+        policy.queue_state = "processing"
+        policy.lease_worker_id = "dead-worker"
+        policy.claim_generation = 1
+        policy.visibility_deadline = now - timedelta(seconds=1)
+        db.commit()
+    finally:
+        db.close()
+
+    assert worker._recover_jd_workbench_task(task, now) is True
+    assert worker._recover_jd_workbench_task(task, now) is True
+    db = sessions()
+    try:
+        policy = db.query(JdWorkbenchSyncPolicy).one()
+        assert policy.queue_state == "ready"
+        assert policy.lease_worker_id is None
+        assert policy.visibility_deadline is None
+    finally:
+        db.close()
+        engine.dispose()

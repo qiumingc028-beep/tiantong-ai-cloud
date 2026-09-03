@@ -1105,6 +1105,8 @@ def test_r297_manual_handling_success_report_makes_store_due_for_automatic_resum
             "status": "HUMAN_ACTION_REQUIRED",
             "store_id": store["store_id"],
             "reason_code": "RISK_CONTROL",
+            "next_sync_at": "2099-09-01T08:02:00Z",
+            "retry_count": 3,
         },
     )
     assert blocked.status_code == 200, blocked.text
@@ -1125,7 +1127,11 @@ def test_r297_manual_handling_success_report_makes_store_due_for_automatic_resum
     refreshed = _authorized_store(client, device_token)
     assert refreshed["status"] == "ONLINE"
     assert refreshed["reason_code"] is None
-    assert refreshed["next_sync_at"], "人工处理成功后必须自动恢复为立即可调度状态"
+    assert refreshed["retry_count"] == 0
+    resumed_at = datetime.fromisoformat(refreshed["next_sync_at"])
+    if resumed_at.tzinfo is None:
+        resumed_at = resumed_at.replace(tzinfo=timezone.utc)
+    assert resumed_at <= datetime.now(timezone.utc)
 
 
 def test_r297_device_session_policy_and_status_survive_backend_client_recreation(

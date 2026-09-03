@@ -28,8 +28,9 @@ class _RuntimeResponse:
         self.payload = payload
         self.status = status
 
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode("utf-8")
+    def read(self, size: int = -1) -> bytes:
+        payload = json.dumps(self.payload).encode("utf-8")
+        return payload if size < 0 else payload[:size]
 
     def __enter__(self):
         return self
@@ -189,7 +190,31 @@ def test_owner_create_session_delegates_server_derived_scope_to_runtime(client, 
     assert response.status_code == 200
     request = _runtime_call(runtime_recorder, "POST", "/internal/jd-browser/sessions")
     assert json.loads(request.data) == {"tenant_id": "1", "company_id": "1", "store_id": "1", "platform": "jd"}
+
+
+def test_controlled_canary_uses_explicit_loopback_runtime(monkeypatch, client, owner_headers, runtime_recorder):
+    monkeypatch.setenv("R297_CONTROLLED_CANARY", "1")
+    monkeypatch.setenv(
+        "JD_BROWSER_RUNTIME_BASE_URL",
+        "http://127.0.0.1:18787/internal/jd-browser",
+    )
+
+    response = client.post("/api/jd-workbench/stores/1/login-session", headers=owner_headers, json={})
+
+    assert response.status_code == 200
+    assert runtime_recorder.requests[-1][0].full_url.startswith("http://127.0.0.1:18787/")
     assert response.json()["session_id"] == "1:1:1:jd"
+
+
+def test_runtime_override_fails_closed_outside_controlled_loopback(monkeypatch, client, owner_headers, runtime_recorder):
+    monkeypatch.setenv("R297_CONTROLLED_CANARY", "1")
+    monkeypatch.setenv("JD_BROWSER_RUNTIME_BASE_URL", "https://example.invalid/internal/jd-browser")
+
+    response = client.post("/api/jd-workbench/stores/1/login-session", headers=owner_headers, json={})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "云端登录运行时配置无效"}
+    assert runtime_recorder.requests == []
 
 
 def test_owner_session_status_is_read_from_runtime(client, owner_headers, runtime_recorder):

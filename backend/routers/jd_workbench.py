@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import re
 import secrets
 import unicodedata
@@ -14,9 +15,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -243,6 +246,27 @@ def _require_owner_store(store_id: int, request: Request, db: Session) -> tuple[
 
 
 RUNTIME_BASE = "http://jd-browser-runtime:8787/internal/jd-browser"
+RUNTIME_REQUEST_TIMEOUT_SECONDS = 30
+
+
+def _runtime_base() -> str:
+    candidate = os.getenv("JD_BROWSER_RUNTIME_BASE_URL", RUNTIME_BASE).rstrip("/")
+    if candidate == RUNTIME_BASE:
+        return candidate
+    parsed = urlsplit(candidate)
+    if (
+        os.getenv("R297_CONTROLLED_CANARY") != "1"
+        or parsed.scheme != "http"
+        or parsed.hostname != "127.0.0.1"
+        or parsed.port is None
+        or parsed.path != "/internal/jd-browser"
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HTTPException(status_code=503, detail="云端登录运行时配置无效")
+    return candidate
 
 
 def _runtime_session_id(store: Store) -> str:
@@ -254,14 +278,14 @@ def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None)
     if not isinstance(token, str) or len(token.encode("utf-8")) < 32:
         raise HTTPException(status_code=503, detail="云端登录运行时控制凭据未配置")
     body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    request = Request(
-        f"{RUNTIME_BASE}{path}",
+    request = UrlRequest(
+        f"{_runtime_base()}{path}",
         data=body,
         headers={"content-type": "application/json", "x-internal-token": token},
         method=method,
     )
     try:
-        with urlopen(request, timeout=10) as response:
+        with urlopen(request, timeout=RUNTIME_REQUEST_TIMEOUT_SECONDS) as response:
             raw = response.read(512 * 1024)
         result = json.loads(raw)
     except (HTTPError, URLError, TimeoutError, ValueError, OSError) as exc:
@@ -283,7 +307,12 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
     if body:
         raise _generic_bad_request()
     sid = _runtime_session_id(store)
-    result = _runtime_call("POST", "/sessions", {"tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": str(store.platform)})
+    result = await run_in_threadpool(
+        _runtime_call,
+        "POST",
+        "/sessions",
+        {"tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": str(store.platform)},
+    )
     if result.get("session_id") != sid or not isinstance(result.get("expires_in"), int):
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
     _audit_owner_action(db, user, store, "owner_login_session_create")
@@ -294,7 +323,7 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
 async def owner_login_session_status(store_id: int, request: Request, db: Session = Depends(get_db)):
     user, store = _require_owner_store(store_id, request, db)
     sid = _runtime_session_id(store)
-    result = _runtime_call("GET", f"/sessions/{sid}")
+    result = await run_in_threadpool(_runtime_call, "GET", f"/sessions/{sid}")
     status = result.get("status")
     if not isinstance(status, str):
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
@@ -306,7 +335,7 @@ async def owner_login_session_status(store_id: int, request: Request, db: Sessio
 async def delete_owner_login_session(store_id: int, request: Request, db: Session = Depends(get_db)):
     user, store = _require_owner_store(store_id, request, db)
     sid = _runtime_session_id(store)
-    result = _runtime_call("DELETE", f"/sessions/{sid}")
+    result = await run_in_threadpool(_runtime_call, "DELETE", f"/sessions/{sid}")
     if result.get("ok") is not True:
         raise HTTPException(status_code=503, detail="云端登录会话销毁失败")
     _audit_owner_action(db, user, store, "owner_login_session_revoke")
@@ -320,7 +349,7 @@ async def owner_login_ticket(store_id: int, request: Request, db: Session = Depe
     if body:
         raise _generic_bad_request()
     sid = _runtime_session_id(store)
-    result = _runtime_call("POST", "/tickets", {"session_id": sid})
+    result = await run_in_threadpool(_runtime_call, "POST", "/tickets", {"session_id": sid})
     if not isinstance(result.get("ticket"), str) or not isinstance(result.get("expires_in"), int):
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
     _audit_owner_action(db, user, store, "owner_login_ticket")
@@ -758,6 +787,31 @@ async def list_device_stores(request: Request, db: Session = Depends(get_db)):
     return result
 
 
+def resume_store_after_human_action(
+    db: Session,
+    device: JdWorkbenchDevice,
+    store: Store,
+    row: JdWorkbenchStoreStatus,
+    now: datetime,
+) -> None:
+    row.reason_code = None
+    row.retry_count = 0
+    row.last_error_at = None
+    row.next_sync_at = now
+    policy = db.query(JdWorkbenchSyncPolicy).filter(
+        JdWorkbenchSyncPolicy.tenant_id == device.tenant_id,
+        JdWorkbenchSyncPolicy.company_id == device.company_id,
+        JdWorkbenchSyncPolicy.store_id == store.id,
+    ).with_for_update().one_or_none()
+    if policy:
+        policy.active_task_id = None
+        policy.queue_state = None
+        policy.lease_worker_id = None
+        policy.lease_started_at = None
+        policy.lease_heartbeat_at = None
+        policy.visibility_deadline = None
+
+
 @router.post("/heartbeat")
 async def heartbeat(request: Request, db: Session = Depends(get_db)):
     device, user = await _device_context(request, db)
@@ -794,6 +848,7 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
             raise _generic_bad_request()
         store = require_authorized_store(db, user, store_id=store_id, write=True)
         row = _status_row(db, device.device_id, store.id)
+        prior_status = row.status
         row.status = status
         row.reason_code = reason_code
         if last_attempt_at is not None:
@@ -804,6 +859,8 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
             row.last_error_at = now
         elif status in {"IDLE", "ONLINE", "SYNCING"}:
             row.last_error_at = None
+        if prior_status in {"ERROR", "HUMAN_ACTION_REQUIRED"} and status in {"IDLE", "ONLINE"}:
+            resume_store_after_human_action(db, device, store, row, now)
         row.updated_at = now
     device.client_version = client_version
     device.status = status

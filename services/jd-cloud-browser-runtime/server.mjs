@@ -107,7 +107,7 @@ function decryptArchive(payload, masterKey, aad) {
   }
 }
 
-function installReadOnlyPolicy(context) {
+function installReadOnlyPolicy(context, dashboardUrl = ROUTES.dashboard) {
   return context.route('**/*', async (route) => {
     const request = route.request();
     let frame;
@@ -117,6 +117,10 @@ function installReadOnlyPolicy(context) {
     const resourceType = isMainFrameSource && request.resourceType() === 'document'
       ? 'mainFrame'
       : request.resourceType();
+    if (
+      dashboardUrl !== ROUTES.dashboard && request.method() === 'GET' &&
+      resourceType === 'mainFrame' && request.url() === dashboardUrl
+    ) return route.continue();
     const decision = classifyRequest({
       url: request.url(), method: request.method(), resourceType,
       currentMainFrameUrl: frame?.url() || ROUTES.dashboard,
@@ -192,6 +196,7 @@ export function buildApp({
   profileRoot = '/tmp/jd-cloud-profiles',
   archiveRoot = '/data/jd-session-archives',
   authorizeSession,
+  dashboardUrl = ROUTES.dashboard,
   launchContext = (directory) => chromium.launchPersistentContext(directory, {
     headless: false,
     chromiumSandbox: true
@@ -392,7 +397,7 @@ export function buildApp({
           for (const entry of state?.localStorage || []) globalThis.localStorage.setItem(entry.name, entry.value);
         }, { origins: restored.storage_state.origins });
       }
-      await installReadOnlyPolicy(context);
+      await installReadOnlyPolicy(context, dashboardUrl);
       const nonce = restored?.session_nonce || crypto.randomBytes(16).toString('hex');
       browserSessions.set(id, {
         context, scope, nonce, expiresAt: restored?.expires_at || now() + SESSION_TTL_MS
@@ -479,7 +484,7 @@ export function buildApp({
       return reply.code(409).send({ status: 'LOGIN_REQUIRED', data: {} });
     }
     const page = session.context.pages()[0] || await session.context.newPage();
-    await page.goto(ROUTES.dashboard, { waitUntil: 'domcontentloaded' });
+    await page.goto(dashboardUrl, { waitUntil: 'domcontentloaded' });
     const metrics = await page.evaluate(() => Object.fromEntries(
       [...document.querySelectorAll('[data-metric]')]
         .map((node) => [node.getAttribute('data-metric'), node.textContent?.trim()])
@@ -487,7 +492,7 @@ export function buildApp({
     ));
     if (!Object.keys(metrics).length) return reply.code(422).send({ status: 'JD_METRIC_NOT_FOUND', data: {} });
     return { status: 'OK', data: { source: 'jd_cloud_playwright', captured_at: new Date(now()).toISOString(),
-      store_id: scope.store_id, metrics } };
+      store_id: scope.store_id, ...metrics } };
   });
 
   app.get('/internal/jd-browser/sessions/:sid', { preHandler: verifyControl }, async (request, reply) => {
@@ -507,12 +512,23 @@ export function buildApp({
 }
 
 export async function startFromEnv() {
+  let dashboardUrl = ROUTES.dashboard;
+  if (process.env.R297_CONTROLLED_CANARY === '1') {
+    const candidate = new URL(process.env.R297_CONTROLLED_CANARY_DASHBOARD_URL || '');
+    if (
+      candidate.protocol !== 'http:' || candidate.hostname !== 'host.docker.internal' ||
+      candidate.pathname !== '/r297-controlled-canary.html' || candidate.username || candidate.password ||
+      candidate.search || candidate.hash
+    ) throw new Error('R297_CONTROLLED_CANARY_DASHBOARD_URL_INVALID');
+    dashboardUrl = candidate.href;
+  }
   const app = buildApp({
     captureToken: process.env.JD_BROWSER_CAPTURE_TOKEN,
     controlToken: process.env.JD_BROWSER_CONTROL_TOKEN,
     viewerTicketSigningKey: process.env.JD_BROWSER_VIEWER_TICKET_SIGNING_KEY,
     viewerCookieSigningKey: process.env.JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY,
     masterKey: process.env.JD_SESSION_MASTER_KEY,
+    dashboardUrl,
     profileRoot: process.env.JD_PROFILE_ROOT,
     archiveRoot: process.env.JD_SESSION_ARCHIVE_ROOT
   });
