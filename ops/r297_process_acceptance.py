@@ -255,7 +255,7 @@ def main() -> int:
         run(sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head", env=environment)
         os.environ.update({name: environment[name] for name in environment if name.startswith(("DATABASE_", "REDIS_", "APP_ENV", "SERVICE_ROLE", "JD_", "CORS_", "JWT_", "BOSS_", "AGENT_", "ALPHA_", "PUBLIC_", "KNOWLEDGE_", "SKILLS_"))})
         from backend.database import SessionLocal, get_redis
-        from backend.models import JdSyncLog, JdWorkbenchDevice, JdWorkbenchStoreStatus, JdWorkbenchSyncPolicy, Store, User, UserStoreMembership
+        from backend.models import JdAccount, JdSyncLog, JdWorkbenchDevice, JdWorkbenchStoreStatus, JdWorkbenchSyncPolicy, Store, User, UserStoreMembership
         from backend.queue import PROCESSING_METADATA_PREFIX, PROCESSING_QUEUE_NAME, QUEUE_NAME
         from backend.seed import seed_defaults
         from backend.worker import JD_RETRY_BACKOFF_SECONDS, _finish_jd_workbench_task, run_jd_workbench_scheduler
@@ -275,6 +275,15 @@ def main() -> int:
         db.add(store)
         db.flush()
         db.add(UserStoreMembership(user_id=owner.id, store_id=store.id, can_read=True, can_write=True, active=True))
+        db.add(JdAccount(
+            store_id=store.id,
+            account_type="jd_smart",
+            account_name="R297 controlled canary",
+            login_status="ok",
+            cookie_status="ok",
+            auth_status="active",
+            active=True,
+        ))
         device = JdWorkbenchDevice(
             device_id="00000000-0000-4000-8000-000000000297", token_hash=hashlib.sha256(device_token.encode()).hexdigest(),
             public_key_n=public_key_n, public_key_e=65537, tenant_id=store.tenant_id,
@@ -372,7 +381,7 @@ def main() -> int:
                 raise RuntimeError("STORE_TASK_ID_MISSING")
             return {"task_id": task_id}
 
-        def wait_sync_log(task_id: str, expected_status: str = "failed", timeout: float = 30) -> dict:
+        def wait_sync_log(task_id: str, expected_status: str = "success", timeout: float = 30) -> dict:
             deadline = time.monotonic() + timeout
             last_status = None
             while time.monotonic() < deadline:
@@ -388,6 +397,8 @@ def main() -> int:
                 db.close()
                 if result:
                     return result
+                if last_status == "failed":
+                    raise RuntimeError(f"SYNC_TASK_FAILED:{task_id}")
                 time.sleep(0.1)
             raise RuntimeError(f"SYNC_LOG_TIMEOUT:{task_id}:{expected_status}:{last_status}")
 
@@ -556,6 +567,7 @@ def main() -> int:
             "mode": "real_process",
             "mock_count": 0,
             "controlled_canary": True,
+            "data_source": "CONTROLLED_CANARY",
             "real_jd_acceptance": False,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "containers": {"postgres": postgres_id, "redis": redis_id, "runtime": runtime_id},

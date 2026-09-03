@@ -279,6 +279,9 @@ def test_machine_evidence_entrypoints_bind_checkout_head_and_write_hashes():
 
     assert 'head = run("git", "rev-parse", "HEAD")' in process
     assert 'head != os.environ.get("RELEASE_SOURCE_SHA")' in process
+    assert 'account_name="R297 controlled canary"' in process
+    assert 'expected_status: str = "success"' in process
+    assert '"data_source": "CONTROLLED_CANARY"' in process
     assert "R297_PROCESS_ACCEPTANCE_EVIDENCE.json.sha256" in ci
     assert "python ops/r297_process_acceptance.py" in ci
     assert "$env:GITHUB_SHA -eq $head" in windows
