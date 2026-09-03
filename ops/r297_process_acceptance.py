@@ -522,14 +522,14 @@ def main() -> int:
         lock_connection.rollback()
         lock_cursor.close()
         lock_connection.close()
+        replacement = start_python("backend.worker", worker_env, worker_logs[2])
+        processes.append(replacement)
         orphan_result = wait_sync_log(orphan["task_id"], timeout=30)
         db = SessionLocal()
         orphan_log_count = db.query(JdSyncLog).filter(JdSyncLog.task_id == orphan["task_id"]).count()
         db.close()
         if orphan_log_count != 1:
             raise RuntimeError(f"ORPHAN_LOG_COUNT_INVALID:{orphan_log_count}")
-        replacement = start_python("backend.worker", worker_env, worker_logs[2])
-        processes.append(replacement)
 
         commands.append("verify human-action resume and exact retry schedule")
         # State-transition checks must not race the already-observed worker pair.
