@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
@@ -254,7 +254,7 @@ def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None)
     if not isinstance(token, str) or len(token.encode("utf-8")) < 32:
         raise HTTPException(status_code=503, detail="云端登录运行时控制凭据未配置")
     body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    request = Request(
+    request = UrlRequest(
         f"{RUNTIME_BASE}{path}",
         data=body,
         headers={"content-type": "application/json", "x-internal-token": token},
