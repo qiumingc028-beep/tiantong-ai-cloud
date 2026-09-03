@@ -22,6 +22,7 @@ from backend.models import (
     Tenant,
     User,
 )
+from backend.services.jd_collectors import JdCollectorError
 
 
 class SchedulerRedis:
@@ -129,6 +130,48 @@ def test_non_cloud_successful_task_replay_is_ack_only(postgres_database_factory,
     }
     try:
         assert worker._claim_jd_workbench_task(task, "worker-replay", datetime.now(timezone.utc)) == "completed"
+    finally:
+        engine.dispose()
+
+
+def test_0052_downgrade_reupgrade_preserves_queue_identity(postgres_database_factory):
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_0052_roundtrip")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    window = datetime.now(timezone.utc).replace(microsecond=0)
+    task_id = str(uuid.uuid4())
+    with engine.begin() as connection:
+        tenant_id = connection.exec_driver_sql(
+            "INSERT INTO tenants (tenant_code, tenant_name, active) VALUES ('R297-RT', 'R297 roundtrip', true) RETURNING id"
+        ).scalar_one()
+        company_id = connection.exec_driver_sql(
+            "INSERT INTO companies (tenant_id, company_code, company_name, active) VALUES (%s, 'R297-RT', 'R297 roundtrip', true) RETURNING id",
+            (tenant_id,),
+        ).scalar_one()
+        store_id = connection.exec_driver_sql(
+            "INSERT INTO stores (tenant_id, company_id, platform, store_code, store_name, active) VALUES (%s, %s, 'jd', 'R297-RT', 'R297 roundtrip', true) RETURNING id",
+            (tenant_id, company_id),
+        ).scalar_one()
+        connection.exec_driver_sql(
+            "INSERT INTO jd_sync_logs (tenant_id, company_id, store_id, task_id, task_type, source, status, attempt, claim_generation, sync_window_started_at) VALUES (%s, %s, %s, %s, 'sync_jd_smart', 'cloud_scheduler', 'success', 0, 7, %s)",
+            (tenant_id, company_id, store_id, task_id, window),
+        )
+    engine.dispose()
+
+    _alembic(database_url, "downgrade", "0051_r297_queue_fencing_and_idempotency")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            row = connection.exec_driver_sql(
+                "SELECT source, claim_generation, sync_window_started_at FROM jd_sync_logs WHERE task_id = %s",
+                (task_id,),
+            ).one()
+        assert row[0] == "cloud_scheduler"
+        assert row[1] == 7
+        assert row[2] == window
     finally:
         engine.dispose()
 
@@ -343,4 +386,25 @@ def test_two_schedulers_create_one_store_window_task(postgres_database_factory, 
     redis.lists[queue.QUEUE_NAME] = []
     assert worker.run_jd_workbench_scheduler(window + timedelta(seconds=20)) == 0
     assert redis.lists[queue.QUEUE_NAME] == []
+    db = sessions()
+    try:
+        policy = db.query(JdWorkbenchSyncPolicy).one()
+        policy.active_task_id = "00000000-0000-4000-8000-000000000999"
+        policy.queue_state = "processing"
+        policy.lease_worker_id = "worker-new"
+        policy.claim_generation = 2
+        db.commit()
+        with pytest.raises(JdCollectorError, match="任务租约已失效"):
+            worker._assert_jd_workbench_claim_owned(
+                db,
+                {
+                    "task_id": completed_task_id,
+                    "db_claim_generation": 1,
+                    "payload": {"tenant_id": policy.tenant_id, "company_id": policy.company_id, "store_id": policy.store_id},
+                },
+                "worker-old",
+            )
+        db.rollback()
+    finally:
+        db.close()
     engine.dispose()

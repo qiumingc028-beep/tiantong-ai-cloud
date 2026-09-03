@@ -148,6 +148,14 @@ def run_jd_workbench_scheduler(now=None):
                 JdSyncLog.task_type == "sync_jd_smart",
             ).order_by(JdSyncLog.attempt.desc()).first()
             if previous_attempt and previous_attempt.status == "success":
+                _clear_policy_lease(policy)
+                for status_row in statuses:
+                    status_row.status = "IDLE"
+                    status_row.reason_code = None
+                    status_row.last_sync_at = previous_attempt.finished_at or now
+                    status_row.retry_count = 0
+                    status_row.last_error_at = None
+                db.commit()
                 continue
             task_id = previous_attempt.task_id if previous_attempt else str(uuid.uuid4())
             attempt = previous_attempt.attempt + 1 if previous_attempt else 0
@@ -367,6 +375,22 @@ def _heartbeat_jd_workbench_task(task: dict, worker_id: str, now: datetime) -> b
         return updated == 1
     finally:
         db.close()
+
+
+def _assert_jd_workbench_claim_owned(db, task: dict, worker_id: str) -> None:
+    """Fence the business commit with the authoritative PostgreSQL claim."""
+    payload = task["payload"]
+    owned = db.query(JdWorkbenchSyncPolicy.id).filter(
+        JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+        JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+        JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+        JdWorkbenchSyncPolicy.active_task_id == task["task_id"],
+        JdWorkbenchSyncPolicy.lease_worker_id == worker_id,
+        JdWorkbenchSyncPolicy.claim_generation == int(task.get("db_claim_generation", -1)),
+        JdWorkbenchSyncPolicy.queue_state == "processing",
+    ).with_for_update().one_or_none()
+    if owned is None:
+        raise JdCollectorError("任务租约已失效")
 
 
 def _recover_jd_workbench_task(task: dict, now: datetime) -> bool:
@@ -666,6 +690,7 @@ def _handle_task_direct(task):
             attempt=attempt,
         )
         db.add(log)
+    log.claim_generation = task.get("db_claim_generation")
     log.status = "running"
     log.started_at = datetime.now(timezone.utc)
     log.finished_at = None
@@ -673,7 +698,13 @@ def _handle_task_direct(task):
     update_task_status(task_id, "running", task_type, payload, message="任务执行中", attempt=attempt, max_retries=max_retries)
     try:
         if task_type == "sync_jd_smart":
-            result = sync_jd_smart(db, int(payload["store_id"]), completion_log=log)
+            cloud = payload.get("source") == "cloud_scheduler"
+            result = sync_jd_smart(
+                db,
+                int(payload["store_id"]),
+                completion_log=log,
+                before_commit=(lambda: _assert_jd_workbench_claim_owned(db, task, task["_worker_id"])) if cloud else None,
+            )
         elif task_type == "sync_jzt":
             result = sync_jzt(db, int(payload["store_id"]))
         elif task_type == "sync_jd_orders":
@@ -1164,6 +1195,7 @@ def process_next_task():
         return True
     success = False
     task_error = None
+    task["_worker_id"] = worker_id
     logger.info("worker_task_claimed task_id=%s worker_id=%s", task["task_id"], worker_id)
     try:
         with _TaskHeartbeat(task, worker_id):

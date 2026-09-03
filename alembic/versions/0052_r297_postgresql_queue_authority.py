@@ -6,6 +6,7 @@ Revises: 0051_r297_queue_fencing_and_idempotency
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 revision = "0052_r297_postgresql_queue_authority"
@@ -54,22 +55,34 @@ def upgrade():
     op.add_column("jd_sync_logs", sa.Column("source", sa.String(length=32)))
     op.add_column("jd_sync_logs", sa.Column("sync_window_started_at", sa.DateTime(timezone=True)))
     op.create_unique_constraint("uq_stores_tenant_company_id", "stores", ["tenant_id", "company_id", "id"])
-    op.execute(
-        """
-        UPDATE jd_sync_logs AS l
-        SET tenant_id = s.tenant_id,
-            company_id = s.company_id,
-            source = 'legacy',
-            sync_window_started_at = to_timestamp(
-              floor(extract(epoch FROM l.created_at) / COALESCE(p.interval_seconds, 300))
-              * COALESCE(p.interval_seconds, 300)
-            )
-        FROM stores AS s
-        LEFT JOIN jd_workbench_sync_policies AS p
-          ON (p.store_id, p.tenant_id, p.company_id) = (s.id, s.tenant_id, s.company_id)
-        WHERE l.store_id = s.id
-        """
-    )
+    if inspect(op.get_bind()).has_table("r297_0052_jd_sync_log_backup"):
+        op.execute(
+            """
+            UPDATE jd_sync_logs AS l
+            SET tenant_id = b.tenant_id, company_id = b.company_id,
+                claim_generation = b.claim_generation, source = b.source,
+                sync_window_started_at = b.sync_window_started_at
+            FROM r297_0052_jd_sync_log_backup AS b WHERE l.id = b.id
+            """
+        )
+        op.drop_table("r297_0052_jd_sync_log_backup")
+    else:
+        op.execute("UPDATE jd_sync_logs SET source = 'legacy'")
+        op.execute(
+            """
+            UPDATE jd_sync_logs AS l
+            SET tenant_id = s.tenant_id,
+                company_id = s.company_id,
+                sync_window_started_at = to_timestamp(
+                  floor(extract(epoch FROM l.created_at) / COALESCE(p.interval_seconds, 300))
+                  * COALESCE(p.interval_seconds, 300)
+                )
+            FROM stores AS s
+            LEFT JOIN jd_workbench_sync_policies AS p
+              ON (p.store_id, p.tenant_id, p.company_id) = (s.id, s.tenant_id, s.company_id)
+            WHERE l.store_id = s.id
+            """
+        )
     _reject_invalid_history()
     op.create_foreign_key(
         "fk_jd_sync_logs_tenant_company_store", "jd_sync_logs", "stores",
@@ -93,6 +106,23 @@ def upgrade():
 
 
 def downgrade():
+    op.create_table(
+        "r297_0052_jd_sync_log_backup",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("tenant_id", sa.Integer()),
+        sa.Column("company_id", sa.Integer()),
+        sa.Column("claim_generation", sa.Integer()),
+        sa.Column("source", sa.String(length=32)),
+        sa.Column("sync_window_started_at", sa.DateTime(timezone=True)),
+    )
+    op.execute(
+        """
+        INSERT INTO r297_0052_jd_sync_log_backup
+          (id, tenant_id, company_id, claim_generation, source, sync_window_started_at)
+        SELECT id, tenant_id, company_id, claim_generation, source, sync_window_started_at
+        FROM jd_sync_logs
+        """
+    )
     for table in ("jd_workbench_records", "jd_workbench_sync_batches", "jd_workbench_sync_policies"):
         op.drop_constraint(f"fk_{table}_tenant_company_store", table, type_="foreignkey")
     op.drop_index("uq_jd_sync_logs_store_window_task_type", table_name="jd_sync_logs")
