@@ -55,11 +55,15 @@ def test_r297_windows_acceptance_requires_controlled_https_pairing_secrets():
     assert "environment: r297-controlled-canary" in workflow
     for name in (
         "R297_WINDOWS_CANARY_BACKEND_HTTPS_URL",
-        "R297_WINDOWS_CANARY_PAIRING_CODE",
+        "R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER",
         "R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64",
     ):
         assert f"secrets.{name}" in workflow
         assert name in acceptance
+    assert "R297_WINDOWS_CANARY_PAIRING_CODE" not in workflow + acceptance
+    assert '"$backendOrigin/api/jd-workbench/pairing-codes"' in acceptance
+    assert "$pairingCode | node $probe" in acceptance
+    assert "$pairingCode = $null" in acceptance
     assert "R297_WINDOWS_CANARY_HEALTH_URL" not in workflow + acceptance
     assert "R297_WINDOWS_CANARY_SCHEDULER_URL" not in workflow + acceptance
     assert '"$backendOrigin/api/health"' in acceptance

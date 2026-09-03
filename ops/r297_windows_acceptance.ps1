@@ -41,8 +41,8 @@ function Assert-BackendTlsBinding([string]$Origin, [byte[]]$ExpectedCertificateB
 $head = (& git rev-parse HEAD).Trim()
 Require ($head -match '^[0-9a-f]{40}$') 'CHECKOUT_HEAD_INVALID'
 Require ($env:GITHUB_SHA -eq $head) 'EVIDENCE_COMMIT_MUST_EQUAL_GITHUB_SHA'
-Require ($env:R297_WINDOWS_CANARY_PAIRING_CODE -match '^\d{8}$') 'CONTROLLED_BACKEND_PAIRING_CODE_REQUIRED'
 Require ($env:R297_WINDOWS_CANARY_BACKEND_HTTPS_URL -match '^https://[^/]+/?$') 'CONTROLLED_BACKEND_HTTPS_URL_REQUIRED'
+Require (-not [string]::IsNullOrWhiteSpace($env:R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER)) 'CONTROLLED_BACKEND_PAIRING_ISSUER_REQUIRED'
 Require ($env:R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64 -match '^[A-Za-z0-9+/=]+$') 'CONTROLLED_BACKEND_SERVER_CERTIFICATE_REQUIRED'
 
 $backendOrigin = $env:R297_WINDOWS_CANARY_BACKEND_HTTPS_URL.TrimEnd('/')
@@ -52,6 +52,14 @@ $certificateBytes = [Convert]::FromBase64String($env:R297_WINDOWS_CANARY_SERVER_
 $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificateBytes)
 Require ($certificate.NotAfter.ToUniversalTime() -gt [DateTime]::UtcNow) 'CONTROLLED_BACKEND_SERVER_CERTIFICATE_EXPIRED'
 Assert-BackendTlsBinding $backendOrigin $certificateBytes
+$pairingResponse = Invoke-RestMethod `
+  -Method Post `
+  -Uri "$backendOrigin/api/jd-workbench/pairing-codes" `
+  -Headers @{ Authorization = "Bearer $($env:R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER)" } `
+  -TimeoutSec 15
+$pairingCode = [string]$pairingResponse.code
+$env:R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER = $null
+Require ($pairingCode -match '^\d{8}$') 'CONTROLLED_BACKEND_ONE_TIME_PAIRING_CODE_REQUIRED'
 
 $dist = (Resolve-Path $DistDirectory).Path
 $installer = @(Get-ChildItem $dist -File -Filter '*.exe')
@@ -144,7 +152,8 @@ const diagnostic = await call('Runtime.evaluate', {returnByValue:true, expressio
 process.stdout.write(JSON.stringify(diagnostic.result.value));
 socket.close();
 '@ | Set-Content -LiteralPath $probe -Encoding utf8NoBOM
-  $probeResult = ($env:R297_WINDOWS_CANARY_PAIRING_CODE | node $probe $target.webSocketDebuggerUrl) | ConvertFrom-Json
+  $probeResult = ($pairingCode | node $probe $target.webSocketDebuggerUrl) | ConvertFrom-Json
+  $pairingCode = $null
   Require ($probeResult.paired -eq $true) 'PAIRING_NOT_COMPLETED'
   Require ($probeResult.readOnly -eq $true) 'READ_ONLY_POLICY_NOT_VISIBLE'
   Require ($probeResult.diagnosticVisible -eq $true) 'DIAGNOSTIC_UI_NOT_VISIBLE'

@@ -11,6 +11,7 @@ class ReliableFakeRedis:
         self.lists: dict[str, list[str]] = {}
         self.hashes: dict[str, dict[str, str]] = {}
         self.sorted_sets: dict[str, dict[str, float]] = {}
+        self.values: dict[str, str] = {}
 
     def rpush(self, key, value):
         self.lists.setdefault(key, []).append(value)
@@ -71,14 +72,21 @@ class ReliableFakeRedis:
 
     def eval(self, script, _key_count, *args):
         if script == queue._CLAIM_SCRIPT:
-            ready, processing, deadlines, prefix, worker_id, now, deadline, _ttl, score = args
+            ready, processing, deadlines, prefix, worker_id, now, deadline, _ttl, score, generation_prefix, _generation_ttl = args
             values = self.lists.get(ready, [])
             if not values:
                 return None
             raw = values.pop(0)
             task = json.loads(raw)
+            generation_key = generation_prefix + task["task_id"]
+            task["claim_generation"] = max(
+                int(task.get("claim_generation", 0)),
+                int(self.values.get(generation_key, 0)),
+            ) + 1
+            self.values[generation_key] = str(task["claim_generation"])
+            raw = json.dumps(task, separators=(",", ":"))
             payload = task.get("payload") or {}
-            metadata = prefix + task["task_id"]
+            metadata = prefix + f"{task['task_id']}:{task['claim_generation']}"
             self.lists.setdefault(processing, []).append(raw)
             self.hashes[metadata] = {
                 "task_id": task["task_id"],
@@ -87,11 +95,12 @@ class ReliableFakeRedis:
                 "store_id": str(payload.get("store_id") or ""),
                 "sync_window_started_at": str(payload.get("sync_window_started_at") or ""),
                 "claimed_by": worker_id,
+                "claim_generation": str(task["claim_generation"]),
                 "started_at": now,
                 "heartbeat_at": now,
                 "visibility_deadline": deadline,
             }
-            self.zadd(deadlines, {task["task_id"]: float(score)})
+            self.zadd(deadlines, {f"{task['task_id']}:{task['claim_generation']}": float(score)})
             return raw
         if script == queue._HEARTBEAT_SCRIPT:
             metadata, deadlines, worker_id, heartbeat, deadline, _ttl, task_id, score = args
@@ -101,13 +110,31 @@ class ReliableFakeRedis:
             self.zadd(deadlines, {task_id: float(score)})
             return 1
         if script == queue._ACK_SCRIPT:
-            processing, metadata, deadlines, raw, worker_id, task_id = args
+            processing, metadata, deadlines, raw, worker_id, task_id, generation = args
             if self.hashes.get(metadata, {}).get("claimed_by") != worker_id:
+                return 0
+            if self.hashes.get(metadata, {}).get("task_id") != task_id:
+                return 0
+            if self.hashes.get(metadata, {}).get("claim_generation") != generation:
                 return 0
             if not self.lrem(processing, 1, raw):
                 return 0
             self.delete(metadata)
-            self.zrem(deadlines, task_id)
+            self.zrem(deadlines, f"{task_id}:{generation}")
+            return 1
+        if script == queue._NACK_SCRIPT:
+            processing, metadata, deadlines, ready, raw, worker_id, task_id, generation = args
+            if self.hashes.get(metadata, {}).get("claimed_by") != worker_id:
+                return 0
+            if self.hashes.get(metadata, {}).get("task_id") != task_id:
+                return 0
+            if self.hashes.get(metadata, {}).get("claim_generation") != generation:
+                return 0
+            if not self.lrem(processing, 1, raw):
+                return 0
+            self.lpush(ready, raw)
+            self.delete(metadata)
+            self.zrem(deadlines, f"{task_id}:{generation}")
             return 1
         processing, ready, metadata, deadlines, raw, task_id, now = args
         deadline = self.hashes.get(metadata, {}).get("visibility_deadline")
@@ -155,18 +182,35 @@ def test_claim_moves_ready_task_to_processing_and_ack_removes_it(monkeypatch):
     assert claimed["task_id"] == item["task_id"]
     assert redis.lists[queue.QUEUE_NAME] == []
     assert len(redis.lists[queue.PROCESSING_QUEUE_NAME]) == 1
-    metadata = redis.hgetall(f"{queue.PROCESSING_METADATA_PREFIX}{item['task_id']}")
+    metadata = redis.hgetall(f"{queue.PROCESSING_METADATA_PREFIX}{item['task_id']}:1")
     assert metadata["task_id"] == item["task_id"]
     assert metadata["tenant_id"] == "11"
     assert metadata["company_id"] == "22"
     assert metadata["store_id"] == "33"
     assert metadata["claimed_by"] == "worker-1"
+    assert metadata["claim_generation"] == "1"
     assert metadata["started_at"]
     assert metadata["visibility_deadline"]
 
     assert queue.ack_task(claimed, "worker-1") is True
     assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
-    assert redis.hgetall(f"{queue.PROCESSING_METADATA_PREFIX}{item['task_id']}") == {}
+    assert redis.hgetall(f"{queue.PROCESSING_METADATA_PREFIX}{item['task_id']}:1") == {}
+
+
+def test_nack_requeues_a_temporarily_unclaimable_task_with_next_generation(monkeypatch):
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    item = queue.enqueue_task("sync_jd_smart", {"tenant_id": 1, "company_id": 2, "store_id": 3})
+    first = queue.claim_task(worker_id="worker-1", timeout=0)
+
+    assert queue.nack_task(first, "worker-1") is True
+    second = queue.claim_task(worker_id="worker-2", timeout=0)
+
+    assert second["task_id"] == item["task_id"]
+    assert first["claim_generation"] == 1
+    assert second["claim_generation"] == 2
+    assert queue.ack_task(first, "worker-1") is False
+    assert queue.ack_task(second, "worker-2") is True
 
 
 def test_stale_worker_cannot_ack_reassigned_task(monkeypatch):
@@ -174,11 +218,124 @@ def test_stale_worker_cannot_ack_reassigned_task(monkeypatch):
     monkeypatch.setattr(queue, "get_redis", lambda: redis)
     item = queue.enqueue_task("sync_jd_smart", {"tenant_id": 1, "company_id": 2, "store_id": 3})
     claimed = queue.claim_task(worker_id="worker-old", timeout=0, visibility_timeout=30)
-    metadata_key = f"{queue.PROCESSING_METADATA_PREFIX}{item['task_id']}"
+    metadata_key = f"{queue.PROCESSING_METADATA_PREFIX}{item['task_id']}:1"
     redis.hashes[metadata_key]["claimed_by"] = "worker-new"
 
     assert queue.ack_task(claimed, "worker-old") is False
     assert len(redis.lists[queue.PROCESSING_QUEUE_NAME]) == 1
+
+
+def test_stale_claim_generation_cannot_ack_current_lease(monkeypatch):
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    queue.enqueue_task("sync_jd_smart", {"tenant_id": 1, "company_id": 2, "store_id": 3})
+    claimed = queue.claim_task(worker_id="worker-1", timeout=0)
+    stale = {**claimed, "claim_generation": claimed["claim_generation"] - 1}
+
+    assert queue.ack_task(stale, "worker-1", claimed["_processing_raw"]) is False
+    assert queue.ack_task(claimed, "worker-1") is True
+
+
+def test_duplicate_ready_entries_receive_distinct_claim_generations(monkeypatch):
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    item = queue.enqueue_task("sync_jd_smart", {"tenant_id": 1, "company_id": 2, "store_id": 3})
+    redis.rpush(queue.QUEUE_NAME, json.dumps(item))
+
+    first = queue.claim_task(worker_id="worker-1", timeout=0)
+    second = queue.claim_task(worker_id="worker-2", timeout=0)
+
+    assert first["task_id"] == second["task_id"]
+    assert (first["claim_generation"], second["claim_generation"]) == (1, 2)
+
+
+def test_worker_nacks_temporary_database_claim_contention(monkeypatch):
+    from backend import worker
+
+    task = {
+        "task_id": "00000000-0000-4000-8000-000000000297",
+        "task_type": "sync_jd_smart",
+        "payload": {"source": "cloud_scheduler"},
+        "claim_generation": 1,
+        "_processing_raw": "raw",
+    }
+    calls = []
+    monkeypatch.setattr(worker, "_worker_id", lambda: "worker-1")
+    monkeypatch.setattr(worker, "claim_task", lambda **_kwargs: dict(task))
+    monkeypatch.setattr(worker, "_claim_jd_workbench_task", lambda *_args: "nack")
+    monkeypatch.setattr(worker, "nack_task", lambda *_args: calls.append("nack") or True)
+    monkeypatch.setattr(worker, "ack_task", lambda *_args: calls.append("ack") or True)
+
+    assert worker.process_next_task() is True
+    assert calls == ["nack"]
+
+
+def test_completed_database_replay_skips_collection_and_only_acks(monkeypatch):
+    from backend import worker
+
+    task = {
+        "task_id": "00000000-0000-4000-8000-000000000298",
+        "task_type": "sync_jd_smart",
+        "payload": {"source": "cloud_scheduler"},
+        "claim_generation": 2,
+        "_processing_raw": "raw",
+    }
+    calls = []
+    monkeypatch.setattr(worker, "_worker_id", lambda: "worker-2")
+    monkeypatch.setattr(worker, "claim_task", lambda **_kwargs: dict(task))
+    monkeypatch.setattr(worker, "_claim_jd_workbench_task", lambda *_args: "completed")
+    monkeypatch.setattr(worker, "handle_task", lambda *_args: calls.append("collect"))
+    monkeypatch.setattr(worker, "ack_task", lambda *_args: calls.append("ack") or True)
+
+    assert worker.process_next_task() is True
+    assert calls == ["ack"]
+
+
+def test_reconciler_cleans_redis_residue_after_ack_failure(monkeypatch):
+    from backend import worker
+
+    class CompletedQuery:
+        def filter(self, *_args):
+            return self
+
+        def one_or_none(self):
+            return (1,)
+
+    class CompletedSession:
+        def query(self, *_args):
+            return CompletedQuery()
+
+        def close(self):
+            pass
+
+    class FailOnceAckRedis(ReliableFakeRedis):
+        def __init__(self):
+            super().__init__()
+            self.fail_ack = True
+
+        def eval(self, script, key_count, *args):
+            if script == queue._ACK_SCRIPT and self.fail_ack:
+                self.fail_ack = False
+                return 0
+            return super().eval(script, key_count, *args)
+
+    redis = FailOnceAckRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "SessionLocal", CompletedSession)
+    finishes = []
+    monkeypatch.setattr(worker, "_finish_jd_workbench_task", lambda *_args, **_kwargs: finishes.append("finish") or True)
+    queue.enqueue_task(
+        "sync_jd_smart",
+        {"source": "cloud_scheduler", "tenant_id": 1, "company_id": 2, "store_id": 3},
+    )
+    claimed = queue.claim_task(worker_id="worker-1", timeout=0)
+
+    assert queue.ack_task(claimed, "worker-1") is False
+    assert len(redis.lists[queue.PROCESSING_QUEUE_NAME]) == 1
+    assert worker.reconcile_completed_jd_workbench_tasks() == 1
+    assert finishes == ["finish"]
+    assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
 
 
 def test_worker_heartbeat_extends_database_lease_before_redis(monkeypatch):
@@ -208,7 +365,7 @@ def test_heartbeat_extends_visibility_and_reaper_recovers_only_expired_task(monk
     monkeypatch.setattr(queue, "get_redis", lambda: redis)
     item = queue.enqueue_task("sync_jd_smart", {"tenant_id": 1, "company_id": 2, "store_id": 3})
     claimed = queue.claim_task(worker_id="worker-1", timeout=0, visibility_timeout=30)
-    metadata_key = f"{queue.PROCESSING_METADATA_PREFIX}{item['task_id']}"
+    metadata_key = f"{queue.PROCESSING_METADATA_PREFIX}{item['task_id']}:1"
     original_deadline = redis.hashes[metadata_key]["visibility_deadline"]
 
     future = datetime.now(timezone.utc) + timedelta(seconds=10)

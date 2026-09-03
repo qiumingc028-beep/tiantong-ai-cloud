@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from backend.models import (
     Company,
+    JdSyncLog,
     JdWorkbenchDevice,
     JdWorkbenchStoreStatus,
     JdWorkbenchSyncPolicy,
@@ -51,6 +54,31 @@ class SchedulerRedis:
     def ltrim(self, key, start, end):
         with self.lock:
             self.lists[key] = self.lists.get(key, [])[start : end + 1]
+
+
+def test_task_attempt_has_persistent_database_idempotency_key(postgres_database_factory):
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_task_idempotency")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    task_id = str(uuid.uuid4())
+    db = sessions()
+    try:
+        db.add(JdSyncLog(task_id=task_id, task_type="sync_jd_smart", attempt=0, status="success"))
+        db.commit()
+        db.add(JdSyncLog(task_id=task_id, task_type="sync_jd_smart", attempt=0, status="running"))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError("duplicate task_id/attempt must be rejected")
+        assert db.query(JdSyncLog).filter(JdSyncLog.task_id == task_id, JdSyncLog.attempt == 0).count() == 1
+    finally:
+        db.close()
+        engine.dispose()
 
 
 def test_two_schedulers_create_one_store_window_task(postgres_database_factory, monkeypatch):
@@ -152,8 +180,10 @@ def test_two_schedulers_create_one_store_window_task(postgres_database_factory, 
         assert policy.active_task_id
         assert policy.sync_window_started_at == worker._sync_window(now, 300)
         task = json.loads(redis.lists[queue.QUEUE_NAME][0])
+        task["claim_generation"] = 1
         policy.queue_state = "processing"
         policy.lease_worker_id = "dead-worker"
+        policy.claim_generation = 1
         policy.visibility_deadline = now - timedelta(seconds=1)
         db.commit()
     finally:

@@ -117,8 +117,8 @@ jobs:
         shell: pwsh
         working-directory: .
         env:
-          R297_WINDOWS_CANARY_PAIRING_CODE: ${{ secrets.R297_WINDOWS_CANARY_PAIRING_CODE }}
           R297_WINDOWS_CANARY_BACKEND_HTTPS_URL: ${{ secrets.R297_WINDOWS_CANARY_BACKEND_HTTPS_URL }}
+          R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER: ${{ secrets.R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER }}
           R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64: ${{ secrets.R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64 }}
         run: |
           ./ops/r297_windows_acceptance.ps1 `

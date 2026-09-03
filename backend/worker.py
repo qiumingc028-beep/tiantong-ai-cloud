@@ -35,7 +35,18 @@ from .task_center_ownership import (
     task_ownership_context,
 )
 from .queue_worker import process_next_event
-from .queue import ack_task, claim_task, enqueue_task, heartbeat_task, reap_expired_tasks, requeue_task, update_task_status
+from .queue import (
+    PROCESSING_METADATA_PREFIX,
+    PROCESSING_QUEUE_NAME,
+    ack_task,
+    claim_task,
+    enqueue_task,
+    heartbeat_task,
+    nack_task,
+    reap_expired_tasks,
+    requeue_task,
+    update_task_status,
+)
 from .services.ai_store_manager import analyze_store_health
 from .services.jd_collectors import (
     JdCollectorError,
@@ -178,22 +189,42 @@ def run_jd_workbench_scheduler(now=None):
     return scheduled
 
 
-def _claim_jd_workbench_task(task: dict, worker_id: str, now: datetime) -> bool:
+def _claim_jd_workbench_task(task: dict, worker_id: str, now: datetime) -> str:
     if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
-        return True
+        return "claimed"
     payload = task["payload"]
     db = SessionLocal()
     try:
-        policy = db.query(JdWorkbenchSyncPolicy).filter(
+        query = db.query(JdWorkbenchSyncPolicy).filter(
             JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
             JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
             JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
-        ).with_for_update(skip_locked=True).one_or_none()
-        if policy is None or policy.active_task_id != task["task_id"] or policy.queue_state != "ready":
+        )
+        policy = query.with_for_update(skip_locked=True).one_or_none()
+        if policy is None:
             db.rollback()
-            return False
+            return "nack" if query.with_entities(JdWorkbenchSyncPolicy.id).one_or_none() else "discard"
+        completed = db.query(JdSyncLog.id).filter(
+            JdSyncLog.task_id == task["task_id"],
+            JdSyncLog.attempt == int(task.get("attempt", 0)),
+            JdSyncLog.status == "success",
+        ).one_or_none()
+        if completed:
+            if policy.active_task_id == task["task_id"]:
+                _clear_policy_lease(policy)
+                db.commit()
+            else:
+                db.rollback()
+            return "completed"
+        if policy.active_task_id != task["task_id"]:
+            db.rollback()
+            return "discard"
+        if policy.queue_state != "ready":
+            db.rollback()
+            return "nack"
         policy.queue_state = "processing"
         policy.lease_worker_id = worker_id
+        policy.claim_generation = int(task["claim_generation"])
         policy.lease_started_at = now
         policy.lease_heartbeat_at = now
         policy.visibility_deadline = now + timedelta(seconds=JD_TASK_VISIBILITY_SECONDS)
@@ -201,10 +232,10 @@ def _claim_jd_workbench_task(task: dict, worker_id: str, now: datetime) -> bool:
             status.status = "SYNCING"
             status.last_attempt_at = now
         db.commit()
-        return True
+        return "claimed"
     except (KeyError, TypeError, ValueError, IntegrityError):
         db.rollback()
-        return False
+        return "discard"
     finally:
         db.close()
 
@@ -221,6 +252,7 @@ def _finish_jd_workbench_task(task: dict, worker_id: str, *, success: bool, now:
             JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
             JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
             JdWorkbenchSyncPolicy.lease_worker_id == worker_id,
+            JdWorkbenchSyncPolicy.claim_generation == int(task.get("claim_generation", -1)),
             JdWorkbenchSyncPolicy.queue_state == "processing",
         ).with_for_update().one_or_none()
         if policy is None or policy.active_task_id != task["task_id"]:
@@ -263,6 +295,7 @@ def _heartbeat_jd_workbench_task(task: dict, worker_id: str, now: datetime) -> b
             JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
             JdWorkbenchSyncPolicy.active_task_id == task["task_id"],
             JdWorkbenchSyncPolicy.lease_worker_id == worker_id,
+            JdWorkbenchSyncPolicy.claim_generation == int(task.get("claim_generation", -1)),
             JdWorkbenchSyncPolicy.queue_state == "processing",
         ).update({
             JdWorkbenchSyncPolicy.lease_heartbeat_at: now,
@@ -286,6 +319,9 @@ def _recover_jd_workbench_task(task: dict, now: datetime) -> bool:
             JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
         ).with_for_update().one_or_none()
         if policy is None or policy.active_task_id != task["task_id"]:
+            db.rollback()
+            return False
+        if policy.claim_generation != int(task.get("claim_generation", -1)):
             db.rollback()
             return False
         if policy.queue_state == "ready":
@@ -320,6 +356,37 @@ def reap_jd_workbench_tasks(now=None) -> int:
         before_requeue=lambda task: _recover_jd_workbench_task(task, now),
     )
     return len(recovered)
+
+
+def reconcile_completed_jd_workbench_tasks() -> int:
+    """Remove Redis residue for task attempts already committed in PostgreSQL."""
+    redis = get_redis()
+    reconciled = 0
+    for raw in redis.lrange(PROCESSING_QUEUE_NAME, 0, -1):
+        task = json.loads(raw)
+        if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
+            continue
+        db = SessionLocal()
+        try:
+            completed = db.query(JdSyncLog.id).filter(
+                JdSyncLog.task_id == task["task_id"],
+                JdSyncLog.attempt == int(task.get("attempt", 0)),
+                JdSyncLog.status == "success",
+            ).one_or_none()
+        finally:
+            db.close()
+        if not completed:
+            continue
+        metadata = redis.hgetall(
+            f"{PROCESSING_METADATA_PREFIX}{task['task_id']}:{task.get('claim_generation', '')}"
+        )
+        worker_id = metadata.get("claimed_by") if metadata else None
+        if not worker_id:
+            continue
+        _finish_jd_workbench_task(task, worker_id, success=True, now=datetime.now(timezone.utc))
+        if ack_task(task, worker_id, raw):
+            reconciled += 1
+    return reconciled
 
 
 class _TaskHeartbeat:
@@ -514,20 +581,21 @@ def _handle_task_direct(task):
         if owned_task_from_context_or_none(db, task_id=center_id, ownership=payload.get("ownership")) is None:
             db.close()
             raise RuntimeError("task ownership is missing or inconsistent")
-    log = JdSyncLog(
-        store_id=payload.get("store_id"),
-        task_id=task_id,
-        task_type=task_type,
-        status="running",
-        attempt=attempt,
-        started_at=datetime.now(timezone.utc),
-    )
-    db.add(log)
+    log = db.query(JdSyncLog).filter(
+        JdSyncLog.task_id == task_id,
+        JdSyncLog.attempt == attempt,
+    ).one_or_none()
+    if log is None:
+        log = JdSyncLog(store_id=payload.get("store_id"), task_id=task_id, task_type=task_type, attempt=attempt)
+        db.add(log)
+    log.status = "running"
+    log.started_at = datetime.now(timezone.utc)
+    log.finished_at = None
     db.commit()
     update_task_status(task_id, "running", task_type, payload, message="任务执行中", attempt=attempt, max_retries=max_retries)
     try:
         if task_type == "sync_jd_smart":
-            result = sync_jd_smart(db, int(payload["store_id"]))
+            result = sync_jd_smart(db, int(payload["store_id"]), completion_log=log)
         elif task_type == "sync_jzt":
             result = sync_jzt(db, int(payload["store_id"]))
         elif task_type == "sync_jd_orders":
@@ -947,6 +1015,7 @@ def main():
     while True:
         update_worker_heartbeat()
         if time.monotonic() - last_jd_schedule >= JD_SCHEDULER_POLL_SECONDS:
+            reconcile_completed_jd_workbench_tasks()
             reap_jd_workbench_tasks()
             run_jd_workbench_scheduler()
             last_jd_schedule = time.monotonic()
@@ -1010,7 +1079,11 @@ def process_next_task():
     if not task:
         return False
     raw = task.pop("_processing_raw")
-    if not _claim_jd_workbench_task(task, worker_id, datetime.now(timezone.utc)):
+    claim_result = _claim_jd_workbench_task(task, worker_id, datetime.now(timezone.utc))
+    if claim_result == "nack":
+        nack_task(task, worker_id, raw)
+        return True
+    if claim_result in {"completed", "discard"}:
         ack_task(task, worker_id, raw)
         return True
     success = False

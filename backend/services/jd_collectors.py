@@ -58,7 +58,7 @@ class JztCollector:
         return JdSmartCollector()._capture(account, "ads", account.store)
 
 
-def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):
+def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None, completion_log=None):
     store = db.get(Store, store_id)
     if not store:
         raise JdCollectorError("店铺不存在")
@@ -74,6 +74,10 @@ def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):
     account.last_sync_at = datetime.now(timezone.utc)
     account.login_status = "ok"
     account.cookie_status = "ok"
+    if completion_log is not None:
+        completion_log.status = "success"
+        completion_log.message = str(result)
+        completion_log.finished_at = datetime.now(timezone.utc)
     db.commit()
     return result
 
@@ -171,7 +175,7 @@ def save_jd_daily_metric(db: Session, store_id: int, metric_date: date, payload:
     metric.source = source
     metric.raw_payload = None
     metric.synced_at = datetime.now(timezone.utc)
-    db.commit()
+    db.flush()
     return metric
 
 

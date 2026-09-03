@@ -15,6 +15,7 @@ QUEUE_NAME = "tiantong:tasks"
 PROCESSING_QUEUE_NAME = f"{QUEUE_NAME}:processing"
 PROCESSING_METADATA_PREFIX = f"{QUEUE_NAME}:processing:"
 PROCESSING_DEADLINES_KEY = f"{QUEUE_NAME}:processing:deadlines"
+PROCESSING_GENERATION_PREFIX = f"{QUEUE_NAME}:claim-generation:"
 STATUS_PREFIX = "tiantong:task_status:"
 RECENT_STATUS_KEY = "tiantong:task_status_recent"
 STATUS_TTL_SECONDS = 7 * 24 * 3600
@@ -69,8 +70,16 @@ _CLAIM_SCRIPT = """
 local raw = redis.call('LPOP', KEYS[1])
 if not raw then return nil end
 local task = cjson.decode(raw)
+local generation_key = ARGV[7] .. task['task_id']
+local current_generation = tonumber(redis.call('GET', generation_key) or 0)
+local payload_generation = tonumber(task['claim_generation'] or 0)
+if payload_generation > current_generation then current_generation = payload_generation end
+task['claim_generation'] = current_generation + 1
+redis.call('SET', generation_key, tostring(task['claim_generation']), 'EX', ARGV[8])
+raw = cjson.encode(task)
 local payload = task['payload'] or {}
-local metadata = ARGV[1] .. task['task_id']
+local lease_id = task['task_id'] .. ':' .. tostring(task['claim_generation'])
+local metadata = ARGV[1] .. lease_id
 redis.call('RPUSH', KEYS[2], raw)
 redis.call('HSET', metadata,
   'task_id', task['task_id'],
@@ -79,13 +88,22 @@ redis.call('HSET', metadata,
   'store_id', tostring(payload['store_id'] or ''),
   'sync_window_started_at', tostring(payload['sync_window_started_at'] or ''),
   'claimed_by', ARGV[2],
+  'claim_generation', tostring(task['claim_generation']),
   'started_at', ARGV[3],
   'heartbeat_at', ARGV[3],
   'visibility_deadline', ARGV[4])
 redis.call('EXPIRE', metadata, ARGV[5])
-redis.call('ZADD', KEYS[3], ARGV[6], task['task_id'])
+redis.call('ZADD', KEYS[3], ARGV[6], lease_id)
 return raw
 """
+
+
+def _lease_id(task: dict) -> str:
+    return f"{task['task_id']}:{task.get('claim_generation', '')}"
+
+
+def _metadata_key(task: dict) -> str:
+    return f"{PROCESSING_METADATA_PREFIX}{_lease_id(task)}"
 
 
 def claim_task(worker_id: str, timeout: int = 5, visibility_timeout: int = 120):
@@ -109,6 +127,8 @@ def claim_task(worker_id: str, timeout: int = 5, visibility_timeout: int = 120):
                 deadline.isoformat(),
                 str(max(visibility_timeout * 3, 300)),
                 str(deadline.timestamp()),
+                PROCESSING_GENERATION_PREFIX,
+                str(STATUS_TTL_SECONDS),
             )
         except (RedisTimeoutError, RedisConnectionError) as exc:
             logger.warning("redis_queue_read_warning: %s: %s", type(exc).__name__, exc)
@@ -136,7 +156,7 @@ def heartbeat_task(
     visibility_timeout: int = 120,
 ) -> bool:
     now = now or datetime.now(timezone.utc)
-    metadata_key = f"{PROCESSING_METADATA_PREFIX}{task['task_id']}"
+    metadata_key = _metadata_key(task)
     redis_client = get_redis()
     deadline = now + timedelta(seconds=visibility_timeout)
     return bool(redis_client.eval(
@@ -148,7 +168,7 @@ def heartbeat_task(
         now.isoformat(),
         deadline.isoformat(),
         str(max(visibility_timeout * 3, 300)),
-        task["task_id"],
+        _lease_id(task),
         str(deadline.timestamp()),
     ))
 
@@ -164,9 +184,11 @@ return 1
 
 _ACK_SCRIPT = """
 if redis.call('HGET', KEYS[2], 'claimed_by') ~= ARGV[2] then return 0 end
+if redis.call('HGET', KEYS[2], 'task_id') ~= ARGV[3] then return 0 end
+if redis.call('HGET', KEYS[2], 'claim_generation') ~= ARGV[4] then return 0 end
 if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
 redis.call('DEL', KEYS[2])
-redis.call('ZREM', KEYS[3], ARGV[3])
+redis.call('ZREM', KEYS[3], ARGV[3] .. ':' .. ARGV[4])
 return 1
 """
 
@@ -180,11 +202,43 @@ def ack_task(task: dict, worker_id: str, raw: str | None = None) -> bool:
         _ACK_SCRIPT,
         3,
         PROCESSING_QUEUE_NAME,
-        f"{PROCESSING_METADATA_PREFIX}{task['task_id']}",
+        _metadata_key(task),
         PROCESSING_DEADLINES_KEY,
         raw,
         worker_id,
         task["task_id"],
+        str(task.get("claim_generation", "")),
+    ))
+
+
+_NACK_SCRIPT = """
+if redis.call('HGET', KEYS[2], 'claimed_by') ~= ARGV[2] then return 0 end
+if redis.call('HGET', KEYS[2], 'task_id') ~= ARGV[3] then return 0 end
+if redis.call('HGET', KEYS[2], 'claim_generation') ~= ARGV[4] then return 0 end
+if redis.call('LREM', KEYS[1], 1, ARGV[1]) == 0 then return 0 end
+redis.call('LPUSH', KEYS[4], ARGV[1])
+redis.call('DEL', KEYS[2])
+redis.call('ZREM', KEYS[3], ARGV[3] .. ':' .. ARGV[4])
+return 1
+"""
+
+
+def nack_task(task: dict, worker_id: str, raw: str | None = None) -> bool:
+    """Return a temporarily unclaimable task without losing its lease identity."""
+    raw = raw or task.get("_processing_raw")
+    if not raw:
+        return False
+    return bool(get_redis().eval(
+        _NACK_SCRIPT,
+        4,
+        PROCESSING_QUEUE_NAME,
+        _metadata_key(task),
+        PROCESSING_DEADLINES_KEY,
+        QUEUE_NAME,
+        raw,
+        worker_id,
+        task["task_id"],
+        str(task.get("claim_generation", "")),
     ))
 
 
@@ -207,8 +261,8 @@ def reap_expired_tasks(*, now: datetime | None = None, before_requeue=None) -> l
     expired_ids = set(redis_client.zrangebyscore(PROCESSING_DEADLINES_KEY, "-inf", now.timestamp()))
     for raw in redis_client.lrange(PROCESSING_QUEUE_NAME, 0, -1):
         task = json.loads(raw)
-        task_id = task["task_id"]
-        if task_id not in expired_ids:
+        lease_id = _lease_id(task)
+        if lease_id not in expired_ids:
             continue
         if before_requeue is not None and not before_requeue(task):
             continue
@@ -217,10 +271,10 @@ def reap_expired_tasks(*, now: datetime | None = None, before_requeue=None) -> l
             4,
             PROCESSING_QUEUE_NAME,
             QUEUE_NAME,
-            f"{PROCESSING_METADATA_PREFIX}{task_id}",
+            _metadata_key(task),
             PROCESSING_DEADLINES_KEY,
             raw,
-            task_id,
+            lease_id,
             now.isoformat(),
         ):
             recovered.append(task)
