@@ -14,12 +14,44 @@ function Sha256([string]$Path) {
   return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
 }
 
+function Assert-BackendTlsBinding([string]$Origin, [byte[]]$ExpectedCertificateBytes) {
+  $uri = [Uri]$Origin
+  $expected = [Security.Cryptography.X509Certificates.X509Certificate2]::new($ExpectedCertificateBytes)
+  $tcp = [Net.Sockets.TcpClient]::new()
+  $script:r297RemoteCertificate = $null
+  try {
+    $tcp.Connect($uri.Host, $uri.Port)
+    $callback = {
+      param($Sender, $Certificate, $Chain, $PolicyErrors)
+      $script:r297RemoteCertificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($Certificate)
+      return $PolicyErrors -eq [Net.Security.SslPolicyErrors]::None
+    }
+    $tls = [Net.Security.SslStream]::new($tcp.GetStream(), $false, $callback)
+    try { $tls.AuthenticateAsClient($uri.Host) } finally { $tls.Dispose() }
+    Require ($null -ne $script:r297RemoteCertificate) 'CONTROLLED_BACKEND_TLS_CERTIFICATE_MISSING'
+    $expectedSha = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($expected.RawData))
+    $actualSha = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($script:r297RemoteCertificate.RawData))
+    Require ($actualSha -eq $expectedSha) 'CONTROLLED_BACKEND_TLS_CERTIFICATE_MISMATCH'
+  } finally {
+    $tcp.Dispose()
+    $script:r297RemoteCertificate = $null
+  }
+}
+
 $head = (& git rev-parse HEAD).Trim()
 Require ($head -match '^[0-9a-f]{40}$') 'CHECKOUT_HEAD_INVALID'
 Require ($env:GITHUB_SHA -eq $head) 'EVIDENCE_COMMIT_MUST_EQUAL_GITHUB_SHA'
 Require ($env:R297_WINDOWS_CANARY_PAIRING_CODE -match '^\d{8}$') 'CONTROLLED_BACKEND_PAIRING_CODE_REQUIRED'
-Require ($env:R297_WINDOWS_CANARY_HEALTH_URL -match '^https://') 'CONTROLLED_BACKEND_HEALTH_URL_REQUIRED'
-Require ($env:R297_WINDOWS_CANARY_SCHEDULER_URL -match '^https://') 'CONTROLLED_BACKEND_SCHEDULER_URL_REQUIRED'
+Require ($env:R297_WINDOWS_CANARY_BACKEND_HTTPS_URL -match '^https://[^/]+/?$') 'CONTROLLED_BACKEND_HTTPS_URL_REQUIRED'
+Require ($env:R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64 -match '^[A-Za-z0-9+/=]+$') 'CONTROLLED_BACKEND_SERVER_CERTIFICATE_REQUIRED'
+
+$backendOrigin = $env:R297_WINDOWS_CANARY_BACKEND_HTTPS_URL.TrimEnd('/')
+$healthUrl = "$backendOrigin/api/health"
+$schedulerUrl = "$backendOrigin/api/jd-workbench/internal/acceptance-status"
+$certificateBytes = [Convert]::FromBase64String($env:R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64)
+$certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificateBytes)
+Require ($certificate.NotAfter.ToUniversalTime() -gt [DateTime]::UtcNow) 'CONTROLLED_BACKEND_SERVER_CERTIFICATE_EXPIRED'
+Assert-BackendTlsBinding $backendOrigin $certificateBytes
 
 $dist = (Resolve-Path $DistDirectory).Path
 $installer = @(Get-ChildItem $dist -File -Filter '*.exe')
@@ -45,9 +77,9 @@ Require ($install.ExitCode -eq 0) 'INSTALLER_EXECUTION_FAILED'
 $workbench = @(Get-ChildItem $installRoot -Recurse -File -Filter '*.exe' | Where-Object { $_.Name -notmatch '^Uninstall' })
 Require ($workbench.Count -eq 1) 'INSTALLED_EXECUTABLE_NOT_UNIQUE'
 
-$beforeHealth = (Invoke-WebRequest -UseBasicParsing -Uri $env:R297_WINDOWS_CANARY_HEALTH_URL -TimeoutSec 15).StatusCode
+$beforeHealth = (Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 15).StatusCode
 Require ($beforeHealth -eq 200) 'CONTROLLED_BACKEND_NOT_HEALTHY'
-$beforeCycle = [int](Invoke-RestMethod -Uri $env:R297_WINDOWS_CANARY_SCHEDULER_URL -TimeoutSec 15).completed_cycle_count
+$beforeCycle = [int](Invoke-RestMethod -Uri $schedulerUrl -TimeoutSec 15).completed_cycle_count
 $process = Start-Process -FilePath $workbench[0].FullName -ArgumentList @(
   "--remote-debugging-port=$debugPort",
   "--user-data-dir=$userData"
@@ -127,12 +159,12 @@ socket.close();
   if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
 }
 
-$afterExitHealth = (Invoke-WebRequest -UseBasicParsing -Uri $env:R297_WINDOWS_CANARY_HEALTH_URL -TimeoutSec 15).StatusCode
+$afterExitHealth = (Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 15).StatusCode
 Require ($afterExitHealth -eq 200) 'CLOUD_SCHEDULER_DID_NOT_SURVIVE_ELECTRON_EXIT'
 $afterCycle = $beforeCycle
 for ($attempt = 0; $attempt -lt 60 -and $afterCycle -le $beforeCycle; $attempt++) {
   Start-Sleep -Seconds 1
-  $afterCycle = [int](Invoke-RestMethod -Uri $env:R297_WINDOWS_CANARY_SCHEDULER_URL -TimeoutSec 15).completed_cycle_count
+  $afterCycle = [int](Invoke-RestMethod -Uri $schedulerUrl -TimeoutSec 15).completed_cycle_count
 }
 Require ($afterCycle -gt $beforeCycle) 'CLOUD_SCHEDULER_DID_NOT_ADVANCE_AFTER_ELECTRON_EXIT'
 $restart = Start-Process -FilePath $workbench[0].FullName -ArgumentList @("--user-data-dir=$userData") -PassThru
@@ -145,6 +177,7 @@ $evidence = [ordered]@{
   commit = $head
   mode = 'real_windows_process'
   controlled_canary = $true
+  data_source = 'CONTROLLED_CANARY'
   real_jd_acceptance = $false
   mock_count = 0
   source_code_write_count = 0

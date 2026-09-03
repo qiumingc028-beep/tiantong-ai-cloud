@@ -32,6 +32,7 @@ permissions:
 
 jobs:
   build-windows:
+    environment: r297-controlled-canary
     runs-on: windows-latest
     defaults:
       run:
@@ -117,8 +118,8 @@ jobs:
         working-directory: .
         env:
           R297_WINDOWS_CANARY_PAIRING_CODE: ${{ secrets.R297_WINDOWS_CANARY_PAIRING_CODE }}
-          R297_WINDOWS_CANARY_HEALTH_URL: ${{ vars.R297_WINDOWS_CANARY_HEALTH_URL }}
-          R297_WINDOWS_CANARY_SCHEDULER_URL: ${{ vars.R297_WINDOWS_CANARY_SCHEDULER_URL }}
+          R297_WINDOWS_CANARY_BACKEND_HTTPS_URL: ${{ secrets.R297_WINDOWS_CANARY_BACKEND_HTTPS_URL }}
+          R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64: ${{ secrets.R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64 }}
         run: |
           ./ops/r297_windows_acceptance.ps1 `
             -DistDirectory desktop/jd-workbench/dist `
