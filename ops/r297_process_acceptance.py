@@ -416,8 +416,12 @@ def main() -> int:
             raise RuntimeError("WORKER_PIDS_NOT_DISTINCT")
         redis_client = get_redis()
 
+        schedule_cursor = datetime.now(timezone.utc)
+
         def schedule_store_task() -> dict:
-            due_at = datetime.now(timezone.utc)
+            nonlocal schedule_cursor
+            due_at = schedule_cursor
+            schedule_cursor += timedelta(seconds=300)
             db = SessionLocal()
             policy = db.query(JdWorkbenchSyncPolicy).one()
             status_row = db.query(JdWorkbenchStoreStatus).one()
