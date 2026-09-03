@@ -77,7 +77,7 @@ def post_json(url: str, payload: dict, headers: dict[str, str]) -> dict:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=15) as response:
+        with urlopen(request, timeout=45) as response:
             return json.loads(response.read())
     except HTTPError as exc:
         raise RuntimeError(f"HTTP_POST_FAILED:{exc.code}:{exc.read(2000).decode(errors='replace')}") from exc
@@ -192,7 +192,7 @@ def main() -> int:
     redis_name = f"r297-redis-{head[:12]}-{os.getpid()}"
     runtime_name = f"r297-runtime-{head[:12]}-{os.getpid()}"
     runtime_volume = f"r297-runtime-archives-{head[:12]}-{os.getpid()}"
-    postgres_port, redis_port, backend_port, runtime_port = (free_port() for _ in range(4))
+    postgres_port, redis_port, backend_port, runtime_port, canary_port = (free_port() for _ in range(5))
     postgres_password = secrets.token_urlsafe(32)
     redis_password = secrets.token_urlsafe(32)
     capture_token, control_token, ticket_key, cookie_key = (secrets.token_urlsafe(48) for _ in range(4))
@@ -204,6 +204,7 @@ def main() -> int:
     modulus = run("openssl", "rsa", "-in", str(device_private_key), "-noout", "-modulus").split("=", 1)[1]
     public_key_n = modulus.lower()
     backend_log = temporary / "backend.log"
+    canary_log = temporary / "canary.log"
     worker_logs = [temporary / "worker-1.log", temporary / "worker-2.log", temporary / "worker-restarted.log"]
     processes: list[subprocess.Popen] = []
     commands: list[str] = []
@@ -220,6 +221,8 @@ def main() -> int:
         "CORS_ALLOWED_ORIGINS": "https://acceptance.invalid",
         "JD_BROWSER_CAPTURE_TOKEN": "",
         "JD_BROWSER_CONTROL_TOKEN": control_token,
+        "R297_CONTROLLED_CANARY": "1",
+        "JD_BROWSER_RUNTIME_BASE_URL": f"http://127.0.0.1:{runtime_port}/internal/jd-browser",
         "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY": "",
         "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY": "",
         "JD_SESSION_MASTER_KEY": "",
@@ -255,7 +258,7 @@ def main() -> int:
         run(sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head", env=environment)
         os.environ.update({name: environment[name] for name in environment if name.startswith(("DATABASE_", "REDIS_", "APP_ENV", "SERVICE_ROLE", "JD_", "CORS_", "JWT_", "BOSS_", "AGENT_", "ALPHA_", "PUBLIC_", "KNOWLEDGE_", "SKILLS_"))})
         from backend.database import SessionLocal, get_redis
-        from backend.models import JdAccount, JdSyncLog, JdWorkbenchDevice, JdWorkbenchStoreStatus, JdWorkbenchSyncPolicy, Store, User, UserStoreMembership
+        from backend.models import JdAccount, JdDailyMetric, JdSyncLog, JdWorkbenchDevice, JdWorkbenchStoreStatus, JdWorkbenchSyncPolicy, Store, User, UserStoreMembership
         from backend.queue import PROCESSING_METADATA_PREFIX, PROCESSING_QUEUE_NAME, QUEUE_NAME
         from backend.seed import seed_defaults
         from backend.worker import JD_RETRY_BACKOFF_SECONDS, _finish_jd_workbench_task, run_jd_workbench_scheduler
@@ -299,6 +302,34 @@ def main() -> int:
         scope = {"tenant_id": store.tenant_id, "company_id": store.company_id, "store_id": store.id, "platform": store.platform}
         db.close()
 
+        commands.append("start controlled canary HTTP process")
+        canary_root = temporary / "canary"
+        canary_root.mkdir()
+        (canary_root / "r297-controlled-canary.html").write_text(
+            '<!doctype html><html><body><span data-metric="gmv">123.45</span>'
+            '<span data-metric="orders">2</span><span data-metric="visitors">3</span></body></html>',
+            encoding="utf-8",
+        )
+        canary_handle = canary_log.open("ab", buffering=0)
+        canary = subprocess.Popen(
+            [sys.executable, "-m", "http.server", str(canary_port), "--bind", "0.0.0.0", "--directory", str(canary_root)],
+            cwd=ROOT, env=environment, stdin=subprocess.DEVNULL, stdout=canary_handle, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        canary._r297_log_handle = canary_handle  # type: ignore[attr-defined]
+        processes.append(canary)
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                with urlopen(f"http://127.0.0.1:{canary_port}/r297-controlled-canary.html", timeout=2) as response:
+                    if response.status == 200:
+                        break
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                raise RuntimeError("CONTROLLED_CANARY_NOT_READY")
+            time.sleep(0.1)
+
         commands.append("start real backend process")
         backend_env = {**environment, "SERVICE_ROLE": "backend"}
         if sys.platform.startswith("linux"):
@@ -318,6 +349,12 @@ def main() -> int:
         backend._r297_log_handle = backend_handle  # type: ignore[attr-defined]
         processes.append(backend)
         wait_http(f"http://{backend_host}:{backend_port}/ready")
+        login = post_json(
+            f"http://{backend_host}:{backend_port}/api/login",
+            {"username": "boss", "password": environment["BOSS_INITIAL_PASSWORD"]},
+            {},
+        )
+        owner_headers = {"authorization": f"Bearer {login['token']}"}
 
         commands.append("start real browser runtime container and Chromium")
         runtime_env = {
@@ -327,6 +364,8 @@ def main() -> int:
             "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY": ticket_key,
             "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY": cookie_key,
             "JD_SESSION_MASTER_KEY": master_key,
+            "R297_CONTROLLED_CANARY": "1",
+            "R297_CONTROLLED_CANARY_DASHBOARD_URL": f"http://host.docker.internal:{canary_port}/r297-controlled-canary.html",
         }
         run(
             "docker", "run", "--detach", "--rm", "--name", runtime_name,
@@ -340,14 +379,25 @@ def main() -> int:
             "--mount", f"type=volume,source={runtime_volume},target=/data/jd-session-archives",
             "--env", "JD_BROWSER_CAPTURE_TOKEN", "--env", "JD_BROWSER_CONTROL_TOKEN",
             "--env", "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY", "--env", "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY",
-            "--env", "JD_SESSION_MASTER_KEY", "--env", "RUNTIME_API_PORT=8788", "--env", "DISPLAY=:99", "--env", "JD_PROFILE_ROOT=/tmp/jd-cloud-profiles",
+            "--env", "JD_SESSION_MASTER_KEY", "--env", "R297_CONTROLLED_CANARY", "--env", "R297_CONTROLLED_CANARY_DASHBOARD_URL",
+            "--env", "RUNTIME_API_PORT=8788", "--env", "DISPLAY=:99", "--env", "JD_PROFILE_ROOT=/tmp/jd-cloud-profiles",
             "--env", "JD_SESSION_ARCHIVE_ROOT=/data/jd-session-archives",
             "--env", f"JD_BROWSER_SESSION_AUTH_URL=http://{runtime_backend_host}:{backend_port}/api/jd-workbench/internal/browser-session-authorize",
             args.runtime_image,
             env=runtime_env,
         )
         wait_http(f"http://127.0.0.1:{runtime_port}/internal/jd-browser/health", {"x-internal-token": control_token})
-        session = post_json(f"http://127.0.0.1:{runtime_port}/internal/jd-browser/sessions", scope, {"x-internal-token": control_token})
+        session = post_json(
+            f"http://{backend_host}:{backend_port}/api/jd-workbench/stores/{store.id}/login-session",
+            {}, owner_headers,
+        )
+        capture_probe = post_json(
+            f"http://127.0.0.1:{runtime_port}/internal/jd-browser/capture",
+            {**scope, "dataset": "metrics"},
+            {"x-internal-token": capture_token},
+        )
+        if capture_probe.get("status") != "OK":
+            raise RuntimeError(f"CONTROLLED_CAPTURE_PREFLIGHT_FAILED:{capture_probe.get('status')}")
         chromium_pid = int(run("docker", "exec", runtime_name, "pgrep", "-x", "chrome").splitlines()[0])
 
         commands.append("start two independent worker processes")
@@ -429,9 +479,16 @@ def main() -> int:
             cycle_results.append(wait_sync_log(item["task_id"]))
         db = SessionLocal()
         cycle_log_counts = [db.query(JdSyncLog).filter(JdSyncLog.task_id == item["task_id"]).count() for item in cycle_tasks]
+        metrics = db.query(JdDailyMetric).filter(JdDailyMetric.store_id == store.id).all()
+        metric_snapshot = [
+            {"id": row.id, "gmv": str(row.gmv), "orders": row.paid_orders_count, "visitors": row.visitors_count}
+            for row in metrics
+        ]
         db.close()
         if cycle_log_counts != [1, 1]:
             raise RuntimeError(f"CYCLE_LOG_COUNTS_INVALID:{cycle_log_counts}")
+        if len(metric_snapshot) != 1 or metric_snapshot[0]["gmv"] != "123.45" or metric_snapshot[0]["orders"] != 2:
+            raise RuntimeError(f"IDEMPOTENT_METRIC_INVALID:{metric_snapshot}")
 
         commands.append("kill claimed worker and recover expired processing task")
         lock_connection = __import__("psycopg2").connect(environment["DATABASE_URL"].replace("postgresql+psycopg2://", "postgresql://"))
@@ -440,7 +497,8 @@ def main() -> int:
         orphan = schedule_store_task()
         claimed_by = None
         for _ in range(100):
-            metadata = redis_client.hgetall(f"{PROCESSING_METADATA_PREFIX}{orphan['task_id']}")
+            metadata_keys = list(redis_client.scan_iter(f"{PROCESSING_METADATA_PREFIX}{orphan['task_id']}:*"))
+            metadata = redis_client.hgetall(metadata_keys[0]) if len(metadata_keys) == 1 else {}
             if metadata:
                 claimed_by = metadata["claimed_by"]
                 break
@@ -527,6 +585,7 @@ def main() -> int:
             policy.active_task_id = task_id
             policy.queue_state = "processing"
             policy.lease_worker_id = "acceptance-backoff"
+            policy.claim_generation = -1
             db.commit()
             db.close()
             _finish_jd_workbench_task({"task_id": task_id, "task_type": "sync_jd_smart", "attempt": index, "payload": {"source": "cloud_scheduler", "tenant_id": scope["tenant_id"], "company_id": scope["company_id"], "store_id": scope["store_id"]}}, "acceptance-backoff", success=False, now=now)
@@ -548,7 +607,10 @@ def main() -> int:
         run("docker", "restart", runtime_name)
         wait_http(f"http://127.0.0.1:{runtime_port}/internal/jd-browser/health", {"x-internal-token": control_token})
         runtime_pid_after = int(run("docker", "inspect", "--format", "{{.State.Pid}}", runtime_name))
-        restored_session = post_json(f"http://127.0.0.1:{runtime_port}/internal/jd-browser/sessions", scope, {"x-internal-token": control_token})
+        restored_session = post_json(
+            f"http://{backend_host}:{backend_port}/api/jd-workbench/stores/{scope['store_id']}/login-session",
+            {}, owner_headers,
+        )
         backend_pid_before = backend.pid
         stop_process(backend)
         restarted_backend_handle = backend_log.open("ab", buffering=0)
@@ -591,6 +653,7 @@ def main() -> int:
                 "electron_process_count": 0,
             },
             "cycles": [{"task_id": task["task_id"], "status": result["status"], "database_log_count": count} for task, result, count in zip(cycle_tasks, cycle_results, cycle_log_counts)],
+            "idempotent_write": {"metric_row_count": len(metric_snapshot), "rows": metric_snapshot},
             "dual_worker": {
                 "task_id": dual_task["task_id"],
                 "status": dual_result["status"],

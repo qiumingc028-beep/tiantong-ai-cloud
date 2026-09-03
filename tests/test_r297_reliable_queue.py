@@ -180,7 +180,7 @@ def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypa
         def read(self, *_args):
             return json.dumps({
                 "status": "OK",
-                "data": {"store_id": 3, "source": "jd_cloud_playwright", "metrics": {"gmv": "1"}},
+                "data": {"store_id": "3", "source": "jd_cloud_playwright", "gmv": "1"},
             }).encode()
 
     monkeypatch.setenv("JD_BROWSER_CAPTURE_TOKEN", "c" * 32)
@@ -192,7 +192,7 @@ def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypa
     result = jd_collectors.JdSmartCollector()._capture(account, "metrics", store)
 
     assert captured == ["http://127.0.0.1:18787/internal/jd-browser/capture"]
-    assert result["store_id"] == 3
+    assert result["store_id"] == "3"
 
 
 def test_claim_moves_ready_task_to_processing_and_ack_removes_it(monkeypatch):
