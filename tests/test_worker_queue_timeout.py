@@ -2,7 +2,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from backend.queue import claim_task
-from backend.worker import process_next_task
+from backend import worker
 
 
 class EmptyRedis:
@@ -45,7 +45,7 @@ def test_worker_process_next_task_does_not_exit_on_redis_timeout(monkeypatch):
     monkeypatch.setattr("backend.worker.claim_task", raise_timeout)
     monkeypatch.setattr("backend.worker.time.sleep", lambda seconds: None)
 
-    assert process_next_task() is False
+    assert worker.process_next_task() is False
 
 
 def test_worker_process_next_task_does_not_exit_on_redis_connection_error(monkeypatch):
@@ -55,7 +55,7 @@ def test_worker_process_next_task_does_not_exit_on_redis_connection_error(monkey
     monkeypatch.setattr("backend.worker.claim_task", raise_connection_error)
     monkeypatch.setattr("backend.worker.time.sleep", lambda seconds: None)
 
-    assert process_next_task() is False
+    assert worker.process_next_task() is False
 
 
 def test_worker_does_not_ack_after_database_lease_was_recovered(monkeypatch):
@@ -80,5 +80,5 @@ def test_worker_does_not_ack_after_database_lease_was_recovered(monkeypatch):
     monkeypatch.setattr("backend.worker._finish_jd_workbench_task", lambda *_args, **_kwargs: False)
     monkeypatch.setattr("backend.worker.ack_task", lambda *_args: acked.append(True))
 
-    assert process_next_task() is True
+    assert worker.process_next_task() is True
     assert acked == []

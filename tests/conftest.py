@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -44,6 +45,8 @@ class FakeRedis:
     def __init__(self):
         self.values = {}
         self.lists = {}
+        self.hashes = {}
+        self.sorted_sets = {}
 
     def setex(self, key, ttl, value):
         self.values[key] = value
@@ -59,6 +62,24 @@ class FakeRedis:
 
     def delete(self, key):
         self.values.pop(key, None)
+        self.hashes.pop(key, None)
+
+    def hset(self, key, mapping):
+        self.hashes.setdefault(key, {}).update({name: str(value) for name, value in mapping.items()})
+
+    def hgetall(self, key):
+        return dict(self.hashes.get(key, {}))
+
+    def zadd(self, key, mapping):
+        self.sorted_sets.setdefault(key, {}).update(mapping)
+
+    def zrem(self, key, value):
+        self.sorted_sets.get(key, {}).pop(value, None)
+
+    def zrangebyscore(self, key, minimum, maximum):
+        minimum = float("-inf") if minimum == "-inf" else float(minimum)
+        maximum = float("inf") if maximum == "+inf" else float(maximum)
+        return [value for value, score in self.sorted_sets.get(key, {}).items() if minimum <= score <= maximum]
 
     def scan_iter(self, pattern):
         prefix = pattern.removesuffix("*")
@@ -78,6 +99,89 @@ class FakeRedis:
 
     def llen(self, key):
         return len(self.lists.get(key, []))
+
+    def lrem(self, key, _count, value):
+        values = self.lists.get(key, [])
+        if value not in values:
+            return 0
+        values.remove(value)
+        return 1
+
+    def eval(self, script, _key_count, *args):
+        from backend import queue
+
+        if script == queue._CLAIM_SCRIPT:
+            (
+                ready, processing, deadlines, prefix, worker_id, now, deadline,
+                _ttl, score, generation_prefix, _generation_ttl,
+            ) = args
+            values = self.lists.get(ready, [])
+            if not values:
+                return None
+            task = json.loads(values.pop(0))
+            generation_key = generation_prefix + task["task_id"]
+            task["claim_generation"] = max(
+                int(task.get("claim_generation", 0)), int(self.values.get(generation_key, 0))
+            ) + 1
+            self.values[generation_key] = str(task["claim_generation"])
+            raw = json.dumps(task, separators=(",", ":"))
+            lease_id = f"{task['task_id']}:{task['claim_generation']}"
+            metadata = prefix + lease_id
+            payload = task.get("payload") or {}
+            self.lists.setdefault(processing, []).append(raw)
+            self.hashes[metadata] = {
+                "task_id": task["task_id"],
+                "tenant_id": str(payload.get("tenant_id") or ""),
+                "company_id": str(payload.get("company_id") or ""),
+                "store_id": str(payload.get("store_id") or ""),
+                "sync_window_started_at": str(payload.get("sync_window_started_at") or ""),
+                "claimed_by": worker_id,
+                "claim_generation": str(task["claim_generation"]),
+                "started_at": now,
+                "heartbeat_at": now,
+                "visibility_deadline": deadline,
+            }
+            self.zadd(deadlines, {lease_id: float(score)})
+            return raw
+
+        if script == queue._HEARTBEAT_SCRIPT:
+            metadata, deadlines, worker_id, heartbeat, deadline, _ttl, lease_id, score = args
+            if self.hashes.get(metadata, {}).get("claimed_by") != worker_id:
+                return 0
+            self.hashes[metadata].update({"heartbeat_at": heartbeat, "visibility_deadline": deadline})
+            self.zadd(deadlines, {lease_id: float(score)})
+            return 1
+
+        if script in {queue._ACK_SCRIPT, queue._NACK_SCRIPT, queue._RETRY_CLAIMED_SCRIPT}:
+            processing, metadata, deadlines, *rest = args
+            if script == queue._RETRY_CLAIMED_SCRIPT:
+                ready, raw, worker_id, task_id, generation, replacement = rest
+            elif script == queue._NACK_SCRIPT:
+                ready, raw, worker_id, task_id, generation = rest
+                replacement = raw
+            else:
+                raw, worker_id, task_id, generation = rest
+                ready = replacement = None
+            record = self.hashes.get(metadata, {})
+            if record.get("claimed_by") != worker_id or record.get("task_id") != task_id:
+                return 0
+            if record.get("claim_generation") != generation or not self.lrem(processing, 1, raw):
+                return 0
+            if ready is not None:
+                self.rpush(ready, replacement)
+            self.delete(metadata)
+            self.zrem(deadlines, f"{task_id}:{generation}")
+            return 1
+
+        if script == queue._DISCARD_PROCESSING_SCRIPT:
+            processing, metadata, deadlines, raw, lease_id = args
+            if not self.lrem(processing, 1, raw):
+                return 0
+            self.delete(metadata)
+            self.zrem(deadlines, lease_id)
+            return 1
+
+        raise AssertionError("FakeRedis received an unsupported Lua script")
 
     def blpop(self, key, timeout=0):
         keys = key if isinstance(key, list) else [key]

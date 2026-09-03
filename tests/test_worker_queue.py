@@ -1,5 +1,3 @@
-import pytest
-
 from backend.models import EmployeeLog, JdSyncLog
 from backend.queue import QUEUE_NAME, enqueue_task, get_queue_status
 from backend.worker import SUPPORTED_TASK_TYPES, handle_task
@@ -61,21 +59,16 @@ def test_worker_writes_jd_and_employee_logs_for_ai_manager_task(monkeypatch, tes
 
 
 def test_worker_records_failure_reason_and_requeues(monkeypatch, test_db):
-    def fail_sync(db, store_id):
+    from backend import worker
+
+    def fail_sync(db, store_id, **_kwargs):
         raise RuntimeError("collector unavailable")
 
     monkeypatch.setattr("backend.worker.SessionLocal", test_db)
     monkeypatch.setattr("backend.worker.sync_jd_smart", fail_sync)
-    task = {
-        "task_id": "jd-worker-1",
-        "task_type": "sync_jd_smart",
-        "payload": {"store_id": 1},
-        "attempt": 0,
-        "max_retries": 3,
-    }
+    enqueue_task("sync_jd_smart", {"store_id": 1}, task_id="jd-worker-1")
 
-    with pytest.raises(RuntimeError):
-        handle_task(task)
+    assert worker.process_next_task() is True
 
     status = get_queue_status()
     db = test_db()
