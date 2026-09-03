@@ -512,7 +512,21 @@ def test_stale_worker_cannot_overwrite_new_claim_with_failed_log(postgres_databa
     db = sessions()
     try:
         log = db.query(JdSyncLog).filter_by(task_id=task_id, attempt=0).one()
+        policy = db.query(JdWorkbenchSyncPolicy).one()
         assert (log.status, log.claim_generation) == ("success", 2)
+        policy.active_task_id = None
+        policy.queue_state = None
+        policy.lease_worker_id = None
+        db.commit()
+    finally:
+        db.close()
+    completed_task = {**task, "db_claim_generation": 2}
+    assert worker._clear_completed_jd_workbench_policy(completed_task, now) is True
+    db = sessions()
+    try:
+        policy = db.query(JdWorkbenchSyncPolicy).one()
+        assert policy.active_task_id is None
+        assert policy.claim_generation == 2
     finally:
         db.close()
         engine.dispose()

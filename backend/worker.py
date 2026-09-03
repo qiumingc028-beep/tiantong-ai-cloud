@@ -269,7 +269,13 @@ def _clear_completed_jd_workbench_policy(task: dict, now: datetime) -> bool:
             JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
             JdWorkbenchSyncPolicy.claim_generation == int(task["db_claim_generation"]),
         ).with_for_update().one_or_none()
-        if policy is None or policy.active_task_id != task["task_id"]:
+        if policy is None:
+            db.rollback()
+            return False
+        if policy.active_task_id is None and policy.queue_state is None:
+            db.rollback()
+            return True
+        if policy.active_task_id != task["task_id"]:
             db.rollback()
             return False
         statuses = _status_rows(db, policy)
@@ -299,7 +305,13 @@ def _clear_failed_jd_workbench_policy(task: dict, now: datetime) -> bool:
             JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
             JdWorkbenchSyncPolicy.claim_generation == int(task.get("db_claim_generation", -1)),
         ).with_for_update().one_or_none()
-        if policy is None or policy.active_task_id != task["task_id"]:
+        if policy is None:
+            db.rollback()
+            return False
+        if policy.active_task_id is None and policy.queue_state is None:
+            db.rollback()
+            return True
+        if policy.active_task_id != task["task_id"]:
             db.rollback()
             return False
         statuses = _status_rows(db, policy)
