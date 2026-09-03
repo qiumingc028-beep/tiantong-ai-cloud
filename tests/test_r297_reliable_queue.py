@@ -382,7 +382,7 @@ def test_reconciler_cleans_redis_residue_after_ack_failure(monkeypatch):
             return self
 
         def one_or_none(self):
-            return ("success",)
+            return ("success", 1)
 
     class CompletedSession:
         def query(self, *_args):
@@ -429,7 +429,7 @@ def test_reconciler_cleans_completed_task_when_redis_metadata_expired(monkeypatc
             return self
 
         def one_or_none(self):
-            return ("success",)
+            return ("success", None)
 
     class CompletedSession:
         def query(self, *_args):
@@ -458,7 +458,7 @@ def test_reconciler_cleans_terminal_failed_task(monkeypatch):
             return self
 
         def one_or_none(self):
-            return ("failed",)
+            return ("failed", None)
 
     class FailedSession:
         def query(self, *_args):

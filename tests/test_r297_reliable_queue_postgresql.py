@@ -161,6 +161,14 @@ def test_0052_downgrade_reupgrade_preserves_queue_identity(postgres_database_fac
     engine.dispose()
 
     _alembic(database_url, "downgrade", "0051_r297_queue_fencing_and_idempotency")
+    legacy_task_id = str(uuid.uuid4())
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO jd_sync_logs (store_id, task_id, task_type, status, attempt) VALUES (%s, %s, 'sync_jd_smart', 'failed', 0)",
+            (store_id, legacy_task_id),
+        )
+    engine.dispose()
     _alembic(database_url, "upgrade", "head")
     engine = create_engine(database_url)
     try:
@@ -172,6 +180,13 @@ def test_0052_downgrade_reupgrade_preserves_queue_identity(postgres_database_fac
         assert row[0] == "cloud_scheduler"
         assert row[1] == 7
         assert row[2] == window
+        with engine.connect() as connection:
+            legacy = connection.exec_driver_sql(
+                "SELECT tenant_id, company_id, source, sync_window_started_at FROM jd_sync_logs WHERE task_id = %s",
+                (legacy_task_id,),
+            ).one()
+        assert legacy[0:3] == (tenant_id, company_id, "legacy")
+        assert legacy[3] is not None
     finally:
         engine.dispose()
 
@@ -408,3 +423,85 @@ def test_two_schedulers_create_one_store_window_task(postgres_database_factory, 
     finally:
         db.close()
     engine.dispose()
+
+
+def test_stale_worker_cannot_overwrite_new_claim_with_failed_log(postgres_database_factory, monkeypatch):
+    from backend import queue, worker
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_stale_failure_fence")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    now = datetime.now(timezone.utc)
+    task_id = str(uuid.uuid4())
+    db = sessions()
+    try:
+        tenant = Tenant(tenant_code="R297-F", tenant_name="R297 fence")
+        db.add(tenant)
+        db.flush()
+        company = Company(tenant_id=tenant.id, company_code="R297-F", company_name="R297 fence")
+        db.add(company)
+        db.flush()
+        store = Store(
+            tenant_id=tenant.id, company_id=company.id, platform="jd",
+            store_code="R297-F", store_name="R297 fence", active=True,
+        )
+        db.add(store)
+        db.flush()
+        db.add(JdWorkbenchSyncPolicy(
+            tenant_id=tenant.id, company_id=company.id, store_id=store.id,
+            enabled=True, interval_seconds=300, active_task_id=task_id,
+            queue_state="processing", lease_worker_id="worker-old", claim_generation=1,
+            visibility_deadline=now + timedelta(minutes=1),
+        ))
+        db.commit()
+        scope = (tenant.id, company.id, store.id)
+    finally:
+        db.close()
+
+    def takeover_then_fail(_db, _store_id, **_kwargs):
+        takeover = sessions()
+        try:
+            policy = takeover.query(JdWorkbenchSyncPolicy).with_for_update().one()
+            policy.lease_worker_id = "worker-new"
+            policy.claim_generation = 2
+            policy.visibility_deadline = now + timedelta(minutes=2)
+            log = takeover.query(JdSyncLog).filter_by(task_id=task_id, attempt=0).one()
+            log.claim_generation = 2
+            log.status = "running"
+            takeover.commit()
+        finally:
+            takeover.close()
+        raise RuntimeError("old worker lost ownership")
+
+    redis = SchedulerRedis()
+    monkeypatch.setattr(worker, "SessionLocal", sessions)
+    monkeypatch.setattr(worker, "get_redis", lambda: redis)
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    monkeypatch.setattr(worker, "sync_jd_smart", takeover_then_fail)
+    task = {
+        "task_id": task_id,
+        "task_type": "sync_jd_smart",
+        "attempt": 0,
+        "max_retries": 5,
+        "db_claim_generation": 1,
+        "_worker_id": "worker-old",
+        "payload": {
+            "source": "cloud_scheduler", "tenant_id": scope[0],
+            "company_id": scope[1], "store_id": scope[2],
+            "sync_window_started_at": now.isoformat(),
+        },
+    }
+    with pytest.raises(JdCollectorError, match="任务租约已失效"):
+        worker._handle_task_direct(task)
+
+    db = sessions()
+    try:
+        log = db.query(JdSyncLog).filter_by(task_id=task_id, attempt=0).one()
+        policy = db.query(JdWorkbenchSyncPolicy).one()
+        assert (log.status, log.claim_generation) == ("running", 2)
+        assert (policy.lease_worker_id, policy.claim_generation) == ("worker-new", 2)
+    finally:
+        db.close()
+        engine.dispose()

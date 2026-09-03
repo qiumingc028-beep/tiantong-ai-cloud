@@ -66,23 +66,26 @@ def upgrade():
             """
         )
         op.drop_table("r297_0052_jd_sync_log_backup")
-    else:
-        op.execute("UPDATE jd_sync_logs SET source = 'legacy'")
-        op.execute(
-            """
-            UPDATE jd_sync_logs AS l
-            SET tenant_id = s.tenant_id,
-                company_id = s.company_id,
-                sync_window_started_at = to_timestamp(
-                  floor(extract(epoch FROM l.created_at) / COALESCE(p.interval_seconds, 300))
-                  * COALESCE(p.interval_seconds, 300)
-                )
-            FROM stores AS s
-            LEFT JOIN jd_workbench_sync_policies AS p
-              ON (p.store_id, p.tenant_id, p.company_id) = (s.id, s.tenant_id, s.company_id)
-            WHERE l.store_id = s.id
-            """
-        )
+    op.execute("UPDATE jd_sync_logs SET source = 'legacy' WHERE source IS NULL")
+    op.execute(
+        """
+        UPDATE jd_sync_logs AS l
+        SET tenant_id = COALESCE(l.tenant_id, s.tenant_id),
+            company_id = COALESCE(l.company_id, s.company_id),
+            sync_window_started_at = COALESCE(
+              l.sync_window_started_at,
+              to_timestamp(
+                floor(extract(epoch FROM l.created_at) / COALESCE(p.interval_seconds, 300))
+                * COALESCE(p.interval_seconds, 300)
+              )
+            )
+        FROM stores AS s
+        LEFT JOIN jd_workbench_sync_policies AS p
+          ON (p.store_id, p.tenant_id, p.company_id) = (s.id, s.tenant_id, s.company_id)
+        WHERE l.store_id = s.id
+          AND (l.tenant_id IS NULL OR l.company_id IS NULL OR l.sync_window_started_at IS NULL)
+        """
+    )
     _reject_invalid_history()
     op.create_foreign_key(
         "fk_jd_sync_logs_tenant_company_store", "jd_sync_logs", "stores",
