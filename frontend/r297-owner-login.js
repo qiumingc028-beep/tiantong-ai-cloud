@@ -6,6 +6,7 @@
   const STATUS_LABELS = Object.freeze({
     UNKNOWN: '尚未查询',
     OFFLINE: '未登录',
+    ACTIVE: '等待扫码',
     LOGIN_REQUIRED: '等待扫码',
     QR_REQUIRED: '等待扫码',
     CAPTCHA: '验证码',
@@ -44,12 +45,32 @@
 
   function createClient(api) {
     if (typeof api !== 'function') throw new Error('登录接口不可用');
+    const emptyPost = Object.freeze({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     return Object.freeze({
-      create: value => api(sessionPath(value), { method: 'POST' }),
+      create: value => api(sessionPath(value), emptyPost),
       status: value => api(sessionPath(value)),
-      ticket: value => api(`/api/jd-workbench/stores/${storeId(value)}/login-ticket`, { method: 'POST' }),
+      ticket: value => api(`/api/jd-workbench/stores/${storeId(value)}/login-ticket`, emptyPost),
       close: value => api(sessionPath(value), { method: 'DELETE' })
     });
+  }
+
+  async function redeemTicket(request, value, response) {
+    if (typeof request !== 'function') throw new Error('受控登录服务不可用');
+    const id = storeId(value);
+    const ticket = response && response.ticket;
+    if (typeof ticket !== 'string' || !ticket || !Number.isInteger(response.expires_in) || response.expires_in <= 0) {
+      throw new Error('登录凭证响应无效');
+    }
+    const result = await request(`/jd-browser/novnc/${id}/exchange`, {
+      method: 'POST', credentials: 'include', cache: 'no-store', referrerPolicy: 'no-referrer',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket })
+    });
+    if (!result || !result.ok) {
+      const error = new Error(result && result.status === 403 ? '无权打开该店铺登录窗口' : result && result.status === 409 ? '登录会话状态冲突，请刷新后重试' : '登录凭证已失效或不适用于该店铺，请重新申请');
+      error.status = result && result.status;
+      throw error;
+    }
+    return `/jd-browser/novnc/${id}/vnc.html`;
   }
 
   function isOwner(user) {
@@ -120,5 +141,5 @@
     return Object.freeze({ begin: () => ++generation, isCurrent: token => token === generation });
   }
 
-  return Object.freeze({ createClient, createOperationGate, createPoller, errorMessage, isOwner, sessionState, statusView });
+  return Object.freeze({ createClient, createOperationGate, createPoller, errorMessage, isOwner, redeemTicket, sessionState, statusView });
 });

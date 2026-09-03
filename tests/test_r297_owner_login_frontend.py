@@ -26,13 +26,34 @@ assert.deepEqual(calls.map(call => [call.path, call.options.method || 'GET']), [
   ['/api/jd-workbench/stores/7/login-ticket', 'POST'],
   ['/api/jd-workbench/stores/7/login-session', 'DELETE']
 ]);
-assert.ok(calls.every(call => !('body' in call.options)));
+assert.deepEqual(calls.filter(call => call.options.method === 'POST').map(call => JSON.parse(call.options.body)), [{}, {}]);
+assert.ok(calls.filter(call => !call.options.method || call.options.method === 'DELETE').every(call => !('body' in call.options)));
 assert.throws(() => client.create('session-from-user'), /店铺标识无效/);
 assert.equal(login.isOwner({role_code: 'owner'}), true);
 assert.equal(login.isOwner({role_code: 'admin'}), false);
 assert.equal(login.isOwner({role_code: 'operator'}), false);
-assert.deepEqual(login.sessionState(7, {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600, ignored: 'not persisted'}), {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600});
+assert.deepEqual(login.sessionState(7, {session_id: 'server-only', store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600}), {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600});
 assert.throws(() => login.sessionState(7, {store_id: 8, status: 'ONLINE'}), /店铺作用域不匹配/);
+
+const exchanges = [];
+const viewerPath = await login.redeemTicket(async (path, options) => {
+  exchanges.push({path, options});
+  return {ok: true, status: 204};
+}, 7, {ticket: 'one-time-secret', expires_in: 60});
+assert.equal(viewerPath, '/jd-browser/novnc/7/vnc.html');
+assert.equal(exchanges[0].path, '/jd-browser/novnc/7/exchange');
+assert.equal(exchanges[0].options.method, 'POST');
+assert.equal(exchanges[0].options.credentials, 'include');
+assert.equal(exchanges[0].options.referrerPolicy, 'no-referrer');
+assert.deepEqual(JSON.parse(exchanges[0].options.body), {ticket: 'one-time-secret'});
+assert.ok(!exchanges[0].path.includes('?'));
+
+for (const status of [400, 401, 403, 409, 410]) {
+  await assert.rejects(
+    login.redeemTicket(async () => ({ok: false, status}), 7, {ticket: 'rejected', expires_in: 1}),
+    /登录凭证|无权|冲突/
+  );
+}
 """
     subprocess.run(
         ["node", "-e", f"(async()=>{{{script}}})().catch(error=>{{console.error(error);process.exit(1)}})"],
@@ -48,7 +69,7 @@ const login = require('./frontend/r297-owner-login.js');
 
 const labels = {
   UNKNOWN: '尚未查询',
-  OFFLINE: '未登录', LOGIN_REQUIRED: '等待扫码', CAPTCHA_REQUIRED: '验证码',
+  OFFLINE: '未登录', ACTIVE: '等待扫码', LOGIN_REQUIRED: '等待扫码', CAPTCHA_REQUIRED: '验证码',
   SMS_REQUIRED: '短信验证', RISK_CONTROL: '风控', ONLINE: '登录成功',
   LOGIN_EXPIRED: '登录失效', TICKET_EXPIRED: 'ticket过期',
   AUTHORIZATION_REVOKED: '授权撤销', REVOKED: '授权撤销',
@@ -132,10 +153,16 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert 'src="/r297-owner-login.js"' in page
     assert "R297OwnerLogin.isOwner(currentUser)" in page
     assert "if(!store.active)return" in page
-    assert 'class="secondary" disabled' in page
+    assert "R297OwnerLogin.redeemTicket(fetch,id,ticketResponse)" in page
+    assert "window.open('about:blank'" in page
+    assert "viewerWindow.location.replace(viewerPath)" in page
+    assert "if(existing&&!existing.closed){existing.focus();return}" in page
+    assert "loginWindows.delete(id);if(loginBusy.has(id)" in page
     assert '<button class="danger"${busy}' in page
-    assert page.count("if(loginBusy.has(id))return") == 2
+    assert page.count("loginBusy.has(id)") == 3
     assert "ownerLoginClient.status(id)" in page
+    assert page.count("ownerLoginClient.status(") == 1
+    assert "loadOwnerLoginStates" not in page
     assert "isAllowed:()=>R297OwnerLogin.isOwner(currentUser)&&document.getElementById('stores')!==null" in page
     assert "addEventListener('pagehide',stopLoginPolling)" in page
     for label in ("京东登录", "重新验证", "打开受控验证窗口", "关闭会话"):
