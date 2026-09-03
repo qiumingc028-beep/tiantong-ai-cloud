@@ -495,10 +495,14 @@ def main() -> int:
             raise RuntimeError(f"IDEMPOTENT_METRIC_INVALID:{metric_snapshot}")
 
         commands.append("kill claimed worker and recover expired processing task")
+        for worker in workers:
+            stop_process(worker)
+        orphan = schedule_store_task()
         lock_connection = __import__("psycopg2").connect(environment["DATABASE_URL"].replace("postgresql+psycopg2://", "postgresql://"))
         lock_cursor = lock_connection.cursor()
         lock_cursor.execute("LOCK TABLE jd_sync_logs IN ACCESS EXCLUSIVE MODE")
-        orphan = schedule_store_task()
+        orphan_worker = start_python("backend.worker", worker_env, worker_logs[2])
+        processes.append(orphan_worker)
         claimed_by = None
         for _ in range(100):
             metadata_keys = list(redis_client.scan_iter(f"{PROCESSING_METADATA_PREFIX}{orphan['task_id']}:*"))
@@ -510,9 +514,9 @@ def main() -> int:
         if not claimed_by:
             raise RuntimeError("ORPHAN_PROCESSING_NOT_OBSERVED")
         claimed_pid = int(claimed_by.rsplit(":", 1)[1])
-        killed = next((worker for worker in workers if worker.pid == claimed_pid), None)
-        if killed is None:
+        if orphan_worker.pid != claimed_pid:
             raise RuntimeError("CLAIMED_WORKER_PID_NOT_FOUND")
+        killed = orphan_worker
         os.killpg(killed.pid, signal.SIGKILL)
         killed.wait(timeout=5)
         lock_connection.rollback()
