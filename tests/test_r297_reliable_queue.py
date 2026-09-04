@@ -177,7 +177,10 @@ class ReliableFakeRedis:
                 lease_id = f"{task_id}:{claimed.get('claim_generation', '')}"
                 metadata = prefix + lease_id
                 deadline = self.hashes.get(metadata, {}).get("visibility_deadline")
-                if int(claimed.get("attempt", 0)) >= int(expected_attempt) and deadline and deadline > now:
+                processing_attempt = int(claimed.get("attempt", 0))
+                if processing_attempt > int(expected_attempt):
+                    return 0
+                if processing_attempt == int(expected_attempt) and deadline and deadline > now:
                     return 0
                 self.lrem(processing, 1, raw)
                 self.delete(metadata)
@@ -324,6 +327,17 @@ def test_postgresql_reaper_delivery_replaces_expired_transport_once(monkeypatch)
     assert queue.ensure_task_delivery(task, now=now) is False
     ready = [json.loads(raw) for raw in redis.lists[queue.QUEUE_NAME]]
     assert [item["attempt"] for item in ready] == [1]
+
+    redis.lists[queue.QUEUE_NAME] = []
+    newer = {**task, "attempt": 2, "claim_generation": 8}
+    newer_raw = json.dumps(newer)
+    newer_lease_id = "task-db-authority:8"
+    redis.lists[queue.PROCESSING_QUEUE_NAME] = [newer_raw]
+    redis.hashes[queue.PROCESSING_METADATA_PREFIX + newer_lease_id] = {
+        "visibility_deadline": "2026-09-04T00:00:00+00:00",
+    }
+    assert queue.ensure_task_delivery(retry, now=now) is False
+    assert redis.lists[queue.PROCESSING_QUEUE_NAME] == [newer_raw]
 
 
 def test_nack_requeues_a_temporarily_unclaimable_task_with_next_generation(monkeypatch):

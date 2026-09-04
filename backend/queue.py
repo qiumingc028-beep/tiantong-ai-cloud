@@ -323,7 +323,10 @@ for _, raw in ipairs(redis.call('LRANGE', KEYS[2], 0, -1)) do
     local lease_id = ARGV[1] .. ':' .. generation
     local metadata = ARGV[3] .. lease_id
     local deadline = redis.call('HGET', metadata, 'visibility_deadline')
-    if tonumber(processing['attempt'] or 0) >= tonumber(ARGV[5]) and deadline and deadline > ARGV[2] then return 0 end
+    local processing_attempt = tonumber(processing['attempt'] or 0)
+    local expected_attempt = tonumber(ARGV[5])
+    if processing_attempt > expected_attempt then return 0 end
+    if processing_attempt == expected_attempt and deadline and deadline > ARGV[2] then return 0 end
     redis.call('LREM', KEYS[2], 1, raw)
     redis.call('DEL', metadata)
     redis.call('ZREM', KEYS[3], lease_id)
