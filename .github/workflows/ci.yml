@@ -211,6 +211,7 @@ jobs:
           viewer_ticket_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           viewer_cookie_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           master_key="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
+          session_namespace="ci"
           docker network create "$network" >/dev/null
           docker volume create "$volume" >/dev/null
           MOCK_CONTROL_TOKEN="$control_token" python - <<'PY' &
@@ -256,6 +257,7 @@ jobs:
             --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" \
             --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" \
             --env "JD_SESSION_MASTER_KEY=$master_key" \
+            --env "JD_SESSION_NAMESPACE=$session_namespace" \
             --env JD_BROWSER_SESSION_AUTH_URL=http://host.docker.internal:18787/api/jd-workbench/internal/browser-session-authorize \
             --env RUNTIME_API_PORT=8788 \
             --env DISPLAY=:99 \
