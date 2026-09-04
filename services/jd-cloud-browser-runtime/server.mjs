@@ -19,7 +19,7 @@ const TICKET_TYPE = 'viewer_ticket';
 const TICKET_AUDIENCE = 'jd-browser-viewer-exchange';
 const COOKIE_TYPE = 'viewer_cookie';
 const COOKIE_AUDIENCE = 'jd-browser-novnc';
-const SCOPE_KEYS = Object.freeze(['tenant_id', 'company_id', 'store_id', 'platform']);
+const SCOPE_KEYS = Object.freeze(['namespace', 'tenant_id', 'company_id', 'store_id', 'platform']);
 const SCOPE_VALUE = /^[A-Za-z0-9_-]{1,64}$/;
 
 function decodeMasterKey(value) {
@@ -191,6 +191,7 @@ export function buildApp({
   now = Date.now,
   profileRoot = '/tmp/jd-cloud-profiles',
   archiveRoot = '/data/jd-session-archives',
+  sessionNamespace,
   authorizeSession,
   launchContext = (directory) => chromium.launchPersistentContext(directory, {
     headless: false,
@@ -202,6 +203,7 @@ export function buildApp({
   const ticketKey = requiredSecret(viewerTicketSigningKey, 'JD_BROWSER_VIEWER_TICKET_SIGNING_KEY');
   const cookieKey = requiredSecret(viewerCookieSigningKey, 'JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY');
   const encryptionKey = decodeMasterKey(masterKey);
+  if (sessionNamespace !== undefined && !/^([a-z0-9][a-z0-9-]{1,31})$/.test(String(sessionNamespace || ''))) throw new Error('JD_SESSION_NAMESPACE_REQUIRED');
   if (new Set([captureKey, controlKey, ticketKey, cookieKey]).size !== 4) {
     throw new Error('JD_BROWSER_CAPABILITY_TOKENS_MUST_BE_DISTINCT');
   }
@@ -358,6 +360,7 @@ export function buildApp({
 
   app.post('/internal/jd-browser/sessions', { preHandler: verifyControl }, async (request, reply) => {
     const scope = normalizedScope(request.body);
+    if (scope && scope.namespace !== sessionNamespace) return reply.code(403).send({ error: 'scope_namespace_mismatch' });
     if (!scope) return reply.code(403).send({ error: 'SESSION_SCOPE_REJECTED' });
     const id = sessionId(scope);
     if (!await isAuthorized(scope)) {
@@ -507,6 +510,7 @@ export function buildApp({
 }
 
 export async function startFromEnv() {
+  if (!/^([a-z0-9][a-z0-9-]{1,31})$/.test(String(process.env.JD_SESSION_NAMESPACE || ''))) throw new Error('JD_SESSION_NAMESPACE_REQUIRED');
   const app = buildApp({
     captureToken: process.env.JD_BROWSER_CAPTURE_TOKEN,
     controlToken: process.env.JD_BROWSER_CONTROL_TOKEN,
@@ -515,6 +519,7 @@ export async function startFromEnv() {
     masterKey: process.env.JD_SESSION_MASTER_KEY,
     profileRoot: process.env.JD_PROFILE_ROOT,
     archiveRoot: process.env.JD_SESSION_ARCHIVE_ROOT
+    ,sessionNamespace: process.env.JD_SESSION_NAMESPACE
   });
   await app.listen({ host: '127.0.0.1', port: Number(process.env.RUNTIME_API_PORT || 8788) });
   return app;

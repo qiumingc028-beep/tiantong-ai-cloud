@@ -249,7 +249,9 @@ RUNTIME_BASE = "http://jd-browser-runtime:8787/internal/jd-browser"
 
 
 def _runtime_session_id(store: Store) -> str:
-    namespace = (os.getenv("APP_ENV") or os.getenv("ENV") or "development").strip().lower()
+    namespace = get_settings().JD_SESSION_NAMESPACE.strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,31}", namespace):
+        raise HTTPException(status_code=503, detail="会话命名空间未配置")
     return f"{namespace}:{store.tenant_id}:{store.company_id}:{store.id}:{store.platform}"
 
 
@@ -287,11 +289,12 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
     if body:
         raise _generic_bad_request()
     sid = _runtime_session_id(store)
-    result = _runtime_call("POST", "/sessions", {"tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": str(store.platform)})
+    namespace = sid.split(":", 1)[0]
+    result = _runtime_call("POST", "/sessions", {"namespace": namespace, "tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": str(store.platform)})
     if result.get("session_id") != sid or not isinstance(result.get("expires_in"), int) or not (0 < result["expires_in"] <= 600):
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
     _audit_owner_action(db, user, store, "owner_login_session_create")
-    return {"session_id": sid, "store_id": store.id, "status": "LOGIN_REQUIRED", "expires_in": result["expires_in"]}
+    return {"store_id": store.id, "status": "LOGIN_REQUIRED", "expires_in": result["expires_in"]}
 
 
 @router.get("/stores/{store_id}/login-session")
