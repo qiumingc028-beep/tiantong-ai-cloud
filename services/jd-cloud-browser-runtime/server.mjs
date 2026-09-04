@@ -92,6 +92,7 @@ function verifiedValue(value, key, { typ, aud, now }) {
   }
 }
 
+
 function archiveFilename(id) {
   return `${crypto.createHash('sha256').update(id).digest('hex')}.enc`;
 }

@@ -40,7 +40,7 @@ class JdSmartCollector:
         if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") != "OK":
             raise JdCollectorError("需要人工处理登录或风控")
         data = result["data"]
-        if not isinstance(data, dict) or data.get("store_id") != store.id or data.get("source") != "jd_cloud_playwright":
+        if not isinstance(data, dict) or str(data.get("store_id")) != str(store.id) or data.get("source") != "jd_cloud_playwright":
             raise JdCollectorError("云端采集响应校验失败")
         return data
 
