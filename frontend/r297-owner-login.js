@@ -224,7 +224,7 @@
   function createPageCloseReporter({ observer = root[PAGE_CLOSE_OBSERVER_CONTRACT.binding], now = () => new Date().toISOString() } = {}) {
     return Object.freeze({
       report: (event, storeIds) => {
-        if (!event || event.type !== 'pagehide' || event.isTrusted !== true || typeof observer !== 'function') return false;
+        if (typeof root.PageTransitionEvent !== 'function' || !(event instanceof root.PageTransitionEvent) || event.type !== 'pagehide' || event.isTrusted !== true || typeof observer !== 'function') return false;
         const ids = [...new Set((storeIds || []).map(storeId))];
         ids.forEach(id => {
           try {

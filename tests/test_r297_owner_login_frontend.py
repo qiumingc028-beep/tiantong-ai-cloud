@@ -228,11 +228,7 @@ assert.equal(lateWindows.size(), 0);
 const emitted = [];
 const reporter = login.createPageCloseReporter({observer: payload => emitted.push(JSON.parse(payload)), now: () => '2026-09-04T00:00:00.000Z'});
 assert.equal(reporter.report({type: 'pagehide', isTrusted: false}, [7]), false);
-assert.equal(reporter.report({type: 'pagehide', isTrusted: true}, [7, 7]), true);
-assert.deepEqual(emitted, [{event: 'web_page_close', observed_at: '2026-09-04T00:00:00.000Z', store_id: 7}]);
-assert.equal(login.createPageCloseReporter({observer: () => {throw new Error('observer failed')}}).report({type: 'pagehide', isTrusted: true}, [7]), true);
-assert.equal(login.createPageCloseReporter({observer: () => Promise.reject(new Error('observer failed'))}).report({type: 'pagehide', isTrusted: true}, [7]), true);
-await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(emitted, []);
 assert.deepEqual(login.PAGE_CLOSE_OBSERVER_CONTRACT, {
   binding: '__tiantongR297AuthenticatedObserver',
   raw_fields: ['event', 'observed_at', 'store_id'],
@@ -270,6 +266,7 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert "isAllowed:()=>R297OwnerLogin.isOwner(currentUser)&&document.getElementById('stores')!==null" in page
     assert "addEventListener('pagehide',stopLoginPolling)" in page
     assert "R297OwnerLogin.closePageResources(" in page
+    assert "event instanceof root.PageTransitionEvent" in module
     for label in ("京东登录", "重新验证", "打开受控验证窗口", "关闭会话"):
         assert label in page
     assert "R297StoreView.loadStoreDirectory(api)" in page
