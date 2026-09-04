@@ -87,8 +87,6 @@ test('capability credentials must be distinct', () => {
   );
 });
 
-<<<<<<< HEAD
-=======
 test('runtime entrypoint fails closed without namespace in an isolated process', () => {
   const env = {
     ...process.env,
@@ -312,7 +310,6 @@ test('numeric and string store IDs resolve to the same active session', async (t
   }
 });
 
->>>>>>> fa9d036 (test: classify R297 runtime contract boundaries)
 test('backend ticket is single-use and exchanges for a short-lived noVNC cookie', async (t) => {
   let now = 1_000_000;
   const app = await activeApp(t, { now: () => now, storeId: 'store' });
