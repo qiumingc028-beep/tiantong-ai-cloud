@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import redis as redis_module
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
@@ -477,7 +478,7 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
     postgres_database_factory,
     monkeypatch,
 ):
-    from backend import worker
+    from backend import queue, worker
     from tests.conftest import _alembic
 
     database_url = postgres_database_factory("r297_postgres_reaper")
@@ -553,23 +554,39 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
             visibility_deadline=now - timedelta(seconds=1),
             sync_window_started_at=now - timedelta(minutes=5),
         ))
+        db.add(JdSyncLog(
+            task_id=task_id,
+            tenant_id=tenant.id,
+            company_id=company.id,
+            store_id=store.id,
+            task_type="sync_jd_smart",
+            source="cloud_scheduler",
+            status="failed",
+            attempt=0,
+            claim_generation=2,
+            sync_window_started_at=now - timedelta(minutes=5),
+        ))
         db.commit()
         scope = (tenant.id, company.id, store.id)
     finally:
         db.close()
 
-    delivered = []
-    delivery_lock = threading.Lock()
-
-    def ensure_delivery(task, *, now):
-        with delivery_lock:
-            if any(item["task_id"] == task["task_id"] for item in delivered):
-                return False
-            delivered.append(task)
-            return True
+    redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    redis_client = redis_module.Redis.from_url(redis_url, decode_responses=True)
+    namespace = f"tiantong:test:r297-reaper:{uuid.uuid4()}"
+    queue_keys = {
+        "QUEUE_NAME": namespace,
+        "PROCESSING_QUEUE_NAME": f"{namespace}:processing",
+        "PROCESSING_METADATA_PREFIX": f"{namespace}:processing:",
+        "PROCESSING_DEADLINES_KEY": f"{namespace}:processing:deadlines",
+        "PROCESSING_GENERATION_PREFIX": f"{namespace}:claim-generation:",
+    }
+    for name, value in queue_keys.items():
+        monkeypatch.setattr(queue, name, value)
+    monkeypatch.setattr(queue, "get_redis", lambda: redis_client)
 
     monkeypatch.setattr(worker, "SessionLocal", sessions)
-    monkeypatch.setattr(worker, "ensure_task_delivery", ensure_delivery, raising=False)
+    monkeypatch.setattr(worker, "ensure_task_delivery", queue.ensure_task_delivery, raising=False)
 
     def reap_non_cloud_only(*, before_requeue, **_kwargs):
         assert before_requeue({
@@ -595,6 +612,7 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
             thread.join(timeout=10)
 
         assert sorted(results) == [0, 1]
+        delivered = [json.loads(raw) for raw in redis_client.lrange(queue.QUEUE_NAME, 0, -1)]
         assert len(delivered) == 1
         task = delivered[0]
         assert task["task_id"] == task_id
@@ -606,6 +624,7 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
             task["payload"]["store_id"],
         ) == scope
         assert task["claim_generation"] == 3
+        assert task["attempt"] == 1
         db = sessions()
         try:
             policy = db.query(JdWorkbenchSyncPolicy).one()
@@ -614,7 +633,7 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
             assert policy.visibility_deadline is None
         finally:
             db.close()
-        stale_attempt = {**task, "attempt": 1}
+        stale_attempt = {**task, "attempt": 0}
         assert worker._claim_jd_workbench_task(
             stale_attempt,
             "worker-stale-attempt",
@@ -650,7 +669,7 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
         finally:
             db.close()
         assert worker.reap_jd_workbench_tasks(now) == 0
-        assert len(delivered) == 1
+        assert redis_client.llen(queue.QUEUE_NAME) == 1
         db = sessions()
         try:
             policy = db.query(JdWorkbenchSyncPolicy).one()
@@ -663,6 +682,9 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
         finally:
             db.close()
     finally:
+        keys = list(redis_client.scan_iter(f"{namespace}*"))
+        if keys:
+            redis_client.delete(*keys)
         engine.dispose()
 
 

@@ -167,7 +167,7 @@ class ReliableFakeRedis:
                 queued = json.loads(raw)
                 if queued["task_id"] != task_id:
                     continue
-                if int(queued.get("attempt", 0)) == int(expected_attempt):
+                if int(queued.get("attempt", 0)) >= int(expected_attempt):
                     return 0
                 self.lrem(ready, 1, raw)
             for raw in list(self.lists.get(processing, [])):
@@ -177,7 +177,7 @@ class ReliableFakeRedis:
                 lease_id = f"{task_id}:{claimed.get('claim_generation', '')}"
                 metadata = prefix + lease_id
                 deadline = self.hashes.get(metadata, {}).get("visibility_deadline")
-                if int(claimed.get("attempt", 0)) == int(expected_attempt) and deadline and deadline > now:
+                if int(claimed.get("attempt", 0)) >= int(expected_attempt) and deadline and deadline > now:
                     return 0
                 self.lrem(processing, 1, raw)
                 self.delete(metadata)
@@ -319,6 +319,9 @@ def test_postgresql_reaper_delivery_replaces_expired_transport_once(monkeypatch)
 
     retry = {**task, "attempt": 1}
     assert queue.ensure_task_delivery(retry, now=now) is True
+    ready = [json.loads(raw) for raw in redis.lists[queue.QUEUE_NAME]]
+    assert [item["attempt"] for item in ready] == [1]
+    assert queue.ensure_task_delivery(task, now=now) is False
     ready = [json.loads(raw) for raw in redis.lists[queue.QUEUE_NAME]]
     assert [item["attempt"] for item in ready] == [1]
 

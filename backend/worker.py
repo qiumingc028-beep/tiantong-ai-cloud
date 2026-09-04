@@ -539,7 +539,11 @@ def reap_jd_workbench_tasks(now=None) -> int:
                     status.last_error_at = None
                 db.commit()
                 continue
-            if latest and latest.status == "failed" and latest.attempt >= 5:
+            if (
+                latest
+                and latest.status == "failed"
+                and latest.claim_generation == policy.claim_generation
+            ):
                 statuses = _status_rows(db, policy)
                 _clear_policy_lease(policy)
                 attempt = min(latest.attempt + 1, len(JD_RETRY_BACKOFF_SECONDS))
