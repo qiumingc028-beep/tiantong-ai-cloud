@@ -486,7 +486,10 @@ export function buildApp({
   });
 
   app.post('/internal/jd-browser/capture', { preHandler: verifyCapture }, async (request, reply) => {
-    const scope = normalizedScope(request.body);
+    if (!request.body || Object.keys(request.body).some((key) => !['scope', 'dataset'].includes(key)) || typeof request.body.dataset !== 'string' || !['metrics', 'orders', 'products', 'ads'].includes(request.body.dataset)) {
+      return reply.code(400).send({ status: 'INVALID_CAPTURE_REQUEST', data: {} });
+    }
+    const scope = normalizedScope(request.body.scope);
     const session = scope && browserSessions.get(sessionId(scope));
     if (!session || !await sessionRemainsAuthorized(sessionId(scope), session)) {
       return reply.code(409).send({ status: 'LOGIN_REQUIRED', data: {} });

@@ -20,6 +20,8 @@ export PRODUCTION_ENV_FILE=$ENV_FILE
 [[ -d $DEPLOYMENT_DIR/.git || -f $DEPLOYMENT_DIR/.git ]] || { echo "R297_DEPLOYMENT_NOT_GIT_WORKTREE" >&2; exit 66; }
 [[ -f $COMPOSE_FILE ]] || { echo "R297_COMPOSE_MISSING" >&2; exit 66; }
 [[ -f $ENV_FILE ]] || { echo "R297_ENV_FILE_MISSING" >&2; exit 66; }
+namespace_value="$(awk -F= '$1=="JD_SESSION_NAMESPACE"{print $2}' "$ENV_FILE" | tail -n1)"
+[[ "$namespace_value" =~ ^[a-z0-9][a-z0-9-]{1,31}$ && "$namespace_value" != "development" && "$namespace_value" != "default" && "$namespace_value" != "test" && "$namespace_value" != "ci" ]] || { echo "R297_SESSION_NAMESPACE_INVALID" >&2; exit 78; }
 
 env_mode=$(stat -c '%a' "$ENV_FILE")
 env_mode_decimal=$((8#$env_mode))

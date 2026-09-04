@@ -28,13 +28,16 @@ class JdSmartCollector:
             raise JdCollectorError("云端浏览器内部认证未配置")
         if not endpoint:
             raise JdCollectorError("云端浏览器运行时未配置")
-        payload = {"tenant_id": store.tenant_id, "company_id": store.company_id, "store_id": store.id, "platform": store.platform, "dataset": dataset}
+        namespace = os.getenv("JD_SESSION_NAMESPACE", "").strip()
+        if not namespace:
+            raise JdCollectorError("会话命名空间未配置")
+        payload = {"scope": {"namespace": namespace, "tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": "jd"}, "dataset": dataset}
         try:
             with urlopen(Request(endpoint + "/capture", data=json.dumps(payload).encode(), headers={"content-type": "application/json", "x-internal-token": token}), timeout=45) as response:
                 result = json.loads(response.read(1_000_000))
         except Exception as exc:
             raise JdCollectorError("云端浏览器采集失败") from exc
-        if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") in {"LOGIN_REQUIRED", "CAPTCHA", "RISK_CONTROL"}:
+        if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") != "OK":
             raise JdCollectorError("需要人工处理登录或风控")
         data = result["data"]
         if not isinstance(data, dict) or data.get("store_id") != store.id or data.get("source") != "jd_cloud_playwright":
