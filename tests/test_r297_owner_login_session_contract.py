@@ -206,6 +206,21 @@ def test_controlled_canary_uses_explicit_loopback_runtime(monkeypatch, client, o
     assert response.json()["session_id"] == "1:1:1:jd"
 
 
+def test_controlled_canary_is_hard_disabled_in_production(monkeypatch, client, owner_headers, runtime_recorder):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("R297_CONTROLLED_CANARY", "1")
+    monkeypatch.setenv(
+        "JD_BROWSER_RUNTIME_BASE_URL",
+        "http://127.0.0.1:18787/internal/jd-browser",
+    )
+
+    response = client.post("/api/jd-workbench/stores/1/login-session", headers=owner_headers, json={})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "生产环境禁止受控Canary运行时"}
+    assert runtime_recorder.requests == []
+
+
 def test_runtime_override_fails_closed_outside_controlled_loopback(monkeypatch, client, owner_headers, runtime_recorder):
     monkeypatch.setenv("R297_CONTROLLED_CANARY", "1")
     monkeypatch.setenv("JD_BROWSER_RUNTIME_BASE_URL", "https://example.invalid/internal/jd-browser")

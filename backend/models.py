@@ -458,6 +458,10 @@ class JdSyncLog(Base):
             "store_id IS NULL OR (tenant_id IS NOT NULL AND company_id IS NOT NULL AND sync_window_started_at IS NOT NULL)",
             name="ck_jd_sync_logs_store_scope_complete",
         ),
+        CheckConstraint(
+            "NOT redis_notification_pending OR redis_notification_payload IS NOT NULL",
+            name="ck_jd_sync_logs_notification_payload",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "company_id", "store_id"],
             ["stores.tenant_id", "stores.company_id", "stores.id"],
@@ -478,6 +482,8 @@ class JdSyncLog(Base):
     message: Mapped[str | None] = mapped_column(Text)
     attempt: Mapped[int] = mapped_column(Integer, default=0)
     claim_generation: Mapped[int | None] = mapped_column(Integer)
+    redis_notification_pending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    redis_notification_payload: Mapped[str | None] = mapped_column(Text)
     sync_window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

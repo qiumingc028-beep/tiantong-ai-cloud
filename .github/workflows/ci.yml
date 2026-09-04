@@ -422,6 +422,7 @@ jobs:
           name: r297-process-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_RAW.jsonl
+            /tmp/r297-process-acceptance/R297_SENSITIVE_FIXTURE.json
             /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
             /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json.sha256
           if-no-files-found: error

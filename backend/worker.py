@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import json
 import os
@@ -8,6 +9,7 @@ import uuid
 from datetime import date, datetime, timezone, timedelta
 
 from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -135,10 +137,9 @@ def run_jd_workbench_scheduler(now=None):
             if status and status.next_sync_at and status.next_sync_at > now:
                 continue
             if policy.active_task_id:
-                if policy.visibility_deadline and policy.visibility_deadline <= now:
-                    _clear_policy_lease(policy)
-                else:
-                    continue
+                # PostgreSQL is authoritative; only the generation-fenced reaper
+                # may recover an expired processing claim.
+                continue
             window_started_at = _sync_window(now, policy.interval_seconds)
             previous_attempt = db.query(JdSyncLog).filter(
                 JdSyncLog.tenant_id == policy.tenant_id,
@@ -366,7 +367,10 @@ def _finish_jd_workbench_task(task: dict, worker_id: str, *, success: bool, now:
                 status.last_error_at = now
                 status.next_sync_at = now + timedelta(seconds=delay)
         db.commit()
-        redis.delete(f"{JD_WORKBENCH_LEASE_PREFIX}{policy.tenant_id}:{policy.store_id}")
+        try:
+            redis.delete(f"{JD_WORKBENCH_LEASE_PREFIX}{policy.tenant_id}:{policy.store_id}")
+        except RedisError as exc:
+            logger.warning("jd_workbench_lease_cleanup_pending task_id=%s error=%s", task["task_id"], type(exc).__name__)
         return True
     finally:
         db.close()
@@ -415,7 +419,22 @@ def _assert_jd_workbench_claim_owned(db, task: dict, worker_id: str) -> None:
 
 def _recover_jd_workbench_task(task: dict, now: datetime) -> bool:
     if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
-        return None
+        db = SessionLocal()
+        try:
+            terminal = db.query(JdSyncLog.id).filter(
+                JdSyncLog.task_id == task["task_id"],
+                JdSyncLog.attempt == int(task.get("attempt", 0)),
+                or_(
+                    JdSyncLog.status == "success",
+                    and_(
+                        JdSyncLog.status == "failed",
+                        JdSyncLog.attempt >= int(task.get("max_retries", 3)),
+                    ),
+                ),
+            ).one_or_none()
+            return False if terminal else None
+        finally:
+            db.close()
     payload = task["payload"]
     db = SessionLocal()
     try:
@@ -463,22 +482,27 @@ def reap_jd_workbench_tasks(now=None) -> int:
 
 def reconcile_completed_jd_workbench_tasks() -> int:
     """Remove Redis residue for task attempts already committed in PostgreSQL."""
+    _reconcile_pending_task_statuses()
     redis = get_redis()
     reconciled = 0
     for raw in redis.lrange(PROCESSING_QUEUE_NAME, 0, -1):
         task = json.loads(raw)
         db = SessionLocal()
         try:
-            terminal = db.query(JdSyncLog.status, JdSyncLog.claim_generation).filter(
+            terminal = db.query(JdSyncLog).filter(
                 JdSyncLog.task_id == task["task_id"],
                 JdSyncLog.attempt == int(task.get("attempt", 0)),
             ).one_or_none()
+            status = terminal.status if terminal else None
+            claim_generation = terminal.claim_generation if terminal else None
+            notification_pending = terminal.redis_notification_pending if terminal else False
         finally:
             db.close()
         if not terminal:
             continue
-        status = terminal[0]
-        fenced_task = {**task, "db_claim_generation": terminal[1]}
+        if notification_pending:
+            continue
+        fenced_task = {**task, "db_claim_generation": claim_generation}
         cloud = task.get("task_type") == "sync_jd_smart" and task.get("payload", {}).get("source") == "cloud_scheduler"
         if status == "success":
             if cloud and not _clear_completed_jd_workbench_policy(fenced_task, datetime.now(timezone.utc)):
@@ -491,6 +515,95 @@ def reconcile_completed_jd_workbench_tasks() -> int:
         if discard_processing_task(task, raw):
             reconciled += 1
     return reconciled
+
+
+def _reconcile_pending_task_statuses() -> int:
+    """Republish status notifications from PostgreSQL even after Redis state loss."""
+    published = 0
+    lookup = SessionLocal()
+    try:
+        pending_ids = [row[0] for row in lookup.query(JdSyncLog.id).filter(
+            JdSyncLog.redis_notification_pending.is_(True),
+            JdSyncLog.status.in_(("running", "success", "failed")),
+        ).order_by(JdSyncLog.id).limit(100).all()]
+    finally:
+        lookup.close()
+    for log_id in pending_ids:
+        db = SessionLocal()
+        try:
+            if _publish_staged_task_status(db, log_id):
+                published += 1
+        finally:
+            db.close()
+    return published
+
+
+def _stage_task_status(log: JdSyncLog, task: dict, status: str, message: str) -> None:
+    log.redis_notification_pending = True
+    log.redis_notification_payload = json.dumps({
+        "task_id": task["task_id"],
+        "status": status,
+        "task_type": task["task_type"],
+        "payload": task.get("payload", {}),
+        "message": message,
+        "attempt": int(task.get("attempt", 0)),
+        "max_retries": int(task.get("max_retries", 3)),
+    }, ensure_ascii=False, sort_keys=True)
+    task["_redis_notification_pending"] = True
+
+
+def _publish_staged_task_status(db, log_id: int, task: dict | None = None) -> bool:
+    """Publish Redis status without allowing transport failure to rewrite DB truth."""
+    log = db.query(JdSyncLog).filter(
+        JdSyncLog.id == log_id,
+        JdSyncLog.redis_notification_pending.is_(True),
+    ).with_for_update(skip_locked=True).one_or_none()
+    if log is None:
+        if task is not None:
+            task["_redis_notification_pending"] = False
+            return True
+        return False
+    try:
+        envelope = json.loads(log.redis_notification_payload or "")
+        if not {"task_id", "status", "task_type"}.issubset(envelope):
+            raise ValueError("missing required task status fields")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        db.rollback()
+        logger.error("task_status_notification_invalid log_id=%s", log_id)
+        return False
+    try:
+        update_task_status(**envelope)
+    except RedisError as exc:
+        db.rollback()
+        if task is not None:
+            task["_redis_notification_pending"] = True
+        logger.warning(
+            "task_status_notification_pending task_id=%s status=%s error=%s",
+            log.task_id, log.status, type(exc).__name__,
+        )
+        return False
+    log.redis_notification_pending = False
+    log.redis_notification_payload = None
+    db.add(log)
+    db.commit()
+    if task is not None:
+        task["_redis_notification_pending"] = False
+    return True
+
+
+def _publish_task_status_best_effort(db, log_id: int, task: dict) -> bool:
+    """Keep transport/readback failures outside the business transaction outcome."""
+    try:
+        return _publish_staged_task_status(db, log_id, task)
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            db.rollback()
+        task["_redis_notification_pending"] = True
+        logger.warning(
+            "task_status_notification_pending log_id=%s error=%s",
+            log_id, type(exc).__name__,
+        )
+        return False
 
 
 class _TaskHeartbeat:
@@ -726,16 +839,22 @@ def _handle_task_direct(task):
     log.status = "running"
     log.started_at = datetime.now(timezone.utc)
     log.finished_at = None
+    _stage_task_status(log, task, "running", "任务执行中")
     db.commit()
-    update_task_status(task_id, "running", task_type, payload, message="任务执行中", attempt=attempt, max_retries=max_retries)
+    _publish_task_status_best_effort(db, log.id, task)
     try:
         if task_type == "sync_jd_smart":
             cloud = payload.get("source") == "cloud_scheduler"
+            def prepare_smart_commit():
+                if cloud:
+                    _assert_jd_workbench_claim_owned(db, task, task["_worker_id"])
+                _stage_task_status(log, task, "success", "任务执行成功")
+
             result = sync_jd_smart(
                 db,
                 int(payload["store_id"]),
                 completion_log=log,
-                before_commit=(lambda: _assert_jd_workbench_claim_owned(db, task, task["_worker_id"])) if cloud else None,
+                before_commit=prepare_smart_commit,
             )
         elif task_type == "sync_jzt":
             result = sync_jzt(db, int(payload["store_id"]))
@@ -752,11 +871,13 @@ def _handle_task_direct(task):
             result = execute_sprint18_business_loop(db, task)
         else:
             raise RuntimeError(f"未知任务类型: {task_type}")
-        log.status = "success"
-        log.message = str(result)
-        log.finished_at = datetime.now(timezone.utc)
-        db.commit()
-        update_task_status(task_id, "success", task_type, payload, message="任务执行成功", attempt=attempt, max_retries=max_retries)
+        if task_type != "sync_jd_smart":
+            log.status = "success"
+            log.message = str(result)
+            log.finished_at = datetime.now(timezone.utc)
+            _stage_task_status(log, task, "success", "任务执行成功")
+            db.commit()
+        _publish_task_status_best_effort(db, log.id, task)
     except Exception as exc:
         db.rollback()
         if cloud_scheduled:
@@ -765,12 +886,18 @@ def _handle_task_direct(task):
         log.status = "failed"
         log.message = str(exc)
         log.finished_at = datetime.now(timezone.utc)
+        terminal_failure = cloud_scheduled or attempt >= max_retries
+        if terminal_failure:
+            _stage_task_status(log, task, "failed", str(exc))
+        else:
+            log.redis_notification_pending = False
+            log.redis_notification_payload = None
         db.add(log)
         if task_type == "ai_store_manager_daily":
             write_employee_log(db, task_type, "failed", {"error": str(exc)}, attempt, max_retries)
         db.commit()
-        if attempt >= max_retries or cloud_scheduled:
-            update_task_status(task_id, "failed", task_type, payload, message=str(exc), attempt=attempt, max_retries=max_retries)
+        if terminal_failure:
+            _publish_task_status_best_effort(db, log.id, task)
         raise
     finally:
         db.close()
@@ -1247,8 +1374,11 @@ def process_next_task():
             retry_claimed_task(task, worker_id, raw, f"执行失败，准备重试: {task_error}")
         else:
             finished = _finish_jd_workbench_task(task, worker_id, success=success, now=datetime.now(timezone.utc))
-            if finished:
-                ack_task(task, worker_id, raw)
+            if finished and not task.get("_redis_notification_pending"):
+                try:
+                    ack_task(task, worker_id, raw)
+                except RedisError as exc:
+                    logger.warning("task_ack_pending task_id=%s error=%s", task["task_id"], type(exc).__name__)
     return True
 
 

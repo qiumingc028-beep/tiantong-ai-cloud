@@ -134,6 +134,41 @@ def test_non_cloud_successful_task_replay_is_ack_only(postgres_database_factory,
         engine.dispose()
 
 
+def test_pending_status_reconciler_uses_postgresql_skip_locked(postgres_database_factory, monkeypatch):
+    from backend import worker
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_pending_status_lock")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    task_id = str(uuid.uuid4())
+    db = sessions()
+    try:
+        db.add(JdSyncLog(
+            task_id=task_id, task_type="ai_store_manager_daily", attempt=0,
+            status="success", redis_notification_pending=True,
+            redis_notification_payload=json.dumps({
+                "task_id": task_id, "status": "success",
+                "task_type": "ai_store_manager_daily",
+            }),
+        ))
+        db.commit()
+        db.connection().exec_driver_sql(
+            "SELECT id FROM jd_sync_logs WHERE task_id = %s FOR UPDATE",
+            (task_id,),
+        ).one()
+        monkeypatch.setattr(worker, "SessionLocal", sessions)
+        monkeypatch.setattr(worker, "update_task_status", lambda *_args, **_kwargs: None)
+
+        assert worker._reconcile_pending_task_statuses() == 0
+        db.rollback()
+        assert worker._reconcile_pending_task_statuses() == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_0052_downgrade_reupgrade_preserves_queue_identity(postgres_database_factory):
     from tests.conftest import _alembic
 
@@ -155,8 +190,8 @@ def test_0052_downgrade_reupgrade_preserves_queue_identity(postgres_database_fac
             (tenant_id, company_id),
         ).scalar_one()
         connection.exec_driver_sql(
-            "INSERT INTO jd_sync_logs (tenant_id, company_id, store_id, task_id, task_type, source, status, attempt, claim_generation, sync_window_started_at) VALUES (%s, %s, %s, %s, 'sync_jd_smart', 'cloud_scheduler', 'success', 0, 7, %s)",
-            (tenant_id, company_id, store_id, task_id, window),
+            "INSERT INTO jd_sync_logs (tenant_id, company_id, store_id, task_id, task_type, source, status, attempt, claim_generation, redis_notification_pending, redis_notification_payload, sync_window_started_at) VALUES (%s, %s, %s, %s, 'sync_jd_smart', 'cloud_scheduler', 'success', 0, 7, true, %s, %s)",
+            (tenant_id, company_id, store_id, task_id, '{"status":"success"}', window),
         )
     engine.dispose()
 
@@ -174,12 +209,14 @@ def test_0052_downgrade_reupgrade_preserves_queue_identity(postgres_database_fac
     try:
         with engine.connect() as connection:
             row = connection.exec_driver_sql(
-                "SELECT source, claim_generation, sync_window_started_at FROM jd_sync_logs WHERE task_id = %s",
+                "SELECT source, claim_generation, redis_notification_pending, redis_notification_payload, sync_window_started_at FROM jd_sync_logs WHERE task_id = %s",
                 (task_id,),
             ).one()
         assert row[0] == "cloud_scheduler"
         assert row[1] == 7
-        assert row[2] == window
+        assert row[2] is True
+        assert row[3] == '{"status":"success"}'
+        assert row[4] == window
         with engine.connect() as connection:
             legacy = connection.exec_driver_sql(
                 "SELECT tenant_id, company_id, source, sync_window_started_at FROM jd_sync_logs WHERE task_id = %s",
@@ -366,7 +403,18 @@ def test_two_schedulers_create_one_store_window_task(postgres_database_factory, 
         policy.lease_worker_id = "dead-worker"
         policy.claim_generation = 1
         policy.visibility_deadline = now - timedelta(seconds=1)
+        db.query(JdWorkbenchStoreStatus).one().next_sync_at = now - timedelta(seconds=1)
         db.commit()
+    finally:
+        db.close()
+
+    assert worker.run_jd_workbench_scheduler(now) == 0
+    db = sessions()
+    try:
+        policy = db.query(JdWorkbenchSyncPolicy).one()
+        assert policy.queue_state == "processing"
+        assert policy.lease_worker_id == "dead-worker"
+        assert policy.visibility_deadline == now - timedelta(seconds=1)
     finally:
         db.close()
 

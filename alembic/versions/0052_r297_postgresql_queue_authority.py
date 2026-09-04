@@ -53,14 +53,28 @@ def upgrade():
     op.add_column("jd_sync_logs", sa.Column("company_id", sa.Integer()))
     op.add_column("jd_sync_logs", sa.Column("claim_generation", sa.Integer()))
     op.add_column("jd_sync_logs", sa.Column("source", sa.String(length=32)))
+    op.add_column("jd_sync_logs", sa.Column("redis_notification_pending", sa.Boolean(), nullable=False, server_default=sa.false()))
+    op.add_column("jd_sync_logs", sa.Column("redis_notification_payload", sa.Text()))
     op.add_column("jd_sync_logs", sa.Column("sync_window_started_at", sa.DateTime(timezone=True)))
     op.create_unique_constraint("uq_stores_tenant_company_id", "stores", ["tenant_id", "company_id", "id"])
     if inspect(op.get_bind()).has_table("r297_0052_jd_sync_log_backup"):
+        backup_columns = {
+            column["name"]
+            for column in inspect(op.get_bind()).get_columns("r297_0052_jd_sync_log_backup")
+        }
+        pending_value = (
+            "(b.redis_notification_pending AND b.redis_notification_payload IS NOT NULL)"
+            if {"redis_notification_pending", "redis_notification_payload"}.issubset(backup_columns)
+            else "false"
+        )
+        payload_value = "b.redis_notification_payload" if "redis_notification_payload" in backup_columns else "NULL"
         op.execute(
-            """
+            f"""
             UPDATE jd_sync_logs AS l
             SET tenant_id = b.tenant_id, company_id = b.company_id,
                 claim_generation = b.claim_generation, source = b.source,
+                redis_notification_pending = {pending_value},
+                redis_notification_payload = {payload_value},
                 sync_window_started_at = b.sync_window_started_at
             FROM r297_0052_jd_sync_log_backup AS b WHERE l.id = b.id
             """
@@ -95,6 +109,10 @@ def upgrade():
         "ck_jd_sync_logs_store_scope_complete", "jd_sync_logs",
         "store_id IS NULL OR (tenant_id IS NOT NULL AND company_id IS NOT NULL AND sync_window_started_at IS NOT NULL)",
     )
+    op.create_check_constraint(
+        "ck_jd_sync_logs_notification_payload", "jd_sync_logs",
+        "NOT redis_notification_pending OR redis_notification_payload IS NOT NULL",
+    )
     op.create_index(
         "uq_jd_sync_logs_store_window_task_type", "jd_sync_logs",
         ["store_id", "sync_window_started_at", "task_type"], unique=True,
@@ -116,23 +134,28 @@ def downgrade():
         sa.Column("company_id", sa.Integer()),
         sa.Column("claim_generation", sa.Integer()),
         sa.Column("source", sa.String(length=32)),
+        sa.Column("redis_notification_pending", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("redis_notification_payload", sa.Text()),
         sa.Column("sync_window_started_at", sa.DateTime(timezone=True)),
     )
     op.execute(
         """
         INSERT INTO r297_0052_jd_sync_log_backup
-          (id, tenant_id, company_id, claim_generation, source, sync_window_started_at)
-        SELECT id, tenant_id, company_id, claim_generation, source, sync_window_started_at
+          (id, tenant_id, company_id, claim_generation, source, redis_notification_pending, redis_notification_payload, sync_window_started_at)
+        SELECT id, tenant_id, company_id, claim_generation, source, redis_notification_pending, redis_notification_payload, sync_window_started_at
         FROM jd_sync_logs
         """
     )
     for table in ("jd_workbench_records", "jd_workbench_sync_batches", "jd_workbench_sync_policies"):
         op.drop_constraint(f"fk_{table}_tenant_company_store", table, type_="foreignkey")
     op.drop_index("uq_jd_sync_logs_store_window_task_type", table_name="jd_sync_logs")
+    op.drop_constraint("ck_jd_sync_logs_notification_payload", "jd_sync_logs", type_="check")
     op.drop_constraint("ck_jd_sync_logs_store_scope_complete", "jd_sync_logs", type_="check")
     op.drop_constraint("fk_jd_sync_logs_tenant_company_store", "jd_sync_logs", type_="foreignkey")
     op.drop_constraint("uq_stores_tenant_company_id", "stores", type_="unique")
     op.drop_column("jd_sync_logs", "sync_window_started_at")
+    op.drop_column("jd_sync_logs", "redis_notification_payload")
+    op.drop_column("jd_sync_logs", "redis_notification_pending")
     op.drop_column("jd_sync_logs", "source")
     op.drop_column("jd_sync_logs", "claim_generation")
     op.drop_column("jd_sync_logs", "company_id")

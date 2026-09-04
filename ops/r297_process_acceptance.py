@@ -199,6 +199,19 @@ def main() -> int:
     master_key = __import__("base64").b64encode(secrets.token_bytes(32)).decode()
     device_token = secrets.token_urlsafe(48)
     temporary = Path(tempfile.mkdtemp(prefix="r297-process-"))
+    sensitive_fixture = output / "R297_SENSITIVE_FIXTURE.json"
+    sensitive_values = {
+        "buyer_name": "canary-" + secrets.token_hex(8),
+        "phone": "canary-" + secrets.token_hex(8),
+        "address": "canary-" + secrets.token_hex(8),
+        "cookie": "canary-" + secrets.token_hex(16),
+        "token": "canary-" + secrets.token_hex(16),
+        "password": "canary-" + secrets.token_hex(16),
+    }
+    sensitive_fixture.write_text(json.dumps(sensitive_values, sort_keys=True) + "\n", encoding="utf-8")
+    sensitive_fixture.chmod(0o600)
+    sensitive_fixture_sha256 = sha256(sensitive_fixture)
+    fixture_env = {f"R297_FIXTURE_{key.upper()}": value for key, value in sensitive_values.items()}
     device_private_key = temporary / "device-test-key.pem"
     run("openssl", "genpkey", "-quiet", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", str(device_private_key))
     modulus = run("openssl", "rsa", "-in", str(device_private_key), "-noout", "-modulus").split("=", 1)[1]
@@ -206,13 +219,15 @@ def main() -> int:
     backend_log = temporary / "backend.log"
     canary_log = temporary / "canary.log"
     worker_logs = [temporary / "worker-1.log", temporary / "worker-2.log", temporary / "worker-restarted.log"]
+    container_logs: dict[str, str] = {}
+    cleanup_errors: list[str] = []
     processes: list[subprocess.Popen] = []
     commands: list[str] = []
     observations: dict[str, object] = {}
 
     environment = os.environ.copy()
     environment.update({
-        "APP_ENV": "production",
+        "APP_ENV": "test",
         "SERVICE_ROLE": "backend",
         "DATABASE_URL": f"postgresql+psycopg2://r297:{postgres_password}@127.0.0.1:{postgres_port}/r297_acceptance",
         "REDIS_URL": f"redis://:{redis_password}@127.0.0.1:{redis_port}/0",
@@ -233,20 +248,21 @@ def main() -> int:
         "SKILLS_ENGINE_ENABLED": "false",
         "JD_TASK_VISIBILITY_SECONDS": "5",
         "JD_SCHEDULER_POLL_SECONDS": "1",
+        **fixture_env,
     })
 
     try:
         commands.append("docker run isolated postgres:16")
         docker_env = {**os.environ, "POSTGRES_PASSWORD": postgres_password}
         run(
-            "docker", "run", "--detach", "--rm", "--pull", "never", "--name", postgres_name,
+            "docker", "run", "--detach", "--pull", "never", "--name", postgres_name,
             "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_USER=r297", "--env", "POSTGRES_DB=r297_acceptance",
             "--publish", f"127.0.0.1:{postgres_port}:5432", "postgres:16", env=docker_env,
         )
         commands.append("docker run isolated redis:7")
         docker_env = {**os.environ, "REDIS_PASSWORD": redis_password}
         run(
-            "docker", "run", "--detach", "--rm", "--pull", "never", "--name", redis_name,
+            "docker", "run", "--detach", "--pull", "never", "--name", redis_name,
             "--env", "REDIS_PASSWORD", "--publish", f"127.0.0.1:{redis_port}:6379",
             "redis:7", "sh", "-c", 'exec redis-server --appendonly no --requirepass "$REDIS_PASSWORD"', env=docker_env,
         )
@@ -359,6 +375,7 @@ def main() -> int:
         commands.append("start real browser runtime container and Chromium")
         runtime_env = {
             **os.environ,
+            **fixture_env,
             "JD_BROWSER_CAPTURE_TOKEN": capture_token,
             "JD_BROWSER_CONTROL_TOKEN": control_token,
             "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY": ticket_key,
@@ -368,7 +385,7 @@ def main() -> int:
             "R297_CONTROLLED_CANARY_DASHBOARD_URL": f"http://host.docker.internal:{canary_port}/r297-controlled-canary.html",
         }
         run(
-            "docker", "run", "--detach", "--rm", "--name", runtime_name,
+            "docker", "run", "--detach", "--name", runtime_name,
             "--add-host", "host.docker.internal:host-gateway", "--publish", f"127.0.0.1:{runtime_port}:8787",
             "--cap-drop", "ALL", "--cap-add", "SYS_CHROOT", "--read-only",
             "--security-opt", "no-new-privileges:true",
@@ -380,6 +397,7 @@ def main() -> int:
             "--env", "JD_BROWSER_CAPTURE_TOKEN", "--env", "JD_BROWSER_CONTROL_TOKEN",
             "--env", "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY", "--env", "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY",
             "--env", "JD_SESSION_MASTER_KEY", "--env", "R297_CONTROLLED_CANARY", "--env", "R297_CONTROLLED_CANARY_DASHBOARD_URL",
+            *(item for name in sorted(fixture_env) for item in ("--env", name)),
             "--env", "RUNTIME_API_PORT=8788", "--env", "DISPLAY=:99", "--env", "JD_PROFILE_ROOT=/tmp/jd-cloud-profiles",
             "--env", "JD_SESSION_ARCHIVE_ROOT=/data/jd-session-archives",
             "--env", f"JD_BROWSER_SESSION_AUTH_URL=http://{runtime_backend_host}:{backend_port}/api/jd-workbench/internal/browser-session-authorize",
@@ -663,7 +681,7 @@ def main() -> int:
             },
             "cycles": [{"task_id": task["task_id"], "status": result["status"], "database_log_count": count} for task, result, count in zip(cycle_tasks, cycle_results, cycle_log_counts)],
             "idempotent_write": {"metric_row_count": len(metric_snapshot), "rows": metric_snapshot},
-            "dual_worker": {
+            "multi_worker": {
                 "task_id": dual_task["task_id"],
                 "status": dual_result["status"],
                 "worker_pids": [workers[0].pid, workers[1].pid],
@@ -676,44 +694,84 @@ def main() -> int:
             "orphan_recovery": {"task_id": orphan["task_id"], "processing_observed": True, "killed_worker_pid": killed.pid, "final_status": orphan_result["status"], "database_log_count": orphan_log_count},
             "explicit_ack": queue_residue,
             "worker_restart": {"pid_before": worker_pid_before, "pid_after": restarted_worker.pid, "recovered": worker_pid_before != restarted_worker.pid},
-            "runtime_restart": {"pid_before": runtime_pid_before, "pid_after": runtime_pid_after, "session_restored": bool(restored_session.get("restored"))},
-            "backend_restart": {"pid_before": backend_pid_before, "pid_after": restarted_backend.pid},
-            "frontend_independence": {"web_process_count": 0, "electron_process_count": 0, "completed_cycle_count": len(cycle_results)},
+            "service_restart": {
+                "runtime_pid_before": runtime_pid_before,
+                "runtime_pid_after": runtime_pid_after,
+                "runtime_session_restored": bool(restored_session.get("restored")),
+                "backend_pid_before": backend_pid_before,
+                "backend_pid_after": restarted_backend.pid,
+            },
             "manual_resume": {"before_status": "HUMAN_ACTION_REQUIRED", "after": manual_after, "automatic_enqueue_count": scheduled, "task_id": manual_task_id, "task_status": manual_task_result["status"]},
+            "human_action_detection": {"detected_status": "HUMAN_ACTION_REQUIRED", "automatic_resume_status": manual_task_result["status"]},
             "retry_schedule": {"expected_seconds": list(JD_RETRY_BACKOFF_SECONDS), "observed_seconds": observed_backoff},
             "source_code_write_count": 0,
             "production_connection_count": 0,
         }
     finally:
         for process in reversed(processes):
-            with contextlib.suppress(Exception):
+            try:
                 stop_process(process)
+                if process.poll() is None:
+                    cleanup_errors.append(f"process:{process.pid}:still-running")
+            except Exception as exc:
+                cleanup_errors.append(f"process:{process.pid}:{type(exc).__name__}")
         for name in (runtime_name, redis_name, postgres_name):
+            stop_result = subprocess.run(
+                ["docker", "stop", name], cwd=ROOT, text=True,
+                capture_output=True, check=False,
+            )
+            if stop_result.returncode:
+                cleanup_errors.append(f"container:{name}:stop:{stop_result.returncode}")
             with contextlib.suppress(Exception):
-                run("docker", "rm", "--force", name)
+                result = subprocess.run(
+                    ["docker", "logs", name], cwd=ROOT, text=True,
+                    capture_output=True, check=False,
+                )
+                if result.returncode == 0:
+                    container_logs[name] = result.stdout + result.stderr
+            with contextlib.suppress(Exception):
+                run("docker", "rm", name)
         with contextlib.suppress(Exception):
             run("docker", "volume", "rm", runtime_volume)
 
     raw_log = output / "R297_PROCESS_ACCEPTANCE_RAW.jsonl"
+    expected_container_logs = {runtime_name, redis_name, postgres_name}
+    if observations and (cleanup_errors or set(container_logs) != expected_container_logs):
+        missing = sorted(expected_container_logs - set(container_logs))
+        details = cleanup_errors + [f"missing-log:{name}" for name in missing]
+        raise RuntimeError(f"PROCESS_CLEANUP_OR_LOG_CAPTURE_INCOMPLETE:{','.join(details)}")
     with raw_log.open("w", encoding="utf-8") as handle:
         for command in commands:
             handle.write(json.dumps({"event": "command", "command": command}, sort_keys=True) + "\n")
+        handle.write(json.dumps({
+            "event": "sensitive_fixture_injected",
+            "fixture_sha256": sensitive_fixture_sha256,
+            "fields": sorted(sensitive_values),
+        }, sort_keys=True) + "\n")
         for key, value in observations.items():
-            handle.write(json.dumps({"event": "observation", "name": key, "value": value}, ensure_ascii=False, sort_keys=True) + "\n")
+            handle.write(json.dumps({"event": "gate_result", "gate": key, "result": value}, ensure_ascii=False, sort_keys=True) + "\n")
     observations["exact_commands"] = commands
     observations["raw_log_path"] = str(raw_log)
     observations["raw_log_sha256"] = sha256(raw_log)
+    observations["sensitive_fixture_path"] = str(sensitive_fixture)
+    observations["sensitive_fixture_sha256"] = sensitive_fixture_sha256
     evidence = output / "R297_PROCESS_ACCEPTANCE_EVIDENCE.json"
     serialized = json.dumps(observations, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    secrets_found = sum(serialized.count(value) for value in (postgres_password, redis_password, capture_token, control_token, ticket_key, cookie_key, master_key))
-    if secrets_found or re.search(r"(?i)(?:authorization|cookie|password|token)\s*[=:]\s*\S+", serialized):
+    process_logs = "\n".join(container_logs.values()) + "\n" + "\n".join(
+        path.read_text(errors="replace")
+        for path in (backend_log, canary_log, *worker_logs)
+        if path.exists()
+    )
+    scanned_text = serialized + "\n" + process_logs
+    secrets_found = sum(scanned_text.count(value) for value in (postgres_password, redis_password, capture_token, control_token, ticket_key, cookie_key, master_key, *sensitive_values.values()))
+    if secrets_found or re.search(r"(?i)(?:authorization|cookie|password|token)\s*[=:]\s*\S+", scanned_text):
         raise RuntimeError("SENSITIVE_VALUE_CAPTURED")
     observations["secret_exposure_count"] = 0
     evidence.write_text(json.dumps(observations, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     digest = sha256(evidence)
     sidecar = evidence.with_suffix(evidence.suffix + ".sha256")
     sidecar.write_text(f"{digest}  {evidence.name}\n", encoding="ascii")
-    for path in (raw_log, evidence, sidecar):
+    for path in (sensitive_fixture, raw_log, evidence, sidecar):
         path.chmod(0o600)
     print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE={evidence}")
     print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE_SHA256={digest}")

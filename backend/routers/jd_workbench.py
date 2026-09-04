@@ -251,6 +251,8 @@ RUNTIME_REQUEST_TIMEOUT_SECONDS = 30
 
 def _runtime_base() -> str:
     candidate = os.getenv("JD_BROWSER_RUNTIME_BASE_URL", RUNTIME_BASE).rstrip("/")
+    if os.getenv("APP_ENV", "").strip().lower() == "production" and os.getenv("R297_CONTROLLED_CANARY") == "1":
+        raise HTTPException(status_code=503, detail="生产环境禁止受控Canary运行时")
     if candidate == RUNTIME_BASE:
         return candidate
     parsed = urlsplit(candidate)
@@ -274,12 +276,13 @@ def _runtime_session_id(store: Store) -> str:
 
 
 def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    runtime_base = _runtime_base()
     token = get_settings().JD_BROWSER_CONTROL_TOKEN
     if not isinstance(token, str) or len(token.encode("utf-8")) < 32:
         raise HTTPException(status_code=503, detail="云端登录运行时控制凭据未配置")
     body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
     request = UrlRequest(
-        f"{_runtime_base()}{path}",
+        f"{runtime_base}{path}",
         data=body,
         headers={"content-type": "application/json", "x-internal-token": token},
         method=method,
