@@ -32,8 +32,12 @@
     'AUTHORIZATION_REVOKED', 'REVOKED', 'SESSION_DESTROYED', 'DESTROYED',
     'RUNTIME_UNAVAILABLE', 'SYNC_RECOVERED', 'ERROR', 'SYNC_FAILED'
   ]);
+  const SERVER_SESSION_STATUSES = new Set(['LOGIN_REQUIRED', 'ACTIVE', 'REVOKED']);
+  const SESSION_TTL_MAX_SECONDS = 600;
+  const TICKET_TTL_MAX_SECONDS = 60;
 
   function storeId(value) {
+    if (typeof value === 'boolean') throw new Error('店铺标识无效');
     const parsed = Number(value);
     if (!Number.isInteger(parsed) || parsed <= 0) throw new Error('店铺标识无效');
     return parsed;
@@ -43,34 +47,87 @@
     return `/api/jd-workbench/stores/${storeId(value)}/login-session`;
   }
 
-  function createClient(api) {
-    if (typeof api !== 'function') throw new Error('登录接口不可用');
+  function exactKeys(value, keys) {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value) &&
+      Object.keys(value).sort().join('\0') === [...keys].sort().join('\0'));
+  }
+
+  function strictTtl(value, maximum) {
+    return Number.isInteger(value) && value > 0 && value <= maximum;
+  }
+
+  async function responseError(response) {
+    let detail = '';
+    try { detail = (await response.json()).detail; } catch (_error) {}
+    const unexpectedSuccess = response && response.status >= 200 && response.status < 300;
+    const error = new Error(unexpectedSuccess ? '云端登录HTTP状态无效' : typeof detail === 'string' && detail ? detail : '云端登录请求失败，请稍后重试');
+    error.status = response && response.status;
+    return error;
+  }
+
+  async function requiredJson(response, expectedStatus) {
+    if (!response || response.status !== expectedStatus) throw await responseError(response);
+    try { return await response.json(); } catch (_error) { throw new Error('云端登录响应无效'); }
+  }
+
+  function createClient(request) {
+    if (typeof request !== 'function') throw new Error('登录接口不可用');
     const emptyPost = Object.freeze({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const send = async (path, options) => { try { return await request(path, options); } catch (_error) { throw new Error('网络连接失败，请稍后重试'); } };
     return Object.freeze({
-      create: value => api(sessionPath(value), emptyPost),
-      status: value => api(sessionPath(value)),
-      ticket: value => api(`/api/jd-workbench/stores/${storeId(value)}/login-ticket`, emptyPost),
-      close: value => api(sessionPath(value), { method: 'DELETE' })
+      create: async value => {
+        const id = storeId(value), data = await requiredJson(await send(sessionPath(id), emptyPost), 200);
+        if (!exactKeys(data, ['session_id', 'store_id', 'status', 'expires_in']) || typeof data.session_id !== 'string' || !data.session_id || data.status !== 'LOGIN_REQUIRED' || !strictTtl(data.expires_in, SESSION_TTL_MAX_SECONDS)) throw new Error('登录会话响应无效');
+        return sessionState(id, data);
+      },
+      status: async value => {
+        const id = storeId(value), data = await requiredJson(await send(sessionPath(id)), 200);
+        if (!exactKeys(data, ['store_id', 'status'])) throw new Error('登录状态响应无效');
+        return sessionState(id, data);
+      },
+      ticket: async (value, signal) => {
+        const id = storeId(value), options = signal ? { ...emptyPost, signal } : emptyPost;
+        const data = await requiredJson(await send(`/api/jd-workbench/stores/${id}/login-ticket`, options), 200);
+        if (!exactKeys(data, ['ticket', 'expires_in']) || typeof data.ticket !== 'string' || !data.ticket.trim() || !strictTtl(data.expires_in, TICKET_TTL_MAX_SECONDS)) throw new Error('登录凭证响应无效');
+        return Object.freeze({ ticket: data.ticket, expires_in: data.expires_in });
+      },
+      close: async value => {
+        const id = storeId(value), response = await send(sessionPath(id), { method: 'DELETE' });
+        if (response && response.status === 204) return Object.freeze({ store_id: id, status: 'REVOKED' });
+        const data = await requiredJson(response, 200);
+        if (!exactKeys(data, ['ok', 'store_id', 'status']) || data.ok !== true || !Number.isInteger(data.store_id) || data.store_id !== id || data.status !== 'REVOKED') throw new Error('登录会话销毁响应无效');
+        return Object.freeze({ store_id: id, status: 'REVOKED' });
+      }
     });
   }
 
-  async function redeemTicket(request, value, response) {
+  async function redeemTicket(request, value, response, signal) {
     if (typeof request !== 'function') throw new Error('受控登录服务不可用');
     const id = storeId(value);
     const ticket = response && response.ticket;
-    if (typeof ticket !== 'string' || !ticket || !Number.isInteger(response.expires_in) || response.expires_in <= 0) {
+    if (!exactKeys(response, ['ticket', 'expires_in']) || typeof ticket !== 'string' || !ticket.trim() || !strictTtl(response.expires_in, TICKET_TTL_MAX_SECONDS)) {
       throw new Error('登录凭证响应无效');
     }
-    const result = await request(`/jd-browser/novnc/${id}/exchange`, {
-      method: 'POST', credentials: 'include', cache: 'no-store', referrerPolicy: 'no-referrer',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket })
-    });
-    if (!result || !result.ok) {
-      const error = new Error(result && result.status === 403 ? '无权打开该店铺登录窗口' : result && result.status === 409 ? '登录会话状态冲突，请刷新后重试' : '登录凭证已失效或不适用于该店铺，请重新申请');
+    let result;
+    try {
+      result = await request(`/jd-browser/novnc/${id}/exchange`, {
+        method: 'POST', credentials: 'include', cache: 'no-store', referrerPolicy: 'no-referrer',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket }), signal
+      });
+    } catch (_error) { throw new Error('网络连接失败，请稍后重试'); }
+    if (!result || result.status !== 204) {
+      const error = new Error(result && result.status === 403 ? '无权打开该店铺登录窗口' : result && result.status === 409 ? '登录会话状态冲突，请刷新后重试' : result && result.status >= 200 && result.status < 300 ? '登录凭证兑换响应无效' : '登录凭证已失效或不适用于该店铺，请重新申请');
       error.status = result && result.status;
       throw error;
     }
     return `/jd-browser/novnc/${id}/vnc.html`;
+  }
+
+  async function openViewer({ client, request, storeId: value, signal, isActive }) {
+    const id = storeId(value);
+    const ticket = await client.ticket(id, signal);
+    if (signal.aborted || !isActive()) return null;
+    return redeemTicket(request, id, ticket, signal);
   }
 
   function isOwner(user) {
@@ -78,17 +135,23 @@
   }
 
   function statusView(value) {
-    const code = String(value || 'UNKNOWN').toUpperCase();
-    return Object.freeze({ code, label: STATUS_LABELS[code] || '登录状态未知', terminal: TERMINAL_STATUSES.has(code) });
+    if (value === undefined || value === null || value === '') return Object.freeze({ code: 'UNKNOWN', label: STATUS_LABELS.UNKNOWN, terminal: false });
+    const code = String(value).toUpperCase();
+    if (!STATUS_LABELS[code]) return Object.freeze({ code: 'INVALID', label: '登录状态异常', terminal: true });
+    return Object.freeze({ code, label: STATUS_LABELS[code], terminal: TERMINAL_STATUSES.has(code) });
   }
 
   function sessionState(expectedStoreId, response) {
     const expected = storeId(expectedStoreId);
-    if (!response || Number(response.store_id) !== expected || typeof response.status !== 'string') {
+    if (!response || !Number.isInteger(response.store_id) || response.store_id !== expected) {
       throw new Error('登录会话店铺作用域不匹配');
     }
-    const state = { store_id: expected, status: statusView(response.status).code };
-    if (Number.isFinite(Number(response.expires_in)) && Number(response.expires_in) >= 0) state.expires_in = Number(response.expires_in);
+    if (typeof response.status !== 'string' || !SERVER_SESSION_STATUSES.has(response.status)) throw new Error('登录状态响应无效');
+    const state = { store_id: expected, status: response.status };
+    if ('expires_in' in response) {
+      if (!strictTtl(response.expires_in, SESSION_TTL_MAX_SECONDS)) throw new Error('登录会话有效期响应无效');
+      state.expires_in = response.expires_in;
+    }
     return Object.freeze(state);
   }
 
@@ -141,5 +204,25 @@
     return Object.freeze({ begin: () => ++generation, isCurrent: token => token === generation });
   }
 
-  return Object.freeze({ createClient, createOperationGate, createPoller, errorMessage, isOwner, redeemTicket, sessionState, statusView });
+  function createWindowRegistry() {
+    const windows = new Map();
+    return Object.freeze({
+      track: (value, viewer) => { const id = storeId(value); windows.set(id, viewer); },
+      focus: value => { const viewer = windows.get(storeId(value)); if (!viewer || viewer.closed) { windows.delete(storeId(value)); return false; } viewer.focus(); return true; },
+      close: value => { const id = storeId(value), viewer = windows.get(id); if (viewer && !viewer.closed) viewer.close(); windows.delete(id); },
+      closeAll: () => { windows.forEach(viewer => { if (viewer && !viewer.closed) viewer.close(); }); windows.clear(); },
+      size: () => windows.size
+    });
+  }
+
+  function closePageResources({ operationGates, abortControllers, busy, pollers, windows }) {
+    operationGates.forEach(gate => gate.begin());
+    abortControllers.forEach(controller => controller.abort());
+    abortControllers.clear();
+    busy.clear();
+    pollers.forEach(poller => poller.stop());
+    windows.closeAll();
+  }
+
+  return Object.freeze({ closePageResources, createClient, createOperationGate, createPoller, createWindowRegistry, errorMessage, isOwner, openViewer, redeemTicket, sessionState, statusView });
 });
