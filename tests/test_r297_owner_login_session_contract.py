@@ -28,8 +28,8 @@ class _RuntimeResponse:
         self.payload = payload
         self.status = status
 
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode("utf-8")
+    def read(self, size: int = -1) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")[:size] if size >= 0 else json.dumps(self.payload).encode("utf-8")
 
     def __enter__(self):
         return self
