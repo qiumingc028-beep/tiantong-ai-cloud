@@ -95,13 +95,35 @@
       }
     },
     {
-      "name": "unicode_scope_value",
+      "name": "control_character_in_store_id",
       "expected_status": 400,
       "scope": {
         "namespace": "r297-contract",
-        "tenant_id": "租户",
+        "tenant_id": "tenant",
         "company_id": "company",
-        "store_id": "store",
+        "store_id": "store\nother",
+        "platform": "jd"
+      }
+    },
+    {
+      "name": "separator_injection_in_store_id",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store:other",
+        "platform": "jd"
+      }
+    },
+    {
+      "name": "non_normalized_store_id",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "e\u0301",
         "platform": "jd"
       }
     },
@@ -153,6 +175,10 @@
   "store_id_normalization": {
     "canonical": "1",
     "equivalent_inputs": ["1", 1]
+  },
+  "controlled_capture_metrics": {
+    "gmv": "1.00",
+    "store_name": "京东旗舰店"
   },
   "legacy_session_id": "tenant:company:store:jd",
   "namespace_mismatch_session_id": "other-environment:tenant:company:store:jd",

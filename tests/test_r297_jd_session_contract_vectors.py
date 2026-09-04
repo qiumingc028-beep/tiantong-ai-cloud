@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -66,7 +67,9 @@ def test_shared_contract_vector_schema_covers_required_cases():
         "namespace_mismatch",
         "non_jd_platform",
         "dataset_mixed_into_scope",
-        "unicode_scope_value",
+        "control_character_in_store_id",
+        "separator_injection_in_store_id",
+        "non_normalized_store_id",
         "store_id_missing",
         "scope_extra_field",
         "store_id_wrong_type",
@@ -77,13 +80,22 @@ def test_shared_contract_vector_schema_covers_required_cases():
         "namespace_mismatch": 403,
         "non_jd_platform": 400,
         "dataset_mixed_into_scope": 400,
-        "unicode_scope_value": 400,
+        "control_character_in_store_id": 400,
+        "separator_injection_in_store_id": 400,
+        "non_normalized_store_id": 400,
         "store_id_missing": 400,
         "scope_extra_field": 400,
         "store_id_wrong_type": 400,
         "store_id_zero": 400,
     }
     assert VECTORS["store_id_normalization"] == {"canonical": "1", "equivalent_inputs": ["1", 1]}
+    assert VECTORS["controlled_capture_metrics"]["store_name"] == "京东旗舰店"
+    non_normalized = next(
+        case["scope"]["store_id"]
+        for case in VECTORS["invalid_scope_cases"]
+        if case["name"] == "non_normalized_store_id"
+    )
+    assert unicodedata.normalize("NFC", non_normalized) != non_normalized
     assert VECTORS["ticket_ttl_rejections"] == [True, 0, -1, 121]
     assert VECTORS["max_ticket_ttl_seconds"] == 120
     assert {case["name"] for case in VECTORS["claim_type_misuse"]} == {

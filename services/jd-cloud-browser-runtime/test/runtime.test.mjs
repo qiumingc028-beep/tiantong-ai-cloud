@@ -212,7 +212,7 @@ async function controlledCaptureApp(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-capture-test-'));
   const page = {
     goto: async () => {},
-    evaluate: async () => ({ gmv: '1.00' })
+    evaluate: async () => contract.controlled_capture_metrics
   };
   const app = buildApp({
     captureToken,
@@ -258,7 +258,7 @@ test('controlled read-only capture succeeds after an authorized login', async (t
       source: 'jd_cloud_playwright',
       captured_at: new Date(captureNow).toISOString(),
       store_id: contract.valid_scope.store_id,
-      metrics: { gmv: '1.00' }
+      metrics: contract.controlled_capture_metrics
     }
   });
 });
