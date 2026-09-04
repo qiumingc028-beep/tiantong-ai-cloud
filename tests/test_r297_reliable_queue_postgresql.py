@@ -508,6 +508,38 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
         )
         db.add(store)
         db.flush()
+        user = User(
+            username="r297-reaper-owner",
+            password_hash="not-a-real-secret",
+            role="owner",
+            display_name="R297 reaper owner",
+            tenant_id=tenant.id,
+            company_id=company.id,
+            active=True,
+        )
+        db.add(user)
+        db.flush()
+        device = JdWorkbenchDevice(
+            device_id="00000000-0000-4000-8000-000000000298",
+            token_hash="b" * 64,
+            public_key_n="b" * 256,
+            public_key_e=65537,
+            tenant_id=tenant.id,
+            company_id=company.id,
+            user_id=user.id,
+            device_name="reaper-test",
+            client_version="2.97.0",
+            status="ONLINE",
+            expires_at=now + timedelta(days=1),
+        )
+        db.add(device)
+        db.flush()
+        db.add(JdWorkbenchStoreStatus(
+            device_id=device.device_id,
+            store_id=store.id,
+            status="SYNCING",
+            next_sync_at=now,
+        ))
         db.add(JdWorkbenchSyncPolicy(
             tenant_id=tenant.id,
             company_id=company.id,
@@ -582,6 +614,19 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
             assert policy.visibility_deadline is None
         finally:
             db.close()
+        stale_attempt = {**task, "attempt": 1}
+        assert worker._claim_jd_workbench_task(
+            stale_attempt,
+            "worker-stale-attempt",
+            now,
+        ) == "discard"
+        db = sessions()
+        try:
+            policy = db.query(JdWorkbenchSyncPolicy).one()
+            assert policy.queue_state == "ready"
+            assert policy.claim_generation == 3
+        finally:
+            db.close()
         assert worker.reap_jd_workbench_tasks(now) == 0
         db = sessions()
         try:
@@ -596,8 +641,8 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
                 store_id=scope[2],
                 task_type="sync_jd_smart",
                 source="cloud_scheduler",
-                status="success",
-                attempt=0,
+                status="failed",
+                attempt=5,
                 claim_generation=policy.claim_generation,
                 sync_window_started_at=policy.sync_window_started_at,
             ))
@@ -611,6 +656,10 @@ def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
             policy = db.query(JdWorkbenchSyncPolicy).one()
             assert policy.active_task_id is None
             assert policy.queue_state is None
+            status = db.query(JdWorkbenchStoreStatus).one()
+            assert status.status == "ERROR"
+            assert status.reason_code == "COLLECTOR_FAILED"
+            assert status.last_error_at == now
         finally:
             db.close()
     finally:

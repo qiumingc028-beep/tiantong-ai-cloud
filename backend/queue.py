@@ -311,7 +311,10 @@ def nack_task(task: dict, worker_id: str, raw: str | None = None) -> bool:
 _ENSURE_TASK_DELIVERY_SCRIPT = """
 for _, raw in ipairs(redis.call('LRANGE', KEYS[1], 0, -1)) do
   local ok, queued = pcall(cjson.decode, raw)
-  if ok and queued['task_id'] == ARGV[1] then return 0 end
+  if ok and queued['task_id'] == ARGV[1] then
+    if tonumber(queued['attempt'] or 0) == tonumber(ARGV[5]) then return 0 end
+    redis.call('LREM', KEYS[1], 1, raw)
+  end
 end
 for _, raw in ipairs(redis.call('LRANGE', KEYS[2], 0, -1)) do
   local ok, processing = pcall(cjson.decode, raw)
@@ -320,7 +323,7 @@ for _, raw in ipairs(redis.call('LRANGE', KEYS[2], 0, -1)) do
     local lease_id = ARGV[1] .. ':' .. generation
     local metadata = ARGV[3] .. lease_id
     local deadline = redis.call('HGET', metadata, 'visibility_deadline')
-    if deadline and deadline > ARGV[2] then return 0 end
+    if tonumber(processing['attempt'] or 0) == tonumber(ARGV[5]) and deadline and deadline > ARGV[2] then return 0 end
     redis.call('LREM', KEYS[2], 1, raw)
     redis.call('DEL', metadata)
     redis.call('ZREM', KEYS[3], lease_id)
@@ -347,6 +350,7 @@ def ensure_task_delivery(task: dict, *, now: datetime | None = None) -> bool:
         now.isoformat(),
         PROCESSING_METADATA_PREFIX,
         raw,
+        str(int(task.get("attempt", 0))),
     ))
 
 

@@ -234,6 +234,22 @@ def _claim_jd_workbench_task(task: dict, worker_id: str, now: datetime) -> str:
         if policy.active_task_id != task["task_id"]:
             db.rollback()
             return "discard"
+        latest = db.query(JdSyncLog).filter(
+            JdSyncLog.task_id == policy.active_task_id,
+        ).order_by(JdSyncLog.attempt.desc()).first()
+        if latest and latest.status == "success":
+            db.rollback()
+            return "discard"
+        expected_attempt = (
+            latest.attempt
+            if latest and latest.status == "running"
+            else latest.attempt + 1
+            if latest
+            else 0
+        )
+        if int(task.get("attempt", 0)) != expected_attempt:
+            db.rollback()
+            return "discard"
         if policy.queue_state != "ready":
             db.rollback()
             return "nack"
@@ -524,7 +540,17 @@ def reap_jd_workbench_tasks(now=None) -> int:
                 db.commit()
                 continue
             if latest and latest.status == "failed" and latest.attempt >= 5:
+                statuses = _status_rows(db, policy)
                 _clear_policy_lease(policy)
+                attempt = min(latest.attempt + 1, len(JD_RETRY_BACKOFF_SECONDS))
+                for status in statuses:
+                    status.status = "ERROR"
+                    status.reason_code = "COLLECTOR_FAILED"
+                    status.retry_count = attempt
+                    status.last_error_at = now
+                    status.next_sync_at = now + timedelta(
+                        seconds=JD_RETRY_BACKOFF_SECONDS[attempt - 1]
+                    )
                 db.commit()
                 continue
             attempt = latest.attempt if latest and latest.status == "running" else (
