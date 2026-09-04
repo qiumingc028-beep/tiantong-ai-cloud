@@ -78,12 +78,13 @@ function verifiedValue(value, key, { typ, aud, now }) {
   if (!safeEqual(signature, expected)) return null;
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    const scope = normalizedScope(Object.fromEntries(SCOPE_KEYS.map((name) => [name, payload[name]])));
     if (
       payload.typ !== typ || payload.aud !== aud || payload.iss !== TOKEN_ISSUER ||
       typeof payload.jti !== 'string' || !/^[0-9a-f]{32}$/.test(payload.jti) ||
       !Number.isInteger(payload.issued_at) || !Number.isInteger(payload.expires_at) ||
-      payload.issued_at > now() || payload.expires_at <= now() ||
-      sessionId(normalizedScope(payload) || {}) !== payload.session_id
+      payload.issued_at > now() || payload.expires_at <= now() || !scope ||
+      sessionId(scope) !== payload.session_id
     ) return null;
     return payload;
   } catch (_error) {
