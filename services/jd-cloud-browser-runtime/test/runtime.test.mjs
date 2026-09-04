@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -86,6 +87,232 @@ test('capability credentials must be distinct', () => {
   );
 });
 
+<<<<<<< HEAD
+=======
+test('runtime entrypoint fails closed without namespace in an isolated process', () => {
+  const env = {
+    ...process.env,
+    JD_BROWSER_CAPTURE_TOKEN: captureToken,
+    JD_BROWSER_CONTROL_TOKEN: controlToken,
+    JD_BROWSER_VIEWER_TICKET_SIGNING_KEY: viewerSigningKey,
+    JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY: viewerCookieSigningKey,
+    JD_SESSION_MASTER_KEY: masterKey
+  };
+  delete env.JD_SESSION_NAMESPACE;
+  const moduleUrl = new URL('../server.mjs', import.meta.url).href;
+  const child = spawnSync(process.execPath, [
+    '--input-type=module',
+    '--eval',
+    `import { startFromEnv } from ${JSON.stringify(moduleUrl)}; await startFromEnv();`
+  ], { env, encoding: 'utf8', timeout: 10_000 });
+
+  assert.equal(child.status, 1);
+  assert.match(child.stderr, /JD_SESSION_NAMESPACE_REQUIRED/);
+});
+
+for (const vector of contract.invalid_scope_cases) {
+  test(`shared scope contract: ${vector.name}`, async (t) => {
+    const app = buildApp({
+      captureToken,
+      controlToken,
+      viewerTicketSigningKey: viewerSigningKey,
+      viewerCookieSigningKey,
+      masterKey,
+      sessionNamespace,
+      authorizeSession: async () => true,
+      launchContext: async () => { throw new Error('invalid scope must not launch Chromium'); }
+    });
+    t.after(() => app.close());
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/jd-browser/sessions',
+      headers: { 'x-internal-token': controlToken },
+      payload: vector.scope
+    });
+    assert.equal(response.statusCode, vector.expected_status, vector.name);
+  });
+}
+
+test('shared session ID, encoded path, and ticket TTL vectors are enforced', async (t) => {
+  const app = await activeApp(t, { storeId: contract.valid_scope.store_id });
+  const encoded = await app.inject({
+    method: 'GET',
+    url: `/internal/jd-browser/sessions/${contract.encoded_session_path}`,
+    headers: { 'x-internal-token': controlToken }
+  });
+  assert.equal(encoded.statusCode, 200);
+  assert.equal(encoded.json().status, 'ACTIVE');
+  assert.equal((await app.inject({
+    method: 'POST',
+    url: '/internal/jd-browser/tickets',
+    headers: { 'x-internal-token': controlToken },
+    payload: { session_id: contract.legacy_session_id }
+  })).statusCode, 400);
+  assert.equal((await app.inject({
+    method: 'POST',
+    url: '/internal/jd-browser/tickets',
+    headers: { 'x-internal-token': controlToken },
+    payload: { session_id: contract.namespace_mismatch_session_id }
+  })).statusCode, 400);
+  for (const expiresIn of contract.ticket_ttl_rejections) {
+    assert.equal((await app.inject({
+      method: 'POST',
+      url: '/internal/jd-browser/tickets',
+      headers: { 'x-internal-token': controlToken },
+      payload: { session_id: contract.valid_session_id, expires_in: expiresIn }
+    })).statusCode, 400, `expires_in=${String(expiresIn)}`);
+  }
+});
+
+test('capture requires an active login session', async (t) => {
+  const app = buildApp({
+    captureToken,
+    controlToken,
+    viewerTicketSigningKey: viewerSigningKey,
+    viewerCookieSigningKey,
+    masterKey,
+    sessionNamespace,
+    authorizeSession: async () => true
+  });
+  t.after(() => app.close());
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/internal/jd-browser/capture',
+    headers: { 'x-internal-token': captureToken },
+    payload: { scope: contract.valid_scope, dataset: 'metrics' }
+  });
+  assert.equal(response.statusCode, 409);
+  assert.deepEqual(response.json(), { status: 'LOGIN_REQUIRED', data: {} });
+});
+
+for (const vector of contract.invalid_capture_request_cases) {
+  test(`capture request schema: ${vector.name}`, async (t) => {
+    const app = buildApp({
+      captureToken,
+      controlToken,
+      viewerTicketSigningKey: viewerSigningKey,
+      viewerCookieSigningKey,
+      masterKey,
+      sessionNamespace,
+      authorizeSession: async () => true
+    });
+    t.after(() => app.close());
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/jd-browser/capture',
+      headers: { 'x-internal-token': captureToken },
+      payload: vector.payload
+    });
+    assert.equal(response.statusCode, 400, vector.name);
+    assert.deepEqual(response.json(), { status: 'INVALID_CAPTURE_REQUEST', data: {} }, vector.name);
+  });
+}
+
+async function controlledCaptureApp(t) {
+  const captureNow = 5_000_000;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-capture-test-'));
+  const page = {
+    goto: async () => {},
+    evaluate: async () => ({ gmv: '1.00' })
+  };
+  const app = buildApp({
+    captureToken,
+    controlToken,
+    viewerTicketSigningKey: viewerSigningKey,
+    viewerCookieSigningKey,
+    masterKey,
+    sessionNamespace,
+    now: () => captureNow,
+    profileRoot: path.join(root, 'profiles'),
+    archiveRoot: path.join(root, 'archives'),
+    authorizeSession: async () => true,
+    launchContext: async () => ({
+      route: async () => {},
+      storageState: async () => ({ cookies: [] }),
+      close: async () => {},
+      pages: () => [page]
+    })
+  });
+  t.after(async () => { await app.close(); await fs.rm(root, { recursive: true, force: true }); });
+  assert.equal((await app.inject({
+    method: 'POST',
+    url: '/internal/jd-browser/sessions',
+    headers: { 'x-internal-token': controlToken },
+    payload: contract.valid_scope
+  })).statusCode, 200);
+  return { app, captureNow };
+}
+
+test('controlled read-only capture succeeds after an authorized login', async (t) => {
+  const { app, captureNow } = await controlledCaptureApp(t);
+  const vector = contract.capture_cases.find(({ name }) => name === 'valid_metrics');
+  const response = await app.inject({
+    method: 'POST',
+    url: '/internal/jd-browser/capture',
+    headers: { 'x-internal-token': captureToken },
+    payload: { scope: vector.scope, dataset: vector.dataset }
+  });
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json(), {
+    status: 'OK',
+    data: {
+      source: 'jd_cloud_playwright',
+      captured_at: new Date(captureNow).toISOString(),
+      store_id: contract.valid_scope.store_id,
+      metrics: { gmv: '1.00' }
+    }
+  });
+});
+
+for (const vector of contract.capture_cases.filter(({ name }) => name !== 'valid_metrics')) {
+  test(`capture contract: ${vector.name}`, async (t) => {
+    const { app } = await controlledCaptureApp(t);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/jd-browser/capture',
+      headers: { 'x-internal-token': captureToken },
+      payload: { scope: vector.scope, dataset: vector.dataset }
+    });
+    assert.equal(response.statusCode, vector.expected_status, vector.name);
+  });
+}
+
+test('numeric and string store IDs resolve to the same active session', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-store-id-test-'));
+  const page = { goto: async () => {}, evaluate: async () => ({ orders: 0 }) };
+  const app = buildApp({
+    captureToken,
+    controlToken,
+    viewerTicketSigningKey: viewerSigningKey,
+    viewerCookieSigningKey,
+    masterKey,
+    sessionNamespace,
+    profileRoot: path.join(root, 'profiles'),
+    archiveRoot: path.join(root, 'archives'),
+    authorizeSession: async () => true,
+    launchContext: async () => ({
+      route: async () => {}, storageState: async () => ({ cookies: [] }), close: async () => {}, pages: () => [page]
+    })
+  });
+  t.after(async () => { await app.close(); await fs.rm(root, { recursive: true, force: true }); });
+  assert.equal((await app.inject({
+    method: 'POST', url: '/internal/jd-browser/sessions', headers: { 'x-internal-token': controlToken },
+    payload: { ...contract.valid_scope, store_id: contract.store_id_normalization.canonical }
+  })).statusCode, 200);
+
+  for (const storeId of contract.store_id_normalization.equivalent_inputs) {
+    const response = await app.inject({
+      method: 'POST', url: '/internal/jd-browser/capture', headers: { 'x-internal-token': captureToken },
+      payload: { scope: { ...contract.valid_scope, store_id: storeId }, dataset: 'metrics' }
+    });
+    assert.equal(response.statusCode, 200, `store_id=${String(storeId)}`);
+    assert.equal(response.json().data.store_id, contract.store_id_normalization.canonical);
+    assert.equal(response.json().data.metrics.orders, 0);
+  }
+});
+
+>>>>>>> fa9d036 (test: classify R297 runtime contract boundaries)
 test('backend ticket is single-use and exchanges for a short-lived noVNC cookie', async (t) => {
   let now = 1_000_000;
   const app = await activeApp(t, { now: () => now, storeId: 'store' });
