@@ -518,7 +518,8 @@ def main() -> int:
         orphan = schedule_store_task()
         lock_connection = __import__("psycopg2").connect(environment["DATABASE_URL"].replace("postgresql+psycopg2://", "postgresql://"))
         lock_cursor = lock_connection.cursor()
-        lock_cursor.execute("LOCK TABLE jd_sync_logs IN ACCESS EXCLUSIVE MODE")
+        # Let the real worker claim first, then block only its business commit.
+        lock_cursor.execute("LOCK TABLE jd_daily_metrics IN ACCESS EXCLUSIVE MODE")
         orphan_worker = start_python("backend.worker", worker_env, worker_logs[2])
         processes.append(orphan_worker)
         claimed_by = None
