@@ -473,6 +473,150 @@ def test_two_schedulers_create_one_store_window_task(postgres_database_factory, 
     engine.dispose()
 
 
+def test_reaper_recovers_expired_postgres_claim_without_redis_processing(
+    postgres_database_factory,
+    monkeypatch,
+):
+    from backend import worker
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_postgres_reaper")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    task_id = str(uuid.uuid4())
+    db = sessions()
+    try:
+        tenant = Tenant(tenant_code="R297-R", tenant_name="R297 reaper")
+        db.add(tenant)
+        db.flush()
+        company = Company(
+            tenant_id=tenant.id,
+            company_code="R297-R",
+            company_name="R297 reaper",
+        )
+        db.add(company)
+        db.flush()
+        store = Store(
+            tenant_id=tenant.id,
+            company_id=company.id,
+            platform="jd",
+            store_code="R297-R",
+            store_name="R297 reaper",
+            active=True,
+        )
+        db.add(store)
+        db.flush()
+        db.add(JdWorkbenchSyncPolicy(
+            tenant_id=tenant.id,
+            company_id=company.id,
+            store_id=store.id,
+            enabled=True,
+            interval_seconds=300,
+            active_task_id=task_id,
+            queue_state="processing",
+            lease_worker_id="dead-worker",
+            claim_generation=3,
+            visibility_deadline=now - timedelta(seconds=1),
+            sync_window_started_at=now - timedelta(minutes=5),
+        ))
+        db.commit()
+        scope = (tenant.id, company.id, store.id)
+    finally:
+        db.close()
+
+    delivered = []
+    delivery_lock = threading.Lock()
+
+    def ensure_delivery(task, *, now):
+        with delivery_lock:
+            if any(item["task_id"] == task["task_id"] for item in delivered):
+                return False
+            delivered.append(task)
+            return True
+
+    monkeypatch.setattr(worker, "SessionLocal", sessions)
+    monkeypatch.setattr(worker, "ensure_task_delivery", ensure_delivery, raising=False)
+
+    def reap_non_cloud_only(*, before_requeue, **_kwargs):
+        assert before_requeue({
+            "task_type": "sync_jd_smart",
+            "payload": {"source": "cloud_scheduler"},
+        }) is False
+        return []
+
+    monkeypatch.setattr(worker, "reap_expired_tasks", reap_non_cloud_only)
+    try:
+        barrier = threading.Barrier(3)
+        results = []
+
+        def reap():
+            barrier.wait()
+            results.append(worker.reap_jd_workbench_tasks(now))
+
+        threads = [threading.Thread(target=reap) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert sorted(results) == [0, 1]
+        assert len(delivered) == 1
+        task = delivered[0]
+        assert task["task_id"] == task_id
+        assert task["task_type"] == "sync_jd_smart"
+        assert task["payload"]["source"] == "cloud_scheduler"
+        assert (
+            task["payload"]["tenant_id"],
+            task["payload"]["company_id"],
+            task["payload"]["store_id"],
+        ) == scope
+        assert task["claim_generation"] == 3
+        db = sessions()
+        try:
+            policy = db.query(JdWorkbenchSyncPolicy).one()
+            assert policy.queue_state == "ready"
+            assert policy.lease_worker_id is None
+            assert policy.visibility_deadline is None
+        finally:
+            db.close()
+        assert worker.reap_jd_workbench_tasks(now) == 0
+        db = sessions()
+        try:
+            policy = db.query(JdWorkbenchSyncPolicy).one()
+            policy.queue_state = "processing"
+            policy.lease_worker_id = "worker-after-restart"
+            policy.visibility_deadline = now - timedelta(seconds=1)
+            db.add(JdSyncLog(
+                task_id=task_id,
+                tenant_id=scope[0],
+                company_id=scope[1],
+                store_id=scope[2],
+                task_type="sync_jd_smart",
+                source="cloud_scheduler",
+                status="success",
+                attempt=0,
+                claim_generation=policy.claim_generation,
+                sync_window_started_at=policy.sync_window_started_at,
+            ))
+            db.commit()
+        finally:
+            db.close()
+        assert worker.reap_jd_workbench_tasks(now) == 0
+        assert len(delivered) == 1
+        db = sessions()
+        try:
+            policy = db.query(JdWorkbenchSyncPolicy).one()
+            assert policy.active_task_id is None
+            assert policy.queue_state is None
+        finally:
+            db.close()
+    finally:
+        engine.dispose()
+
+
 def test_stale_worker_cannot_overwrite_new_claim_with_failed_log(postgres_database_factory, monkeypatch):
     from backend import queue, worker
     from tests.conftest import _alembic

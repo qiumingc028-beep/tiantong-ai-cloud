@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+
+import pytest
 
 from backend import queue
 
@@ -158,6 +161,24 @@ class ReliableFakeRedis:
             self.delete(metadata)
             self.zrem(deadlines, lease_id)
             return 1
+        if script == queue._ENSURE_TASK_DELIVERY_SCRIPT:
+            ready, processing, deadlines, task_id, now, prefix, replacement = args
+            if any(json.loads(raw)["task_id"] == task_id for raw in self.lists.get(ready, [])):
+                return 0
+            for raw in list(self.lists.get(processing, [])):
+                claimed = json.loads(raw)
+                if claimed["task_id"] != task_id:
+                    continue
+                lease_id = f"{task_id}:{claimed.get('claim_generation', '')}"
+                metadata = prefix + lease_id
+                deadline = self.hashes.get(metadata, {}).get("visibility_deadline")
+                if deadline and deadline > now:
+                    return 0
+                self.lrem(processing, 1, raw)
+                self.delete(metadata)
+                self.zrem(deadlines, lease_id)
+            self.rpush(ready, replacement)
+            return 1
         processing, ready, metadata, deadlines, raw, task_id, now, database_authorized = args
         deadline = self.hashes.get(metadata, {}).get("visibility_deadline")
         if database_authorized != "1" and deadline and deadline > now:
@@ -184,6 +205,23 @@ class Pipeline:
 
     def execute(self):
         return [getattr(self.client, name)(*args, **kwargs) for name, args, kwargs in self.operations]
+
+
+def test_process_evidence_generator_rejects_production_canary_before_writes(monkeypatch, tmp_path):
+    from ops import r297_process_acceptance
+
+    output = tmp_path / "must-not-exist"
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("R297_CONTROLLED_CANARY", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["r297_process_acceptance.py", str(output), "--runtime-image", "unused"],
+    )
+
+    with pytest.raises(RuntimeError, match="R297_CONTROLLED_CANARY_FORBIDDEN_IN_PRODUCTION"):
+        r297_process_acceptance.main()
+    assert not output.exists()
 
 
 def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypatch):
@@ -247,6 +285,32 @@ def test_claim_moves_ready_task_to_processing_and_ack_removes_it(monkeypatch):
     assert queue.ack_task(claimed, "worker-1") is True
     assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
     assert redis.hgetall(f"{queue.PROCESSING_METADATA_PREFIX}{item['task_id']}:1") == {}
+
+
+def test_postgresql_reaper_delivery_replaces_expired_transport_once(monkeypatch):
+    redis = ReliableFakeRedis()
+    monkeypatch.setattr(queue, "get_redis", lambda: redis)
+    task = {
+        "task_id": "task-db-authority",
+        "task_type": "sync_jd_smart",
+        "payload": {"source": "cloud_scheduler", "store_id": 3},
+        "attempt": 0,
+        "max_retries": 5,
+        "claim_generation": 7,
+    }
+    old_raw = json.dumps(task)
+    lease_id = "task-db-authority:7"
+    metadata = queue.PROCESSING_METADATA_PREFIX + lease_id
+    redis.lists[queue.PROCESSING_QUEUE_NAME] = [old_raw]
+    redis.hashes[metadata] = {"visibility_deadline": "2026-09-04T00:00:00+00:00"}
+    redis.sorted_sets[queue.PROCESSING_DEADLINES_KEY] = {lease_id: 0}
+    now = datetime(2026, 9, 4, 0, 0, 1, tzinfo=timezone.utc)
+
+    assert queue.ensure_task_delivery(task, now=now) is True
+    assert redis.lists[queue.PROCESSING_QUEUE_NAME] == []
+    assert len(redis.lists[queue.QUEUE_NAME]) == 1
+    assert queue.ensure_task_delivery(task, now=now) is False
+    assert len(redis.lists[queue.QUEUE_NAME]) == 1
 
 
 def test_nack_requeues_a_temporarily_unclaimable_task_with_next_generation(monkeypatch):

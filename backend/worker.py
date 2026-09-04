@@ -43,6 +43,7 @@ from .queue import (
     claim_task,
     discard_processing_task,
     enqueue_task,
+    ensure_task_delivery,
     heartbeat_task,
     nack_task,
     reap_expired_tasks,
@@ -472,12 +473,108 @@ def _recover_jd_workbench_task(task: dict, now: datetime) -> bool:
 
 
 def reap_jd_workbench_tasks(now=None) -> int:
+    """Recover expired cloud claims from PostgreSQL, even after Redis loss."""
     now = now or datetime.now(timezone.utc)
-    recovered = reap_expired_tasks(
+    lookup = SessionLocal()
+    try:
+        policy_ids = [row[0] for row in lookup.query(JdWorkbenchSyncPolicy.id).filter(
+            JdWorkbenchSyncPolicy.active_task_id.is_not(None),
+            or_(
+                JdWorkbenchSyncPolicy.queue_state == "ready",
+                and_(
+                    JdWorkbenchSyncPolicy.queue_state == "processing",
+                    JdWorkbenchSyncPolicy.visibility_deadline.is_not(None),
+                    JdWorkbenchSyncPolicy.visibility_deadline <= now,
+                ),
+            ),
+        ).all()]
+    finally:
+        lookup.close()
+
+    recovered = 0
+    for policy_id in policy_ids:
+        db = SessionLocal()
+        task = None
+        try:
+            policy = db.query(JdWorkbenchSyncPolicy).filter(
+                JdWorkbenchSyncPolicy.id == policy_id,
+                JdWorkbenchSyncPolicy.active_task_id.is_not(None),
+            ).with_for_update(skip_locked=True).one_or_none()
+            if policy is None:
+                continue
+            expired = (
+                policy.queue_state == "processing"
+                and policy.visibility_deadline is not None
+                and policy.visibility_deadline <= now
+            )
+            if policy.queue_state != "ready" and not expired:
+                db.rollback()
+                continue
+            latest = db.query(JdSyncLog).filter(
+                JdSyncLog.task_id == policy.active_task_id,
+            ).order_by(JdSyncLog.attempt.desc()).first()
+            if latest and latest.status == "success":
+                _clear_policy_lease(policy)
+                for status in _status_rows(db, policy):
+                    status.status = "IDLE"
+                    status.reason_code = None
+                    status.last_sync_at = latest.finished_at or now
+                    status.retry_count = 0
+                    status.last_error_at = None
+                db.commit()
+                continue
+            if latest and latest.status == "failed" and latest.attempt >= 5:
+                _clear_policy_lease(policy)
+                db.commit()
+                continue
+            attempt = latest.attempt if latest and latest.status == "running" else (
+                latest.attempt + 1 if latest else 0
+            )
+            if expired:
+                policy.queue_state = "ready"
+                policy.lease_worker_id = None
+                policy.lease_started_at = None
+                policy.lease_heartbeat_at = None
+                policy.visibility_deadline = None
+                for status in _status_rows(db, policy):
+                    status.status = "IDLE"
+                    status.reason_code = None
+                    status.next_sync_at = now
+            sync_window_started_at = policy.sync_window_started_at or _sync_window(
+                now,
+                policy.interval_seconds,
+            )
+            policy.sync_window_started_at = sync_window_started_at
+            task = {
+                "task_id": policy.active_task_id,
+                "task_type": "sync_jd_smart",
+                "payload": {
+                    "tenant_id": policy.tenant_id,
+                    "company_id": policy.company_id,
+                    "store_id": policy.store_id,
+                    "source": "cloud_scheduler",
+                    "scheduled_at": now.isoformat(),
+                    "sync_window_started_at": sync_window_started_at.isoformat(),
+                },
+                "attempt": attempt,
+                "max_retries": 5,
+                "claim_generation": policy.claim_generation,
+            }
+            db.commit()
+        finally:
+            db.close()
+        if task is not None and ensure_task_delivery(task, now=now):
+            recovered += 1
+    non_cloud = reap_expired_tasks(
         now=now,
-        before_requeue=lambda task: _recover_jd_workbench_task(task, now),
+        before_requeue=lambda task: (
+            False
+            if task.get("task_type") == "sync_jd_smart"
+            and task.get("payload", {}).get("source") == "cloud_scheduler"
+            else _recover_jd_workbench_task(task, now)
+        ),
     )
-    return len(recovered)
+    return recovered + len(non_cloud)
 
 
 def reconcile_completed_jd_workbench_tasks() -> int:

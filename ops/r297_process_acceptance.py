@@ -178,6 +178,8 @@ def stop_process(process: subprocess.Popen | None) -> None:
 
 
 def main() -> int:
+    if os.environ.get("APP_ENV", "").strip().lower() == "production":
+        raise RuntimeError("R297_CONTROLLED_CANARY_FORBIDDEN_IN_PRODUCTION")
     parser = argparse.ArgumentParser()
     parser.add_argument("output_directory", type=Path)
     parser.add_argument("--runtime-image", required=True)
@@ -680,7 +682,7 @@ def main() -> int:
                 "web_process_count": 0,
                 "electron_process_count": 0,
             },
-            "cycles": [{"task_id": task["task_id"], "status": result["status"], "database_log_count": count} for task, result, count in zip(cycle_tasks, cycle_results, cycle_log_counts)],
+            "two_cycle": [{"task_id": task["task_id"], "status": result["status"], "database_log_count": count} for task, result, count in zip(cycle_tasks, cycle_results, cycle_log_counts)],
             "idempotent_write": {"metric_row_count": len(metric_snapshot), "rows": metric_snapshot},
             "multi_worker": {
                 "task_id": dual_task["task_id"],
@@ -701,6 +703,11 @@ def main() -> int:
                 "runtime_session_restored": bool(restored_session.get("restored")),
                 "backend_pid_before": backend_pid_before,
                 "backend_pid_after": restarted_backend.pid,
+            },
+            "runtime_restart": {
+                "pid_before": runtime_pid_before,
+                "pid_after": runtime_pid_after,
+                "session_restored": bool(restored_session.get("restored")),
             },
             "manual_resume": {"before_status": "HUMAN_ACTION_REQUIRED", "after": manual_after, "automatic_enqueue_count": scheduled, "task_id": manual_task_id, "task_status": manual_task_result["status"]},
             "human_action_detection": {"detected_status": "HUMAN_ACTION_REQUIRED", "automatic_resume_status": manual_task_result["status"]},

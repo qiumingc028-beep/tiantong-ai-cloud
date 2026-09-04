@@ -5,13 +5,32 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { buildApp } from '../server.mjs';
+import { buildApp, startFromEnv } from '../server.mjs';
 
 const controlToken = 'i'.repeat(32);
 const captureToken = 'c'.repeat(32);
 const viewerSigningKey = 'v'.repeat(32);
 const viewerCookieSigningKey = 'o'.repeat(32);
 const masterKey = Buffer.alloc(32, 7).toString('base64');
+
+test('production runtime rejects controlled canary before listening', async () => {
+  const previous = {
+    APP_ENV: process.env.APP_ENV,
+    R297_CONTROLLED_CANARY: process.env.R297_CONTROLLED_CANARY,
+    R297_CONTROLLED_CANARY_DASHBOARD_URL: process.env.R297_CONTROLLED_CANARY_DASHBOARD_URL
+  };
+  process.env.APP_ENV = 'production';
+  process.env.R297_CONTROLLED_CANARY = '1';
+  process.env.R297_CONTROLLED_CANARY_DASHBOARD_URL = 'http://host.docker.internal/r297-controlled-canary.html';
+  try {
+    await assert.rejects(startFromEnv(), /R297_CONTROLLED_CANARY_FORBIDDEN_IN_PRODUCTION/);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
 
 test('viewer ticket and cookie keys are independently required', () => {
   assert.throws(

@@ -514,6 +514,9 @@ export function buildApp({
 export async function startFromEnv() {
   let dashboardUrl = ROUTES.dashboard;
   if (process.env.R297_CONTROLLED_CANARY === '1') {
+    if ((process.env.APP_ENV || '').trim().toLowerCase() === 'production') {
+      throw new Error('R297_CONTROLLED_CANARY_FORBIDDEN_IN_PRODUCTION');
+    }
     const candidate = new URL(process.env.R297_CONTROLLED_CANARY_DASHBOARD_URL || '');
     if (
       candidate.protocol !== 'http:' || candidate.hostname !== 'host.docker.internal' ||

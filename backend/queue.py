@@ -308,6 +308,48 @@ def nack_task(task: dict, worker_id: str, raw: str | None = None) -> bool:
     ))
 
 
+_ENSURE_TASK_DELIVERY_SCRIPT = """
+for _, raw in ipairs(redis.call('LRANGE', KEYS[1], 0, -1)) do
+  local ok, queued = pcall(cjson.decode, raw)
+  if ok and queued['task_id'] == ARGV[1] then return 0 end
+end
+for _, raw in ipairs(redis.call('LRANGE', KEYS[2], 0, -1)) do
+  local ok, processing = pcall(cjson.decode, raw)
+  if ok and processing['task_id'] == ARGV[1] then
+    local generation = tostring(processing['claim_generation'] or '')
+    local lease_id = ARGV[1] .. ':' .. generation
+    local metadata = ARGV[3] .. lease_id
+    local deadline = redis.call('HGET', metadata, 'visibility_deadline')
+    if deadline and deadline > ARGV[2] then return 0 end
+    redis.call('LREM', KEYS[2], 1, raw)
+    redis.call('DEL', metadata)
+    redis.call('ZREM', KEYS[3], lease_id)
+  end
+end
+redis.call('RPUSH', KEYS[1], ARGV[4])
+return 1
+"""
+
+
+def ensure_task_delivery(task: dict, *, now: datetime | None = None) -> bool:
+    """Ensure a PostgreSQL-authorized task has one live Redis delivery."""
+    now = now or datetime.now(timezone.utc)
+    queued = {key: value for key, value in task.items() if not key.startswith("_")}
+    queued["queued_at"] = now.isoformat()
+    raw = json.dumps(queued, ensure_ascii=False)
+    return bool(get_redis().eval(
+        _ENSURE_TASK_DELIVERY_SCRIPT,
+        3,
+        QUEUE_NAME,
+        PROCESSING_QUEUE_NAME,
+        PROCESSING_DEADLINES_KEY,
+        task["task_id"],
+        now.isoformat(),
+        PROCESSING_METADATA_PREFIX,
+        raw,
+    ))
+
+
 _REAP_EXPIRED_SCRIPT = """
 local deadline = redis.call('HGET', KEYS[3], 'visibility_deadline')
 if ARGV[4] ~= '1' and deadline and deadline > ARGV[3] then return 0 end
