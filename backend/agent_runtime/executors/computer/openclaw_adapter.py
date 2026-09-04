@@ -22,7 +22,7 @@ from ....auth import (
 )
 from ....config import get_settings
 from .base import ComputerExecutorBase, ComputerExecutorOutcome
-from .evidence import utcnow
+from .evidence import redact_text, utcnow
 
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -380,14 +380,19 @@ class OpenClawAdapter(ComputerExecutorBase):
     def _capture(self, context) -> dict:
         target_url, authorization = self.validate(context)
         timeout = float(getattr(self.settings, "PAGE_CAPTURE_TIMEOUT_SECONDS", 20))
+        startup_timeout = float(
+            getattr(self.settings, "PAGE_CAPTURE_STARTUP_TIMEOUT_SECONDS", max(timeout, 30))
+        )
         output_root = Path(self.settings.PAGE_CAPTURE_OUTPUT_ROOT)
         output_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         output_root.chmod(0o700)
         profile = Path(tempfile.mkdtemp(prefix="profile-", dir=output_root))
         profile.chmod(0o700)
         screenshot = output_root / f"{secrets.token_hex(16)}.png"
+        stderr_path = profile / "chrome-startup.stderr"
         process = None
         websocket = None
+        stderr_log = None
         try:
             command = [
                 str(self.settings.PAGE_CAPTURE_CHROME_PATH),
@@ -406,28 +411,64 @@ class OpenClawAdapter(ComputerExecutorBase):
                 "--host-resolver-rules=MAP * 0.0.0.0, EXCLUDE 127.0.0.1",
                 "about:blank",
             ]
+            stderr_log = stderr_path.open("wb", buffering=0)
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=stderr_log,
                 start_new_session=True,
                 close_fds=True,
             )
-            deadline = time.monotonic() + timeout
+            deadline = time.monotonic() + startup_timeout
             port_file = profile / "DevToolsActivePort"
-            while not port_file.exists():
+            port = None
+            targets = None
+            startup_stage = "devtools_port"
+
+            def startup_failure(reason: str) -> str:
+                exit_code = process.poll()
+                stderr_log.flush()
+                stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-1000:]
+                stderr_tail = redact_text(
+                    " ".join(stderr_tail.replace(str(profile), "[PROFILE]").split())
+                ) or "none"
+                return (
+                    f"isolated Chrome startup {reason}; stage={startup_stage}; pid={process.pid}; "
+                    f"port={port if port is not None else 'unavailable'}; "
+                    f"xvfb=not_required_headless; sandbox=enabled; "
+                    f"exit_code={exit_code if exit_code is not None else 'running'}; stderr_tail={stderr_tail}"
+                )
+
+            while targets is None:
                 if process.poll() is not None:
-                    raise RuntimeError("isolated Chrome exited during startup")
+                    raise RuntimeError(startup_failure("exited"))
                 if time.monotonic() >= deadline:
-                    raise TimeoutError("isolated Chrome startup timed out")
+                    raise TimeoutError(startup_failure("timed out"))
+                if port is None and port_file.exists():
+                    try:
+                        port = int(port_file.read_text(encoding="utf-8").splitlines()[0])
+                        startup_stage = "devtools_health"
+                    except (IndexError, OSError, ValueError):
+                        port = None
+                if port is not None:
+                    connection = None
+                    try:
+                        remaining = max(0.1, min(1.0, deadline - time.monotonic()))
+                        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=remaining)
+                        connection.request("GET", "/json/list")
+                        response = connection.getresponse()
+                        if response.status == 200:
+                            targets = json.loads(response.read().decode("utf-8"))
+                    except (OSError, http.client.HTTPException, json.JSONDecodeError):
+                        targets = None
+                    finally:
+                        if connection is not None:
+                            connection.close()
+                if targets is not None:
+                    break
                 time.sleep(0.05)
-            port = int(port_file.read_text(encoding="utf-8").splitlines()[0])
-            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
-            connection.request("GET", "/json/list")
-            response = connection.getresponse()
-            targets = json.loads(response.read().decode("utf-8"))
-            connection.close()
+            deadline = time.monotonic() + timeout
             page = next((target for target in targets if target.get("type") == "page"), None)
             if not page or not page.get("webSocketDebuggerUrl"):
                 raise RuntimeError("isolated Chrome page target unavailable")
@@ -484,6 +525,8 @@ class OpenClawAdapter(ComputerExecutorBase):
                 except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=5)
+            if stderr_log is not None:
+                stderr_log.close()
             if profile.exists():
                 shutil.rmtree(profile)
 

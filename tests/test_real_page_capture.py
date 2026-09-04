@@ -456,6 +456,46 @@ def test_real_adapter_captures_private_png_with_isolated_profile(tmp_path, monke
     screenshot.unlink()
 
 
+def test_real_adapter_reports_bounded_chrome_startup_timeout_and_cleans_process(tmp_path, monkeypatch):
+    signals = []
+
+    class FakeProcess:
+        pid = 43210
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout):
+            assert timeout == 5
+            return 0
+
+    authorization = SimpleNamespace(clear=lambda: None)
+    settings = SimpleNamespace(
+        PAGE_CAPTURE_CHROME_PATH="/isolated/fake-chrome",
+        PAGE_CAPTURE_OUTPUT_ROOT=str(tmp_path / "captures"),
+        PAGE_CAPTURE_TIMEOUT_SECONDS=0.01,
+        PAGE_CAPTURE_STARTUP_TIMEOUT_SECONDS=0.01,
+    )
+    adapter = OpenClawAdapter(settings=settings)
+    monkeypatch.setattr(adapter, "validate", lambda _context: ("http://127.0.0.1/page", authorization))
+    monkeypatch.setattr(adapter_module.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monotonic_reads = iter((100.0, 101.0))
+    monkeypatch.setattr(adapter_module.time, "monotonic", lambda: next(monotonic_reads))
+    monkeypatch.setattr(adapter_module.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    with pytest.raises(TimeoutError) as exc_info:
+        adapter._capture(SimpleNamespace())
+
+    message = str(exc_info.value)
+    assert "stage=devtools_port" in message
+    assert "pid=43210" in message
+    assert "port=unavailable" in message
+    assert "xvfb=not_required_headless" in message
+    assert "sandbox=enabled" in message
+    assert signals == [(43210, adapter_module.signal.SIGTERM)]
+    assert not list(tmp_path.rglob("profile-*"))
+
+
 def test_real_adapter_uses_workflow_bound_readonly_auth_and_verifies_owner_page(tmp_path, chrome_path):
     requests = []
     with protected_workflow_page(requests) as (target_url, authorization):
