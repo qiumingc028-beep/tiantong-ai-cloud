@@ -216,9 +216,11 @@ async def authorize_browser_session(request: Request, db: Session = Depends(get_
     if len(expected) < 32 or not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="浏览器控制凭据无效")
     body = await _json_body(request)
-    required = {"tenant_id", "company_id", "store_id", "platform"}
+    required = {"namespace", "tenant_id", "company_id", "store_id", "platform"}
     if set(body) != required:
         raise _generic_bad_request()
+    if body["namespace"] != get_settings().JD_SESSION_NAMESPACE:
+        raise HTTPException(status_code=403, detail="会话命名空间不匹配")
     try:
         tenant_id, company_id, store_id = (int(body[name]) for name in ("tenant_id", "company_id", "store_id"))
     except (TypeError, ValueError) as exc:

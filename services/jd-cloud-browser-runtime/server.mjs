@@ -41,13 +41,21 @@ function safeEqual(actual, expected) {
 }
 
 function normalizedScope(payload) {
+  if (!payload || typeof payload !== 'object' || Object.keys(payload).some((key) => !SCOPE_KEYS.includes(key))) return null;
   const scope = Object.fromEntries(SCOPE_KEYS.map((key) => [key, String(payload?.[key] ?? '').trim()]));
-  if (!SCOPE_KEYS.every((key) => SCOPE_VALUE.test(scope[key]))) return null;
+  if (!SCOPE_KEYS.every((key) => SCOPE_VALUE.test(scope[key])) || scope.platform !== 'jd') return null;
   return scope;
 }
 
 function sessionId(scope) {
   return SCOPE_KEYS.map((key) => scope[key]).join(':');
+}
+
+function parseSessionId(value, expectedNamespace) {
+  const parts = String(value || '').split(':');
+  if (parts.length !== SCOPE_KEYS.length) return null;
+  const scope = normalizedScope(Object.fromEntries(SCOPE_KEYS.map((key, index) => [key, parts[index]])));
+  return scope && scope.namespace === expectedNamespace && sessionId(scope) === value ? scope : null;
 }
 
 function cookieValue(header, name) {
@@ -418,6 +426,7 @@ export function buildApp({
       return reply.code(400).send({ error: 'INVALID_TICKET_REQUEST' });
     }
     const id = String(request.body?.session_id || '').trim();
+    if (!parseSessionId(id, sessionNamespace)) return reply.code(400).send({ error: 'invalid_session_id' });
     const session = browserSessions.get(id);
     if (!session || !await sessionRemainsAuthorized(id, session)) {
       return reply.code(409).send({ error: 'SESSION_NOT_ACTIVE' });
@@ -501,6 +510,7 @@ export function buildApp({
   });
 
   app.delete('/internal/jd-browser/sessions/:sid', { preHandler: verifyControl }, async (request, reply) => {
+    if (!parseSessionId(request.params.sid, sessionNamespace)) return reply.code(400).send({ error: 'invalid_session_id' });
     const session = browserSessions.get(request.params.sid);
     await destroySession(request.params.sid, session);
     return { ok: true };
