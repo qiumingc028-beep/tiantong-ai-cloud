@@ -1,8 +1,8 @@
 (function (root, factory) {
-  const api = factory();
+  const api = factory(root);
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.R297OwnerLogin = api;
-})(typeof globalThis === 'object' ? globalThis : this, function () {
+})(typeof globalThis === 'object' ? globalThis : this, function (root) {
   const STATUS_LABELS = Object.freeze({
     UNKNOWN: '尚未查询',
     OFFLINE: '未登录',
@@ -34,7 +34,12 @@
   ]);
   const SERVER_SESSION_STATUSES = new Set(['LOGIN_REQUIRED', 'ACTIVE', 'REVOKED']);
   const SESSION_TTL_MAX_SECONDS = 600;
-  const TICKET_TTL_MAX_SECONDS = 60;
+  const TICKET_TTL_MAX_SECONDS = 120;
+  const PAGE_CLOSE_OBSERVER_CONTRACT = Object.freeze({
+    binding: '__tiantongR297AuthenticatedObserver',
+    raw_fields: Object.freeze(['event', 'observed_at', 'store_id']),
+    observer_fields: Object.freeze(['authenticated_observer', 'scheduler_continues'])
+  });
 
   function storeId(value) {
     if (typeof value === 'boolean') throw new Error('店铺标识无效');
@@ -77,7 +82,7 @@
     return Object.freeze({
       create: async value => {
         const id = storeId(value), data = await requiredJson(await send(sessionPath(id), emptyPost), 200);
-        if (!exactKeys(data, ['session_id', 'store_id', 'status', 'expires_in']) || typeof data.session_id !== 'string' || !data.session_id || data.status !== 'LOGIN_REQUIRED' || !strictTtl(data.expires_in, SESSION_TTL_MAX_SECONDS)) throw new Error('登录会话响应无效');
+        if (!exactKeys(data, ['store_id', 'status', 'expires_in']) || data.status !== 'LOGIN_REQUIRED' || !strictTtl(data.expires_in, SESSION_TTL_MAX_SECONDS)) throw new Error('登录会话响应无效');
         return sessionState(id, data);
       },
       status: async value => {
@@ -211,7 +216,24 @@
       focus: value => { const viewer = windows.get(storeId(value)); if (!viewer || viewer.closed) { windows.delete(storeId(value)); return false; } viewer.focus(); return true; },
       close: value => { const id = storeId(value), viewer = windows.get(id); if (viewer && !viewer.closed) viewer.close(); windows.delete(id); },
       closeAll: () => { windows.forEach(viewer => { if (viewer && !viewer.closed) viewer.close(); }); windows.clear(); },
+      ids: () => Object.freeze([...windows.keys()]),
       size: () => windows.size
+    });
+  }
+
+  function createPageCloseReporter({ observer = root[PAGE_CLOSE_OBSERVER_CONTRACT.binding], now = () => new Date().toISOString() } = {}) {
+    return Object.freeze({
+      report: (event, storeIds) => {
+        if (!event || event.type !== 'pagehide' || event.isTrusted !== true || typeof observer !== 'function') return false;
+        const ids = [...new Set((storeIds || []).map(storeId))];
+        ids.forEach(id => {
+          try {
+            const result = observer(JSON.stringify({ event: 'web_page_close', observed_at: now(), store_id: id }));
+            if (result && typeof result.catch === 'function') result.catch(() => {});
+          } catch (_) {}
+        });
+        return ids.length > 0;
+      }
     });
   }
 
@@ -224,5 +246,5 @@
     windows.closeAll();
   }
 
-  return Object.freeze({ closePageResources, createClient, createOperationGate, createPoller, createWindowRegistry, errorMessage, isOwner, openViewer, redeemTicket, sessionState, statusView });
+  return Object.freeze({ PAGE_CLOSE_OBSERVER_CONTRACT, closePageResources, createClient, createOperationGate, createPageCloseReporter, createPoller, createWindowRegistry, errorMessage, isOwner, openViewer, redeemTicket, sessionState, statusView });
 });

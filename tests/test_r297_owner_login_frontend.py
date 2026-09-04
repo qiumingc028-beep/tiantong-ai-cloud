@@ -13,7 +13,7 @@ const login = require('./frontend/r297-owner-login.js');
 
 const calls = [];
 const responses = [
-  [200, {session_id: 'server-only', store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600}],
+  [200, {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600}],
   [200, {store_id: 7, status: 'ACTIVE'}],
   [200, {ticket: 'one-time-secret', expires_in: 60}],
   [200, {ok: true, store_id: 7, status: 'REVOKED'}]
@@ -40,7 +40,7 @@ await assert.rejects(client.create(true), /店铺标识无效/);
 assert.equal(login.isOwner({role_code: 'owner'}), true);
 assert.equal(login.isOwner({role_code: 'admin'}), false);
 assert.equal(login.isOwner({role_code: 'operator'}), false);
-assert.deepEqual(login.sessionState(7, {session_id: 'server-only', store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600}), {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600});
+assert.deepEqual(login.sessionState(7, {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600}), {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600});
 assert.throws(() => login.sessionState(7, {store_id: 8, status: 'ONLINE'}), /店铺作用域不匹配/);
 assert.throws(() => login.sessionState(7, {store_id: '7', status: 'ACTIVE'}), /店铺作用域不匹配/);
 assert.throws(() => login.sessionState(7, {store_id: 7, status: 'UNKNOWN_FROM_RUNTIME'}), /登录状态响应无效/);
@@ -48,12 +48,14 @@ assert.throws(() => login.sessionState(7, {store_id: 7, status: 'active'}), /登
 
 const requestOnce = (status, body) => async () => ({status, json: async () => body});
 await assert.rejects(login.createClient(requestOnce(201, {})).create(7), /HTTP状态无效/);
-for (const expires_in of [true, 0, -1, 61, 1.5]) {
+for (const expires_in of [true, 0, -1, 121, 1.5]) {
   await assert.rejects(login.createClient(requestOnce(200, {ticket: 'x', expires_in})).ticket(7), /登录凭证响应无效/);
 }
+assert.deepEqual(await login.createClient(requestOnce(200, {ticket: 'x', expires_in: 120})).ticket(7), {ticket: 'x', expires_in: 120});
 for (const expires_in of [true, 0, -1, 601, 1.5]) {
-  await assert.rejects(login.createClient(requestOnce(200, {session_id: 'server-only', store_id: 7, status: 'LOGIN_REQUIRED', expires_in})).create(7), /登录会话响应无效/);
+  await assert.rejects(login.createClient(requestOnce(200, {store_id: 7, status: 'LOGIN_REQUIRED', expires_in})).create(7), /登录会话响应无效/);
 }
+await assert.rejects(login.createClient(requestOnce(200, {session_id: 'legacy', store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600})).create(7), /登录会话响应无效/);
 await assert.rejects(login.createClient(requestOnce(200, {ticket: 'x', expires_in: 60, extra: true})).ticket(7), /登录凭证响应无效/);
 await assert.rejects(login.createClient(requestOnce(202, {})).close(7), /HTTP状态无效/);
 await assert.rejects(login.createClient(requestOnce(200, {ok: false, store_id: 7, status: 'REVOKED'})).close(7), /销毁响应无效/);
@@ -222,6 +224,20 @@ resolveTicket({ticket: 'late-secret', expires_in: 60});
 assert.equal(await lateOpen, null);
 assert.equal(exchangeCalls, 0);
 assert.equal(lateWindows.size(), 0);
+
+const emitted = [];
+const reporter = login.createPageCloseReporter({observer: payload => emitted.push(JSON.parse(payload)), now: () => '2026-09-04T00:00:00.000Z'});
+assert.equal(reporter.report({type: 'pagehide', isTrusted: false}, [7]), false);
+assert.equal(reporter.report({type: 'pagehide', isTrusted: true}, [7, 7]), true);
+assert.deepEqual(emitted, [{event: 'web_page_close', observed_at: '2026-09-04T00:00:00.000Z', store_id: 7}]);
+assert.equal(login.createPageCloseReporter({observer: () => {throw new Error('observer failed')}}).report({type: 'pagehide', isTrusted: true}, [7]), true);
+assert.equal(login.createPageCloseReporter({observer: () => Promise.reject(new Error('observer failed'))}).report({type: 'pagehide', isTrusted: true}, [7]), true);
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(login.PAGE_CLOSE_OBSERVER_CONTRACT, {
+  binding: '__tiantongR297AuthenticatedObserver',
+  raw_fields: ['event', 'observed_at', 'store_id'],
+  observer_fields: ['authenticated_observer', 'scheduler_continues']
+});
 """
     subprocess.run(
         ["node", "-e", f"(async()=>{{{script}}})().catch(error=>{{console.error(error);process.exit(1)}})"],
@@ -260,7 +276,9 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert "/api/stores" not in page
     assert "/api/stores" not in dashboard
     assert "/internal/jd-browser/" not in combined
-    assert "data.session_id" in module
+    assert "session_id" not in combined
+    assert "scheduler_continues:true" not in combined
+    assert "authenticated_observer:true" not in combined
     assert "localStorage" not in module
     assert "sessionStorage" not in module
     assert "console." not in module
