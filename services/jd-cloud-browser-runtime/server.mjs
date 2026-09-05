@@ -42,7 +42,8 @@ function safeEqual(actual, expected) {
 
 function normalizedScope(payload) {
   if (!payload || typeof payload !== 'object' || Object.keys(payload).some((key) => !SCOPE_KEYS.includes(key))) return null;
-  const scope = Object.fromEntries(SCOPE_KEYS.map((key) => [key, String(payload?.[key] ?? '').trim()]));
+  if (!SCOPE_KEYS.every((key) => typeof payload[key] === 'string')) return null;
+  const scope = Object.fromEntries(SCOPE_KEYS.map((key) => [key, payload[key].trim()]));
   if (!SCOPE_KEYS.every((key) => SCOPE_VALUE.test(scope[key])) || scope.platform !== 'jd') return null;
   return scope;
 }
@@ -82,8 +83,8 @@ function verifiedValue(value, key, { typ, aud, now }) {
     if (
       payload.typ !== typ || payload.aud !== aud || payload.iss !== TOKEN_ISSUER ||
       typeof payload.jti !== 'string' || !/^[0-9a-f]{32}$/.test(payload.jti) ||
-      !Number.isInteger(payload.issued_at) || !Number.isInteger(payload.expires_at) ||
-      payload.issued_at > now() || payload.expires_at <= now() || !scope ||
+      !Number.isInteger(payload.issued_at) || typeof payload.exp !== 'number' || !Number.isInteger(payload.exp) ||
+      payload.issued_at > now() || payload.exp * 1000 <= now() || !scope ||
       sessionId(scope) !== payload.session_id
     ) return null;
     return payload;
@@ -338,7 +339,7 @@ export function buildApp({
     const directory = ticketDirectory(record.session_id);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     try {
-      await fs.writeFile(path.join(directory, record.jti), String(record.expires_at), { flag: 'wx', mode: 0o600 });
+      await fs.writeFile(path.join(directory, record.jti), String(record.exp * 1000), { flag: 'wx', mode: 0o600 });
       return true;
     } catch (error) {
       if (error?.code === 'EEXIST') return false;
@@ -370,8 +371,8 @@ export function buildApp({
 
   app.post('/internal/jd-browser/sessions', { preHandler: verifyControl }, async (request, reply) => {
     const scope = normalizedScope(request.body);
-    if (scope && scope.namespace !== sessionNamespace) return reply.code(403).send({ error: 'scope_namespace_mismatch' });
-    if (!scope) return reply.code(403).send({ error: 'SESSION_SCOPE_REJECTED' });
+    if (!scope) return reply.code(400).send({ error: 'SESSION_SCOPE_INVALID' });
+    if (scope.namespace !== sessionNamespace) return reply.code(403).send({ error: 'scope_namespace_mismatch' });
     const id = sessionId(scope);
     if (!await isAuthorized(scope)) {
       const active = browserSessions.get(id);
@@ -438,7 +439,7 @@ export function buildApp({
       typ: TICKET_TYPE, aud: TICKET_AUDIENCE, iss: TOKEN_ISSUER,
       jti: crypto.randomBytes(16).toString('hex'), ...session.scope, session_id: id,
       session_nonce: session.nonce,
-      issued_at: issuedAt, expires_at: issuedAt + TICKET_TTL_MS
+      issued_at: issuedAt, exp: Math.floor((issuedAt + TICKET_TTL_MS) / 1000)
     }, ticketKey);
     return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer')
       .send({ ticket, expires_in: TICKET_TTL_MS / 1000 });
@@ -462,7 +463,7 @@ export function buildApp({
       typ: COOKIE_TYPE, aud: COOKIE_AUDIENCE, iss: TOKEN_ISSUER,
       jti: crypto.randomBytes(16).toString('hex'), ...Object.fromEntries(SCOPE_KEYS.map((key) => [key, record[key]])),
       session_id: record.session_id, session_nonce: record.session_nonce,
-      issued_at: issuedAt, expires_at: issuedAt + COOKIE_TTL_MS
+      issued_at: issuedAt, exp: Math.floor((issuedAt + COOKIE_TTL_MS) / 1000)
     }, cookieKey);
     return reply
       .header('cache-control', 'no-store')
@@ -491,6 +492,8 @@ export function buildApp({
       return reply.code(400).send({ status: 'INVALID_CAPTURE_REQUEST', data: {} });
     }
     const scope = normalizedScope(request.body.scope);
+    if (!scope) return reply.code(400).send({ status: 'INVALID_CAPTURE_REQUEST', data: {} });
+    if (scope.namespace !== sessionNamespace) return reply.code(403).send({ status: 'SCOPE_REJECTED', data: {} });
     const session = scope && browserSessions.get(sessionId(scope));
     if (!session || !await sessionRemainsAuthorized(sessionId(scope), session)) {
       return reply.code(409).send({ status: 'LOGIN_REQUIRED', data: {} });
