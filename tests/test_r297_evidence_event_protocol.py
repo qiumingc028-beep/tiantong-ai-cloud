@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from ops.r297_evidence_events import load_trust_manifest, verify_acceptance_event_bundle
+from ops.r297_evidence_events import load_trust_manifest, signed_event_sha256, verify_acceptance_event_bundle
 from tests.test_r291_jd_workbench_cloud import TEST_RSA_D, TEST_RSA_N_B64
 
 
@@ -128,7 +128,14 @@ def _bundle(now: datetime) -> dict:
         "nonce": "page-close-nonce-0001",
         "observed_at": (now - timedelta(seconds=4)).isoformat(),
         "sequence": 1,
-        "payload": {"closed": True, "source": "browser_pagehide"},
+        "payload": {
+            "closed": True, "source": "browser_pagehide",
+            "artifact_evidence_sha256": "1" * 64,
+            "artifact_archive_sha256": "2" * 64,
+            "artifact_id": 9965082823,
+            "artifact_name": "r297-native-pagehide-test",
+            "workflow_run_id": 33949515935,
+        },
     })
     page_observer = _sign({
         **common,
@@ -139,6 +146,7 @@ def _bundle(now: datetime) -> dict:
         "sequence": 2,
         "payload": {
             "subject_nonce": page["nonce"],
+            "subject_event_sha256": signed_event_sha256(page),
             "scheduler_continues": True,
             "observation_source": "postgresql_scheduler_state",
             "database_read_only": True,
@@ -166,6 +174,7 @@ def _bundle(now: datetime) -> dict:
         "sequence": 4,
         "payload": {
             "subject_nonce": electron["nonce"],
+            "subject_event_sha256": signed_event_sha256(electron),
             "scheduler_continues": True,
             "observation_source": "postgresql_scheduler_state",
             "database_read_only": True,

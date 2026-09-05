@@ -64,6 +64,33 @@ def _canonical(event: dict) -> bytes:
     return json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
 
 
+def signed_event_sha256(event: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+
+
+def validate_page_event_payload(payload: object) -> None:
+    fields = {
+        "closed", "source", "artifact_evidence_sha256", "artifact_archive_sha256",
+        "artifact_id", "artifact_name", "workflow_run_id",
+    }
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != fields
+        or payload.get("closed") is not True
+        or payload.get("source") != "browser_pagehide"
+        or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("artifact_evidence_sha256", "")))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("artifact_archive_sha256", "")))
+        or type(payload.get("artifact_id")) is not int
+        or payload["artifact_id"] <= 0
+        or type(payload.get("workflow_run_id")) is not int
+        or payload["workflow_run_id"] <= 0
+        or not re.fullmatch(r"r297-native-pagehide-[A-Za-z0-9._-]+", str(payload.get("artifact_name", "")))
+    ):
+        raise ValueError("page close event invalid")
+
+
 def _read_protected_file(path: Path) -> bytes:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
@@ -188,10 +215,57 @@ def _verify_signature(event: dict, key: dict) -> None:
         raise ValueError("invalid evidence signature")
 
 
-def _observer_result(event: dict, subject_nonce: str, expected_store_id: int) -> dict:
+def verify_signed_event(
+    event: dict, *, event_type: str, issuer: str, environment: str, now: datetime,
+    maximum_age: timedelta = timedelta(minutes=5),
+) -> tuple[dict, dict]:
+    """Verify one producer event against the fixed trust anchor and time window."""
+    if not isinstance(event, dict) or set(event) != _FIELDS:
+        raise ValueError("evidence event schema mismatch")
+    if event.get("event_type") != event_type or event.get("issuer") != issuer:
+        raise ValueError("evidence event role mismatch")
+    if any(not _scope_identity(event.get(field)) for field in _SCOPE_FIELDS - {"store_id", "platform", "release_sha"}):
+        raise ValueError("invalid evidence event scope")
+    if (
+        type(event.get("store_id")) is not int
+        or event["store_id"] <= 0
+        or not isinstance(event.get("platform"), str)
+        or re.fullmatch(r"[a-z0-9_-]{1,32}", event["platform"]) is None
+        or not _SHA_RE.fullmatch(str(event.get("release_sha", "")))
+        or type(event.get("sequence")) is not int
+        or not isinstance(event.get("nonce"), str)
+        or _NONCE_RE.fullmatch(event["nonce"]) is None
+        or not isinstance(event.get("payload"), dict)
+    ):
+        raise ValueError("invalid evidence event scope")
+    occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
+    now = now.astimezone(timezone.utc)
+    if occurred_at < now - maximum_age:
+        raise ValueError("expired evidence event")
+    if occurred_at > now + timedelta(seconds=30):
+        raise ValueError("future evidence event")
+    manifest, _ = load_trust_manifest(environment=environment)
+    key = next((candidate for candidate in manifest["keys"] if candidate["issuer"] == issuer), None)
+    if (
+        key is None
+        or event.get("key_id") != key["key_id"]
+        or event_type not in key["allowed_event_types"]
+        or not (_timestamp(key["valid_from"], "evidence trust key validity invalid") <= occurred_at < _timestamp(
+            key["valid_until"], "evidence trust key validity invalid"
+        ))
+    ):
+        raise ValueError("evidence issuer key missing")
+    if event_type in {"web_page_close", "electron_exit"} and "scheduler_continues" in event["payload"]:
+        raise ValueError("client scheduler claim forbidden")
+    _verify_signature(event, key)
+    return manifest, key
+
+
+def _observer_result(event: dict, subject_event: dict, expected_store_id: int) -> dict:
     payload = event["payload"]
     if (
-        payload.get("subject_nonce") != subject_nonce
+        payload.get("subject_nonce") != subject_event["nonce"]
+        or payload.get("subject_event_sha256") != signed_event_sha256(subject_event)
         or payload.get("scheduler_continues") is not True
         or payload.get("observation_source") != "postgresql_scheduler_state"
         or payload.get("database_read_only") is not True
@@ -328,13 +402,12 @@ def verify_acceptance_event_bundle(
         _verify_signature(event, key)
 
     page, page_observer, electron, electron_observer = events
-    if page["payload"].get("closed") is not True or page["payload"].get("source") != "browser_pagehide":
-        raise ValueError("page close event invalid")
+    validate_page_event_payload(page["payload"])
     process_id = electron["payload"].get("process_id")
     if electron["payload"].get("exited") is not True or type(process_id) is not int or process_id <= 0:
         raise ValueError("electron exit event invalid")
-    page_result = _observer_result(page_observer, page["nonce"], expected_scope["store_id"])
-    electron_result = _observer_result(electron_observer, electron["nonce"], expected_scope["store_id"])
+    page_result = _observer_result(page_observer, page, expected_scope["store_id"])
+    electron_result = _observer_result(electron_observer, electron, expected_scope["store_id"])
 
     _record_nonces(nonce_ledger, replay_bindings)
 
