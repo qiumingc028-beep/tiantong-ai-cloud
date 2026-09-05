@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import unquote
 
 import pytest
 
@@ -21,6 +22,11 @@ VIEWER_SIGNING_SETTINGS = (
     "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY",
     "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY",
 )
+CONTRACT = json.loads(
+    (Path(__file__).parent / "fixtures" / "r297_jd_session_contract_vectors.json").read_text(encoding="utf-8")
+)
+SESSION_NAMESPACE = CONTRACT["namespace"]
+SESSION_ID = ":".join((SESSION_NAMESPACE, "1", "1", "1", CONTRACT["valid_scope"]["platform"]))
 
 
 class _RuntimeResponse:
@@ -28,8 +34,8 @@ class _RuntimeResponse:
         self.payload = payload
         self.status = status
 
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode("utf-8")
+    def read(self, size: int = -1) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")[:size] if size >= 0 else json.dumps(self.payload).encode("utf-8")
 
     def __enter__(self):
         return self
@@ -50,7 +56,7 @@ class _RuntimeRecorder:
         method = request.get_method()
         url = request.full_url
         if method == "POST" and url.endswith("/sessions"):
-            return _RuntimeResponse({"session_id": "1:1:1:jd", "expires_in": 600, "restored": False})
+            return _RuntimeResponse({"session_id": SESSION_ID, "expires_in": 600, "restored": False})
         if method == "GET" and "/sessions/" in url:
             return _RuntimeResponse({"status": "ACTIVE"})
         if method == "DELETE" and "/sessions/" in url:
@@ -64,6 +70,7 @@ class _RuntimeRecorder:
 def runtime_recorder(monkeypatch):
     recorder = _RuntimeRecorder()
     monkeypatch.setenv("JD_BROWSER_CONTROL_TOKEN", "control-token-that-is-at-least-32-bytes")
+    monkeypatch.setenv("JD_SESSION_NAMESPACE", SESSION_NAMESPACE)
     monkeypatch.setattr("urllib.request.urlopen", recorder)
     monkeypatch.setattr(jd_workbench, "urlopen", recorder, raising=False)
     get_settings.cache_clear()
@@ -81,7 +88,7 @@ def _runtime_call(recorder: _RuntimeRecorder, method: str, suffix: str):
     matching = [
         item
         for item in recorder.requests
-        if item[0].get_method() == method and item[0].full_url.endswith(suffix)
+        if item[0].get_method() == method and unquote(item[0].full_url).endswith(suffix)
     ]
     assert len(matching) == 1
     return matching[0][0]
@@ -188,15 +195,22 @@ def test_owner_create_session_delegates_server_derived_scope_to_runtime(client, 
 
     assert response.status_code == 200
     request = _runtime_call(runtime_recorder, "POST", "/internal/jd-browser/sessions")
-    assert json.loads(request.data) == {"tenant_id": "1", "company_id": "1", "store_id": "1", "platform": "jd"}
-    assert response.json()["session_id"] == "1:1:1:jd"
+    assert json.loads(request.data) == {
+        "namespace": SESSION_NAMESPACE,
+        "tenant_id": "1",
+        "company_id": "1",
+        "store_id": "1",
+        "platform": "jd",
+    }
+    assert response.json() == {"store_id": 1, "status": "LOGIN_REQUIRED", "expires_in": 600}
+    assert "session_id" not in response.json()
 
 
 def test_owner_session_status_is_read_from_runtime(client, owner_headers, runtime_recorder):
     response = client.get("/api/jd-workbench/stores/1/login-session", headers=owner_headers)
 
     assert response.status_code == 200
-    _runtime_call(runtime_recorder, "GET", "/internal/jd-browser/sessions/1:1:1:jd")
+    _runtime_call(runtime_recorder, "GET", f"/internal/jd-browser/sessions/{SESSION_ID}")
     assert response.json() == {"store_id": 1, "status": "ACTIVE"}
 
 
@@ -205,7 +219,7 @@ def test_owner_login_ticket_is_runtime_issued_and_never_placed_in_a_url(client, 
 
     assert response.status_code == 200
     request = _runtime_call(runtime_recorder, "POST", "/internal/jd-browser/tickets")
-    assert json.loads(request.data) == {"session_id": "1:1:1:jd"}
+    assert json.loads(request.data) == {"session_id": SESSION_ID}
     assert all("viewer-ticket-secret" not in item[0].full_url for item in runtime_recorder.requests)
     assert "viewer-ticket-secret" not in str(response.url)
     assert response.headers.get("location") is None
@@ -248,7 +262,8 @@ def test_owner_delete_session_is_authenticated_runtime_idempotent(client, owner_
     assert [response.status_code for response in responses] == [200, 200]
     calls = [
         item for item in runtime_recorder.requests
-        if item[0].get_method() == "DELETE" and item[0].full_url.endswith("/internal/jd-browser/sessions/1:1:1:jd")
+        if item[0].get_method() == "DELETE"
+        and unquote(item[0].full_url).endswith(f"/internal/jd-browser/sessions/{SESSION_ID}")
     ]
     assert len(calls) == 2
     assert all(response.json()["status"] == "REVOKED" for response in responses)

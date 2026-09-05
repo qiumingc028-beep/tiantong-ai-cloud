@@ -12,7 +12,7 @@ const { ROUTES } = require('../../desktop/jd-workbench/readonly-collector.js');
 const { classifyRequest } = require('../../desktop/jd-workbench/security-policy.js');
 
 const TICKET_TTL_MS = 60_000;
-const COOKIE_TTL_MS = 600_000;
+const COOKIE_TTL_MS = 60_000;
 const SESSION_TTL_MS = 600_000;
 const TOKEN_ISSUER = 'tiantong-jd-browser-runtime';
 const TICKET_TYPE = 'viewer_ticket';
@@ -42,8 +42,8 @@ function safeEqual(actual, expected) {
 
 function normalizedScope(payload) {
   if (!payload || typeof payload !== 'object' || Object.keys(payload).some((key) => !SCOPE_KEYS.includes(key))) return null;
-  if (!SCOPE_KEYS.every((key) => typeof payload[key] === 'string')) return null;
-  const scope = Object.fromEntries(SCOPE_KEYS.map((key) => [key, payload[key].trim()]));
+  if (!SCOPE_KEYS.every((key) => typeof payload[key] === 'string' || (key === 'store_id' && Number.isSafeInteger(payload[key]) && payload[key] > 0))) return null;
+  const scope = Object.fromEntries(SCOPE_KEYS.map((key) => [key, String(payload[key]).trim()]));
   if (!SCOPE_KEYS.every((key) => SCOPE_VALUE.test(scope[key])) || scope.platform !== 'jd') return null;
   return scope;
 }
@@ -84,7 +84,7 @@ function verifiedValue(value, key, { typ, aud, now }) {
       payload.typ !== typ || payload.aud !== aud || payload.iss !== TOKEN_ISSUER ||
       typeof payload.jti !== 'string' || !/^[0-9a-f]{32}$/.test(payload.jti) ||
       !Number.isInteger(payload.issued_at) || typeof payload.exp !== 'number' || !Number.isInteger(payload.exp) ||
-      payload.issued_at > now() || payload.exp * 1000 <= now() || !scope ||
+      payload.issued_at * 1000 > now() || payload.exp * 1000 <= now() || !scope ||
       sessionId(scope) !== payload.session_id
     ) return null;
     return payload;
@@ -409,7 +409,8 @@ export function buildApp({
       await installReadOnlyPolicy(context);
       const nonce = restored?.session_nonce || crypto.randomBytes(16).toString('hex');
       browserSessions.set(id, {
-        context, scope, nonce, expiresAt: restored?.expires_at || now() + SESSION_TTL_MS
+        context, scope, nonce: restored ? crypto.randomBytes(16).toString('hex') : nonce,
+        expiresAt: restored?.expires_at || now() + SESSION_TTL_MS
       });
     } catch (error) {
       await runAllCleanup([
@@ -434,12 +435,12 @@ export function buildApp({
     if (!session || !await sessionRemainsAuthorized(id, session)) {
       return reply.code(409).send({ error: 'SESSION_NOT_ACTIVE' });
     }
-    const issuedAt = now();
+    const issuedAt = Math.floor(now() / 1000);
     const ticket = signedValue({
       typ: TICKET_TYPE, aud: TICKET_AUDIENCE, iss: TOKEN_ISSUER,
       jti: crypto.randomBytes(16).toString('hex'), ...session.scope, session_id: id,
       session_nonce: session.nonce,
-      issued_at: issuedAt, exp: Math.floor((issuedAt + TICKET_TTL_MS) / 1000)
+      issued_at: issuedAt, exp: issuedAt + Math.floor(TICKET_TTL_MS / 1000)
     }, ticketKey);
     return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer')
       .send({ ticket, expires_in: TICKET_TTL_MS / 1000 });
@@ -458,17 +459,17 @@ export function buildApp({
       !await sessionRemainsAuthorized(record.session_id, session) ||
       !await consumeTicket(record)
     ) return reply.code(401).send({ error: 'TICKET_INVALID' });
-    const issuedAt = now();
+    const issuedAt = Math.floor(now() / 1000);
     const viewerSession = signedValue({
       typ: COOKIE_TYPE, aud: COOKIE_AUDIENCE, iss: TOKEN_ISSUER,
       jti: crypto.randomBytes(16).toString('hex'), ...Object.fromEntries(SCOPE_KEYS.map((key) => [key, record[key]])),
       session_id: record.session_id, session_nonce: record.session_nonce,
-      issued_at: issuedAt, exp: Math.floor((issuedAt + COOKIE_TTL_MS) / 1000)
+      issued_at: issuedAt, exp: issuedAt + Math.floor(COOKIE_TTL_MS / 1000)
     }, cookieKey);
     return reply
       .header('cache-control', 'no-store')
       .header('referrer-policy', 'no-referrer')
-      .header('set-cookie', `jd_browser_session=${viewerSession}; Max-Age=${COOKIE_TTL_MS / 1000}; Path=/jd-browser/novnc/${encodeURIComponent(storeId)}/; HttpOnly; Secure; SameSite=Strict`)
+      .header('set-cookie', `jd_browser_session=${viewerSession}; Max-Age=${TICKET_TTL_MS / 1000}; Path=/jd-browser/novnc/${encodeURIComponent(storeId)}/; HttpOnly; Secure; SameSite=Strict`)
       .code(204).send();
   });
 
