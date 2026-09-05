@@ -389,27 +389,135 @@ jobs:
           print("RUNTIME_NOVNC_WEBSOCKET=PASS")
           PY
 
+          restart_step="RESTART_COMMAND"
+          restart_diagnostics() {
+            failure_status=$?
+            trap - ERR
+            echo "RUNTIME_RESTART_FAILED_STEP=$restart_step EXIT_CODE=$failure_status" >&2
+            docker inspect --format 'STATE={{.State.Status}} EXIT={{.State.ExitCode}} PID={{.State.Pid}} RESTARTS={{.RestartCount}}' "$container" >&2 || true
+            docker exec "$container" sh -c 'for process in /proc/[0-9]*; do test -r "$process/comm" && printf "%s %s\n" "${process##*/}" "$(cat "$process/comm")"; done' >&2 || true
+            docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles /data/jd-session-archives -maxdepth 3 -printf "%M %u:%g %s %p\n"' >&2 || true
+            for status_file in /tmp/runtime-health.json /tmp/runtime-session.json /tmp/runtime-restored.json; do
+              test ! -f "$status_file" || python -c '
+          import json, pathlib, re, sys
+          path = pathlib.Path(sys.argv[1])
+          try:
+              value = json.loads(path.read_text())
+          except Exception:
+              value = {"unparseable": True, "sha256_only": True}
+          def redact(item):
+              if isinstance(item, dict):
+                  return {key: "[REDACTED]" if re.search(r"(?i)(token|ticket|cookie|password|secret|key)", key) else redact(entry) for key, entry in item.items()}
+              if isinstance(item, list):
+                  return [redact(entry) for entry in item]
+              return item
+          print(f"STATUS_FILE={path.name} CONTENT={json.dumps(redact(value), sort_keys=True)}")
+          ' "$status_file" >&2
+            done
+            docker logs "$container" 2>&1 | R_CAPTURE="$capture_token" R_CONTROL="$control_token" R_TICKET_KEY="$viewer_ticket_key" R_COOKIE_KEY="$viewer_cookie_key" R_MASTER="$master_key" R_OLD_TICKET="${ticket:-}" R_NEW_TICKET="${new_ticket:-}" R_OLD_COOKIE="${cookie:-}" R_NEW_COOKIE="${new_cookie:-}" python -c '
+          import os, re, sys
+          text = sys.stdin.read()
+          for name in ("R_CAPTURE", "R_CONTROL", "R_TICKET_KEY", "R_COOKIE_KEY", "R_MASTER", "R_OLD_TICKET", "R_NEW_TICKET", "R_OLD_COOKIE", "R_NEW_COOKIE"):
+              value = os.environ.get(name)
+              if value:
+                  text = text.replace(value, "[REDACTED]")
+          text = re.sub(r"(?i)((?:token|ticket|cookie|password|secret|key)\s*[=:]\s*)\S+", r"\1[REDACTED]", text)
+          sys.stderr.write(text)
+          ' || true
+            exit "$failure_status"
+          }
+          wait_runtime_health() {
+            status=000
+            for _ in $(seq 1 60); do
+              status="$(curl --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
+                --header "x-internal-token: $control_token" \
+                "http://127.0.0.1:$runtime_port/internal/jd-browser/health" || true)"
+              test "$status" = 200 && return 0
+              sleep 1
+            done
+            return 1
+          }
+          trap restart_diagnostics ERR
+
           docker restart "$container" >/dev/null
+          echo "RESTART_COMMAND=PASS"
           runtime_port="$(docker port "$container" 8787/tcp | awk -F: 'END {print $NF}')"
-          for _ in $(seq 1 60); do
-            status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-              --header "x-internal-token: $control_token" \
-              "http://127.0.0.1:$runtime_port/internal/jd-browser/health" || true)"
-            test "$status" = 200 && break
-            sleep 1
-          done
-          test "$status" = 200
-          restored="$(curl --silent --fail --header 'content-type: application/json' \
+          restart_step="HEALTH_READY"
+          wait_runtime_health
+          echo "HEALTH_READY=PASS HTTP_STATUS=$status"
+
+          restart_step="PROFILE_RESTORED"
+          restored_status="$(curl --silent --show-error --output /tmp/runtime-restored.json --write-out '%{http_code}' \
             --header "x-internal-token: $control_token" \
             --data '{"tenant_id":1,"company_id":1,"store_id":1,"platform":"jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
-          test "$(printf '%s' "$restored" | python -c 'import json,sys; print(str(json.load(sys.stdin)["restored"]).lower())')" = true
+          test "$restored_status" = 200
+          test "$(python -c 'import json; print(str(json.load(open("/tmp/runtime-restored.json"))["restored"]).lower())')" = true
           docker exec "$container" pgrep -x chrome >/dev/null
-          curl --silent --fail --request DELETE --header "x-internal-token: $control_token" \
-            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions/1%3A1%3A1%3Ajd" >/dev/null
+          echo "PROFILE_RESTORED=PASS HTTP_STATUS=$restored_status"
+
+          restart_step="OLD_COOKIE_REJECTED"
+          old_cookie_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          test "$old_cookie_status" = 401
+          echo "OLD_COOKIE_REJECTED=PASS HTTP_STATUS=$old_cookie_status"
+
+          restart_step="OLD_TICKET_REPLAY_REJECTED"
+          old_ticket_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
+          test "$old_ticket_status" = 401
+          echo "OLD_TICKET_REPLAY_REJECTED=PASS HTTP_STATUS=$old_ticket_status"
+
+          restart_step="NEW_TICKET_ISSUED"
+          new_ticket_response="$(curl --silent --show-error --write-out $'\n%{http_code}' \
+            --header 'content-type: application/json' --header "x-internal-token: $control_token" \
+            --data '{"session_id":"1:1:1:jd"}' \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets")"
+          new_ticket_status="${new_ticket_response##*$'\n'}"
+          test "$new_ticket_status" = 200
+          new_ticket_body="${new_ticket_response%$'\n'*}"
+          new_ticket="$(printf '%s' "$new_ticket_body" | python -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
+          test -n "$new_ticket"
+          echo "NEW_TICKET_ISSUED=PASS HTTP_STATUS=$new_ticket_status"
+
+          restart_step="NEW_COOKIE_ACCEPTED"
+          new_cookie_response="$(curl --silent --show-error --dump-header - --output /dev/null --write-out $'HTTP_STATUS:%{http_code}' \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$new_ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
+          new_cookie_status="${new_cookie_response##*HTTP_STATUS:}"
+          test "$new_cookie_status" = 204
+          new_cookie="$(printf '%s' "$new_cookie_response" | awk -F': ' 'tolower($1)=="set-cookie" {sub(/\r$/, "", $2); print $2}')"
+          test -n "$new_cookie"
+          new_viewer_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $new_cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          test "$new_viewer_status" = 200
+          echo "NEW_COOKIE_ACCEPTED=PASS HTTP_STATUS=$new_viewer_status"
+
+          restart_step="REVOKE_PERSISTED"
+          revoke_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --request DELETE \
+            --header "x-internal-token: $control_token" \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions/1%3A1%3A1%3Ajd")"
+          test "$revoke_status" = 200
+          docker restart "$container" >/dev/null
+          runtime_port="$(docker port "$container" 8787/tcp | awk -F: 'END {print $NF}')"
+          restart_step="SECOND_RESTART_HEALTH_READY"
+          wait_runtime_health
+          restart_step="REVOKE_PERSISTED"
+          echo "REVOKE_PERSISTED=PASS HTTP_STATUS=$revoke_status"
+
+          restart_step="SECOND_RESTART_OLD_COOKIE_REJECTED"
+          second_old_cookie_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $new_cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          test "$second_old_cookie_status" = 401
+          echo "SECOND_RESTART_OLD_COOKIE_REJECTED=PASS HTTP_STATUS=$second_old_cookie_status"
+
+          restart_step="ARTIFACT_CLEANUP"
           test -z "$(docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles /data/jd-session-archives -type f -print')"
           test -z "$(docker exec "$container" pgrep -x chrome || true)"
+          echo "ARTIFACT_CLEANUP=PASS"
           echo "RUNTIME_RESTART=PASS"
+          trap - ERR
 
       - name: Generate R297 real-process acceptance evidence
         run: |

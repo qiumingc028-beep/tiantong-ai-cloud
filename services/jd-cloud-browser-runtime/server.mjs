@@ -398,7 +398,8 @@ export function buildApp({
         }, { origins: restored.storage_state.origins });
       }
       await installReadOnlyPolicy(context, dashboardUrl);
-      const nonce = restored?.session_nonce || crypto.randomBytes(16).toString('hex');
+      // Viewer authority is intentionally process-bound: restore JD state, never a pre-restart cookie.
+      const nonce = crypto.randomBytes(16).toString('hex');
       browserSessions.set(id, {
         context, scope, nonce, expiresAt: restored?.expires_at || now() + SESSION_TTL_MS
       });

@@ -370,6 +370,63 @@ test('graceful restart restores encrypted state and revoke removes every session
   await second.close();
 });
 
+test('restart restores profile but rotates viewer authority and revoke survives another restart', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-runtime-viewer-restart-'));
+  const archiveRoot = path.join(root, 'archives');
+  const profileRoot = path.join(root, 'profiles');
+  const launchContext = async () => ({
+    route: async () => {}, storageState: async () => ({ cookies: [] }),
+    close: async () => {}, pages: () => []
+  });
+  const options = {
+    captureToken, controlToken, viewerTicketSigningKey: viewerSigningKey,
+    viewerCookieSigningKey, masterKey, authorizeSession: async () => true,
+    archiveRoot, profileRoot, launchContext
+  };
+  const sessionPayload = { tenant_id: 1, company_id: 2, store_id: 3, platform: 'jd' };
+  const createSession = (app) => app.inject({
+    method: 'POST', url: '/internal/jd-browser/sessions',
+    headers: { 'x-internal-token': controlToken }, payload: sessionPayload
+  });
+  const issueTicket = (app) => app.inject({
+    method: 'POST', url: '/internal/jd-browser/tickets',
+    headers: { 'x-internal-token': controlToken }, payload: { session_id: '1:2:3:jd' }
+  });
+  const exchange = (app, ticket) => app.inject({
+    method: 'POST', url: '/internal/jd-browser/viewer/exchange/3', payload: { ticket }
+  });
+  const authorize = (app, cookie) => app.inject({
+    method: 'GET', url: '/internal/jd-browser/viewer/authorize',
+    headers: { cookie, 'x-original-uri': '/jd-browser/novnc/3/vnc.html' }
+  });
+
+  const first = buildApp(options);
+  assert.equal((await createSession(first)).statusCode, 200);
+  const oldTicket = (await issueTicket(first)).json().ticket;
+  const oldCookie = (await exchange(first, oldTicket)).headers['set-cookie'];
+  assert.equal((await authorize(first, oldCookie)).statusCode, 204);
+  await first.close();
+
+  const second = buildApp(options);
+  assert.equal((await createSession(second)).json().restored, true);
+  assert.equal((await authorize(second, oldCookie)).statusCode, 401);
+  assert.equal((await exchange(second, oldTicket)).statusCode, 401);
+  const newTicket = (await issueTicket(second)).json().ticket;
+  const newCookie = (await exchange(second, newTicket)).headers['set-cookie'];
+  assert.equal((await authorize(second, newCookie)).statusCode, 204);
+  assert.equal((await second.inject({
+    method: 'DELETE', url: '/internal/jd-browser/sessions/1%3A2%3A3%3Ajd',
+    headers: { 'x-internal-token': controlToken }
+  })).statusCode, 200);
+  await second.close();
+
+  const third = buildApp(options);
+  t.after(async () => { await third.close(); await fs.rm(root, { recursive: true, force: true }); });
+  assert.equal((await authorize(third, newCookie)).statusCode, 401);
+  assert.deepEqual((await fs.readdir(archiveRoot)).filter((name) => name.endsWith('.enc')), []);
+  assert.deepEqual(await fs.readdir(profileRoot), []);
+});
+
 test('database revocation invalidates viewer and capture access and control can always destroy', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-runtime-revoke-'));
   let authorized = true;
