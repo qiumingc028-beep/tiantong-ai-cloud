@@ -200,18 +200,26 @@ jobs:
           }
           trap cleanup EXIT
 
-          if docker run --rm "$S12_JD_RUNTIME_IMAGE" >/tmp/runtime-missing-token.log 2>&1; then
-            echo "Runtime unexpectedly started without an internal token" >&2
-            exit 1
-          fi
-          grep -F "JD_BROWSER_CAPTURE_TOKEN_REQUIRED" /tmp/runtime-missing-token.log >/dev/null
-
           capture_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           control_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           viewer_ticket_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           viewer_cookie_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           master_key="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
           session_namespace="ci"
+          if docker run --rm "$S12_JD_RUNTIME_IMAGE" >/tmp/runtime-empty.log 2>&1; then exit 1; fi
+          for missing in JD_SESSION_NAMESPACE JD_BROWSER_CAPTURE_TOKEN JD_BROWSER_CONTROL_TOKEN JD_BROWSER_VIEWER_TICKET_SIGNING_KEY JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY JD_SESSION_MASTER_KEY; do
+            args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key")
+            case "$missing" in
+              JD_SESSION_NAMESPACE) args=(--env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_BROWSER_CAPTURE_TOKEN) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_BROWSER_CONTROL_TOKEN) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_BROWSER_VIEWER_TICKET_SIGNING_KEY) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_SESSION_MASTER_KEY) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key");;
+            esac
+            if docker run --rm "${args[@]}" "$S12_JD_RUNTIME_IMAGE" >/tmp/runtime-missing.log 2>&1; then exit 1; fi
+            grep -F "${missing}_REQUIRED" /tmp/runtime-missing.log >/dev/null
+          done
           docker network create "$network" >/dev/null
           docker volume create "$volume" >/dev/null
           MOCK_CONTROL_TOKEN="$control_token" python - <<'PY' &
