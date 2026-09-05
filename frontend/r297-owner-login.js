@@ -37,7 +37,7 @@
   const TICKET_TTL_MAX_SECONDS = 120;
   const PAGE_CLOSE_OBSERVER_CONTRACT = Object.freeze({
     binding: '__tiantongR297AuthenticatedObserver',
-    raw_fields: Object.freeze(['event', 'observed_at', 'store_id']),
+    raw_fields: Object.freeze(['event', 'observed_at', 'store_id', 'release_sha']),
     observer_fields: Object.freeze(['authenticated_observer', 'scheduler_continues'])
   });
 
@@ -221,14 +221,17 @@
     });
   }
 
-  function createPageCloseReporter({ observer = root[PAGE_CLOSE_OBSERVER_CONTRACT.binding], now = () => new Date().toISOString() } = {}) {
+  function createPageCloseReporter({ observer = root[PAGE_CLOSE_OBSERVER_CONTRACT.binding], now = () => new Date().toISOString(), getReleaseSha = () => '' } = {}) {
     return Object.freeze({
       report: (event, storeIds) => {
         if (typeof root.PageTransitionEvent !== 'function' || !(event instanceof root.PageTransitionEvent) || event.type !== 'pagehide' || event.isTrusted !== true || typeof observer !== 'function') return false;
+        let releaseSha;
+        try { releaseSha = String(getReleaseSha() || '').trim().toLowerCase(); } catch (_) { return false; }
+        if (!/^[0-9a-f]{40}$/.test(releaseSha)) return false;
         const ids = [...new Set((storeIds || []).map(storeId))];
         ids.forEach(id => {
           try {
-            const result = observer(JSON.stringify({ event: 'web_page_close', observed_at: now(), store_id: id }));
+            const result = observer(JSON.stringify({ event: 'web_page_close', observed_at: now(), store_id: id, release_sha: releaseSha }));
             if (result && typeof result.catch === 'function') result.catch(() => {});
           } catch (_) {}
         });

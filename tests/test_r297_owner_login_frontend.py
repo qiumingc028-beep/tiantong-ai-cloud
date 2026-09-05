@@ -231,7 +231,7 @@ assert.equal(reporter.report({type: 'pagehide', isTrusted: false}, [7]), false);
 assert.deepEqual(emitted, []);
 assert.deepEqual(login.PAGE_CLOSE_OBSERVER_CONTRACT, {
   binding: '__tiantongR297AuthenticatedObserver',
-  raw_fields: ['event', 'observed_at', 'store_id'],
+  raw_fields: ['event', 'observed_at', 'store_id', 'release_sha'],
   observer_fields: ['authenticated_observer', 'scheduler_continues']
 });
 """
@@ -267,6 +267,8 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert "addEventListener('pagehide',stopLoginPolling)" in page
     assert "R297OwnerLogin.closePageResources(" in page
     assert "event instanceof root.PageTransitionEvent" in module
+    assert "getReleaseSha:()=>releaseSha" in page
+    assert "h.release.commit" in page
     for label in ("京东登录", "重新验证", "打开受控验证窗口", "关闭会话"):
         assert label in page
     assert "R297StoreView.loadStoreDirectory(api)" in page
