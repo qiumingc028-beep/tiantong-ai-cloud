@@ -146,6 +146,9 @@ def test_database_restore_contract_is_fail_closed():
     preflight = read("ops/r297_workbench_preflight.sh")
     assert "assert payload" not in preflight
     assert "jd-browser-runtime" in preflight
+    assert "ops.r297_evidence_preflight" in preflight
+    assert "--role verifier" in preflight
+    assert "page_event_receiver authenticated_observer verifier" not in preflight
 
 
 def test_database_restore_failure_injection_hooks_fail_closed():

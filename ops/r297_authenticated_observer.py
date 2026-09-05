@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -13,15 +12,13 @@ from pathlib import Path
 import re
 import secrets
 import stat
-import subprocess
 import zipfile
 
 import psycopg2
 
 try:
     from ops.r297_evidence_events import (
-        _canonical,
-        _verify_signature,
+        sign_event,
         load_trust_manifest,
         signed_event_sha256,
         validate_page_event_payload,
@@ -31,8 +28,7 @@ except ModuleNotFoundError as exc:
     if exc.name != "ops":
         raise
     from r297_evidence_events import (
-        _canonical,
-        _verify_signature,
+        sign_event,
         load_trust_manifest,
         signed_event_sha256,
         validate_page_event_payload,
@@ -246,63 +242,6 @@ def read_scheduler_snapshot(database_url: str, page_event: dict) -> dict:
     }
 
 
-def _open_private_key(environment: str, issuer: str) -> int:
-    prefix = "R297_PAGE_EVENT_RECEIVER" if issuer == "page_event_receiver" else "R297_OBSERVER"
-    variable = f"{prefix}_{'TEST_' if environment == 'test' else ''}PRIVATE_KEY_PATH"
-    value = os.getenv(variable, "")
-    if not value:
-        raise RuntimeError("observer private key missing")
-    descriptor = os.open(value, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    metadata = os.fstat(descriptor)
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid not in {0, os.geteuid()}
-        or metadata.st_mode & 0o077
-    ):
-        os.close(descriptor)
-        raise RuntimeError("observer private key permissions invalid")
-    return descriptor
-
-
-def _decode(value: str) -> int:
-    return int.from_bytes(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)), "big")
-
-
-def _sign(event: dict, environment: str, manifest: dict, issuer: str) -> dict:
-    signing_key = next(key for key in manifest["keys"] if key["issuer"] == issuer)
-    event = {**event, "key_id": signing_key["key_id"]}
-    descriptor = _open_private_key(environment, issuer)
-    try:
-        if environment == "test":
-            private = json.loads(os.read(descriptor, os.fstat(descriptor).st_size).decode("utf-8"))
-            if (
-                private.get("environment") != "test"
-                or private.get("key_id") != signing_key["key_id"]
-                or private.get("n") != signing_key["n"]
-            ):
-                raise RuntimeError("observer test private key mismatch")
-            digest = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(
-                _canonical(event)
-            ).digest()
-            encoded = b"\x00\x01" + b"\xff" * (256 - len(digest) - 3) + b"\x00" + digest
-            signature = pow(
-                int.from_bytes(encoded, "big"), _decode(private["d"]), _decode(private["n"])
-            ).to_bytes(256, "big")
-        else:
-            result = subprocess.run(
-                ["openssl", "dgst", "-sha256", "-sign", f"/dev/fd/{descriptor}"],
-                input=_canonical(event), capture_output=True, check=False, pass_fds=(descriptor,),
-            )
-            if result.returncode:
-                raise RuntimeError("observer signing failed")
-            signature = result.stdout
-    finally:
-        os.close(descriptor)
-    signed = {**event, "signature": base64.urlsafe_b64encode(signature).rstrip(b"=").decode()}
-    _verify_signature(signed, signing_key)
-    return signed
-
-
 def produce_page_event_receiver(raw_artifact: dict, authenticated_scope: dict) -> dict:
     """Turn a native client event into a scoped event signed by the trusted receiver."""
     environment = os.getenv("APP_ENV", "").strip().lower()
@@ -334,7 +273,7 @@ def produce_page_event_receiver(raw_artifact: dict, authenticated_scope: dict) -
         "workflow_run_id": raw_artifact["workflow_run_id"],
     })
     validate_page_event_payload(event["payload"])
-    return _sign(event, environment, manifest, "page_event_receiver")
+    return sign_event(event, environment=environment, manifest=manifest, issuer="page_event_receiver")
 
 
 def _validate_page_event_receiver(page_event: dict, environment: str, *, now: datetime) -> dict:
@@ -381,7 +320,7 @@ def _produce_authenticated_observer(
             "collected_store_ids_after": snapshot["collected_store_ids_after"],
         },
     }
-    return _sign(event, environment, manifest, "authenticated_observer")
+    return sign_event(event, environment=environment, manifest=manifest, issuer="authenticated_observer")
 
 
 def produce_authenticated_observer(page_event: dict, snapshot: dict, *, observed_at: datetime) -> dict:

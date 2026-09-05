@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timedelta, timezone
-import fcntl
 import hashlib
 import json
 import os
@@ -12,6 +11,12 @@ from pathlib import Path
 import re
 import secrets
 import stat
+import subprocess
+
+try:
+    import fcntl
+except ImportError:  # Windows signers do not consume the POSIX nonce ledger.
+    fcntl = None
 
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -19,8 +24,11 @@ _NONCE_RE = re.compile(r"[A-Za-z0-9_-]{16,128}")
 _DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
 _TEST_TRUST_MANIFEST = Path(__file__).with_name("r297_evidence_trust_manifest.test.json")
 _TEST_TRUST_MANIFEST_SHA256 = "0eac4b3fc49f913f33762dbedbe41916c3ef50eb1128211d7d93281c78902fed"
-_PRODUCTION_TRUST_MANIFEST = Path("/etc/tiantong/r297-evidence-trust-manifest.json")
-_PRODUCTION_TRUST_MANIFEST_SIDECAR = Path("/etc/tiantong/r297-evidence-trust-manifest.json.sha256")
+_PRODUCTION_TRUST_MANIFEST = (
+    Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "TiantongAI/r297-evidence-trust-manifest.json"
+    if os.name == "nt" else Path("/etc/tiantong/r297-evidence-trust-manifest.json")
+)
+_PRODUCTION_TRUST_MANIFEST_SIDECAR = Path(f"{_PRODUCTION_TRUST_MANIFEST}.sha256")
 _TEST_KEY_FINGERPRINTS = {
     "0eddedd66e432bc8105bf196092793328ff2f9d83039d80223dd00faee9f4d84",
     "f49dbfbcf14774d5449ba88417fd32b04a028f9911008abeea6d8adf7533c599",
@@ -194,6 +202,82 @@ def load_trust_manifest(*, environment: str) -> tuple[dict, str]:
     return manifest, digest
 
 
+def _private_key_variable(environment: str, issuer: str) -> str:
+    prefixes = {
+        "page_event_receiver": "R297_PAGE_EVENT_RECEIVER",
+        "authenticated_observer": "R297_OBSERVER",
+        "windows_runner": "R297_WINDOWS_RUNNER",
+    }
+    prefix = prefixes.get(issuer)
+    if prefix is None:
+        raise RuntimeError("evidence signer role invalid")
+    return f"{prefix}_{'TEST_' if environment == 'test' else ''}PRIVATE_KEY_PATH"
+
+
+def _open_private_key(environment: str, issuer: str) -> int:
+    variable = _private_key_variable(environment, issuer)
+    value = os.getenv(variable, "")
+    if not value:
+        label = "windows runner" if issuer == "windows_runner" else "observer"
+        raise RuntimeError(f"{label} private key missing")
+    descriptor = os.open(value, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    metadata = os.fstat(descriptor)
+    permissions_invalid = (
+        bool(metadata.st_mode & stat.S_IWRITE)
+        if os.name == "nt" else metadata.st_uid not in {0, os.geteuid()} or bool(metadata.st_mode & 0o077)
+    )
+    if not stat.S_ISREG(metadata.st_mode) or permissions_invalid:
+        os.close(descriptor)
+        raise RuntimeError("evidence private key permissions invalid")
+    return descriptor
+
+
+def _private_integer(value: str) -> int:
+    return int.from_bytes(_decode(value), "big")
+
+
+def sign_event(event: dict, *, environment: str, manifest: dict, issuer: str) -> dict:
+    signing_key = next(key for key in manifest["keys"] if key["issuer"] == issuer)
+    event = {**event, "key_id": signing_key["key_id"]}
+    descriptor = _open_private_key(environment, issuer)
+    try:
+        if environment == "test":
+            private = json.loads(os.read(descriptor, os.fstat(descriptor).st_size).decode("utf-8"))
+            if (
+                private.get("environment") != "test"
+                or private.get("key_id") != signing_key["key_id"]
+                or private.get("n") != signing_key["n"]
+            ):
+                raise RuntimeError("evidence test private key mismatch")
+            digest = _DIGEST_INFO + hashlib.sha256(_canonical(event)).digest()
+            encoded = b"\x00\x01" + b"\xff" * (256 - len(digest) - 3) + b"\x00" + digest
+            signature = pow(
+                int.from_bytes(encoded, "big"), _private_integer(private["d"]),
+                _private_integer(private["n"]),
+            ).to_bytes(256, "big")
+        elif os.name == "nt":
+            result = subprocess.run(
+                ["openssl", "dgst", "-sha256", "-sign", os.environ[_private_key_variable(environment, issuer)]],
+                input=_canonical(event), capture_output=True, check=False,
+            )
+            if result.returncode:
+                raise RuntimeError("evidence signing failed")
+            signature = result.stdout
+        else:
+            result = subprocess.run(
+                ["openssl", "dgst", "-sha256", "-sign", f"/dev/fd/{descriptor}"],
+                input=_canonical(event), capture_output=True, check=False, pass_fds=(descriptor,),
+            )
+            if result.returncode:
+                raise RuntimeError("evidence signing failed")
+            signature = result.stdout
+    finally:
+        os.close(descriptor)
+    signed = {**event, "signature": base64.urlsafe_b64encode(signature).rstrip(b"=").decode()}
+    _verify_signature(signed, signing_key)
+    return signed
+
+
 def _verify_signature(event: dict, key: dict) -> None:
     modulus = int.from_bytes(_decode(key.get("n")), "big")
     exponent = int.from_bytes(_decode(key.get("e")), "big")
@@ -297,18 +381,67 @@ def _observer_result(event: dict, subject_event: dict, expected_store_id: int) -
     }
 
 
-def _record_nonces(nonce_ledger: Path, bindings: list[dict]) -> None:
-    nonce_ledger.parent.mkdir(parents=True, exist_ok=True)
+def _nonce_ledger_descriptor(path: Path, flags: int) -> int:
+    try:
+        descriptor = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError as exc:
+        raise RuntimeError("evidence nonce ledger missing") from exc
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_nlink != 1
+    ):
+        os.close(descriptor)
+        raise RuntimeError("evidence nonce ledger permissions invalid")
+    return descriptor
+
+
+def validate_nonce_ledger(nonce_ledger: Path) -> None:
+    parent = nonce_ledger.parent
+    try:
+        parent_metadata = parent.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError("evidence nonce ledger missing") from exc
+    if (
+        parent.is_symlink()
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise RuntimeError("evidence nonce ledger permissions invalid")
     lock_path = nonce_ledger.with_suffix(nonce_ledger.suffix + ".lock")
-    with lock_path.open("a+", encoding="utf-8") as lock:
-        lock_path.chmod(0o600)
+    for path, flags in ((nonce_ledger, os.O_RDONLY), (lock_path, os.O_RDWR)):
+        descriptor = _nonce_ledger_descriptor(path, flags)
+        os.close(descriptor)
+
+
+def _record_nonces(nonce_ledger: Path, bindings: list[dict]) -> None:
+    if fcntl is None:
+        raise RuntimeError("evidence nonce ledger locking unavailable")
+    validate_nonce_ledger(nonce_ledger)
+    lock_path = nonce_ledger.with_suffix(nonce_ledger.suffix + ".lock")
+    lock_descriptor = _nonce_ledger_descriptor(lock_path, os.O_RDWR)
+    with os.fdopen(lock_descriptor, "r+", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         ledger_values: set[str] = set()
-        if nonce_ledger.exists():
-            loaded = json.loads(nonce_ledger.read_text(encoding="utf-8"))
-            if not isinstance(loaded, list) or not all(isinstance(value, dict) for value in loaded):
-                raise ValueError("evidence nonce ledger invalid")
-            ledger_values.update(json.dumps(value, separators=(",", ":"), sort_keys=True) for value in loaded)
+        ledger_descriptor = _nonce_ledger_descriptor(nonce_ledger, os.O_RDONLY)
+        try:
+            with os.fdopen(ledger_descriptor, "r", encoding="utf-8") as ledger_handle:
+                try:
+                    loaded = json.load(ledger_handle)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("evidence nonce ledger invalid") from exc
+        except Exception:
+            raise
+        required_fields = _SCOPE_FIELDS | {"event_type", "key_id", "nonce"}
+        if (
+            not isinstance(loaded, list)
+            or not all(isinstance(value, dict) and set(value) == required_fields for value in loaded)
+        ):
+            raise ValueError("evidence nonce ledger invalid")
+        ledger_values.update(json.dumps(value, separators=(",", ":"), sort_keys=True) for value in loaded)
         canonical_bindings = {
             json.dumps(value, separators=(",", ":"), sort_keys=True) for value in bindings
         }
@@ -316,10 +449,24 @@ def _record_nonces(nonce_ledger: Path, bindings: list[dict]) -> None:
             raise ValueError("replayed evidence nonce")
         temporary = nonce_ledger.with_name(f".{nonce_ledger.name}.{secrets.token_hex(8)}")
         updated = [json.loads(value) for value in sorted(ledger_values.union(canonical_bindings))]
-        temporary.write_text(json.dumps(updated, sort_keys=True) + "\n", encoding="utf-8")
-        temporary.chmod(0o600)
-        os.replace(temporary, nonce_ledger)
-        nonce_ledger.chmod(0o600)
+        temporary_descriptor = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600,
+        )
+        try:
+            content = (json.dumps(updated, sort_keys=True) + "\n").encode()
+            os.write(temporary_descriptor, content)
+            os.fsync(temporary_descriptor)
+        finally:
+            os.close(temporary_descriptor)
+        try:
+            os.replace(temporary, nonce_ledger)
+            directory_descriptor = os.open(nonce_ledger.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def verify_acceptance_event_bundle(

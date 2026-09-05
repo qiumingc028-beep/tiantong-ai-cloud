@@ -13,6 +13,9 @@ on:
       - tests/test_r297_jd_workbench_auto_sync_static.py
       - tests/test_r297_windows_release_gate.py
       - ops/r297_windows_acceptance.ps1
+      - ops/r297_windows_event_signer.py
+      - ops/r297_evidence_preflight.py
+      - ops/r297_evidence_events.py
       - .github/workflows/r291-windows-workbench.yml
   push:
     branches:
@@ -25,6 +28,9 @@ on:
       - tests/test_r297_jd_workbench_auto_sync_static.py
       - tests/test_r297_windows_release_gate.py
       - ops/r297_windows_acceptance.ps1
+      - ops/r297_windows_event_signer.py
+      - ops/r297_evidence_preflight.py
+      - ops/r297_evidence_events.py
       - .github/workflows/r291-windows-workbench.yml
 
 permissions:
@@ -50,6 +56,11 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: desktop/jd-workbench/package-lock.json
+
+      - name: Set up Python for signed evidence
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
@@ -113,6 +124,45 @@ jobs:
             [System.Text.UTF8Encoding]::new($false)
           )
 
+      - name: Materialize protected Windows evidence trust material
+        shell: pwsh
+        working-directory: .
+        env:
+          R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64: ${{ secrets.R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64 }}
+          R297_EVIDENCE_TRUST_MANIFEST_BASE64: ${{ secrets.R297_EVIDENCE_TRUST_MANIFEST_BASE64 }}
+          R297_EVIDENCE_TRUST_MANIFEST_SHA256: ${{ secrets.R297_EVIDENCE_TRUST_MANIFEST_SHA256 }}
+        run: |
+          if (-not $env:R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64 -or
+              -not $env:R297_EVIDENCE_TRUST_MANIFEST_BASE64 -or
+              $env:R297_EVIDENCE_TRUST_MANIFEST_SHA256 -notmatch '^[0-9a-f]{64}$') {
+            throw 'R297_WINDOWS_PROTECTED_MATERIAL_MISSING'
+          }
+          if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
+            throw 'R297_WINDOWS_OPENSSL_MISSING'
+          }
+          $trustDirectory = Join-Path $env:ProgramData 'TiantongAI'
+          $trustPath = Join-Path $trustDirectory 'r297-evidence-trust-manifest.json'
+          $trustSidecar = "$trustPath.sha256"
+          $privateKeyPath = Join-Path $env:RUNNER_TEMP 'r297-windows-runner-private-key.pem'
+          New-Item -ItemType Directory -Force -Path $trustDirectory | Out-Null
+          [IO.File]::WriteAllBytes($privateKeyPath, [Convert]::FromBase64String($env:R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64))
+          [IO.File]::WriteAllBytes($trustPath, [Convert]::FromBase64String($env:R297_EVIDENCE_TRUST_MANIFEST_BASE64))
+          $actualTrustHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $trustPath).Hash.ToLowerInvariant()
+          if ($actualTrustHash -cne $env:R297_EVIDENCE_TRUST_MANIFEST_SHA256) {
+            throw 'R297_WINDOWS_TRUST_MANIFEST_DIGEST_MISMATCH'
+          }
+          [IO.File]::WriteAllText(
+            $trustSidecar,
+            "$actualTrustHash  r297-evidence-trust-manifest.json`n",
+            [Text.Encoding]::ASCII
+          )
+          foreach ($path in @($privateKeyPath, $trustPath, $trustSidecar)) {
+            & icacls $path /inheritance:r /grant:r "$($env:USERNAME):(R)" 'SYSTEM:(R)' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'R297_WINDOWS_PROTECTED_MATERIAL_ACL_FAILED' }
+            (Get-Item -LiteralPath $path).IsReadOnly = $true
+          }
+          "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH=$privateKeyPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Generate real Windows process acceptance evidence
         shell: pwsh
         working-directory: .
@@ -120,7 +170,14 @@ jobs:
           R297_WINDOWS_CANARY_BACKEND_HTTPS_URL: ${{ secrets.R297_WINDOWS_CANARY_BACKEND_HTTPS_URL }}
           R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER: ${{ secrets.R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER }}
           R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64: ${{ secrets.R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64 }}
+          R297_EVIDENCE_NAMESPACE: ${{ vars.R297_EVIDENCE_NAMESPACE }}
+          R297_EVIDENCE_TENANT_ID: ${{ vars.R297_EVIDENCE_TENANT_ID }}
+          R297_EVIDENCE_COMPANY_ID: ${{ vars.R297_EVIDENCE_COMPANY_ID }}
+          R297_EVIDENCE_STORE_ID: ${{ vars.R297_EVIDENCE_STORE_ID }}
+          R297_EVIDENCE_PLATFORM: jd
+          APP_ENV: acceptance
         run: |
+          python -m ops.r297_evidence_preflight --role windows_runner
           ./ops/r297_windows_acceptance.ps1 `
             -DistDirectory desktop/jd-workbench/dist `
             -OutputDirectory desktop/jd-workbench/dist/acceptance
@@ -136,5 +193,25 @@ jobs:
             desktop/jd-workbench/dist/chromium-info.json
             desktop/jd-workbench/dist/acceptance/R297_WINDOWS_ACCEPTANCE_EVIDENCE.json
             desktop/jd-workbench/dist/acceptance/R297_WINDOWS_ACCEPTANCE_EVIDENCE.json.sha256
+            desktop/jd-workbench/dist/acceptance/R297_WINDOWS_ELECTRON_EXIT_EVENT.json
+            desktop/jd-workbench/dist/acceptance/R297_WINDOWS_ELECTRON_EXIT_EVENT.json.sha256
           if-no-files-found: error
           retention-days: 14
+
+      - name: Remove protected Windows evidence trust material
+        if: always()
+        shell: pwsh
+        working-directory: .
+        run: |
+          $paths = @(
+            (Join-Path $env:RUNNER_TEMP 'r297-windows-runner-private-key.pem'),
+            (Join-Path $env:ProgramData 'TiantongAI/r297-evidence-trust-manifest.json'),
+            (Join-Path $env:ProgramData 'TiantongAI/r297-evidence-trust-manifest.json.sha256')
+          )
+          foreach ($path in $paths) {
+            if ($path -and (Test-Path -LiteralPath $path)) {
+              & icacls $path /grant:r "$($env:USERNAME):(F)" | Out-Null
+              (Get-Item -LiteralPath $path).IsReadOnly = $false
+              Remove-Item -Force -LiteralPath $path
+            }
+          }

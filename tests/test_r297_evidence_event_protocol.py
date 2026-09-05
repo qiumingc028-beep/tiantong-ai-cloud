@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 import sys
 
 import pytest
@@ -105,6 +106,18 @@ def _scope() -> dict:
     }
 
 
+def _nonce_ledger(tmp_path):
+    root = tmp_path / "nonce-ledger"
+    root.mkdir(mode=0o700)
+    ledger = root / "seen-nonces.json"
+    ledger.write_text("[]\n", encoding="utf-8")
+    ledger.chmod(0o600)
+    lock = root / "seen-nonces.json.lock"
+    lock.write_text("", encoding="utf-8")
+    lock.chmod(0o600)
+    return ledger
+
+
 def _integer(value: str) -> int:
     return int.from_bytes(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)), "big")
 
@@ -189,12 +202,13 @@ def _bundle(now: datetime) -> dict:
 
 def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_path):
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    ledger_path = _nonce_ledger(tmp_path)
 
     result = verify_acceptance_event_bundle(
         _bundle(now),
         expected_scope=_scope(),
         now=now,
-        nonce_ledger=tmp_path / "seen-nonces.json",
+        nonce_ledger=ledger_path,
     )
 
     assert result["web_page_close"] == {
@@ -212,7 +226,7 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
     assert result["authenticated_observer"]["verified_subject_count"] == 2
     assert result["evidence_trust_manifest_id"] == "r297-evidence-trust-test-v1"
     assert result["evidence_trust_manifest_sha256"] == "0eac4b3fc49f913f33762dbedbe41916c3ef50eb1128211d7d93281c78902fed"
-    ledger = json.loads((tmp_path / "seen-nonces.json").read_text())
+    ledger = json.loads(ledger_path.read_text())
     assert len(ledger) == 4
     assert all(set(entry) == {
         "namespace", "tenant_id", "company_id", "store_id", "platform",
@@ -222,13 +236,13 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
     with pytest.raises(ValueError, match="replayed evidence nonce"):
         verify_acceptance_event_bundle(
             _bundle(now), expected_scope=_scope(), now=now,
-            nonce_ledger=tmp_path / "seen-nonces.json",
+            nonce_ledger=ledger_path,
         )
 
 
 def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
-    ledger = tmp_path / "seen-nonces.json"
+    ledger = _nonce_ledger(tmp_path)
 
     def verify():
         try:
@@ -342,5 +356,46 @@ def test_signed_evidence_events_fail_closed(mutation, error, tmp_path):
     with pytest.raises(ValueError, match=error):
         verify_acceptance_event_bundle(
             bundle, expected_scope=_scope(), now=now,
-            nonce_ledger=tmp_path / "seen-nonces.json",
+            nonce_ledger=_nonce_ledger(tmp_path),
         )
+
+
+def test_nonce_ledger_missing_fails_closed(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    with pytest.raises(RuntimeError, match="nonce ledger missing"):
+        verify_acceptance_event_bundle(
+            _bundle(now), expected_scope=_scope(), now=now,
+            nonce_ledger=tmp_path / "missing.json",
+        )
+
+
+@pytest.mark.parametrize("target", ["ledger", "lock", "directory"])
+def test_nonce_ledger_permission_errors_fail_closed(tmp_path, target):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    ledger = _nonce_ledger(tmp_path)
+    paths = {
+        "ledger": ledger,
+        "lock": ledger.with_suffix(ledger.suffix + ".lock"),
+        "directory": ledger.parent,
+    }
+    paths[target].chmod(0o666 if target != "directory" else 0o777)
+
+    with pytest.raises(RuntimeError, match="nonce ledger permissions invalid"):
+        verify_acceptance_event_bundle(
+            _bundle(now), expected_scope=_scope(), now=now, nonce_ledger=ledger,
+        )
+
+
+def test_nonce_ledger_corruption_fails_closed_without_replacement(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    ledger = _nonce_ledger(tmp_path)
+    ledger.write_text("not-json\n", encoding="utf-8")
+    original_inode = os.stat(ledger).st_ino
+
+    with pytest.raises(ValueError, match="evidence nonce ledger invalid"):
+        verify_acceptance_event_bundle(
+            _bundle(now), expected_scope=_scope(), now=now, nonce_ledger=ledger,
+        )
+
+    assert ledger.read_text(encoding="utf-8") == "not-json\n"
+    assert os.stat(ledger).st_ino == original_inode

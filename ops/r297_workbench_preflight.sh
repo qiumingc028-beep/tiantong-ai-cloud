@@ -57,6 +57,11 @@ SOURCE_DATE_EPOCH=$(git -C "$DEPLOYMENT_DIR" show -s --format=%ct "$EXPECTED_COM
 [[ $SOURCE_DATE_EPOCH =~ ^[0-9]+$ ]] || { echo "R297_SOURCE_DATE_EPOCH_INVALID" >&2; exit 79; }
 export SOURCE_DATE_EPOCH
 
+# Signing roles run this same checker inside their isolated service identities.
+# The deployment controller is a verifier and must not possess any signing key.
+APP_ENV=production PYTHONPATH="$DEPLOYMENT_DIR" \
+  python3 -m ops.r297_evidence_preflight --role verifier
+
 for preserved_commit in \
   17d79c6 f144557 8eb807a b18e431 e0db23a 1b8af29 51235a7 af2185b; do
   git -C "$DEPLOYMENT_DIR" merge-base --is-ancestor "$preserved_commit" "$EXPECTED_COMMIT" || {

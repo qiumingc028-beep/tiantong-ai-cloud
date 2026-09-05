@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLIENT = ROOT / "desktop" / "jd-workbench"
 WORKFLOW = ROOT / ".github" / "workflows" / "r291-windows-workbench.yml"
 ACCEPTANCE_SCRIPT = ROOT / "ops" / "r297_windows_acceptance.ps1"
+EVENT_SIGNER = ROOT / "ops" / "r297_windows_event_signer.py"
 
 
 def test_r297_windows_gate_packages_only_the_official_workbench():
@@ -70,3 +71,34 @@ def test_r297_windows_acceptance_requires_controlled_https_pairing_secrets():
     assert '"$backendOrigin/api/jd-workbench/internal/acceptance-status"' in acceptance
     assert "CONTROLLED_BACKEND_TLS_CERTIFICATE_MISMATCH" in acceptance
     assert "data_source = 'CONTROLLED_CANARY'" in acceptance
+
+
+def test_r297_windows_acceptance_signs_only_after_real_electron_exit():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    acceptance = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+    signer = EVENT_SIGNER.read_text(encoding="utf-8")
+
+    assert "actions/setup-python@v6" in workflow
+    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH" in workflow
+    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64" in workflow
+    assert "R297_EVIDENCE_TRUST_MANIFEST_BASE64" in workflow
+    assert "R297_EVIDENCE_TRUST_MANIFEST_SHA256" in workflow
+    assert "icacls" in workflow
+    assert "GITHUB_ENV" in workflow
+    assert "Remove-Item" in workflow
+    for name in (
+        "R297_EVIDENCE_NAMESPACE", "R297_EVIDENCE_TENANT_ID",
+        "R297_EVIDENCE_COMPANY_ID", "R297_EVIDENCE_STORE_ID", "R297_EVIDENCE_PLATFORM",
+    ):
+        assert name in workflow
+        assert name in acceptance
+    assert "$process.WaitForExit(10000)" in acceptance
+    assert "python -m ops.r297_windows_event_signer" in acceptance
+    assert acceptance.index("$process.WaitForExit(10000)") < acceptance.index(
+        "python -m ops.r297_windows_event_signer"
+    )
+    assert "R297_WINDOWS_ELECTRON_EXIT_EVENT.json" in acceptance
+    assert "R297_WINDOWS_ELECTRON_EXIT_EVENT.json" in workflow
+    assert "R297_WINDOWS_ELECTRON_EXIT_EVENT.json.sha256" in workflow
+    assert "ops.r297_evidence_preflight --role windows_runner" in workflow
+    assert "process_is_running(process_id)" in signer

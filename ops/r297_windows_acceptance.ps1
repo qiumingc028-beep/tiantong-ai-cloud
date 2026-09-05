@@ -92,6 +92,7 @@ $process = Start-Process -FilePath $workbench[0].FullName -ArgumentList @(
   "--remote-debugging-port=$debugPort",
   "--user-data-dir=$userData"
 ) -PassThru
+$processStartedAt = $process.StartTime.ToUniversalTime().ToString('o')
 
 try {
   $targets = $null
@@ -166,7 +167,27 @@ socket.close();
   $firstPid = $process.Id
 } finally {
   if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+  Require ($process.WaitForExit(10000)) 'WORKBENCH_EXIT_TIMEOUT'
 }
+
+Require ($env:R297_EVIDENCE_NAMESPACE -match '^[A-Za-z0-9._:-]{1,128}$') 'EVIDENCE_NAMESPACE_REQUIRED'
+Require ($env:R297_EVIDENCE_TENANT_ID -match '^\d+$') 'EVIDENCE_TENANT_ID_REQUIRED'
+Require ($env:R297_EVIDENCE_COMPANY_ID -match '^\d+$') 'EVIDENCE_COMPANY_ID_REQUIRED'
+Require ($env:R297_EVIDENCE_STORE_ID -match '^\d+$') 'EVIDENCE_STORE_ID_REQUIRED'
+Require ($env:R297_EVIDENCE_PLATFORM -match '^[a-z0-9_-]{1,32}$') 'EVIDENCE_PLATFORM_REQUIRED'
+$electronEventPath = Join-Path $output 'R297_WINDOWS_ELECTRON_EXIT_EVENT.json'
+python -m ops.r297_windows_event_signer `
+  $electronEventPath `
+  --namespace $env:R297_EVIDENCE_NAMESPACE `
+  --tenant-id $env:R297_EVIDENCE_TENANT_ID `
+  --company-id $env:R297_EVIDENCE_COMPANY_ID `
+  --store-id $env:R297_EVIDENCE_STORE_ID `
+  --platform $env:R297_EVIDENCE_PLATFORM `
+  --release-sha $head `
+  --process-id $firstPid `
+  --process-started-at $processStartedAt
+Require ($LASTEXITCODE -eq 0) 'WINDOWS_ELECTRON_EXIT_SIGNING_FAILED'
+$electronEventSha = Sha256 $electronEventPath
 
 $afterExitHealth = (Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 15).StatusCode
 Require ($afterExitHealth -eq 200) 'CLOUD_SCHEDULER_DID_NOT_SURVIVE_ELECTRON_EXIT'
@@ -196,7 +217,7 @@ $evidence = [ordered]@{
   pairing = [ordered]@{ controlled_backend = $true; completed = $true; secret_recorded = $false }
   chromium = [ordered]@{ packaged_process_count = $processTree.Count; started = $true }
   read_only_policy = [ordered]@{ visible = $true; business_write_claim = $probeResult.businessWrites; business_write_count = 0 }
-  electron_exit = [ordered]@{ cloud_health_before = $beforeHealth; cloud_health_after = $afterExitHealth; cloud_cycles_before = $beforeCycle; cloud_cycles_after = $afterCycle }
+  electron_exit = [ordered]@{ cloud_health_before = $beforeHealth; cloud_health_after = $afterExitHealth; cloud_cycles_before = $beforeCycle; cloud_cycles_after = $afterCycle; signed_event_sha256 = $electronEventSha }
   restart = [ordered]@{ first_pid = $firstPid; second_pid = $restartPid; restored = ($firstPid -ne $restartPid) }
   diagnostics = [ordered]@{ visible = $true; secret_exposure_count = 0 }
 }
