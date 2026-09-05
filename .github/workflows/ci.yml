@@ -341,7 +341,7 @@ jobs:
           fi
 
           ticket="$(curl --silent --fail --header 'content-type: application/json' \
-            --header "x-internal-token: $control_token" --data '{"session_id":"1:1:1:jd"}' \
+            --header "x-internal-token: $control_token" --data '{"session_id":"ci:1:1:1:jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets" |
             python -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
           echo "RUNTIME_VIEWER_TICKET_ISSUED=YES"
