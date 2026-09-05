@@ -184,22 +184,21 @@ def stop_process(process: subprocess.Popen | None) -> None:
 
 
 def main() -> int:
-    if os.environ.get("APP_ENV", "").strip().lower() == "production":
+    trust_environment = os.getenv("APP_ENV", "").strip().lower()
+    if trust_environment == "production":
         raise RuntimeError("R297_CONTROLLED_CANARY_FORBIDDEN_IN_PRODUCTION")
+    if trust_environment != "acceptance":
+        raise RuntimeError("R297_ACCEPTANCE_ENVIRONMENT_REQUIRED")
     parser = argparse.ArgumentParser()
     parser.add_argument("output_directory", type=Path)
     parser.add_argument("--runtime-image", required=True)
     parser.add_argument("--signed-event-bundle", type=Path, required=True)
-    parser.add_argument("--event-public-keys", type=Path, required=True)
     args = parser.parse_args()
 
     head = run("git", "rev-parse", "HEAD")
     if head != os.environ.get("RELEASE_SOURCE_SHA"):
         raise RuntimeError("RELEASE_SOURCE_SHA_MISMATCH")
     output = args.output_directory.resolve()
-    expected_key_digest = os.getenv("R297_EVIDENCE_TRUSTED_KEYS_SHA256", "")
-    if not re.fullmatch(r"[0-9a-f]{64}", expected_key_digest):
-        raise RuntimeError("R297_EVIDENCE_TRUSTED_KEYS_SHA256_MISSING")
     ledger_value = os.getenv("R297_EVIDENCE_NONCE_LEDGER", "")
     if not ledger_value:
         raise RuntimeError("R297_EVIDENCE_NONCE_LEDGER_MISSING")
@@ -291,12 +290,16 @@ def main() -> int:
 
         commands.append("alembic upgrade head against isolated PostgreSQL")
         run(sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head", env=environment)
-        os.environ.update({name: environment[name] for name in environment if name.startswith(("DATABASE_", "REDIS_", "APP_ENV", "SERVICE_ROLE", "JD_", "CORS_", "JWT_", "BOSS_", "AGENT_", "ALPHA_", "PUBLIC_", "KNOWLEDGE_", "SKILLS_"))})
-        from backend.database import SessionLocal, get_redis
-        from backend.models import JdAccount, JdDailyMetric, JdSyncLog, JdWorkbenchDevice, JdWorkbenchStoreStatus, JdWorkbenchSyncPolicy, Store, User, UserStoreMembership
-        from backend.queue import PROCESSING_METADATA_PREFIX, PROCESSING_QUEUE_NAME, QUEUE_NAME
-        from backend.seed import seed_defaults
-        from backend.worker import JD_RETRY_BACKOFF_SECONDS, _finish_jd_workbench_task, run_jd_workbench_scheduler
+        os.environ.update({name: environment[name] for name in environment if name.startswith(("DATABASE_", "REDIS_", "SERVICE_ROLE", "JD_", "CORS_", "JWT_", "BOSS_", "AGENT_", "ALPHA_", "PUBLIC_", "KNOWLEDGE_", "SKILLS_"))})
+        os.environ["APP_ENV"] = environment["APP_ENV"]
+        try:
+            from backend.database import SessionLocal, get_redis
+            from backend.models import JdAccount, JdDailyMetric, JdSyncLog, JdWorkbenchDevice, JdWorkbenchStoreStatus, JdWorkbenchSyncPolicy, Store, User, UserStoreMembership
+            from backend.queue import PROCESSING_METADATA_PREFIX, PROCESSING_QUEUE_NAME, QUEUE_NAME
+            from backend.seed import seed_defaults
+            from backend.worker import JD_RETRY_BACKOFF_SECONDS, _finish_jd_workbench_task, run_jd_workbench_scheduler
+        finally:
+            os.environ["APP_ENV"] = trust_environment
 
         db = SessionLocal()
         seed_defaults(db)
@@ -760,15 +763,19 @@ def main() -> int:
             run("docker", "volume", "rm", runtime_volume)
 
     bundle = json.loads(args.signed_event_bundle.read_text(encoding="utf-8"))
-    public_keys = json.loads(args.event_public_keys.read_text(encoding="utf-8"))
+    evidence_scope = {
+        "namespace": f"r297-acceptance-{head[:12]}",
+        "tenant_id": scope["tenant_id"],
+        "company_id": scope["company_id"],
+        "store_id": scope["store_id"],
+        "platform": scope["platform"],
+        "release_sha": head,
+    }
     observations.update(verify_acceptance_event_bundle(
         bundle,
-        public_keys,
-        expected_release_sha=head,
-        expected_store_id=scope["store_id"],
+        expected_scope=evidence_scope,
         now=datetime.now(timezone.utc),
         nonce_ledger=nonce_ledger,
-        expected_public_keys_sha256=expected_key_digest,
     ))
 
     raw_log = output / "R297_PROCESS_ACCEPTANCE_RAW.jsonl"

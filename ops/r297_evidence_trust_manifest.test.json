@@ -1,0 +1,43 @@
+{
+  "environment": "test",
+  "keys": [
+    {
+      "algorithm": "RS256",
+      "allowed_event_types": [
+        "web_page_close"
+      ],
+      "e": "AQAB",
+      "issuer": "page_event_receiver",
+      "key_id": "r297-page_event_receiver-test",
+      "n": "yZNc_C6r9P7c1DgsOoyxwx2xaJq-NQx0C-2nkJgx0FTeTsL-usd7DVMEXMXHh-IHZEy_rgC43cGo41RgbIXJgEBmffUGjz3I5LH_w3LGs9aJaNnkalHRGJFzKgH5Qz7o9mj65asJ2GGZUl6qEOZ7wmrApOZmGzQ6FQ8cPD6u3Cl5GaFBJpnvE1QL2Rzpg90AEFIeRLU_9d1zy53mBtXE6GwPljagVaaotw4GZrgxBquOd8Q0_IQf-MLEdgwhksw6lbUQuEfVb4JW0tuxVd0F9iBtQTSNKXMiW8d0hxBQ1FzLfcjBXQgfhaY9-BHp3yp8hfPiDjmW7917mj3oPL-odQ",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2030-01-01T00:00:00Z"
+    },
+    {
+      "algorithm": "RS256",
+      "allowed_event_types": [
+        "authenticated_observer"
+      ],
+      "e": "AQAB",
+      "issuer": "authenticated_observer",
+      "key_id": "r297-authenticated_observer-test",
+      "n": "qqJk2ZH4W5fP8Y2xulfKp_mafykFYNhou5UX35781QJTy5m3Md3fJfCjXEt1Jn1Qpvy9DjFHyjCrJSiOi50idZRhL6SdJvn66JzNS0SP9aXG-53oVGSnqwMedFE2ByxhI67IHI0ndIgnAtLudX2RU1J-vkPo2BjYztSkxXBX9aePJit_d58i6KkZ4Yd-KVQi8QjsNuzytXZNxymZj_TyGxLXFsySeVZhFNR7TySOWbylrziPNFil3DAPzEP7LcALArb6dUdfAxvHWrRmXd7uWqlciTEaTy7q37fNJyvcggS1FlfpGcrpRG_LuwNN58FSWt-_VBeVQf00emDZ60g0xQ",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2030-01-01T00:00:00Z"
+    },
+    {
+      "algorithm": "RS256",
+      "allowed_event_types": [
+        "electron_exit"
+      ],
+      "e": "AQAB",
+      "issuer": "windows_runner",
+      "key_id": "r297-windows_runner-test",
+      "n": "3gopfQl3LtI1-yVIGGVF5wrt7ab-Z5rj-N36Efuy7gFv428S5KyQFf_JXvl_StuiIcnb44I44hVUdZMeBAlAFvnoCyagOI8sU2TDkm0PoZGGHuXRBYN4j76O13gwqzRoB7Bj1O-XMhxECvfz6F5fTd9zzpSWqfF7afVZUGM7nYRB84Wdarh3hpftcTmsuvpczTsGhjlzt5v2gUq_mMVHkFK_Xi10LLwhIEubgmsYASG5Ui9gtpusqL9fY3foaAsovvs8Ukx3Gs0IBV4MeUwzJ-_ern932h36DgdCoaqdg20E3HTbxz0GKKXRMMwT1JdJCHMewGukTcAiPgmCsIz8JQ",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2030-01-01T00:00:00Z"
+    }
+  ],
+  "manifest_id": "r297-evidence-trust-test-v1",
+  "schema_version": 1
+}

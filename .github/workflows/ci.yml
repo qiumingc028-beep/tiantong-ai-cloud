@@ -521,6 +521,8 @@ jobs:
           trap - ERR
 
       - name: Generate R297 real-process acceptance evidence
+        env:
+          APP_ENV: acceptance
         run: |
           PYTHONPATH=. python ops/r297_process_acceptance.py /tmp/r297-process-acceptance \
             --runtime-image "$S12_JD_RUNTIME_IMAGE"

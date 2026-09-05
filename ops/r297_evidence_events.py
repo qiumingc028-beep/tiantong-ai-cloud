@@ -11,20 +11,42 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _NONCE_RE = re.compile(r"[A-Za-z0-9_-]{16,128}")
 _DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+_TEST_TRUST_MANIFEST = Path(__file__).with_name("r297_evidence_trust_manifest.test.json")
+_TEST_TRUST_MANIFEST_SHA256 = "0eac4b3fc49f913f33762dbedbe41916c3ef50eb1128211d7d93281c78902fed"
+_PRODUCTION_TRUST_MANIFEST = Path("/etc/tiantong/r297-evidence-trust-manifest.json")
+_PRODUCTION_TRUST_MANIFEST_SIDECAR = Path("/etc/tiantong/r297-evidence-trust-manifest.json.sha256")
+_TEST_KEY_FINGERPRINTS = {
+    "0eddedd66e432bc8105bf196092793328ff2f9d83039d80223dd00faee9f4d84",
+    "f49dbfbcf14774d5449ba88417fd32b04a028f9911008abeea6d8adf7533c599",
+    "fc974bd3604d0c416b49c03639f9c80e6f0d98b1f6edb9519d9ecd3cf6157ce6",
+}
 _EVENT_ORDER = (
     ("web_page_close", "page_event_receiver"),
     ("authenticated_observer", "authenticated_observer"),
     ("electron_exit", "windows_runner"),
     ("authenticated_observer", "authenticated_observer"),
 )
+_ALLOWED_EVENTS_BY_ISSUER = {
+    "page_event_receiver": ["web_page_close"],
+    "authenticated_observer": ["authenticated_observer"],
+    "windows_runner": ["electron_exit"],
+}
+_SCOPE_FIELDS = {
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+}
 _FIELDS = {
-    "event_type", "issuer", "release_sha", "store_id", "occurred_at",
+    *_SCOPE_FIELDS, "event_type", "issuer", "observed_at",
     "sequence", "nonce", "key_id", "payload", "signature",
+}
+_MANIFEST_FIELDS = {"schema_version", "manifest_id", "environment", "keys"}
+_KEY_FIELDS = {
+    "issuer", "key_id", "algorithm", "allowed_event_types", "valid_from", "valid_until", "n", "e",
 }
 
 
@@ -42,9 +64,107 @@ def _canonical(event: dict) -> bytes:
     return json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
 
 
-def trusted_keys_sha256(public_keys: dict) -> str:
-    canonical = json.dumps(public_keys, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
-    return hashlib.sha256(canonical).hexdigest()
+def _read_protected_file(path: Path) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o222:
+            raise RuntimeError("production evidence trust manifest is not immutable")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            return handle.read()
+    finally:
+        os.close(descriptor)
+
+
+def _timestamp(value: object, error: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(error) from exc
+    if parsed.tzinfo is None:
+        raise ValueError(error)
+    return parsed.astimezone(timezone.utc)
+
+
+def _scope_identity(value: object) -> bool:
+    return (
+        type(value) is int and value > 0
+        or isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value) is not None
+    )
+
+
+def _key_fingerprint(key: dict) -> str:
+    modulus = int.from_bytes(_decode(key.get("n")), "big")
+    exponent = int.from_bytes(_decode(key.get("e")), "big")
+    return hashlib.sha256(f"{modulus}:{exponent}".encode()).hexdigest()
+
+
+def _validate_trust_manifest(manifest: object, *, environment: str) -> dict:
+    if not isinstance(manifest, dict) or set(manifest) != _MANIFEST_FIELDS:
+        raise ValueError("evidence trust manifest schema mismatch")
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("environment") != environment
+        or not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", str(manifest.get("manifest_id", "")))
+    ):
+        raise ValueError("evidence trust manifest identity mismatch")
+    keys = manifest.get("keys")
+    expected_issuers = {issuer for _, issuer in _EVENT_ORDER}
+    if not isinstance(keys, list) or len(keys) != 3:
+        raise ValueError("evidence issuer keys not isolated")
+    by_issuer = {}
+    for key in keys:
+        if not isinstance(key, dict) or set(key) != _KEY_FIELDS:
+            raise ValueError("evidence trust key schema mismatch")
+        issuer = key.get("issuer")
+        if issuer in by_issuer or issuer not in expected_issuers:
+            raise ValueError("evidence issuer keys not isolated")
+        allowed = key.get("allowed_event_types")
+        if (
+            key.get("algorithm") != "RS256"
+            or not isinstance(allowed, list)
+            or not allowed
+            or allowed != _ALLOWED_EVENTS_BY_ISSUER[issuer]
+            or not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", str(key.get("key_id", "")))
+        ):
+            raise ValueError("evidence trust key policy invalid")
+        if _timestamp(key.get("valid_from"), "evidence trust key validity invalid") >= _timestamp(
+            key.get("valid_until"), "evidence trust key validity invalid"
+        ):
+            raise ValueError("evidence trust key validity invalid")
+        if environment in {"acceptance", "production"} and (
+            _key_fingerprint(key) in _TEST_KEY_FINGERPRINTS
+            or str(key.get("key_id", "")).endswith("-test")
+        ):
+            raise ValueError("test evidence key forbidden in production")
+        by_issuer[issuer] = key
+    if set(by_issuer) != expected_issuers or len({_key_fingerprint(key) for key in keys}) != 3:
+        raise ValueError("evidence issuer keys not isolated")
+    return manifest
+
+
+def load_trust_manifest(*, environment: str) -> tuple[dict, str]:
+    """Load the only trust anchor allowed for this runtime environment."""
+    environment = environment.strip().lower()
+    if environment in {"acceptance", "production"}:
+        path = _PRODUCTION_TRUST_MANIFEST
+        sidecar = _PRODUCTION_TRUST_MANIFEST_SIDECAR
+        manifest_bytes = _read_protected_file(path)
+        parts = _read_protected_file(sidecar).decode("ascii").strip().split()
+        if len(parts) != 2 or parts[1] != path.name or not re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+            raise RuntimeError("production evidence trust manifest sidecar invalid")
+        expected_digest = parts[0]
+    elif environment == "test":
+        path = _TEST_TRUST_MANIFEST
+        manifest_bytes = path.read_bytes()
+        expected_digest = _TEST_TRUST_MANIFEST_SHA256
+    else:
+        raise RuntimeError("evidence trust manifest environment is not configured")
+    digest = hashlib.sha256(manifest_bytes).hexdigest()
+    if digest != expected_digest:
+        raise RuntimeError("evidence trust manifest digest mismatch")
+    manifest = _validate_trust_manifest(json.loads(manifest_bytes.decode("utf-8")), environment=environment)
+    return manifest, digest
 
 
 def _verify_signature(event: dict, key: dict) -> None:
@@ -70,7 +190,12 @@ def _verify_signature(event: dict, key: dict) -> None:
 
 def _observer_result(event: dict, subject_nonce: str, expected_store_id: int) -> dict:
     payload = event["payload"]
-    if payload.get("subject_nonce") != subject_nonce or payload.get("scheduler_continues") is not True:
+    if (
+        payload.get("subject_nonce") != subject_nonce
+        or payload.get("scheduler_continues") is not True
+        or payload.get("observation_source") != "postgresql_scheduler_state"
+        or payload.get("database_read_only") is not True
+    ):
         raise ValueError("observer subject mismatch")
     before = payload.get("cloud_cycles_before")
     after = payload.get("cloud_cycles_after")
@@ -93,10 +218,12 @@ def _observer_result(event: dict, subject_nonce: str, expected_store_id: int) ->
         "cloud_cycles_after": after,
         "eligible_store_ids": eligible,
         "collected_store_ids_after": collected,
+        "observation_source": "postgresql_scheduler_state",
+        "database_read_only": True,
     }
 
 
-def _record_nonces(nonce_ledger: Path, nonces: list[str]) -> None:
+def _record_nonces(nonce_ledger: Path, bindings: list[dict]) -> None:
     nonce_ledger.parent.mkdir(parents=True, exist_ok=True)
     lock_path = nonce_ledger.with_suffix(nonce_ledger.suffix + ".lock")
     with lock_path.open("a+", encoding="utf-8") as lock:
@@ -105,13 +232,17 @@ def _record_nonces(nonce_ledger: Path, nonces: list[str]) -> None:
         ledger_values: set[str] = set()
         if nonce_ledger.exists():
             loaded = json.loads(nonce_ledger.read_text(encoding="utf-8"))
-            if not isinstance(loaded, list) or not all(isinstance(value, str) for value in loaded):
+            if not isinstance(loaded, list) or not all(isinstance(value, dict) for value in loaded):
                 raise ValueError("evidence nonce ledger invalid")
-            ledger_values.update(loaded)
-        if ledger_values.intersection(nonces):
+            ledger_values.update(json.dumps(value, separators=(",", ":"), sort_keys=True) for value in loaded)
+        canonical_bindings = {
+            json.dumps(value, separators=(",", ":"), sort_keys=True) for value in bindings
+        }
+        if ledger_values.intersection(canonical_bindings):
             raise ValueError("replayed evidence nonce")
         temporary = nonce_ledger.with_name(f".{nonce_ledger.name}.{secrets.token_hex(8)}")
-        temporary.write_text(json.dumps(sorted(ledger_values.union(nonces))) + "\n", encoding="utf-8")
+        updated = [json.loads(value) for value in sorted(ledger_values.union(canonical_bindings))]
+        temporary.write_text(json.dumps(updated, sort_keys=True) + "\n", encoding="utf-8")
         temporary.chmod(0o600)
         os.replace(temporary, nonce_ledger)
         nonce_ledger.chmod(0o600)
@@ -119,61 +250,60 @@ def _record_nonces(nonce_ledger: Path, nonces: list[str]) -> None:
 
 def verify_acceptance_event_bundle(
     bundle: dict,
-    public_keys: dict,
     *,
-    expected_release_sha: str,
-    expected_store_id: int,
+    expected_scope: dict,
     now: datetime,
     nonce_ledger: Path,
-    expected_public_keys_sha256: str,
     maximum_age: timedelta = timedelta(minutes=5),
 ) -> dict:
     """Return acceptance sections only after all four independently signed events verify."""
     events = bundle.get("events") if isinstance(bundle, dict) else None
     if not isinstance(events, list) or len(events) != len(_EVENT_ORDER):
         raise ValueError("evidence event count mismatch")
-    if not _SHA_RE.fullmatch(expected_release_sha) or type(expected_store_id) is not int or expected_store_id <= 0:
+    if not isinstance(expected_scope, dict) or set(expected_scope) != _SCOPE_FIELDS:
         raise ValueError("invalid expected evidence binding")
-    if not re.fullmatch(r"[0-9a-f]{64}", expected_public_keys_sha256):
-        raise ValueError("trusted key digest missing")
-    if trusted_keys_sha256(public_keys) != expected_public_keys_sha256:
-        raise ValueError("trusted key digest mismatch")
-    expected_issuers = {issuer for _, issuer in _EVENT_ORDER}
-    if not isinstance(public_keys, dict) or set(public_keys) != expected_issuers:
-        raise ValueError("evidence issuer keys not isolated")
-    issuer_keys = [public_keys.get(issuer) for _, issuer in _EVENT_ORDER]
-    unique_issuer_keys = {
-        (key.get("n"), key.get("e"))
-        for key in issuer_keys
-        if isinstance(key, dict)
-    }
-    if len(issuer_keys) != 4 or len(unique_issuer_keys) != 3:
-        raise ValueError("evidence issuer keys not isolated")
+    if (
+        not _SHA_RE.fullmatch(str(expected_scope.get("release_sha", "")))
+        or not _scope_identity(expected_scope.get("namespace"))
+        or not _scope_identity(expected_scope.get("tenant_id"))
+        or not _scope_identity(expected_scope.get("company_id"))
+        or type(expected_scope.get("store_id")) is not int
+        or expected_scope["store_id"] <= 0
+        or not isinstance(expected_scope.get("platform"), str)
+        or re.fullmatch(r"[a-z0-9_-]{1,32}", expected_scope["platform"]) is None
+    ):
+        raise ValueError("invalid expected evidence binding")
+    manifest, manifest_digest = load_trust_manifest(
+        environment=os.getenv("APP_ENV", "").strip().lower()
+    )
+    public_keys = {key["issuer"]: key for key in manifest["keys"]}
     now = now.astimezone(timezone.utc)
-    nonces: list[str] = []
+    replay_bindings: list[dict] = []
+    bundle_nonces: set[str] = set()
     previous_time = None
     for sequence, (event, (event_type, issuer)) in enumerate(zip(events, _EVENT_ORDER), 1):
         if not isinstance(event, dict) or set(event) != _FIELDS:
             raise ValueError("evidence event schema mismatch")
         if event.get("event_type") != event_type or event.get("issuer") != issuer:
             raise ValueError("evidence event role mismatch")
-        if event.get("release_sha") != expected_release_sha:
-            raise ValueError("release SHA mismatch")
-        if type(event.get("store_id")) is not int or event.get("store_id") != expected_store_id:
-            raise ValueError("store scope mismatch")
+        for scope_field in _SCOPE_FIELDS:
+            if (
+                type(event.get(scope_field)) is not type(expected_scope[scope_field])
+                or event.get(scope_field) != expected_scope[scope_field]
+            ):
+                raise ValueError(f"{scope_field} mismatch")
         if type(event.get("sequence")) is not int or event.get("sequence") != sequence:
             raise ValueError("event sequence mismatch")
         nonce = event.get("nonce")
-        if not isinstance(nonce, str) or not _NONCE_RE.fullmatch(nonce) or nonce in nonces:
+        if not isinstance(nonce, str) or not _NONCE_RE.fullmatch(nonce) or nonce in bundle_nonces:
             raise ValueError("replayed evidence nonce")
-        nonces.append(nonce)
-        try:
-            occurred_at = datetime.fromisoformat(str(event.get("occurred_at")).replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("invalid evidence event time") from exc
-        if occurred_at.tzinfo is None:
-            raise ValueError("invalid evidence event time")
-        occurred_at = occurred_at.astimezone(timezone.utc)
+        bundle_nonces.add(nonce)
+        replay_binding = {field: event[field] for field in _SCOPE_FIELDS}
+        replay_binding.update({"event_type": event_type, "key_id": event["key_id"], "nonce": nonce})
+        if replay_binding in replay_bindings:
+            raise ValueError("replayed evidence nonce")
+        replay_bindings.append(replay_binding)
+        occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
         if occurred_at < now - maximum_age:
             raise ValueError("expired evidence event")
         if occurred_at > now + timedelta(seconds=30):
@@ -188,10 +318,11 @@ def verify_acceptance_event_bundle(
         key = public_keys.get(issuer) if isinstance(public_keys, dict) else None
         if (
             not isinstance(key, dict)
-            or set(key) != {"key_id", "n", "e"}
-            or not isinstance(key.get("key_id"), str)
-            or not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", key["key_id"])
             or event.get("key_id") != key.get("key_id")
+            or event_type not in key.get("allowed_event_types", [])
+            or not (_timestamp(key["valid_from"], "evidence trust key validity invalid") <= occurred_at < _timestamp(
+                key["valid_until"], "evidence trust key validity invalid"
+            ))
         ):
             raise ValueError("evidence issuer key missing")
         _verify_signature(event, key)
@@ -202,18 +333,19 @@ def verify_acceptance_event_bundle(
     process_id = electron["payload"].get("process_id")
     if electron["payload"].get("exited") is not True or type(process_id) is not int or process_id <= 0:
         raise ValueError("electron exit event invalid")
-    page_result = _observer_result(page_observer, page["nonce"], expected_store_id)
-    electron_result = _observer_result(electron_observer, electron["nonce"], expected_store_id)
+    page_result = _observer_result(page_observer, page["nonce"], expected_scope["store_id"])
+    electron_result = _observer_result(electron_observer, electron["nonce"], expected_scope["store_id"])
 
-    _record_nonces(nonce_ledger, nonces)
+    _record_nonces(nonce_ledger, replay_bindings)
 
     return {
+        "evidence_trust_manifest_id": manifest["manifest_id"],
+        "evidence_trust_manifest_sha256": manifest_digest,
         "web_page_close": {"closed": True, **page_result},
         "electron_exit": {"exited": True, "process_id": process_id, **electron_result},
         "authenticated_observer": {
             "issuer": "authenticated_observer",
-            "release_sha": expected_release_sha,
-            "store_id": expected_store_id,
+            **expected_scope,
             "verified_subject_count": 2,
             "subject_nonces": [page["nonce"], electron["nonce"]],
         },

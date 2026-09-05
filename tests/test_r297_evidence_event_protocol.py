@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from ops.r297_evidence_events import trusted_keys_sha256, verify_acceptance_event_bundle
+from ops.r297_evidence_events import load_trust_manifest, verify_acceptance_event_bundle
 from tests.test_r291_jd_workbench_cloud import TEST_RSA_D, TEST_RSA_N_B64
 
 
@@ -25,15 +25,88 @@ _PRIVATE_KEYS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _use_test_trust_manifest(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "test")
+
+
+def test_embedded_test_trust_manifest_is_versioned_and_role_scoped():
+    manifest, digest = load_trust_manifest(environment="test")
+
+    assert manifest["schema_version"] == 1
+    assert manifest["environment"] == "test"
+    assert digest == "0eac4b3fc49f913f33762dbedbe41916c3ef50eb1128211d7d93281c78902fed"
+    assert all("d" not in key and "private_key" not in key for key in manifest["keys"])
+    assert {key["issuer"] for key in manifest["keys"]} == set(_PRIVATE_KEYS)
+    assert {key["algorithm"] for key in manifest["keys"]} == {"RS256"}
+    assert len({key["key_id"] for key in manifest["keys"]}) == 3
+    assert {
+        key["issuer"]: key["allowed_event_types"]
+        for key in manifest["keys"]
+    } == {
+        "page_event_receiver": ["web_page_close"],
+        "authenticated_observer": ["authenticated_observer"],
+        "windows_runner": ["electron_exit"],
+    }
+
+
+def test_production_rejects_test_fixture_trust_manifest():
+    from ops import r297_evidence_events
+
+    source = r297_evidence_events._TEST_TRUST_MANIFEST
+    relabelled = json.loads(source.read_text())
+    relabelled["environment"] = "production"
+    relabelled["manifest_id"] = "r297-evidence-trust-production-v1"
+    for key in relabelled["keys"]:
+        key["key_id"] = key["key_id"].removesuffix("-test") + "-production"
+    with pytest.raises(ValueError, match="test evidence key forbidden in production"):
+        r297_evidence_events._validate_trust_manifest(relabelled, environment="production")
+
+
+def test_production_rejects_equivalent_test_key_encoding():
+    from ops import r297_evidence_events
+
+    relabelled = json.loads(r297_evidence_events._TEST_TRUST_MANIFEST.read_text())
+    relabelled["environment"] = "production"
+    relabelled["manifest_id"] = "r297-evidence-trust-production-v1"
+    for key in relabelled["keys"]:
+        key["key_id"] = key["key_id"].removesuffix("-test") + "-production"
+        key["n"] = base64.urlsafe_b64encode(b"\0" + base64.urlsafe_b64decode(
+            key["n"] + "=" * (-len(key["n"]) % 4)
+        )).rstrip(b"=").decode()
+
+    with pytest.raises(ValueError, match="test evidence key forbidden in production"):
+        r297_evidence_events._validate_trust_manifest(relabelled, environment="production")
+
+
+def test_manifest_rejects_equivalent_key_encodings_for_different_roles():
+    from ops import r297_evidence_events
+
+    manifest = json.loads(r297_evidence_events._TEST_TRUST_MANIFEST.read_text())
+    page_key = manifest["keys"][0]
+    observer_key = manifest["keys"][1]
+    observer_key["n"] = base64.urlsafe_b64encode(b"\0" + base64.urlsafe_b64decode(
+        page_key["n"] + "=" * (-len(page_key["n"]) % 4)
+    )).rstrip(b"=").decode()
+    observer_key["e"] = page_key["e"]
+
+    with pytest.raises(ValueError, match="evidence issuer keys not isolated"):
+        r297_evidence_events._validate_trust_manifest(manifest, environment="test")
+
+
+def _scope() -> dict:
+    return {
+        "namespace": "r297-acceptance-9b466ac80122",
+        "tenant_id": "tenant-1",
+        "company_id": "company-1",
+        "store_id": 7,
+        "platform": "jd",
+        "release_sha": "9b466ac80122e35893cbaa408735136acc88331a",
+    }
+
+
 def _integer(value: str) -> int:
     return int.from_bytes(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)), "big")
-
-
-def _keys() -> dict:
-    return {
-        issuer: {"key_id": f"r297-{issuer}-test", "n": values[0], "e": "AQAB"}
-        for issuer, values in _PRIVATE_KEYS.items()
-    }
 
 
 def _sign(event: dict) -> dict:
@@ -47,14 +120,13 @@ def _sign(event: dict) -> dict:
 
 
 def _bundle(now: datetime) -> dict:
-    release = "9b466ac80122e35893cbaa408735136acc88331a"
-    common = {"release_sha": release, "store_id": 7}
+    common = _scope()
     page = _sign({
         **common,
         "event_type": "web_page_close",
         "issuer": "page_event_receiver",
         "nonce": "page-close-nonce-0001",
-        "occurred_at": (now - timedelta(seconds=4)).isoformat(),
+        "observed_at": (now - timedelta(seconds=4)).isoformat(),
         "sequence": 1,
         "payload": {"closed": True, "source": "browser_pagehide"},
     })
@@ -63,11 +135,13 @@ def _bundle(now: datetime) -> dict:
         "event_type": "authenticated_observer",
         "issuer": "authenticated_observer",
         "nonce": "page-observer-nonce-01",
-        "occurred_at": (now - timedelta(seconds=3)).isoformat(),
+        "observed_at": (now - timedelta(seconds=3)).isoformat(),
         "sequence": 2,
         "payload": {
             "subject_nonce": page["nonce"],
             "scheduler_continues": True,
+            "observation_source": "postgresql_scheduler_state",
+            "database_read_only": True,
             "cloud_cycles_before": 2,
             "cloud_cycles_after": 3,
             "eligible_store_ids": [7],
@@ -79,7 +153,7 @@ def _bundle(now: datetime) -> dict:
         "event_type": "electron_exit",
         "issuer": "windows_runner",
         "nonce": "electron-exit-nonce-01",
-        "occurred_at": (now - timedelta(seconds=2)).isoformat(),
+        "observed_at": (now - timedelta(seconds=2)).isoformat(),
         "sequence": 3,
         "payload": {"exited": True, "process_id": 4201},
     })
@@ -88,11 +162,13 @@ def _bundle(now: datetime) -> dict:
         "event_type": "authenticated_observer",
         "issuer": "authenticated_observer",
         "nonce": "electron-observer-0001",
-        "occurred_at": (now - timedelta(seconds=1)).isoformat(),
+        "observed_at": (now - timedelta(seconds=1)).isoformat(),
         "sequence": 4,
         "payload": {
             "subject_nonce": electron["nonce"],
             "scheduler_continues": True,
+            "observation_source": "postgresql_scheduler_state",
+            "database_read_only": True,
             "cloud_cycles_before": 3,
             "cloud_cycles_after": 4,
             "eligible_store_ids": [7],
@@ -104,16 +180,12 @@ def _bundle(now: datetime) -> dict:
 
 def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_path):
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
-    keys = _keys()
 
     result = verify_acceptance_event_bundle(
         _bundle(now),
-        keys,
-        expected_release_sha="9b466ac80122e35893cbaa408735136acc88331a",
-        expected_store_id=7,
+        expected_scope=_scope(),
         now=now,
         nonce_ledger=tmp_path / "seen-nonces.json",
-        expected_public_keys_sha256=trusted_keys_sha256(keys),
     )
 
     assert result["web_page_close"] == {
@@ -122,34 +194,37 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
         "cloud_cycles_after": 3,
         "eligible_store_ids": [7],
         "collected_store_ids_after": [7],
+        "observation_source": "postgresql_scheduler_state",
+        "database_read_only": True,
     }
     assert result["electron_exit"]["exited"] is True
     assert result["electron_exit"]["process_id"] == 4201
     assert result["electron_exit"]["cloud_cycles_after"] == 4
     assert result["authenticated_observer"]["verified_subject_count"] == 2
+    assert result["evidence_trust_manifest_id"] == "r297-evidence-trust-test-v1"
+    assert result["evidence_trust_manifest_sha256"] == "0eac4b3fc49f913f33762dbedbe41916c3ef50eb1128211d7d93281c78902fed"
+    ledger = json.loads((tmp_path / "seen-nonces.json").read_text())
+    assert len(ledger) == 4
+    assert all(set(entry) == {
+        "namespace", "tenant_id", "company_id", "store_id", "platform",
+        "release_sha", "event_type", "key_id", "nonce",
+    } for entry in ledger)
 
     with pytest.raises(ValueError, match="replayed evidence nonce"):
         verify_acceptance_event_bundle(
-            _bundle(now), keys,
-            expected_release_sha="9b466ac80122e35893cbaa408735136acc88331a",
-            expected_store_id=7, now=now,
+            _bundle(now), expected_scope=_scope(), now=now,
             nonce_ledger=tmp_path / "seen-nonces.json",
-            expected_public_keys_sha256=trusted_keys_sha256(keys),
         )
 
 
 def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
-    keys = _keys()
     ledger = tmp_path / "seen-nonces.json"
 
     def verify():
         try:
             verify_acceptance_event_bundle(
-                _bundle(now), keys,
-                expected_release_sha="9b466ac80122e35893cbaa408735136acc88331a",
-                expected_store_id=7, now=now, nonce_ledger=ledger,
-                expected_public_keys_sha256=trusted_keys_sha256(keys),
+                _bundle(now), expected_scope=_scope(), now=now, nonce_ledger=ledger,
             )
             return "accepted"
         except ValueError as exc:
@@ -161,32 +236,67 @@ def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
     assert sorted(results) == ["accepted", "replayed evidence nonce"]
 
 
-def test_signed_evidence_events_require_pinned_isolated_issuer_keys(tmp_path):
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("namespace", ""),
+        ("tenant_id", True),
+        ("company_id", "company with spaces"),
+        ("store_id", True),
+        ("platform", "JD"),
+    ],
+)
+def test_signed_evidence_events_reject_invalid_expected_scope(field, value, tmp_path):
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
-    keys = _keys()
-    with pytest.raises(ValueError, match="trusted key digest mismatch"):
+    scope = _scope()
+    scope[field] = value
+
+    with pytest.raises(ValueError, match="invalid expected evidence binding"):
         verify_acceptance_event_bundle(
-            _bundle(now), keys,
-            expected_release_sha="9b466ac80122e35893cbaa408735136acc88331a",
-            expected_store_id=7, now=now, nonce_ledger=tmp_path / "seen-nonces.json",
-            expected_public_keys_sha256="0" * 64,
+            _bundle(now), expected_scope=scope, now=now,
+            nonce_ledger=tmp_path / "seen-nonces.json",
         )
 
-    keys["windows_runner"] = {**keys["windows_runner"], "n": keys["page_event_receiver"]["n"]}
-    with pytest.raises(ValueError, match="evidence issuer keys not isolated"):
+
+def test_signed_evidence_events_reject_boolean_scope_alias(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    scope = _scope()
+    scope["tenant_id"] = 1
+    bundle = _bundle(now)
+    for event in bundle["events"]:
+        event["tenant_id"] = True
+
+    with pytest.raises(ValueError, match="tenant_id mismatch"):
         verify_acceptance_event_bundle(
-            _bundle(now), keys,
-            expected_release_sha="9b466ac80122e35893cbaa408735136acc88331a",
-            expected_store_id=7, now=now, nonce_ledger=tmp_path / "seen-nonces.json",
-            expected_public_keys_sha256=trusted_keys_sha256(keys),
+            bundle, expected_scope=scope, now=now,
+            nonce_ledger=tmp_path / "seen-nonces.json",
         )
+
+
+def test_process_evidence_rejects_caller_supplied_trust_anchor(monkeypatch, tmp_path):
+    from ops import r297_process_acceptance
+
+    output = tmp_path / "must-not-exist"
+    bundle = tmp_path / "events.json"
+    keys = tmp_path / "attacker-keys.json"
+    bundle.write_text("{}")
+    keys.write_text("{}")
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    monkeypatch.setattr(sys, "argv", [
+        "r297_process_acceptance.py", str(output), "--runtime-image", "unused",
+        "--signed-event-bundle", str(bundle), "--event-public-keys", str(keys),
+    ])
+
+    with pytest.raises(SystemExit):
+        r297_process_acceptance.main()
+    assert not output.exists()
 
 
 def test_process_evidence_requires_real_signed_event_inputs(monkeypatch, tmp_path):
     from ops import r297_process_acceptance
 
     output = tmp_path / "must-not-exist"
-    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("APP_ENV", "acceptance")
     monkeypatch.setattr(
         sys,
         "argv",
@@ -201,10 +311,15 @@ def test_process_evidence_requires_real_signed_event_inputs(monkeypatch, tmp_pat
 @pytest.mark.parametrize(
     ("mutation", "error"),
     [
-        (lambda bundle, now: bundle["events"][0].update(release_sha="0" * 40), "release SHA mismatch"),
-        (lambda bundle, now: bundle["events"][0].update(store_id=8), "store scope mismatch"),
+        (lambda bundle, now: bundle["events"][0].update(release_sha="0" * 40), "release_sha mismatch"),
+        (lambda bundle, now: bundle["events"][0].update(namespace="other"), "namespace mismatch"),
+        (lambda bundle, now: bundle["events"][0].update(tenant_id="other"), "tenant_id mismatch"),
+        (lambda bundle, now: bundle["events"][0].update(company_id="other"), "company_id mismatch"),
+        (lambda bundle, now: bundle["events"][0].update(store_id=8), "store_id mismatch"),
+        (lambda bundle, now: bundle["events"][0].update(platform="other"), "platform mismatch"),
         (lambda bundle, now: bundle["events"][0].update(sequence=True), "event sequence mismatch"),
-        (lambda bundle, now: bundle["events"][0].update(occurred_at=(now - timedelta(minutes=6)).isoformat()), "expired evidence event"),
+        (lambda bundle, now: bundle["events"][0].update(observed_at=(now - timedelta(minutes=6)).isoformat()), "expired evidence event"),
+        (lambda bundle, now: bundle["events"][0].update(observed_at=(now + timedelta(minutes=1)).isoformat()), "future evidence event"),
         (lambda bundle, now: bundle["events"][1].update(sequence=1), "event sequence mismatch"),
         (lambda bundle, now: bundle["events"][0]["payload"].update(scheduler_continues=True), "client scheduler claim forbidden"),
         (lambda bundle, now: bundle["events"][1].update(signature=bundle["events"][0]["signature"]), "invalid evidence signature"),
@@ -214,13 +329,9 @@ def test_signed_evidence_events_fail_closed(mutation, error, tmp_path):
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
     bundle = deepcopy(_bundle(now))
     mutation(bundle, now)
-    keys = _keys()
 
     with pytest.raises(ValueError, match=error):
         verify_acceptance_event_bundle(
-            bundle, keys,
-            expected_release_sha="9b466ac80122e35893cbaa408735136acc88331a",
-            expected_store_id=7, now=now,
+            bundle, expected_scope=_scope(), now=now,
             nonce_ledger=tmp_path / "seen-nonces.json",
-            expected_public_keys_sha256=trusted_keys_sha256(keys),
         )
