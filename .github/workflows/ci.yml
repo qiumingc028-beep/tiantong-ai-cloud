@@ -442,6 +442,31 @@ jobs:
           print("CI_PYTEST_RESULT=1795_PASS/0_SKIP/0_FAIL/0_ERROR")
           PY
 
+      - name: Generate R297 native pagehide evidence
+        if: ${{ !cancelled() }}
+        run: |
+          evidence_dir="$RUNNER_TEMP/r297-native-pagehide"
+          mkdir -p "$evidence_dir"
+          chmod 0777 "$evidence_dir"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          docker run --rm \
+            --entrypoint node \
+            --env NODE_PATH=/app/services/jd-cloud-browser-runtime/node_modules \
+            --mount type=bind,source="$PWD",target=/workspace,readonly \
+            --mount type=bind,source="$evidence_dir",target=/evidence \
+            "$S12_JD_RUNTIME_IMAGE" \
+            /workspace/tests/r297_native_pagehide_evidence.cjs \
+            "$RELEASE_SOURCE_SHA" "$RELEASE_SOURCE_SHA" /evidence
+
+      - name: Upload R297 native pagehide evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-native-pagehide-${{ env.RELEASE_SOURCE_SHA }}
+          path: ${{ runner.temp }}/r297-native-pagehide/
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Verify CI Redis queue and lock residue
         if: always()
         run: |
