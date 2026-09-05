@@ -77,7 +77,12 @@
   function navigationFor(user){
     const permissions=permissionsOf(user);
     if(!permissions)return [];
+    const compactHidden=new Set();
+    if(permissions.has('menu.jd_data'))compactHidden.add('menu.dashboard');
+    if(permissions.has('menu.stores'))compactHidden.add('menu.import');
+    if(permissions.has('menu.ai_employees'))compactHidden.add('menu.computer_executor');
     return user.menus
+      .filter(item=>item&&!compactHidden.has(item.permission))
       .filter(item=>item&&permissions.has(item.permission)&&ROUTE_PERMISSIONS[normalize(item.href)]===item.permission)
       .map(item=>[item.label,normalize(item.href)]);
   }

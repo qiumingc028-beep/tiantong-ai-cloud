@@ -1,0 +1,291 @@
+{
+  "schema_version": 1,
+  "namespace": "r297-contract",
+  "valid_scope": {
+    "namespace": "r297-contract",
+    "tenant_id": "tenant",
+    "company_id": "company",
+    "store_id": "store",
+    "platform": "jd"
+  },
+  "valid_session_id": "r297-contract:tenant:company:store:jd",
+  "valid_ticket_claims": {
+    "typ": "viewer_ticket",
+    "aud": "jd-browser-viewer-exchange",
+    "iss": "tiantong-jd-browser-runtime",
+    "required_fields": [
+      "namespace",
+      "tenant_id",
+      "company_id",
+      "store_id",
+      "platform",
+      "session_id",
+      "session_nonce",
+      "typ",
+      "aud",
+      "iss",
+      "jti",
+      "issued_at",
+      "exp"
+    ]
+  },
+  "valid_cookie_claims": {
+    "typ": "viewer_cookie",
+    "aud": "jd-browser-novnc",
+    "iss": "tiantong-jd-browser-runtime",
+    "required_fields": [
+      "namespace",
+      "tenant_id",
+      "company_id",
+      "store_id",
+      "platform",
+      "session_id",
+      "session_nonce",
+      "typ",
+      "aud",
+      "iss",
+      "jti",
+      "issued_at",
+      "exp"
+    ]
+  },
+  "invalid_scope_cases": [
+    {
+      "name": "namespace_missing",
+      "expected_status": 400,
+      "scope": {
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store",
+        "platform": "jd"
+      }
+    },
+    {
+      "name": "namespace_mismatch",
+      "expected_status": 403,
+      "scope": {
+        "namespace": "other-environment",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store",
+        "platform": "jd"
+      }
+    },
+    {
+      "name": "non_jd_platform",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store",
+        "platform": "tmall"
+      }
+    },
+    {
+      "name": "dataset_mixed_into_scope",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store",
+        "platform": "jd",
+        "dataset": "metrics"
+      }
+    },
+    {
+      "name": "control_character_in_store_id",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store\nother",
+        "platform": "jd"
+      }
+    },
+    {
+      "name": "separator_injection_in_store_id",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store:other",
+        "platform": "jd"
+      }
+    },
+    {
+      "name": "non_normalized_store_id",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "e\u0301",
+        "platform": "jd"
+      }
+    },
+    {
+      "name": "store_id_missing",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "platform": "jd"
+      }
+    },
+    {
+      "name": "scope_extra_field",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store",
+        "platform": "jd",
+        "unexpected": "field"
+      }
+    },
+    {
+      "name": "store_id_wrong_type",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": {"nested": "value"},
+        "platform": "jd"
+      }
+    },
+    {
+      "name": "store_id_zero",
+      "expected_status": 400,
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": 0,
+        "platform": "jd"
+      }
+    }
+  ],
+  "store_id_normalization": {
+    "canonical": "1",
+    "equivalent_inputs": ["1", 1]
+  },
+  "controlled_capture_metrics": {
+    "gmv": "1.00",
+    "store_name": "京东旗舰店"
+  },
+  "legacy_session_id": "tenant:company:store:jd",
+  "namespace_mismatch_session_id": "other-environment:tenant:company:store:jd",
+  "encoded_session_path": "r297-contract%3Atenant%3Acompany%3Astore%3Ajd",
+  "ticket_ttl_rejections": [true, 0, -1, 121],
+  "valid_ticket_ttl_seconds": 60,
+  "max_ticket_ttl_seconds": 120,
+  "claim_type_misuse": [
+    {
+      "name": "ticket_used_as_cookie",
+      "source_type": "viewer_ticket",
+      "target_type": "viewer_cookie"
+    },
+    {
+      "name": "cookie_used_as_ticket",
+      "source_type": "viewer_cookie",
+      "target_type": "viewer_ticket"
+    }
+  ],
+  "invalid_runtime_response_cases": [
+    {
+      "name": "extra_response_field",
+      "response": {
+        "ticket": "viewer-ticket-secret",
+        "expires_in": 60,
+        "session_id": "must-not-leak"
+      }
+    }
+  ],
+  "invalid_capture_request_cases": [
+    {
+      "name": "dataset_missing",
+      "payload": {
+        "scope": {
+          "namespace": "r297-contract",
+          "tenant_id": "tenant",
+          "company_id": "company",
+          "store_id": "store",
+          "platform": "jd"
+        }
+      }
+    },
+    {
+      "name": "dataset_wrong_type",
+      "payload": {
+        "scope": {
+          "namespace": "r297-contract",
+          "tenant_id": "tenant",
+          "company_id": "company",
+          "store_id": "store",
+          "platform": "jd"
+        },
+        "dataset": 0
+      }
+    },
+    {
+      "name": "capture_extra_field",
+      "payload": {
+        "scope": {
+          "namespace": "r297-contract",
+          "tenant_id": "tenant",
+          "company_id": "company",
+          "store_id": "store",
+          "platform": "jd"
+        },
+        "dataset": "metrics",
+        "write": false
+      }
+    }
+  ],
+  "capture_cases": [
+    {
+      "name": "valid_metrics",
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store",
+        "platform": "jd"
+      },
+      "dataset": "metrics",
+      "expected_status": 200
+    },
+    {
+      "name": "unknown_dataset",
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store",
+        "platform": "jd"
+      },
+      "dataset": "unknown",
+      "expected_status": 400
+    },
+    {
+      "name": "dataset_mixed_into_scope",
+      "scope": {
+        "namespace": "r297-contract",
+        "tenant_id": "tenant",
+        "company_id": "company",
+        "store_id": "store",
+        "platform": "jd",
+        "dataset": "metrics"
+      },
+      "dataset": "metrics",
+      "expected_status": 400
+    }
+  ]
+}

@@ -1,5 +1,8 @@
-import json
 from datetime import date, datetime, timezone
+import json
+import os
+import hmac
+from urllib.request import Request, urlopen
 
 from sqlalchemy.orm import Session
 
@@ -18,29 +21,44 @@ class JdSmartCollector:
     没有授权时不会伪造数据。
     """
 
+    def _capture(self, account: JdAccount, dataset: str, store: Store):
+        endpoint = "http://jd-browser-runtime:8787/internal/jd-browser"
+        token = os.getenv("JD_BROWSER_CAPTURE_TOKEN", "")
+        if len(token.encode()) < 32:
+            raise JdCollectorError("云端浏览器内部认证未配置")
+        if not endpoint:
+            raise JdCollectorError("云端浏览器运行时未配置")
+        namespace = os.getenv("JD_SESSION_NAMESPACE", "").strip()
+        if not namespace:
+            raise JdCollectorError("会话命名空间未配置")
+        payload = {"scope": {"namespace": namespace, "tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": "jd"}, "dataset": dataset}
+        try:
+            with urlopen(Request(endpoint + "/capture", data=json.dumps(payload).encode(), headers={"content-type": "application/json", "x-internal-token": token}), timeout=45) as response:
+                result = json.loads(response.read(1_000_000))
+        except Exception as exc:
+            raise JdCollectorError("云端浏览器采集失败") from exc
+        if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") != "OK":
+            raise JdCollectorError("需要人工处理登录或风控")
+        data = result["data"]
+        if not isinstance(data, dict) or str(data.get("store_id")) != str(store.id) or data.get("source") != "jd_cloud_playwright":
+            raise JdCollectorError("云端采集响应校验失败")
+        return data
+
     def fetch_today(self, account: JdAccount) -> dict:
-        if not account.access_token:
-            raise JdCollectorError("京东商智账号未授权，无法采集真实数据")
-        raise JdCollectorError("京东商智真实接口适配尚未配置")
+        return self._capture(account, "metrics", account.store)
 
     def fetch_orders_today(self, account: JdAccount) -> list[dict]:
-        if not account.access_token:
-            raise JdCollectorError("京东商智账号未授权，无法采集订单数据")
-        raise JdCollectorError("京东订单真实接口适配尚未配置")
+        return self._capture(account, "orders", account.store)
 
     def fetch_products_today(self, account: JdAccount) -> list[dict]:
-        if not account.access_token:
-            raise JdCollectorError("京东商智账号未授权，无法采集商品数据")
-        raise JdCollectorError("京东商品真实接口适配尚未配置")
+        return self._capture(account, "products", account.store)
 
 
 class JztCollector:
     """京准通采集适配器。"""
 
     def fetch_ads_today(self, account: JdAccount) -> list[dict]:
-        if not account.access_token:
-            raise JdCollectorError("京准通账号未授权，无法采集真实广告数据")
-        raise JdCollectorError("京准通真实接口适配尚未配置")
+        return JdSmartCollector()._capture(account, "ads", account.store)
 
 
 def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):
@@ -87,7 +105,7 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
                 roi=number(row.get("roi")),
                 cpa=number(row.get("cpa")),
                 deal_amount=number(row.get("deal_amount")),
-                raw_payload=json.dumps(row, ensure_ascii=False),
+                raw_payload=None,
             )
         )
         saved += 1
@@ -154,7 +172,7 @@ def save_jd_daily_metric(db: Session, store_id: int, metric_date: date, payload:
     metric.cart_add_count = int(number(payload.get("cart_add_count")))
     metric.conversion_rate = number(payload.get("conversion_rate"))
     metric.source = source
-    metric.raw_payload = json.dumps(payload, ensure_ascii=False)
+    metric.raw_payload = None
     metric.synced_at = datetime.now(timezone.utc)
     db.commit()
     return metric
@@ -171,8 +189,8 @@ def save_order(db: Session, store_id: int, row: dict):
     order.paid_amount = number(row.get("paid_amount"))
     order.profit_amount = number(row.get("profit_amount"))
     order.order_status = row.get("order_status")
-    order.buyer_pin = row.get("buyer_pin")
-    order.raw_payload = json.dumps(row, ensure_ascii=False)
+    order.buyer_pin = None
+    order.raw_payload = None
     return order
 
 
@@ -188,7 +206,7 @@ def save_product(db: Session, store_id: int, row: dict):
         visitors_count=int(number(row.get("visitors_count"))),
         conversion_rate=number(row.get("conversion_rate")),
         stat_date=parse_date(row.get("stat_date")) or date.today(),
-        raw_payload=json.dumps(row, ensure_ascii=False),
+        raw_payload=None,
     )
     db.add(product)
     return product
