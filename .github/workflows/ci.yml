@@ -229,7 +229,8 @@ jobs:
                       self.path == '/api/jd-workbench/internal/browser-session-authorize'
                       and self.headers.get('x-internal-token') == os.environ['MOCK_CONTROL_TOKEN']
                       and isinstance(body, dict)
-                      and set(body) == {'tenant_id', 'company_id', 'store_id', 'platform'}
+                      and set(body) == {'namespace', 'tenant_id', 'company_id', 'store_id', 'platform'}
+                      and body.get('namespace') == 'ci'
                   )
                   self.send_response(204 if valid else 403)
                   self.end_headers()
@@ -280,7 +281,7 @@ jobs:
           session_status="$(curl --silent --show-error --output /tmp/runtime-session.json --write-out '%{http_code}' \
             --header "content-type: application/json" \
             --header "x-internal-token: $control_token" \
-            --data '{"tenant_id":1,"company_id":1,"store_id":1,"platform":"jd"}' \
+            --data '{"namespace":"ci","tenant_id":"1","company_id":"1","store_id":"1","platform":"jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
           if test "$session_status" != 200; then
             docker logs "$container"
@@ -403,12 +404,12 @@ jobs:
           test "$status" = 200
           restored="$(curl --silent --fail --header 'content-type: application/json' \
             --header "x-internal-token: $control_token" \
-            --data '{"tenant_id":1,"company_id":1,"store_id":1,"platform":"jd"}' \
+            --data '{"namespace":"ci","tenant_id":"1","company_id":"1","store_id":"1","platform":"jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
           test "$(printf '%s' "$restored" | python -c 'import json,sys; print(str(json.load(sys.stdin)["restored"]).lower())')" = true
           docker exec "$container" pgrep -x chrome >/dev/null
           curl --silent --fail --request DELETE --header "x-internal-token: $control_token" \
-            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions/1%3A1%3A1%3Ajd" >/dev/null
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions/ci%3A1%3A1%3A1%3Ajd" >/dev/null
           test -z "$(docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles /data/jd-session-archives -type f -print')"
           test -z "$(docker exec "$container" pgrep -x chrome || true)"
           echo "RUNTIME_RESTART=PASS"

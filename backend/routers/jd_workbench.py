@@ -293,7 +293,7 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
     sid = _runtime_session_id(store)
     namespace = sid.split(":", 1)[0]
     result = _runtime_call("POST", "/sessions", {"namespace": namespace, "tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": str(store.platform)})
-    if result.get("session_id") != sid or not isinstance(result.get("expires_in"), int) or not (0 < result["expires_in"] <= 600):
+    if result.get("session_id") != sid or type(result.get("expires_in")) is not int or not (0 < result["expires_in"] <= 120):
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
     _audit_owner_action(db, user, store, "owner_login_session_create")
     return {"store_id": store.id, "status": "LOGIN_REQUIRED", "expires_in": result["expires_in"]}
@@ -330,7 +330,7 @@ async def owner_login_ticket(store_id: int, request: Request, db: Session = Depe
         raise _generic_bad_request()
     sid = _runtime_session_id(store)
     result = _runtime_call("POST", "/tickets", {"session_id": sid})
-    if not isinstance(result.get("ticket"), str) or not result["ticket"] or not isinstance(result.get("expires_in"), int) or not (0 < result["expires_in"] <= 600):
+    if not isinstance(result.get("ticket"), str) or not result["ticket"] or type(result.get("expires_in")) is not int or not (0 < result["expires_in"] <= 120):
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
     _audit_owner_action(db, user, store, "owner_login_ticket")
     return {"ticket": result["ticket"], "expires_in": result["expires_in"]}
