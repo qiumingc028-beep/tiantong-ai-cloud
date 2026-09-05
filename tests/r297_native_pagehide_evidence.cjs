@@ -99,10 +99,18 @@ addEventListener('pagehide', event => {
       synthetic_event_rejected: syntheticRejected
     };
     fs.mkdirSync(outputDir, { recursive: true });
-    const evidencePath = path.join(outputDir, 'r297-native-pagehide-evidence.json');
+    const evidenceName = `r297-native-pagehide-evidence-${releaseSha}.json`;
+    const evidencePath = path.join(outputDir, evidenceName);
     fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o444 });
     const digest = crypto.createHash('sha256').update(fs.readFileSync(evidencePath)).digest('hex');
-    fs.writeFileSync(`${evidencePath}.sha256`, `${digest}  ${path.basename(evidencePath)}\n`, { mode: 0o444 });
+    fs.writeFileSync(`${evidencePath}.sha256`, `${digest}  ${evidenceName}\n`, { mode: 0o444 });
+    const manifestPath = path.join(outputDir, `r297-native-pagehide-manifest-${releaseSha}.json`);
+    fs.writeFileSync(manifestPath, `${JSON.stringify({
+      schema_version: '1.0',
+      release_sha: releaseSha,
+      evidence_file: evidenceName,
+      evidence_sha256: digest
+    }, null, 2)}\n`, { mode: 0o444 });
     console.log(`R297_NATIVE_PAGEHIDE_EVIDENCE_SHA256=${digest}`);
   } finally {
     await browser.close();
