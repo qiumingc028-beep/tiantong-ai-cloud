@@ -524,7 +524,7 @@ jobs:
         env:
           APP_ENV: test
         run: |
-          pytest -q tests/test_r297_evidence_event_protocol.py tests/test_r297_authenticated_observer.py
+          python -m pytest -q tests/test_r297_evidence_event_protocol.py tests/test_r297_authenticated_observer.py
 
       - name: Generate R297 real-process acceptance evidence
         env:
