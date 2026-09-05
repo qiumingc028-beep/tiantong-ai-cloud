@@ -448,6 +448,7 @@ jobs:
 
           restart_step="PROFILE_RESTORED"
           restored_status="$(curl --silent --show-error --output /tmp/runtime-restored.json --write-out '%{http_code}' \
+            --header "content-type: application/json" \
             --header "x-internal-token: $control_token" \
             --data '{"tenant_id":1,"company_id":1,"store_id":1,"platform":"jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"

@@ -245,7 +245,7 @@ export function buildApp({
   }
 
   async function removePlaintextProfile(id) {
-    await fs.rm(profileDirectory(id), { recursive: true, force: true });
+    await fs.rm(profileDirectory(id), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 
   async function runAllCleanup(steps, initialError = null) {
