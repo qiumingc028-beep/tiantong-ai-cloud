@@ -53,6 +53,7 @@ jobs:
       S12_BACKEND_IMAGE: tiantong-ci-backend:${{ github.event.pull_request.head.sha || github.sha }}
       S12_WORKER_IMAGE: tiantong-ci-worker:${{ github.event.pull_request.head.sha || github.sha }}
       S12_JD_RUNTIME_IMAGE: tiantong-ci-jd-browser-runtime:${{ github.event.pull_request.head.sha || github.sha }}
+      R297_PAGEHIDE_EVIDENCE_RELEASE_SHA: 7aca8264444632726a0c58d13a4f9384e0954d4c
 
     steps:
       - name: Checkout
@@ -439,6 +440,33 @@ jobs:
           }, totals
           print("CI_PYTEST_RESULT=1795_PASS/0_SKIP/0_FAIL/0_ERROR")
           PY
+
+      - name: Generate R297 native pagehide evidence
+        if: ${{ !cancelled() }}
+        run: |
+          evidence_dir="$RUNNER_TEMP/r297-native-pagehide"
+          mkdir -p "$evidence_dir"
+          chmod 0777 "$evidence_dir"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          git diff --quiet "$R297_PAGEHIDE_EVIDENCE_RELEASE_SHA" "$RELEASE_SOURCE_SHA" -- \
+            frontend/r297-owner-login.js frontend/stores.html
+          docker run --rm \
+            --entrypoint node \
+            --env NODE_PATH=/app/services/jd-cloud-browser-runtime/node_modules \
+            --mount type=bind,source="$PWD",target=/workspace,readonly \
+            --mount type=bind,source="$evidence_dir",target=/evidence \
+            "$S12_JD_RUNTIME_IMAGE" \
+            /workspace/tests/r297_native_pagehide_evidence.cjs \
+            "$R297_PAGEHIDE_EVIDENCE_RELEASE_SHA" "$RELEASE_SOURCE_SHA" /evidence
+
+      - name: Upload R297 native pagehide evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-native-pagehide-${{ env.R297_PAGEHIDE_EVIDENCE_RELEASE_SHA }}
+          path: ${{ runner.temp }}/r297-native-pagehide/
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Verify CI Redis queue and lock residue
         if: always()
