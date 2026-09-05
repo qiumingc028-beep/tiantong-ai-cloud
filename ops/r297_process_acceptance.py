@@ -22,6 +22,12 @@ from datetime import datetime, timedelta, timezone
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
+try:
+    from ops.r297_evidence_events import verify_acceptance_event_bundle
+except ModuleNotFoundError as exc:
+    if exc.name != "ops":
+        raise
+    from r297_evidence_events import verify_acceptance_event_bundle
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,12 +189,23 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("output_directory", type=Path)
     parser.add_argument("--runtime-image", required=True)
+    parser.add_argument("--signed-event-bundle", type=Path, required=True)
+    parser.add_argument("--event-public-keys", type=Path, required=True)
     args = parser.parse_args()
 
     head = run("git", "rev-parse", "HEAD")
     if head != os.environ.get("RELEASE_SOURCE_SHA"):
         raise RuntimeError("RELEASE_SOURCE_SHA_MISMATCH")
     output = args.output_directory.resolve()
+    expected_key_digest = os.getenv("R297_EVIDENCE_TRUSTED_KEYS_SHA256", "")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_key_digest):
+        raise RuntimeError("R297_EVIDENCE_TRUSTED_KEYS_SHA256_MISSING")
+    ledger_value = os.getenv("R297_EVIDENCE_NONCE_LEDGER", "")
+    if not ledger_value:
+        raise RuntimeError("R297_EVIDENCE_NONCE_LEDGER_MISSING")
+    nonce_ledger = Path(ledger_value).resolve()
+    if output in nonce_ledger.parents or nonce_ledger == output:
+        raise RuntimeError("R297_EVIDENCE_NONCE_LEDGER_NOT_DURABLE")
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
     postgres_name = f"r297-pg-{head[:12]}-{os.getpid()}"
     redis_name = f"r297-redis-{head[:12]}-{os.getpid()}"
@@ -741,6 +758,18 @@ def main() -> int:
                 run("docker", "rm", name)
         with contextlib.suppress(Exception):
             run("docker", "volume", "rm", runtime_volume)
+
+    bundle = json.loads(args.signed_event_bundle.read_text(encoding="utf-8"))
+    public_keys = json.loads(args.event_public_keys.read_text(encoding="utf-8"))
+    observations.update(verify_acceptance_event_bundle(
+        bundle,
+        public_keys,
+        expected_release_sha=head,
+        expected_store_id=scope["store_id"],
+        now=datetime.now(timezone.utc),
+        nonce_ledger=nonce_ledger,
+        expected_public_keys_sha256=expected_key_digest,
+    ))
 
     raw_log = output / "R297_PROCESS_ACCEPTANCE_RAW.jsonl"
     expected_container_logs = {runtime_name, redis_name, postgres_name}
