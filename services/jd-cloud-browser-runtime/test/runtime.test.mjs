@@ -26,6 +26,23 @@ const scope = (storeId = contract.valid_scope.store_id, overrides = {}) => ({
 const scopedSessionId = (storeId = contract.valid_scope.store_id) =>
   [sessionNamespace, contract.valid_scope.tenant_id, contract.valid_scope.company_id, String(storeId), 'jd'].join(':');
 
+function assertExpiryContract(claims, nowMs, lifetimeSeconds = contract.valid_ticket_ttl_seconds) {
+  assert.equal(Number.isInteger(claims.issued_at), true);
+  assert.equal(Number.isInteger(claims.exp), true);
+  assert.ok(Math.abs(claims.issued_at - Math.floor(nowMs / 1000)) <= 1);
+  assert.ok(Math.abs((claims.exp - claims.issued_at) - lifetimeSeconds) <= 1);
+  const expiresAtMs = claims.exp * 1000;
+  assert.ok(expiresAtMs - nowMs >= (lifetimeSeconds - 1) * 1000);
+  assert.ok(expiresAtMs - nowMs <= lifetimeSeconds * 1000);
+}
+
+test('expiry contract keeps JWT seconds separate from browser milliseconds', () => {
+  const nowMs = 1_000_000;
+  const issuedAt = Math.floor(nowMs / 1000);
+
+  assertExpiryContract({ issued_at: issuedAt, exp: issuedAt + 60 }, nowMs);
+});
+
 test('viewer ticket and cookie keys are independently required', () => {
   assert.throws(
     () => buildApp({
@@ -352,9 +369,7 @@ test('backend ticket is single-use and exchanges for a short-lived noVNC cookie'
   }
   assert.equal(claims.session_id, scopedSessionId('store'));
   assert.match(claims.jti, /^[0-9a-f]{32}$/);
-  assert.equal(Number.isInteger(claims.issued_at), true);
-  assert.equal(Number.isInteger(claims.exp), true);
-  assert.equal(claims.exp - claims.issued_at, contract.valid_ticket_ttl_seconds * 1000);
+  assertExpiryContract(claims, now);
   const secondTicket = (await app.inject({
     method: 'POST',
     url: '/internal/jd-browser/tickets',
@@ -374,6 +389,7 @@ test('backend ticket is single-use and exchanges for a short-lived noVNC cookie'
   assert.equal(consumed.statusCode, 204);
   const cookie = consumed.headers['set-cookie'];
   assert.match(cookie, /^jd_browser_session=/);
+  assert.match(cookie, /(?:^|; )Max-Age=60(?:;|$)/);
   const cookieValue = cookie.match(/^jd_browser_session=([^;]+)/)?.[1];
   const cookieClaims = JSON.parse(Buffer.from(cookieValue.split('.')[0], 'base64url').toString('utf8'));
   assert.deepEqual(Object.keys(cookieClaims).sort(), [...contract.valid_cookie_claims.required_fields].sort());
@@ -389,9 +405,7 @@ test('backend ticket is single-use and exchanges for a short-lived noVNC cookie'
   assert.equal(cookieClaims.session_nonce, claims.session_nonce);
   assert.match(cookieClaims.jti, /^[0-9a-f]{32}$/);
   assert.notEqual(cookieClaims.jti, claims.jti);
-  assert.equal(Number.isInteger(cookieClaims.issued_at), true);
-  assert.equal(Number.isInteger(cookieClaims.exp), true);
-  assert.ok(cookieClaims.exp > cookieClaims.issued_at);
+  assertExpiryContract(cookieClaims, now);
   const tokens = { viewer_ticket: ticket, viewer_cookie: cookieValue };
   for (const vector of contract.claim_type_misuse) {
     const response = vector.target_type === 'viewer_cookie'
@@ -495,13 +509,24 @@ test('viewer ticket and cookie are scoped to one store', async (t) => {
 
 test('consumed viewer ticket remains rejected after runtime restart', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-viewer-restart-'));
-  const context = { route: async () => {}, storageState: async () => ({ cookies: [] }), close: async () => {}, pages: () => [] };
+  const contexts = [];
+  const launchContext = async (_directory, restored) => {
+    const context = {
+      route: async () => {},
+      storageState: async () => ({ cookies: [{ name: 'profile', value: 'restored' }] }),
+      addCookies: async (cookies) => { context.restoredCookies = cookies; },
+      close: async () => {},
+      pages: () => []
+    };
+    contexts.push({ context, restored });
+    return context;
+  };
   const options = {
     captureToken, controlToken, viewerTicketSigningKey: viewerSigningKey, viewerCookieSigningKey, masterKey,
     sessionNamespace,
     authorizeSession: async () => true,
     profileRoot: path.join(root, 'profiles'), archiveRoot: path.join(root, 'archives'),
-    launchContext: async () => context
+    launchContext
   };
   const create = async (app) => app.inject({
     method: 'POST', url: '/internal/jd-browser/sessions', headers: { 'x-internal-token': controlToken },
@@ -514,15 +539,37 @@ test('consumed viewer ticket remains rejected after runtime restart', async (t) 
     payload: { session_id: scopedSessionId('restart') }
   });
   const ticket = issued.json().ticket;
-  const request = {
+  const exchange = {
     method: 'POST', url: '/internal/jd-browser/viewer/exchange/restart', payload: { ticket }
   };
-  assert.equal((await first.inject(request)).statusCode, 204);
+  const consumed = await first.inject(exchange);
+  assert.equal(consumed.statusCode, 204);
+  const oldCookie = consumed.headers['set-cookie'];
+  const authorize = (app, cookie) => app.inject({
+    method: 'GET', url: '/internal/jd-browser/viewer/authorize',
+    headers: { cookie, 'x-original-uri': '/jd-browser/novnc/restart/vnc.html' }
+  });
+  assert.equal((await authorize(first, oldCookie)).statusCode, 204);
+  assert.equal((await first.inject(exchange)).statusCode, 401);
   await first.close();
   const second = buildApp(options);
   t.after(async () => { await second.close(); await fs.rm(root, { recursive: true, force: true }); });
-  assert.equal((await create(second)).statusCode, 200);
-  assert.equal((await second.inject(request)).statusCode, 401);
+  const restored = await create(second);
+  assert.equal(restored.statusCode, 200);
+  assert.equal(restored.json().restored, true);
+  assert.deepEqual(contexts[1].context.restoredCookies, [{ name: 'profile', value: 'restored' }]);
+  assert.equal((await authorize(second, oldCookie)).statusCode, 401);
+  assert.equal((await second.inject(exchange)).statusCode, 401);
+
+  const replacementTicket = (await second.inject({
+    method: 'POST', url: '/internal/jd-browser/tickets', headers: { 'x-internal-token': controlToken },
+    payload: { session_id: scopedSessionId('restart') }
+  })).json().ticket;
+  const replacement = await second.inject({
+    method: 'POST', url: '/internal/jd-browser/viewer/exchange/restart', payload: { ticket: replacementTicket }
+  });
+  assert.equal(replacement.statusCode, 204);
+  assert.equal((await authorize(second, replacement.headers['set-cookie'])).statusCode, 204);
 });
 
 test('graceful restart restores encrypted state and revoke removes every session artifact', async (t) => {
