@@ -186,20 +186,49 @@ jobs:
             'sha256sum "$(node -e '\''process.stdout.write(require("playwright").chromium.executablePath())'\'')"'
 
       - name: Verify JD cloud browser runtime container
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           container="jd-browser-runtime-${RELEASE_SOURCE_SHA:0:12}"
           network="jd-browser-runtime-${RELEASE_SOURCE_SHA:0:12}"
           volume="jd-browser-runtime-archives-${RELEASE_SOURCE_SHA:0:12}-${GITHUB_RUN_ID}"
           auth_pid=""
+          runtime_stage="setup"
+          cancelled=0
+          cleanup_done=0
           cleanup() {
+            test "$cleanup_done" = 0 || return
+            cleanup_done=1
             test -z "$auth_pid" || kill "$auth_pid" >/dev/null 2>&1 || true
-            docker rm --force "$container" >/dev/null 2>&1 || true
-            docker network rm "$network" >/dev/null 2>&1 || true
-            docker volume rm "$volume" >/dev/null 2>&1 || true
+            timeout 1s docker rm --force "$container" >/dev/null 2>&1 || true
+            timeout 1s docker network rm "$network" >/dev/null 2>&1 || true
+            timeout 1s docker volume rm "$volume" >/dev/null 2>&1 || true
           }
-          trap cleanup EXIT
+          diagnose_and_cleanup() {
+            exit_code=$?
+            set +e
+            if test "$exit_code" -ne 0 && test "$cancelled" = 0; then
+              echo "RUNTIME_FAILURE_STAGE=$runtime_stage"
+              timeout 1s docker ps --filter "name=^/${container}$" --format 'RUNTIME_CONTAINER={{.Status}} PORTS={{.Ports}}'
+              timeout 1s docker inspect --format '{{json .State}}' "$container"
+              timeout 1s docker stats --no-stream --format 'RUNTIME_CPU={{.CPUPerc}} MEMORY={{.MemUsage}}' "$container"
+              timeout 1s df -h / /var/lib/docker
+            fi
+            cleanup
+          }
+          cancel_and_cleanup() {
+            exit_code=$1
+            trap - INT TERM
+            cancelled=1
+            cleanup
+            exit "$exit_code"
+          }
+          trap diagnose_and_cleanup EXIT
+          trap 'cancel_and_cleanup 130' INT
+          trap 'cancel_and_cleanup 143' TERM
 
+          runtime_stage="missing-token"
+          echo "RUNTIME_STAGE=missing-token"
           if docker run --rm "$S12_JD_RUNTIME_IMAGE" >/tmp/runtime-missing-token.log 2>&1; then
             echo "Runtime unexpectedly started without an internal token" >&2
             exit 1
@@ -237,6 +266,8 @@ jobs:
           HTTPServer(('0.0.0.0', 18787), Handler).serve_forever()
           PY
           auth_pid=$!
+          runtime_stage="container-start"
+          echo "RUNTIME_STAGE=container-start"
           docker run --detach \
             --name "$container" \
             --network "$network" \
@@ -264,6 +295,8 @@ jobs:
             "$S12_JD_RUNTIME_IMAGE" >/dev/null
 
           runtime_port="$(docker port "$container" 8787/tcp | awk -F: 'END {print $NF}')"
+          runtime_stage="health"
+          echo "RUNTIME_STAGE=health"
           status=000
           for _ in $(seq 1 60); do
             status="$(curl --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
@@ -275,6 +308,8 @@ jobs:
           test "$status" = 200
           echo "RUNTIME_HEALTH_STATUS=200"
 
+          runtime_stage="chromium-session"
+          echo "RUNTIME_STAGE=chromium-session"
           session_status="$(curl --silent --show-error --output /tmp/runtime-session.json --write-out '%{http_code}' \
             --header "content-type: application/json" \
             --header "x-internal-token: $control_token" \
@@ -323,6 +358,8 @@ jobs:
           done
           echo "RUNTIME_ENV_NAMES=DISPLAY,HOME,JD_BROWSER_CAPTURE_TOKEN,JD_BROWSER_CONTROL_TOKEN,JD_BROWSER_VIEWER_TICKET_SIGNING_KEY,JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY,JD_PROFILE_ROOT,JD_SESSION_ARCHIVE_ROOT,JD_SESSION_MASTER_KEY,RUNTIME_API_PORT"
 
+          runtime_stage="novnc-http"
+          echo "RUNTIME_STAGE=novnc-http"
           unauth_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
           forged_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Cookie: jd_browser_session=forged' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
           echo "RUNTIME_NOVNC_UNAUTH_STATUS=$unauth_status"
@@ -366,6 +403,8 @@ jobs:
           test "$cross_store_status" = 401
           test "$replay_status" = 401
           test "$query_status" = 400
+          runtime_stage="novnc-websocket"
+          echo "RUNTIME_STAGE=novnc-websocket"
           python - "$runtime_port" "$cookie" <<'PY'
           import socket
           import sys
@@ -389,6 +428,8 @@ jobs:
           print("RUNTIME_NOVNC_WEBSOCKET=PASS")
           PY
 
+          runtime_stage="restart-restore"
+          echo "RUNTIME_STAGE=restart-restore"
           docker restart "$container" >/dev/null
           runtime_port="$(docker port "$container" 8787/tcp | awk -F: 'END {print $NF}')"
           for _ in $(seq 1 60); do

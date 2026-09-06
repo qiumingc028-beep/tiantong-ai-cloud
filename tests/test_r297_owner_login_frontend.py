@@ -1,4 +1,6 @@
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 
 
@@ -422,3 +424,72 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert "URLSearchParams" not in module
     assert "云端登录服务暂不可用" in page
     assert "mock" not in combined.lower()
+
+
+def test_runtime_container_ci_check_has_timeout_and_safe_stage_diagnostics():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    runtime_step = workflow.split("- name: Verify JD cloud browser runtime container", 1)[1].split("- name: Run tests", 1)[0]
+
+    assert "timeout-minutes: 10" in runtime_step
+    for stage in (
+        "missing-token",
+        "container-start",
+        "health",
+        "chromium-session",
+        "novnc-http",
+        "novnc-websocket",
+        "restart-restore",
+    ):
+        assert f"RUNTIME_STAGE={stage}" in runtime_step
+    assert "RUNTIME_FAILURE_STAGE=" in runtime_step
+    assert "trap 'cancel_and_cleanup 130' INT" in runtime_step
+    assert "trap 'cancel_and_cleanup 143' TERM" in runtime_step
+    assert "trap - INT TERM" in runtime_step
+    assert "cancelled=1" in runtime_step
+    assert "cleanup_done=1" in runtime_step
+    assert "timeout 1s docker inspect --format '{{json .State}}'" in runtime_step
+    assert "timeout 1s docker stats --no-stream" in runtime_step
+    assert "docker inspect" not in runtime_step.replace("timeout 1s docker inspect --format '{{json .State}}'", "")
+    assert runtime_step.count("timeout 1s docker ") == 6
+
+    with tempfile.TemporaryDirectory() as directory:
+        marker = Path(directory) / "cleanup"
+        started = time.monotonic()
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "marker=$1; cancelled=0; cleanup(){ printf cleanup > \"$marker\"; }; "
+                "on_exit(){ trap - INT TERM; test \"$cancelled\" = 1 || sleep 20; cleanup; }; "
+                "on_signal(){ trap - INT TERM; cancelled=1; cleanup; exit 143; }; "
+                "trap on_exit EXIT; trap on_signal TERM; kill -TERM $$",
+                "bash",
+                str(marker),
+            ],
+            check=False,
+        )
+        elapsed = time.monotonic() - started
+        assert result.returncode == 143
+        assert elapsed < 2
+        assert marker.read_text(encoding="utf-8") == "cleanup"
+
+    with tempfile.TemporaryDirectory() as directory:
+        marker = Path(directory) / "cleanup-during-exit"
+        started = time.monotonic()
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "marker=$1; cancelled=0; cleanup(){ printf cleanup > \"$marker\"; }; "
+                "on_exit(){ test \"$cancelled\" = 1 || sleep 1; cleanup; }; "
+                "on_signal(){ trap - INT TERM; cancelled=1; cleanup; exit 143; }; "
+                "trap on_exit EXIT; trap on_signal TERM; (sleep 0.1; kill -TERM $$) & exit 1",
+                "bash",
+                str(marker),
+            ],
+            check=False,
+        )
+        elapsed = time.monotonic() - started
+        assert result.returncode == 143
+        assert elapsed < 2
+        assert marker.read_text(encoding="utf-8") == "cleanup"
