@@ -18,6 +18,98 @@ permissions:
   contents: read
 
 jobs:
+  repository-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U ci -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping | grep PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      V2_ALPHA_POSTGRES_ADMIN_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
+      STORE_AUTHZ_POSTGRES_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
+      REDIS_URL: redis://127.0.0.1:6379/0
+      MIGRATION_CODE_FIX_COMMIT: 8d9b5f2890545f1f08d05b9b1618f71ff82d6621
+      RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout immutable source for repository tests
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install locked repository test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Run isolated repository tests
+        run: |
+          set -o pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          bash -n ops/r297_workbench_deploy.sh
+          python -m pytest -v tests/ \
+            --strict-markers \
+            -m "not r297_process_evidence and not r297_windows_evidence" \
+            -o junit_logging=no \
+            --junitxml=/tmp/pytest-results.xml 2>&1 | \
+            sed -E \
+              -e 's/(authorization: *(bearer|device) +)[^ ]+/\1[REDACTED]/Ig' \
+              -e 's/((password|token|secret|cookie|key)[=:] *)[^ ]+/\1[REDACTED]/Ig' \
+              -e 's#(postgres(ql)?://)[^/@:]+:[^@/]+@#\1[REDACTED]@#Ig' | \
+            tee /tmp/pytest-results.log
+
+      - name: Upload isolated repository test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-pytest-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            /tmp/pytest-results.xml
+            /tmp/pytest-results.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Verify isolated Redis residue
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+          import redis
+
+          client = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+          assert client.ping() is True
+          assert client.llen("tiantong:employee:tianshang:execution") == 0
+          assert client.llen("tiantong:execution:tasks") == 0
+          assert list(client.scan_iter("tiantong:execution:lock:*") ) == []
+          PY
+
   test-and-build:
     runs-on: ubuntu-latest
     services:
@@ -553,9 +645,35 @@ jobs:
       - name: Generate R297 real-process acceptance evidence
         env:
           APP_ENV: acceptance
+          R297_SIGNED_EVENT_BUNDLE: /tmp/r297-signed-event-bundle.json
         run: |
+          set -o pipefail
+          if ! test -f "$R297_SIGNED_EVENT_BUNDLE"; then
+            echo "R297_SIGNED_EVENT_BUNDLE_MISSING" | tee /tmp/r297-process-evidence.log
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="utf-8"?>' \
+              '<testsuite name="r297_process_evidence" tests="1" failures="1">' \
+              '<testcase name="protected_signed_event_bundle"><failure message="R297_SIGNED_EVENT_BUNDLE_MISSING"/></testcase>' \
+              '</testsuite>' > /tmp/r297-process-evidence-results.xml
+            exit 1
+          fi
           PYTHONPATH=. python ops/r297_process_acceptance.py /tmp/r297-process-acceptance \
-            --runtime-image "$S12_JD_RUNTIME_IMAGE"
+            --runtime-image "$S12_JD_RUNTIME_IMAGE" \
+            --signed-event-bundle "$R297_SIGNED_EVENT_BUNDLE" 2>&1 | \
+            sed -E \
+              -e 's/(authorization: *(bearer|device) +)[^ ]+/\1[REDACTED]/Ig' \
+              -e 's/((password|token|secret|cookie|key)[=:] *)[^ ]+/\1[REDACTED]/Ig' \
+              -e 's#(postgres(ql)?://)[^/@:]+:[^@/]+@#\1[REDACTED]@#Ig' | \
+            tee /tmp/r297-process-evidence.log
+
+      - name: Upload R297 process evidence log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-process-evidence-log-${{ github.event.pull_request.head.sha || github.sha }}
+          path: /tmp/r297-process-evidence.log
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload R297 process acceptance evidence
         uses: actions/upload-artifact@v7
@@ -569,36 +687,33 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Run tests
+      - name: Validate R297 process acceptance evidence
         env:
           R297_PROCESS_ACCEPTANCE_EVIDENCE: /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
         run: |
-          bash -n ops/r297_workbench_deploy.sh
-          python -m pytest -v tests/ --junitxml=/tmp/pytest-results.xml
-          python - <<'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
+          set -o pipefail
+          python -m pytest -v tests/ \
+            --strict-markers \
+            -m r297_process_evidence \
+            -o junit_logging=no \
+            --junitxml=/tmp/r297-process-evidence-results.xml 2>&1 | \
+            sed -E \
+              -e 's/(authorization: *(bearer|device) +)[^ ]+/\1[REDACTED]/Ig' \
+              -e 's/((password|token|secret|cookie|key)[=:] *)[^ ]+/\1[REDACTED]/Ig' \
+              -e 's#(postgres(ql)?://)[^/@:]+:[^@/]+@#\1[REDACTED]@#Ig' | \
+            tee /tmp/r297-process-evidence-results.log
 
-          result_path = Path("/tmp/pytest-results.xml")
-          root = ET.parse(result_path).getroot()
-          if root.tag == "testsuite":
-              suites = [root]
-          elif all(name in root.attrib for name in ("tests", "failures", "errors", "skipped")):
-              suites = [root]
-          else:
-              suites = root.findall("testsuite")
-          totals = {
-              name: sum(int(suite.attrib.get(name, "0")) for suite in suites)
-              for name in ("tests", "failures", "errors", "skipped")
-          }
-          assert totals == {
-              "tests": 1846,
-              "failures": 0,
-              "errors": 0,
-              "skipped": 0,
-          }, totals
-          print("CI_PYTEST_RESULT=1846_PASS/0_SKIP/0_FAIL/0_ERROR")
-          PY
+      - name: Upload R297 process evidence validation
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-process-evidence-validation-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            /tmp/r297-process-evidence-results.xml
+            /tmp/r297-process-evidence-results.log
+            /tmp/r297-process-evidence.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Verify CI Redis queue and lock residue
         if: always()

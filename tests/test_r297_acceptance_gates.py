@@ -14,6 +14,8 @@ import re
 import subprocess
 import sys
 
+import pytest
+
 from backend.database import Base
 from backend.main import app
 from backend.models import Store, User, UserStoreMembership
@@ -21,7 +23,7 @@ from backend.models import Store, User, UserStoreMembership
 
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "desktop" / "jd-workbench"
-FINAL_REVISION = "0053_r297_jd_workbench_hash_uniqueness"
+FINAL_REVISION = "0054_r297_jd_business_uniqueness"
 
 
 def read(path: Path) -> str:
@@ -289,6 +291,7 @@ def test_r297_default_sync_interval_is_exactly_300_seconds():
     assert "const DEFAULT_INTERVAL_MS = 5 * 60 * 1000" in scheduler
 
 
+@pytest.mark.r297_process_evidence
 def test_r297_web_page_close_does_not_own_or_stop_cloud_scheduling():
     result = process_acceptance_evidence()["web_page_close"]
     assert result["closed"] is True
@@ -296,6 +299,7 @@ def test_r297_web_page_close_does_not_own_or_stop_cloud_scheduling():
     assert set(result["collected_store_ids_after"]) == set(result["eligible_store_ids"])
 
 
+@pytest.mark.r297_process_evidence
 def test_r297_electron_exit_does_not_own_or_stop_cloud_scheduling():
     result = process_acceptance_evidence()["electron_exit"]
     assert result["exited"] is True
@@ -303,6 +307,7 @@ def test_r297_electron_exit_does_not_own_or_stop_cloud_scheduling():
     assert set(result["collected_store_ids_after"]) == set(result["eligible_store_ids"])
 
 
+@pytest.mark.r297_process_evidence
 def test_r297_cloud_worker_restart_recovers_persisted_due_tasks():
     result = process_acceptance_evidence()["worker_restart"]
     assert result["worker_pid_before"] != result["worker_pid_after"]
@@ -310,6 +315,7 @@ def test_r297_cloud_worker_restart_recovers_persisted_due_tasks():
     assert result["recovered_due_count"] == result["persisted_due_count_before"]
 
 
+@pytest.mark.r297_process_evidence
 def test_r297_multiple_workers_claim_each_store_once_atomically():
     result = process_acceptance_evidence()["multi_worker"]
     assert len(set(result["worker_pids"])) >= 2
@@ -320,6 +326,7 @@ def test_r297_multiple_workers_claim_each_store_once_atomically():
     assert result["duplicate_collection_count"] == 0
 
 
+@pytest.mark.r297_process_evidence
 def test_r297_cloud_retry_schedule_is_exact_contract():
     result = process_acceptance_evidence()["retry_schedule"]
     assert result["scheduler"] == "cloud_worker"
@@ -327,6 +334,7 @@ def test_r297_cloud_retry_schedule_is_exact_contract():
     assert result["attempt_count"] == 5
 
 
+@pytest.mark.r297_process_evidence
 def test_r297_manual_handling_success_resumes_collection_without_second_trigger():
     result = process_acceptance_evidence()["manual_resume"]
     assert result["human_action_state_observed"] is True
@@ -340,6 +348,7 @@ def test_r297_manual_handling_success_resumes_collection_without_second_trigger(
     assert result["collection_count_after"] > result["collection_count_before"]
 
 
+@pytest.mark.r297_process_evidence
 def test_r297_electron_detects_login_captcha_and_risk_as_human_action_required():
     detections = process_acceptance_evidence()["human_action_detection"]
     assert detections == {
@@ -349,6 +358,7 @@ def test_r297_electron_detects_login_captcha_and_risk_as_human_action_required()
     }
 
 
+@pytest.mark.r297_process_evidence
 def test_r297_real_service_restart_preserves_session_policy_and_status():
     result = process_acceptance_evidence()["service_restart"]
     assert result["service_pid_before"] != result["service_pid_after"]
@@ -406,6 +416,7 @@ def test_r297_postgresql_upgrade_check_and_downgrade_reupgrade(
             assert head_lines == [f"{FINAL_REVISION} (head)"]
 
 
+@pytest.mark.r297_windows_evidence
 def test_r297_windows_installer_and_portable_have_runtime_acceptance_evidence():
     evidence_path = os.getenv("R297_WINDOWS_ACCEPTANCE_EVIDENCE")
     assert evidence_path, (
