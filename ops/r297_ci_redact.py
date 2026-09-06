@@ -9,6 +9,17 @@ from pathlib import Path
 
 
 _RULES = (
+    (
+        re.compile(
+            r"(&quot;(?:password|token|secret|cookie|key)&quot;\s*[:=]\s*&quot;)[^&<]*(&quot;)",
+            re.I,
+        ),
+        r"\1[REDACTED]\2",
+    ),
+    (
+        re.compile(r'(\"(?:password|token|secret|cookie|key)\"\s*[:=]\s*\")[^\"]*(\")', re.I),
+        r"\1[REDACTED]\2",
+    ),
     (re.compile(r"(authorization:\s*(?:bearer|device)\s+)[^\s<\"']+", re.I), r"\1[REDACTED]"),
     (re.compile(r"((?:password|token|secret|cookie|key)[=:]\s*)[^\s<\"']+", re.I), r"\1[REDACTED]"),
     (re.compile(r"(postgres(?:ql)?://)[^/@:\s\"']+:[^@/\s\"']+@", re.I), r"\1[REDACTED]@"),
