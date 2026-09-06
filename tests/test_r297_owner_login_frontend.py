@@ -97,6 +97,125 @@ await assert.rejects(
     )
 
 
+def test_owner_login_real_environment_preflight_fails_closed():
+    script = r"""
+const assert = require('node:assert/strict');
+const login = require('./frontend/r297-owner-login.js');
+
+const owner = {role_code: 'owner'};
+const store = {id: 7, platform: 'jd', active: true};
+const healthy = async path => {
+  assert.equal(path, '/api/health');
+  return {status: 200, json: async () => ({status: 'running', database: true, redis: true})};
+};
+const activeClient = {status: async id => ({store_id: id, status: 'ACTIVE'})};
+const preflightController = new AbortController();
+let healthSignal;
+let statusSignal;
+const signalAwareHealth = async (path, options) => {
+  healthSignal = options.signal;
+  return healthy(path);
+};
+const signalAwareClient = {status: async (id, signal) => { statusSignal = signal; return {store_id: id, status: 'ACTIVE'}; }};
+
+let createOptions;
+const signalAwareApi = login.createClient(async (_path, options) => {
+  createOptions = options;
+  return {status: 200, json: async () => ({store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 60})};
+});
+await signalAwareApi.create(7, preflightController.signal);
+assert.equal(createOptions.signal, preflightController.signal);
+assert.equal(createOptions.method, 'POST');
+
+assert.deepEqual(await login.runPreflight({
+  request: healthy, user: owner, store, client: activeClient,
+  location: {protocol: 'https:'}, secureContext: true
+}), {
+  backend_https: true, tls_trusted: true, owner_identity: true,
+  store_authorized: true, runtime_healthy: true, store_id: 7
+});
+await login.runPreflight({
+  request: signalAwareHealth, user: owner, store, client: signalAwareClient,
+  signal: preflightController.signal, location: {protocol: 'https:'}, secureContext: true
+});
+assert.equal(healthSignal, preflightController.signal);
+assert.equal(statusSignal, preflightController.signal);
+
+for (const options of [
+  {request: healthy, user: owner, store, client: activeClient, location: {protocol: 'http:'}, secureContext: true},
+  {request: healthy, user: owner, store, client: activeClient, location: {protocol: 'https:'}, secureContext: false},
+  {request: healthy, user: {role_code: 'admin'}, store, client: activeClient, location: {protocol: 'https:'}, secureContext: true},
+  {request: healthy, user: owner, store: {...store, platform: 'tmall'}, client: activeClient, location: {protocol: 'https:'}, secureContext: true},
+  {request: healthy, user: owner, store: {...store, active: false}, client: activeClient, location: {protocol: 'https:'}, secureContext: true}
+]) await assert.rejects(login.runPreflight(options), /HTTPS|TLS|Owner|京东|停用/);
+
+await assert.rejects(login.runPreflight({
+  request: async () => ({status: 503, json: async () => ({})}), user: owner, store,
+  client: activeClient, location: {protocol: 'https:'}, secureContext: true
+}), /Backend健康检查失败/);
+await assert.rejects(login.runPreflight({
+  request: async () => ({status: 200, json: async () => ({status: 'running', database: true, redis: false})}),
+  user: owner, store, client: activeClient, location: {protocol: 'https:'}, secureContext: true
+}), /Backend依赖未就绪/);
+for (const status of [403, 503]) await assert.rejects(login.runPreflight({
+  request: healthy, user: owner, store,
+  client: {status: async () => { const error = new Error('runtime'); error.status = status; throw error; }},
+  location: {protocol: 'https:'}, secureContext: true
+}), status === 403 ? /店铺授权预检失败/ : /Runtime健康检查失败/);
+
+const sockets = [];
+class OpenSocket {
+  constructor(url, protocol) { this.url = url; this.protocol = protocol; sockets.push(this); queueMicrotask(() => this.onopen()); }
+  close() { this.closed = true; }
+}
+assert.deepEqual(await login.verifyNoVncWebSocket({
+  WebSocketCtor: OpenSocket, location: {protocol: 'https:', host: 'internal.example'}, storeId: 7,
+  setTimer: () => 1, clearTimer: () => {}
+}), {store_id: 7, websocket: 'connected'});
+assert.equal(sockets[0].url, 'wss://internal.example/jd-browser/novnc/7/websockify');
+assert.equal(sockets[0].protocol, 'binary');
+assert.equal(sockets[0].url.includes('?'), false);
+assert.equal(sockets[0].closed, true);
+
+class FailedSocket {
+  constructor() { queueMicrotask(() => this.onerror()); }
+  close() { this.closed = true; }
+}
+await assert.rejects(login.verifyNoVncWebSocket({
+  WebSocketCtor: FailedSocket, location: {protocol: 'https:', host: 'internal.example'}, storeId: 7,
+  setTimer: () => 1, clearTimer: () => {}
+}), /WebSocket连接失败/);
+
+let abortedSocketCount = 0;
+class MustNotOpenSocket { constructor() { abortedSocketCount += 1; } }
+const alreadyAborted = new AbortController();
+alreadyAborted.abort();
+await assert.rejects(login.verifyNoVncWebSocket({
+  WebSocketCtor: MustNotOpenSocket, location: {protocol: 'https:', host: 'internal.example'}, storeId: 7,
+  signal: alreadyAborted.signal
+}), /连接已取消/);
+assert.equal(abortedSocketCount, 0);
+
+let pendingClosed = 0;
+let clearedTimer = 0;
+class PendingSocket { close() { pendingClosed += 1; } }
+const pendingController = new AbortController();
+const pendingSocket = login.verifyNoVncWebSocket({
+  WebSocketCtor: PendingSocket, location: {protocol: 'https:', host: 'internal.example'}, storeId: 7,
+  signal: pendingController.signal, setTimer: () => 9, clearTimer: id => { assert.equal(id, 9); clearedTimer += 1; }
+});
+pendingController.abort();
+await assert.rejects(pendingSocket, /连接已取消/);
+assert.equal(pendingClosed, 1);
+assert.equal(clearedTimer, 1);
+"""
+    subprocess.run(
+        ["node", "-e", f"(async()=>{{{script}}})().catch(error=>{{console.error(error);process.exit(1)}})"],
+        cwd=ROOT,
+        check=True,
+    )
+
+
 def test_owner_login_statuses_errors_and_polling_fail_closed():
     script = r"""
 const assert = require('node:assert/strict');
@@ -173,6 +292,21 @@ await crossPoller.start(2);
 resolveOld({store_id: 1, status: 'ONLINE'});
 await oldRequest;
 assert.deepEqual(crossStore, [2]);
+
+let pendingPollSignal;
+let resolvePendingPoll;
+const pendingPoller = login.createPoller({
+  fetchStatus: (_storeId, signal) => { pendingPollSignal = signal; return new Promise(resolve => { resolvePendingPoll = resolve; }); },
+  onStatus: () => { throw new Error('离页后不得渲染轮询结果'); },
+  onError: () => { throw new Error('取消不得显示业务错误'); }
+});
+const pendingPollRequest = pendingPoller.start(7);
+assert.equal(pendingPollSignal.aborted, false);
+pendingPoller.stop();
+assert.equal(pendingPollSignal.aborted, true);
+resolvePendingPoll({store_id: 7, status: 'ONLINE'});
+await pendingPollRequest;
+assert.equal(pendingPoller.active(), false);
 
 let focused = 0;
 let closed = 0;
@@ -253,6 +387,9 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert "store.platform!=='jd'" in page
     assert "if(!store.active)return" in page
     assert "R297OwnerLogin.openViewer(" in page
+    assert "R297OwnerLogin.runPreflight(" in page
+    assert "R297OwnerLogin.verifyNoVncWebSocket(" in page
+    assert "secureContext:isSecureContext" in page
     assert "window.open('about:blank'" in page
     assert "viewerWindow.location.replace(viewerPath)" in page
     assert "if(loginWindows.focus(id))return" in page
@@ -260,7 +397,7 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert page.index("loginWindows.track(id,viewerWindow)") < page.index("R297OwnerLogin.openViewer(")
     assert '<button class="danger"${busy}' in page
     assert page.count("loginBusy.has(id)") == 3
-    assert "ownerLoginClient.status(id)" in page
+    assert "ownerLoginClient.status(id,signal)" in page
     assert page.count("ownerLoginClient.status(") == 1
     assert "loadOwnerLoginStates" not in page
     assert "isAllowed:()=>R297OwnerLogin.isOwner(currentUser)&&document.getElementById('stores')!==null" in page

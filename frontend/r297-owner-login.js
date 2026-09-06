@@ -80,13 +80,14 @@
     const emptyPost = Object.freeze({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const send = async (path, options) => { try { return await request(path, options); } catch (_error) { throw new Error('网络连接失败，请稍后重试'); } };
     return Object.freeze({
-      create: async value => {
-        const id = storeId(value), data = await requiredJson(await send(sessionPath(id), emptyPost), 200);
+      create: async (value, signal) => {
+        const id = storeId(value), data = await requiredJson(await send(sessionPath(id), signal ? { ...emptyPost, signal } : emptyPost), 200);
         if (!exactKeys(data, ['store_id', 'status', 'expires_in']) || data.status !== 'LOGIN_REQUIRED' || !strictTtl(data.expires_in, SESSION_TTL_MAX_SECONDS)) throw new Error('登录会话响应无效');
         return sessionState(id, data);
       },
-      status: async value => {
-        const id = storeId(value), data = await requiredJson(await send(sessionPath(id)), 200);
+      status: async (value, signal) => {
+        const id = storeId(value), options = signal ? { signal } : undefined;
+        const data = await requiredJson(await send(sessionPath(id), options), 200);
         if (!exactKeys(data, ['store_id', 'status'])) throw new Error('登录状态响应无效');
         return sessionState(id, data);
       },
@@ -139,6 +140,62 @@
     return Boolean(user && user.role_code === 'owner');
   }
 
+  async function runPreflight({ request, user, store, client, signal, location = root.location, secureContext = root.isSecureContext }) {
+    if (!location || location.protocol !== 'https:') throw new Error('真实联调必须使用Backend HTTPS地址');
+    if (secureContext !== true) throw new Error('TLS证书未受浏览器信任');
+    if (!isOwner(user)) { const error = new Error('仅Owner可执行云端登录预检'); error.status = 403; throw error; }
+    if (!store || store.platform !== 'jd') throw new Error('仅真实京东店铺可执行云端登录预检');
+    if (store.active !== true) throw new Error('停用店铺不能执行云端登录预检');
+    const id = storeId(store.id);
+    let healthResponse;
+    try { healthResponse = await request('/api/health', { credentials: 'include', cache: 'no-store', signal }); }
+    catch (_error) { throw new Error('Backend HTTPS连接失败'); }
+    if (!healthResponse || healthResponse.status !== 200) throw new Error('Backend健康检查失败');
+    let health;
+    try { health = await healthResponse.json(); } catch (_error) { throw new Error('Backend健康响应无效'); }
+    if (!health || health.status !== 'running' || health.database !== true || health.redis !== true) throw new Error('Backend依赖未就绪');
+    try { await client.status(id, signal); }
+    catch (error) {
+      const failure = new Error(error && error.status === 403 ? '店铺授权预检失败' : 'Runtime健康检查失败');
+      failure.status = error && error.status;
+      throw failure;
+    }
+    return Object.freeze({
+      backend_https: true, tls_trusted: true, owner_identity: true,
+      store_authorized: true, runtime_healthy: true, store_id: id
+    });
+  }
+
+  function verifyNoVncWebSocket({ WebSocketCtor = root.WebSocket, location = root.location, storeId: value, signal, setTimer = setTimeout, clearTimer = clearTimeout, timeoutMs = 5000 }) {
+    const id = storeId(value);
+    if (!location || location.protocol !== 'https:' || !location.host || typeof WebSocketCtor !== 'function') {
+      return Promise.reject(new Error('noVNC WebSocket安全连接不可用'));
+    }
+    if (signal && signal.aborted) return Promise.reject(new Error('noVNC WebSocket连接已取消'));
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const socket = new WebSocketCtor(`wss://${location.host}/jd-browser/novnc/${id}/websockify`, 'binary');
+      const timer = setTimer(() => finish(new Error('noVNC WebSocket连接超时')), timeoutMs);
+      const abort = () => finish(new Error('noVNC WebSocket连接已取消'));
+      function finish(error) {
+        if (settled) return;
+        settled = true;
+        clearTimer(timer);
+        if (signal) signal.removeEventListener('abort', abort);
+        try { socket.close(); } catch (_error) {}
+        if (error) reject(error);
+        else resolve(Object.freeze({ store_id: id, websocket: 'connected' }));
+      }
+      socket.onopen = () => finish();
+      socket.onerror = () => finish(new Error('noVNC WebSocket连接失败'));
+      socket.onclose = () => finish(new Error('noVNC WebSocket连接提前关闭'));
+      if (signal) {
+        if (signal.aborted) return abort();
+        signal.addEventListener('abort', abort, { once: true });
+      }
+    });
+  }
+
   function statusView(value) {
     if (value === undefined || value === null || value === '') return Object.freeze({ code: 'UNKNOWN', label: STATUS_LABELS.UNKNOWN, terminal: false });
     const code = String(value).toUpperCase();
@@ -167,22 +224,27 @@
     return error && error.message || '云端登录请求失败，请稍后重试';
   }
 
-  function createPoller({ fetchStatus, onStatus, onError, isAllowed = () => true, setTimer = setTimeout, clearTimer = clearTimeout, intervalMs = 3000 }) {
+  function createPoller({ fetchStatus, onStatus, onError, isAllowed = () => true, setTimer = setTimeout, clearTimer = clearTimeout, AbortControllerCtor = root.AbortController, intervalMs = 3000 }) {
     let generation = 0;
     let timer = null;
     let running = false;
+    let requestController = null;
 
     function stop() {
       generation += 1;
       running = false;
       if (timer !== null) clearTimer(timer);
       timer = null;
+      if (requestController) requestController.abort();
+      requestController = null;
     }
 
     async function poll(token, id) {
       if (!running || token !== generation || !isAllowed()) return stop();
+      const controller = new AbortControllerCtor();
+      requestController = controller;
       try {
-        const result = await fetchStatus(id);
+        const result = await fetchStatus(id, controller.signal);
         if (!running || token !== generation || !isAllowed()) return stop();
         onStatus(result);
         if (statusView(result && result.status).terminal) return stop();
@@ -190,6 +252,8 @@
       } catch (error) {
         if (!running || token !== generation) return;
         try { onError(error); } finally { stop(); }
+      } finally {
+        if (requestController === controller) requestController = null;
       }
     }
 
@@ -249,5 +313,5 @@
     windows.closeAll();
   }
 
-  return Object.freeze({ PAGE_CLOSE_OBSERVER_CONTRACT, closePageResources, createClient, createOperationGate, createPageCloseReporter, createPoller, createWindowRegistry, errorMessage, isOwner, openViewer, redeemTicket, sessionState, statusView });
+  return Object.freeze({ PAGE_CLOSE_OBSERVER_CONTRACT, closePageResources, createClient, createOperationGate, createPageCloseReporter, createPoller, createWindowRegistry, errorMessage, isOwner, openViewer, redeemTicket, runPreflight, sessionState, statusView, verifyNoVncWebSocket });
 });
