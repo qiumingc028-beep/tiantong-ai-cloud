@@ -85,6 +85,112 @@ def test_task_attempt_has_persistent_database_idempotency_key(postgres_database_
         engine.dispose()
 
 
+def test_manual_resume_fences_the_active_claim_generation(postgres_database_factory, monkeypatch):
+    from backend import worker
+    from backend.routers.jd_workbench import resume_store_after_human_action
+    from tests.conftest import _alembic
+
+    database_url = postgres_database_factory("r297_manual_resume_fence")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    now = datetime.now(timezone.utc)
+    task_id = str(uuid.uuid4())
+
+    db = sessions()
+    try:
+        tenant = Tenant(tenant_code="R297-MR", tenant_name="R297 manual resume")
+        db.add(tenant)
+        db.flush()
+        company = Company(tenant_id=tenant.id, company_code="R297-MR", company_name="R297 manual resume")
+        db.add(company)
+        db.flush()
+        user = User(
+            username="r297-manual-resume", password_hash="not-a-secret", role="owner",
+            display_name="R297", tenant_id=tenant.id, company_id=company.id, active=True,
+        )
+        db.add(user)
+        db.flush()
+        store = Store(
+            tenant_id=tenant.id, company_id=company.id, platform="jd",
+            store_code="R297-MR", store_name="R297 manual resume", active=True,
+        )
+        db.add(store)
+        db.flush()
+        device = JdWorkbenchDevice(
+            device_id="r297-manual-resume", token_hash="a" * 64, public_key_n="n", public_key_e=65537,
+            tenant_id=tenant.id, company_id=company.id, user_id=user.id, device_name="R297",
+            client_version="r297", status="PAIRED", expires_at=now + timedelta(hours=1),
+        )
+        db.add(device)
+        db.flush()
+        status = JdWorkbenchStoreStatus(
+            device_id=device.device_id, store_id=store.id, status="HUMAN_ACTION_REQUIRED",
+            reason_code="RISK_CONTROL", retry_count=3, next_sync_at=now + timedelta(days=1),
+        )
+        policy = JdWorkbenchSyncPolicy(
+            tenant_id=tenant.id, company_id=company.id, store_id=store.id,
+            enabled=True, interval_seconds=300, active_task_id=task_id, queue_state="processing",
+            lease_worker_id="worker-old", claim_generation=7,
+            visibility_deadline=now + timedelta(minutes=1),
+        )
+        db.add_all((status, policy))
+        db.commit()
+        scope = (tenant.id, company.id, store.id)
+
+        resume_store_after_human_action(db, device, store, status, now)
+        db.commit()
+        db.refresh(policy)
+        assert policy.claim_generation == 8
+        assert (policy.active_task_id, policy.queue_state, policy.lease_worker_id) == (None, None, None)
+    finally:
+        db.close()
+
+    monkeypatch.setattr(worker, "SessionLocal", sessions)
+    stale_task = {
+        "task_id": task_id,
+        "task_type": "sync_jd_smart",
+        "db_claim_generation": 7,
+        "attempt": 0,
+        "payload": {
+            "source": "cloud_scheduler", "tenant_id": scope[0],
+            "company_id": scope[1], "store_id": scope[2],
+        },
+    }
+    stale_db = sessions()
+    try:
+        with pytest.raises(JdCollectorError, match="任务租约已失效"):
+            worker._assert_jd_workbench_claim_owned(stale_db, stale_task, "worker-old")
+        stale_db.rollback()
+    finally:
+        stale_db.close()
+    assert worker._finish_jd_workbench_task(stale_task, "worker-old", success=True, now=now) is False
+
+    redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    redis_client = redis_module.Redis.from_url(redis_url, decode_responses=True)
+    namespace = f"tiantong:test:r297-manual-resume:{uuid.uuid4()}"
+    queue_keys = {
+        "PROCESSING_QUEUE_NAME": f"{namespace}:processing",
+        "PROCESSING_METADATA_PREFIX": f"{namespace}:processing:",
+        "PROCESSING_DEADLINES_KEY": f"{namespace}:processing:deadlines",
+    }
+    from backend import queue
+    for name, value in queue_keys.items():
+        monkeypatch.setattr(queue, name, value)
+    monkeypatch.setattr(worker, "PROCESSING_QUEUE_NAME", queue_keys["PROCESSING_QUEUE_NAME"])
+    monkeypatch.setattr(queue, "get_redis", lambda: redis_client)
+    monkeypatch.setattr(worker, "get_redis", lambda: redis_client)
+    monkeypatch.setattr(worker, "discard_processing_task", queue.discard_processing_task)
+    raw = json.dumps({**stale_task, "claim_generation": 7})
+    redis_client.rpush(queue.PROCESSING_QUEUE_NAME, raw)
+    try:
+        assert worker.reconcile_completed_jd_workbench_tasks() == 1
+        assert redis_client.llen(queue.PROCESSING_QUEUE_NAME) == 0
+    finally:
+        redis_client.delete(*queue_keys.values())
+    engine.dispose()
+
+
 def test_migration_rejects_historical_duplicate_task_attempts(postgres_database_factory):
     from tests.conftest import _alembic
 

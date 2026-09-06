@@ -703,12 +703,16 @@ class JdWorkbenchRecord(Base):
 
 class JdAd(Base):
     __tablename__ = "jd_ads"
+    __table_args__ = (
+        UniqueConstraint("store_id", "stat_date", "campaign_id", name="uq_jd_ads_store_date_campaign"),
+        CheckConstraint("length(trim(campaign_id)) > 0", name="ck_jd_ads_campaign_id_not_blank"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
     account_id: Mapped[int | None] = mapped_column(ForeignKey("jd_accounts.id", ondelete="SET NULL"))
     stat_date: Mapped[datetime] = mapped_column(Date, nullable=False)
-    campaign_id: Mapped[str | None] = mapped_column(String(100))
+    campaign_id: Mapped[str] = mapped_column(String(100), nullable=False)
     campaign_name: Mapped[str | None] = mapped_column(String(200))
     ad_spend: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     clicks: Mapped[int] = mapped_column(Integer, default=0)
@@ -740,6 +744,10 @@ class JdOrder(Base):
 
 class JdProduct(Base):
     __tablename__ = "jd_products"
+    __table_args__ = (
+        UniqueConstraint("store_id", "stat_date", "sku_id", name="uq_jd_products_store_date_sku"),
+        CheckConstraint("length(trim(sku_id)) > 0", name="ck_jd_products_sku_id_not_blank"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)

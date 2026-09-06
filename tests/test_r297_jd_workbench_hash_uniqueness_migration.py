@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 
-FINAL_REVISION = "0053_r297_jd_workbench_hash_uniqueness"
+FINAL_REVISION = "0054_r297_jd_business_uniqueness"
 
 
 def _alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[str]:

@@ -4,6 +4,7 @@ import os
 import hmac
 from urllib.request import Request, urlopen
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from ..models import JdAccount, JdAd, JdDailyMetric, JdOrder, JdProduct, Store
@@ -98,22 +99,7 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
     rows = JztCollector().fetch_ads_today(account)
     saved = 0
     for row in rows:
-        db.add(
-            JdAd(
-                store_id=store_id,
-                account_id=account.id,
-                stat_date=stat_date or date.today(),
-                campaign_id=str(row.get("campaign_id", "")),
-                campaign_name=row.get("campaign_name", ""),
-                ad_spend=number(row.get("ad_spend")),
-                clicks=int(number(row.get("clicks"))),
-                impressions=int(number(row.get("impressions"))),
-                roi=number(row.get("roi")),
-                cpa=number(row.get("cpa")),
-                deal_amount=number(row.get("deal_amount")),
-                raw_payload=None,
-            )
-        )
+        save_ad(db, store_id, account.id, stat_date or date.today(), row)
         saved += 1
     account.last_sync_at = datetime.now(timezone.utc)
     account.login_status = "ok"
@@ -201,21 +187,78 @@ def save_order(db: Session, store_id: int, row: dict):
 
 
 def save_product(db: Session, store_id: int, row: dict):
-    product = JdProduct(
-        store_id=store_id,
-        sku_id=str(row.get("sku_id", "")).strip(),
-        product_name=row.get("product_name", ""),
-        category_name=row.get("category_name"),
-        stock_quantity=int(number(row.get("stock_quantity"))),
-        sales_amount=number(row.get("sales_amount")),
-        sales_quantity=int(number(row.get("sales_quantity"))),
-        visitors_count=int(number(row.get("visitors_count"))),
-        conversion_rate=number(row.get("conversion_rate")),
-        stat_date=parse_date(row.get("stat_date")) or date.today(),
-        raw_payload=None,
-    )
-    db.add(product)
-    return product
+    raw_sku_id = row.get("sku_id")
+    sku_id = str(raw_sku_id).strip() if raw_sku_id is not None else ""
+    if not sku_id:
+        raise JdCollectorError("商品缺少 sku_id")
+    stat_date = parse_date(row.get("stat_date")) or date.today()
+    values = {
+        "store_id": store_id,
+        "stat_date": stat_date,
+        "sku_id": sku_id,
+        "product_name": row.get("product_name", ""),
+        "category_name": row.get("category_name"),
+        "stock_quantity": int(number(row.get("stock_quantity"))),
+        "sales_amount": number(row.get("sales_amount")),
+        "sales_quantity": int(number(row.get("sales_quantity"))),
+        "visitors_count": int(number(row.get("visitors_count"))),
+        "conversion_rate": number(row.get("conversion_rate")),
+        "raw_payload": None,
+        "synced_at": datetime.now(timezone.utc),
+    }
+    _upsert_business_row(db, JdProduct, ("store_id", "stat_date", "sku_id"), values)
+    return db.query(JdProduct).filter(
+        JdProduct.store_id == store_id,
+        JdProduct.stat_date == stat_date,
+        JdProduct.sku_id == sku_id,
+    ).one()
+
+
+def save_ad(db: Session, store_id: int, account_id: int | None, stat_date: date, row: dict):
+    raw_campaign_id = row.get("campaign_id")
+    campaign_id = str(raw_campaign_id).strip() if raw_campaign_id is not None else ""
+    if not campaign_id:
+        raise JdCollectorError("广告缺少 campaign_id")
+    values = {
+        "store_id": store_id,
+        "stat_date": stat_date,
+        "campaign_id": campaign_id,
+        "account_id": account_id,
+        "campaign_name": row.get("campaign_name", ""),
+        "ad_spend": number(row.get("ad_spend")),
+        "clicks": int(number(row.get("clicks"))),
+        "impressions": int(number(row.get("impressions"))),
+        "roi": number(row.get("roi")),
+        "cpa": number(row.get("cpa")),
+        "deal_amount": number(row.get("deal_amount")),
+        "raw_payload": None,
+        "synced_at": datetime.now(timezone.utc),
+    }
+    _upsert_business_row(db, JdAd, ("store_id", "stat_date", "campaign_id"), values)
+    return db.query(JdAd).filter(
+        JdAd.store_id == store_id,
+        JdAd.stat_date == stat_date,
+        JdAd.campaign_id == campaign_id,
+    ).one()
+
+
+def _upsert_business_row(db: Session, model, key_columns: tuple[str, ...], values: dict) -> None:
+    if db.get_bind().dialect.name == "postgresql":
+        statement = pg_insert(model).values(**values)
+        db.execute(statement.on_conflict_do_update(
+            index_elements=list(key_columns),
+            set_={key: statement.excluded[key] for key in values if key not in key_columns},
+        ))
+        return
+
+    row = db.query(model).filter_by(**{key: values[key] for key in key_columns}).one_or_none()
+    if row is None:
+        row = model(**{key: values[key] for key in key_columns})
+        db.add(row)
+    for key, value in values.items():
+        if key not in key_columns:
+            setattr(row, key, value)
+    db.flush()
 
 
 def number(value):

@@ -427,6 +427,28 @@ def test_worker_nacks_temporary_database_claim_contention(monkeypatch):
     assert calls == ["nack"]
 
 
+def test_worker_does_not_ack_after_manual_resume_fences_its_claim(monkeypatch):
+    from backend import worker
+
+    task = {
+        "task_id": "00000000-0000-4000-8000-000000000299",
+        "task_type": "sync_jd_smart",
+        "payload": {"source": "cloud_scheduler"},
+        "claim_generation": 7,
+        "_processing_raw": "raw",
+    }
+    calls = []
+    monkeypatch.setattr(worker, "_worker_id", lambda: "worker-old")
+    monkeypatch.setattr(worker, "claim_task", lambda **_kwargs: dict(task))
+    monkeypatch.setattr(worker, "_claim_jd_workbench_task", lambda *_args: "claimed")
+    monkeypatch.setattr(worker, "handle_task", lambda *_args: None)
+    monkeypatch.setattr(worker, "_finish_jd_workbench_task", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(worker, "ack_task", lambda *_args: calls.append("ack") or True)
+
+    assert worker.process_next_task() is True
+    assert calls == []
+
+
 def test_failed_non_cloud_attempt_is_atomically_requeued(monkeypatch):
     from backend import worker
 

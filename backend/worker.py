@@ -614,6 +614,11 @@ def reconcile_completed_jd_workbench_tasks() -> int:
     reconciled = 0
     for raw in redis.lrange(PROCESSING_QUEUE_NAME, 0, -1):
         task = json.loads(raw)
+        cloud = (
+            task.get("task_type") == "sync_jd_smart"
+            and task.get("payload", {}).get("source") == "cloud_scheduler"
+        )
+        abandoned = False
         db = SessionLocal()
         try:
             terminal = db.query(JdSyncLog).filter(
@@ -623,14 +628,23 @@ def reconcile_completed_jd_workbench_tasks() -> int:
             status = terminal.status if terminal else None
             claim_generation = terminal.claim_generation if terminal else None
             notification_pending = terminal.redis_notification_pending if terminal else False
+            if terminal is None and cloud:
+                payload = task["payload"]
+                active_task_id = db.query(JdWorkbenchSyncPolicy.active_task_id).filter(
+                    JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+                    JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+                    JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+                ).scalar()
+                abandoned = active_task_id != task["task_id"]
         finally:
             db.close()
         if not terminal:
+            if abandoned and discard_processing_task(task, raw):
+                reconciled += 1
             continue
         if notification_pending:
             continue
         fenced_task = {**task, "db_claim_generation": claim_generation}
-        cloud = task.get("task_type") == "sync_jd_smart" and task.get("payload", {}).get("source") == "cloud_scheduler"
         if status == "success":
             if cloud and not _clear_completed_jd_workbench_policy(fenced_task, datetime.now(timezone.utc)):
                 continue

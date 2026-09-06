@@ -807,6 +807,8 @@ def resume_store_after_human_action(
         JdWorkbenchSyncPolicy.store_id == store.id,
     ).with_for_update().one_or_none()
     if policy:
+        if policy.active_task_id is not None or policy.queue_state is not None:
+            policy.claim_generation += 1
         policy.active_task_id = None
         policy.queue_state = None
         policy.lease_worker_id = None
