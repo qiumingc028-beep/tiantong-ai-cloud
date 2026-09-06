@@ -32,18 +32,27 @@ class JdSmartCollector:
             raise JdCollectorError("云端浏览器内部认证未配置")
         if not endpoint:
             raise JdCollectorError("云端浏览器运行时未配置")
-        payload = {"tenant_id": store.tenant_id, "company_id": store.company_id, "store_id": store.id, "platform": store.platform, "dataset": dataset}
+        namespace = os.getenv("JD_SESSION_NAMESPACE", "").strip()
+        if not namespace:
+            raise JdCollectorError("会话命名空间未配置")
+        payload = {"scope": {"namespace": namespace, "tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": "jd"}, "dataset": dataset}
         try:
             with urlopen(Request(endpoint + "/capture", data=json.dumps(payload).encode(), headers={"content-type": "application/json", "x-internal-token": token}), timeout=45) as response:
                 result = json.loads(response.read(1_000_000))
         except Exception as exc:
             raise JdCollectorError("云端浏览器采集失败") from exc
-        if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") in {"LOGIN_REQUIRED", "CAPTCHA", "RISK_CONTROL"}:
+        if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") != "OK":
             raise JdCollectorError("需要人工处理登录或风控")
         data = result["data"]
         if not isinstance(data, dict) or str(data.get("store_id")) != str(store.id) or data.get("source") != "jd_cloud_playwright":
             raise JdCollectorError("云端采集响应校验失败")
-        return data
+        captured = data.get(dataset)
+        if (dataset == "metrics" and not isinstance(captured, dict)) or (
+            dataset != "metrics"
+            and (not isinstance(captured, list) or any(not isinstance(row, dict) for row in captured))
+        ):
+            raise JdCollectorError("云端采集响应校验失败")
+        return captured
 
     def fetch_today(self, account: JdAccount) -> dict:
         return self._capture(account, "metrics", account.store)
@@ -85,7 +94,7 @@ def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None, c
     if before_commit is not None:
         before_commit()
     db.commit()
-    return result
+    return {"saved": 1}
 
 
 def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):

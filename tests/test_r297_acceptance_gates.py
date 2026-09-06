@@ -113,7 +113,7 @@ def process_acceptance_evidence() -> dict:
     return evidence
 
 
-def test_r297_operations_and_store_management_return_same_real_store_ids(
+def test_r297_operations_store_ids_are_eligible_subset_of_store_directory(
     client,
     owner_headers,
     test_db,
@@ -121,28 +121,31 @@ def test_r297_operations_and_store_management_return_same_real_store_ids(
     db = test_db()
     try:
         owner = db.query(User).filter(User.username == "owner").one()
-        stores = [Store(
+        active_jd_store = Store(
             tenant_id=owner.tenant_id,
             company_id=owner.company_id,
             platform="jd",
             store_code="R297-SECOND",
             store_name="R297 第二测试店铺",
             active=True,
-        ), Store(
+        )
+        inactive_store = Store(
             tenant_id=owner.tenant_id,
             company_id=owner.company_id,
             platform="jd",
             store_code="R297-INACTIVE",
             store_name="R297 停用测试店铺",
             active=False,
-        ), Store(
+        )
+        non_jd_store = Store(
             tenant_id=owner.tenant_id,
             company_id=owner.company_id,
             platform="tmall",
             store_code="R297-OTHER",
             store_name="R297 非京东测试店铺",
             active=True,
-        )]
+        )
+        stores = [active_jd_store, inactive_store, non_jd_store]
         db.add_all(stores)
         db.flush()
         db.add_all([
@@ -156,6 +159,9 @@ def test_r297_operations_and_store_management_return_same_real_store_ids(
             for store in stores
         ])
         db.commit()
+        active_jd_store_id = active_jd_store.id
+        inactive_store_id = inactive_store.id
+        non_jd_store_id = non_jd_store.id
     finally:
         db.close()
 
@@ -164,9 +170,49 @@ def test_r297_operations_and_store_management_return_same_real_store_ids(
 
     assert management.status_code == 200, management.text
     assert operations.status_code == 200, operations.text
-    assert {row["id"] for row in management.json()} == {
-        row["store_id"] for row in operations.json()["stores"]
-    }
+    directory_ids = {row["id"] for row in management.json()}
+    operation_ids = {row["store_id"] for row in operations.json()["stores"]}
+    assert operation_ids <= directory_ids
+    assert active_jd_store_id in operation_ids
+    assert {inactive_store_id, non_jd_store_id} <= directory_ids
+    assert operation_ids.isdisjoint({inactive_store_id, non_jd_store_id})
+
+    db = test_db()
+    try:
+        owner = db.query(User).filter(User.username == "owner").one()
+        eligible_directory_ids = {
+            store.id
+            for store in db.query(Store).filter(
+                Store.id.in_(directory_ids),
+                Store.active.is_(True),
+                Store.platform == "jd",
+                Store.tenant_id == owner.tenant_id,
+                Store.company_id == owner.company_id,
+            )
+            if db.query(UserStoreMembership).filter_by(
+                user_id=owner.id,
+                store_id=store.id,
+                active=True,
+                can_read=True,
+            ).one_or_none()
+        }
+        assert operation_ids == eligible_directory_ids
+        for store_id in operation_ids:
+            store = db.get(Store, store_id)
+            membership = db.query(UserStoreMembership).filter_by(
+                user_id=owner.id,
+                store_id=store_id,
+                active=True,
+                can_read=True,
+            ).one()
+            assert store is not None
+            assert store.active is True
+            assert store.platform == "jd"
+            assert store.tenant_id == owner.tenant_id
+            assert store.company_id == owner.company_id
+            assert membership.store_id == store.id
+    finally:
+        db.close()
 
 
 def test_r297_has_one_store_master_no_mock_store_api_or_frontend_store_literals():

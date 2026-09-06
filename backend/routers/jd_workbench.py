@@ -15,11 +15,12 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlsplit
 from urllib.request import Request as UrlRequest, urlopen
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -217,9 +218,11 @@ async def authorize_browser_session(request: Request, db: Session = Depends(get_
     if len(expected) < 32 or not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="浏览器控制凭据无效")
     body = await _json_body(request)
-    required = {"tenant_id", "company_id", "store_id", "platform"}
+    required = {"namespace", "tenant_id", "company_id", "store_id", "platform"}
     if set(body) != required:
         raise _generic_bad_request()
+    if body["namespace"] != get_settings().JD_SESSION_NAMESPACE:
+        raise HTTPException(status_code=403, detail="会话命名空间不匹配")
     try:
         tenant_id, company_id, store_id = (int(body[name]) for name in ("tenant_id", "company_id", "store_id"))
     except (TypeError, ValueError) as exc:
@@ -240,7 +243,8 @@ def _require_owner_store(store_id: int, request: Request, db: Session) -> tuple[
     if normalize_role(user.role) not in {"owner", "老板"}:
         raise HTTPException(status_code=403, detail="仅Owner可管理云端登录会话")
     store = require_authorized_store(db, user, store_id=store_id, write=True)
-    if not store.active or store.tenant_id != user.tenant_id or store.company_id != user.company_id:
+    if (not store.active or store.tenant_id != user.tenant_id or store.company_id != user.company_id
+            or str(store.platform).lower() != "jd"):
         raise HTTPException(status_code=403, detail="店铺作用域不匹配")
     return user, store
 
@@ -272,7 +276,10 @@ def _runtime_base() -> str:
 
 
 def _runtime_session_id(store: Store) -> str:
-    return f"{store.tenant_id}:{store.company_id}:{store.id}:{store.platform}"
+    namespace = get_settings().JD_SESSION_NAMESPACE.strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,31}", namespace):
+        raise HTTPException(status_code=503, detail="会话命名空间未配置")
+    return f"{namespace}:{store.tenant_id}:{store.company_id}:{store.id}:{store.platform}"
 
 
 def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -302,6 +309,102 @@ def _audit_owner_action(db: Session, user: User, store: Store, action: str) -> N
     db.add(EmployeeLog(user_id=user.id, store_id=store.id, action=action, detail="owner_login_session"))
     db.commit()
 
+def _saga_pending(db: Session, user: User, store: Store, action: str) -> EmployeeLog:
+    detail = {"status": "PENDING", "namespace": get_settings().JD_SESSION_NAMESPACE,
+              "tenant_id": str(store.tenant_id), "company_id": str(store.company_id),
+              "store_id": str(store.id), "platform": str(store.platform), "operation": action,
+              "created_at": _now().isoformat(), "updated_at": _now().isoformat()}
+    row = EmployeeLog(user_id=user.id, store_id=store.id, action=action, detail=json.dumps(detail, separators=(",", ":")))
+    db.add(row); db.commit(); return row
+
+def _saga_finish(db: Session, row: EmployeeLog, status: str) -> None:
+    detail = json.loads(row.detail or "{}")
+    detail["status"] = status; detail["updated_at"] = _now().isoformat()
+    row.detail = json.dumps(detail, separators=(",", ":")); db.commit()
+
+
+OWNER_SAGA_ACTIONS = frozenset(
+    {
+        "owner_login_session_create",
+        "owner_login_session_status",
+        "owner_login_session_revoke",
+        "owner_login_ticket",
+    }
+)
+OWNER_SESSION_STATUSES = frozenset(
+    {"ACTIVE", "LOGIN_REQUIRED", "REVOKED", "EXPIRED", "HUMAN_ACTION_REQUIRED"}
+)
+OWNER_SAGA_RECONCILE_BATCH_SIZE = 25
+_owner_saga_reconcile_after_id = 0
+
+
+def reconcile_pending_owner_action_audits(db: Session) -> int:
+    global _owner_saga_reconcile_after_id
+    count = 0
+    query = (
+        db.query(EmployeeLog)
+        .filter(
+            EmployeeLog.action.in_(OWNER_SAGA_ACTIONS),
+            or_(
+                EmployeeLog.detail.like('%"status":"PENDING"%'),
+                EmployeeLog.detail.like('%"status": "PENDING"%'),
+            ),
+        )
+    )
+    rows = (
+        query.filter(EmployeeLog.id > _owner_saga_reconcile_after_id)
+        .order_by(EmployeeLog.id)
+        .limit(OWNER_SAGA_RECONCILE_BATCH_SIZE)
+        .all()
+    )
+    if not rows and _owner_saga_reconcile_after_id:
+        _owner_saga_reconcile_after_id = 0
+        rows = query.order_by(EmployeeLog.id).limit(OWNER_SAGA_RECONCILE_BATCH_SIZE).all()
+    if rows:
+        _owner_saga_reconcile_after_id = rows[-1].id
+    for row in rows:
+        try:
+            detail = json.loads(row.detail or "")
+        except (TypeError, ValueError):
+            continue
+        if detail.get("status") != "PENDING":
+            continue
+        if detail.get("operation") != row.action:
+            _saga_finish(db, row, "FAILED")
+            count += 1
+            continue
+        if row.action == "owner_login_ticket":
+            _saga_finish(db, row, "FAILED")
+            count += 1
+            continue
+        scope = [
+            detail.get("namespace"),
+            detail.get("tenant_id"),
+            detail.get("company_id"),
+            detail.get("store_id"),
+            detail.get("platform"),
+        ]
+        if not all(isinstance(value, str) and value for value in scope):
+            _saga_finish(db, row, "FAILED")
+            count += 1
+            continue
+        sid = ":".join(scope)
+        try:
+            result = _runtime_call("GET", f"/sessions/{quote(sid, safe='')}")
+        except HTTPException:
+            continue
+        status = result.get("status") if set(result) == {"status"} else None
+        success = (
+            status in {"ACTIVE", "LOGIN_REQUIRED"}
+            if row.action == "owner_login_session_create"
+            else status in OWNER_SESSION_STATUSES
+            if row.action == "owner_login_session_status"
+            else status == "REVOKED"
+        )
+        _saga_finish(db, row, "SUCCESS" if success else "FAILED")
+        count += 1
+    return count
+
 
 @router.post("/stores/{store_id}/login-session")
 async def create_owner_login_session(store_id: int, request: Request, db: Session = Depends(get_db)):
@@ -310,38 +413,71 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
     if body:
         raise _generic_bad_request()
     sid = _runtime_session_id(store)
-    result = await run_in_threadpool(
-        _runtime_call,
-        "POST",
-        "/sessions",
-        {"tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": str(store.platform)},
-    )
-    if result.get("session_id") != sid or not isinstance(result.get("expires_in"), int):
+    audit = _saga_pending(db, user, store, "owner_login_session_create")
+    namespace = sid.split(":", 1)[0]
+    try:
+        result = await run_in_threadpool(
+            _runtime_call,
+            "POST",
+            "/sessions",
+            {
+                "namespace": namespace,
+                "tenant_id": str(store.tenant_id),
+                "company_id": str(store.company_id),
+                "store_id": str(store.id),
+                "platform": str(store.platform),
+            },
+        )
+    except HTTPException:
+        raise
+    if (
+        set(result) != {"session_id", "expires_in", "restored"}
+        or result.get("session_id") != sid
+        or type(result.get("expires_in")) is not int
+        or not (0 < result["expires_in"] <= 600)
+        or type(result.get("restored")) is not bool
+    ):
+        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
-    _audit_owner_action(db, user, store, "owner_login_session_create")
-    return {"session_id": sid, "store_id": store.id, "status": "LOGIN_REQUIRED", "expires_in": result["expires_in"]}
+    try: _saga_finish(db, audit, "SUCCESS")
+    except Exception as exc: raise HTTPException(status_code=503, detail="审计状态暂不可用") from exc
+    return {"store_id": store.id, "status": "LOGIN_REQUIRED", "expires_in": result["expires_in"]}
 
 
 @router.get("/stores/{store_id}/login-session")
 async def owner_login_session_status(store_id: int, request: Request, db: Session = Depends(get_db)):
     user, store = _require_owner_store(store_id, request, db)
+    audit = _saga_pending(db, user, store, "owner_login_session_status")
     sid = _runtime_session_id(store)
-    result = await run_in_threadpool(_runtime_call, "GET", f"/sessions/{sid}")
-    status = result.get("status")
-    if not isinstance(status, str):
+    try:
+        result = await run_in_threadpool(_runtime_call, "GET", f"/sessions/{quote(sid, safe='')}")
+    except HTTPException:
+        _saga_finish(db, audit, "FAILED")
+        raise
+    if set(result) != {"status"}:
+        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
-    _audit_owner_action(db, user, store, "owner_login_session_status")
+    status = result.get("status")
+    if status not in {"ACTIVE", "LOGIN_REQUIRED", "REVOKED", "EXPIRED", "HUMAN_ACTION_REQUIRED"}:
+        _saga_finish(db, audit, "FAILED")
+        raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
+    _saga_finish(db, audit, "SUCCESS")
     return {"store_id": store.id, "status": status}
 
 
 @router.delete("/stores/{store_id}/login-session")
 async def delete_owner_login_session(store_id: int, request: Request, db: Session = Depends(get_db)):
     user, store = _require_owner_store(store_id, request, db)
+    audit = _saga_pending(db, user, store, "owner_login_session_revoke")
     sid = _runtime_session_id(store)
-    result = await run_in_threadpool(_runtime_call, "DELETE", f"/sessions/{sid}")
-    if result.get("ok") is not True:
+    try:
+        result = await run_in_threadpool(_runtime_call, "DELETE", f"/sessions/{quote(sid, safe='')}")
+    except HTTPException:
+        raise
+    if set(result) != {"ok"} or result.get("ok") is not True:
+        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录会话销毁失败")
-    _audit_owner_action(db, user, store, "owner_login_session_revoke")
+    _saga_finish(db, audit, "SUCCESS")
     return {"ok": True, "store_id": store.id, "status": "REVOKED"}
 
 
@@ -351,11 +487,22 @@ async def owner_login_ticket(store_id: int, request: Request, db: Session = Depe
     body = await _json_body(request)
     if body:
         raise _generic_bad_request()
+    audit = _saga_pending(db, user, store, "owner_login_ticket")
     sid = _runtime_session_id(store)
-    result = await run_in_threadpool(_runtime_call, "POST", "/tickets", {"session_id": sid})
-    if not isinstance(result.get("ticket"), str) or not isinstance(result.get("expires_in"), int):
+    try:
+        result = await run_in_threadpool(_runtime_call, "POST", "/tickets", {"session_id": sid})
+    except HTTPException:
+        raise
+    if (
+        set(result) != {"ticket", "expires_in"}
+        or not isinstance(result.get("ticket"), str)
+        or not result["ticket"]
+        or type(result.get("expires_in")) is not int
+        or not (0 < result["expires_in"] <= 120)
+    ):
+        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
-    _audit_owner_action(db, user, store, "owner_login_ticket")
+    _saga_finish(db, audit, "SUCCESS")
     return {"ticket": result["ticket"], "expires_in": result["expires_in"]}
 
 

@@ -207,6 +207,7 @@ class Settings:
         self.REDIS_URL = _redis_url(production=self.IS_PRODUCTION)
         self.ASSET_STORAGE_ROOT = _asset_storage_root()
         self.JD_BROWSER_CONTROL_TOKEN = os.getenv("JD_BROWSER_CONTROL_TOKEN", "")
+        self.JD_SESSION_NAMESPACE = os.getenv("JD_SESSION_NAMESPACE", "")
 
         self._jwt_secret = None
         self._boss_initial_password = None

@@ -1418,15 +1418,34 @@ def write_employee_log(db, task_type: str, status: str, detail: dict, attempt: i
     )
 
 
+def reconcile_owner_action_audits() -> int:
+    db = SessionLocal()
+    try:
+        from .routers.jd_workbench import reconcile_pending_owner_action_audits
+
+        return reconcile_pending_owner_action_audits(db)
+    except Exception as exc:
+        db.rollback()
+        logger.warning("owner_action_audit_reconcile_warning: %s", type(exc).__name__)
+        return 0
+    finally:
+        db.close()
+
+
+def run_jd_workbench_maintenance() -> None:
+    reconcile_completed_jd_workbench_tasks()
+    reap_jd_workbench_tasks()
+    run_jd_workbench_scheduler()
+    reconcile_owner_action_audits()
+
+
 def main():
     require_service_role("worker")
     last_jd_schedule = 0.0
     while True:
         update_worker_heartbeat()
         if time.monotonic() - last_jd_schedule >= JD_SCHEDULER_POLL_SECONDS:
-            reconcile_completed_jd_workbench_tasks()
-            reap_jd_workbench_tasks()
-            run_jd_workbench_scheduler()
+            run_jd_workbench_maintenance()
             last_jd_schedule = time.monotonic()
         run_daily_scheduler()
         if not process_next_tian_shang_worker_execution() and not process_next_employee_execution() and not process_next_brain_runtime_execution():

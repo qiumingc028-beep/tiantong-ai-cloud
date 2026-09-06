@@ -12,14 +12,14 @@ const { ROUTES } = require('../../desktop/jd-workbench/readonly-collector.js');
 const { classifyRequest } = require('../../desktop/jd-workbench/security-policy.js');
 
 const TICKET_TTL_MS = 60_000;
-const COOKIE_TTL_MS = 600_000;
+const COOKIE_TTL_MS = 60_000;
 const SESSION_TTL_MS = 600_000;
 const TOKEN_ISSUER = 'tiantong-jd-browser-runtime';
 const TICKET_TYPE = 'viewer_ticket';
 const TICKET_AUDIENCE = 'jd-browser-viewer-exchange';
 const COOKIE_TYPE = 'viewer_cookie';
 const COOKIE_AUDIENCE = 'jd-browser-novnc';
-const SCOPE_KEYS = Object.freeze(['tenant_id', 'company_id', 'store_id', 'platform']);
+const SCOPE_KEYS = Object.freeze(['namespace', 'tenant_id', 'company_id', 'store_id', 'platform']);
 const SCOPE_VALUE = /^[A-Za-z0-9_-]{1,64}$/;
 
 function decodeMasterKey(value) {
@@ -41,13 +41,22 @@ function safeEqual(actual, expected) {
 }
 
 function normalizedScope(payload) {
-  const scope = Object.fromEntries(SCOPE_KEYS.map((key) => [key, String(payload?.[key] ?? '').trim()]));
-  if (!SCOPE_KEYS.every((key) => SCOPE_VALUE.test(scope[key]))) return null;
+  if (!payload || typeof payload !== 'object' || Object.keys(payload).some((key) => !SCOPE_KEYS.includes(key))) return null;
+  if (!SCOPE_KEYS.every((key) => typeof payload[key] === 'string' || (key === 'store_id' && Number.isSafeInteger(payload[key]) && payload[key] > 0))) return null;
+  const scope = Object.fromEntries(SCOPE_KEYS.map((key) => [key, String(payload[key]).trim()]));
+  if (!SCOPE_KEYS.every((key) => SCOPE_VALUE.test(scope[key])) || scope.platform !== 'jd') return null;
   return scope;
 }
 
 function sessionId(scope) {
   return SCOPE_KEYS.map((key) => scope[key]).join(':');
+}
+
+function parseSessionId(value, expectedNamespace) {
+  const parts = String(value || '').split(':');
+  if (parts.length !== SCOPE_KEYS.length) return null;
+  const scope = normalizedScope(Object.fromEntries(SCOPE_KEYS.map((key, index) => [key, parts[index]])));
+  return scope && scope.namespace === expectedNamespace && sessionId(scope) === value ? scope : null;
 }
 
 function cookieValue(header, name) {
@@ -70,18 +79,20 @@ function verifiedValue(value, key, { typ, aud, now }) {
   if (!safeEqual(signature, expected)) return null;
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    const scope = normalizedScope(Object.fromEntries(SCOPE_KEYS.map((name) => [name, payload[name]])));
     if (
       payload.typ !== typ || payload.aud !== aud || payload.iss !== TOKEN_ISSUER ||
       typeof payload.jti !== 'string' || !/^[0-9a-f]{32}$/.test(payload.jti) ||
-      !Number.isInteger(payload.issued_at) || !Number.isInteger(payload.expires_at) ||
-      payload.issued_at > now() || payload.expires_at <= now() ||
-      sessionId(normalizedScope(payload) || {}) !== payload.session_id
+      !Number.isInteger(payload.issued_at) || typeof payload.exp !== 'number' || !Number.isInteger(payload.exp) ||
+      payload.issued_at * 1000 > now() || payload.exp * 1000 <= now() || !scope ||
+      sessionId(scope) !== payload.session_id
     ) return null;
     return payload;
   } catch (_error) {
     return null;
   }
 }
+
 
 function archiveFilename(id) {
   return `${crypto.createHash('sha256').update(id).digest('hex')}.enc`;
@@ -195,6 +206,7 @@ export function buildApp({
   now = Date.now,
   profileRoot = '/tmp/jd-cloud-profiles',
   archiveRoot = '/data/jd-session-archives',
+  sessionNamespace,
   authorizeSession,
   dashboardUrl = ROUTES.dashboard,
   launchContext = (directory) => chromium.launchPersistentContext(directory, {
@@ -207,6 +219,7 @@ export function buildApp({
   const ticketKey = requiredSecret(viewerTicketSigningKey, 'JD_BROWSER_VIEWER_TICKET_SIGNING_KEY');
   const cookieKey = requiredSecret(viewerCookieSigningKey, 'JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY');
   const encryptionKey = decodeMasterKey(masterKey);
+  if (sessionNamespace !== undefined && !/^([a-z0-9][a-z0-9-]{1,31})$/.test(String(sessionNamespace || ''))) throw new Error('JD_SESSION_NAMESPACE_REQUIRED');
   if (new Set([captureKey, controlKey, ticketKey, cookieKey]).size !== 4) {
     throw new Error('JD_BROWSER_CAPABILITY_TOKENS_MUST_BE_DISTINCT');
   }
@@ -331,7 +344,7 @@ export function buildApp({
     const directory = ticketDirectory(record.session_id);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     try {
-      await fs.writeFile(path.join(directory, record.jti), String(record.expires_at), { flag: 'wx', mode: 0o600 });
+      await fs.writeFile(path.join(directory, record.jti), String(record.exp * 1000), { flag: 'wx', mode: 0o600 });
       return true;
     } catch (error) {
       if (error?.code === 'EEXIST') return false;
@@ -363,7 +376,8 @@ export function buildApp({
 
   app.post('/internal/jd-browser/sessions', { preHandler: verifyControl }, async (request, reply) => {
     const scope = normalizedScope(request.body);
-    if (!scope) return reply.code(403).send({ error: 'SESSION_SCOPE_REJECTED' });
+    if (!scope) return reply.code(400).send({ error: 'SESSION_SCOPE_INVALID' });
+    if (scope.namespace !== sessionNamespace) return reply.code(403).send({ error: 'scope_namespace_mismatch' });
     const id = sessionId(scope);
     if (!await isAuthorized(scope)) {
       const active = browserSessions.get(id);
@@ -373,7 +387,7 @@ export function buildApp({
     await purgeExpired();
     if (browserSessions.has(id)) {
       const active = browserSessions.get(id);
-      return { session_id: id, expires_in: remainingSeconds(active.expiresAt) };
+      return { session_id: id, expires_in: remainingSeconds(active.expiresAt), restored: false };
     }
     if (browserSessions.size) return reply.code(409).send({ error: 'ACTIVE_SESSION_EXISTS' });
     let restored;
@@ -401,7 +415,8 @@ export function buildApp({
       // Viewer authority is intentionally process-bound: restore JD state, never a pre-restart cookie.
       const nonce = crypto.randomBytes(16).toString('hex');
       browserSessions.set(id, {
-        context, scope, nonce, expiresAt: restored?.expires_at || now() + SESSION_TTL_MS
+        context, scope, nonce: restored ? crypto.randomBytes(16).toString('hex') : nonce,
+        expiresAt: restored?.expires_at || now() + SESSION_TTL_MS
       });
     } catch (error) {
       await runAllCleanup([
@@ -421,16 +436,17 @@ export function buildApp({
       return reply.code(400).send({ error: 'INVALID_TICKET_REQUEST' });
     }
     const id = String(request.body?.session_id || '').trim();
+    if (!parseSessionId(id, sessionNamespace)) return reply.code(400).send({ error: 'invalid_session_id' });
     const session = browserSessions.get(id);
     if (!session || !await sessionRemainsAuthorized(id, session)) {
       return reply.code(409).send({ error: 'SESSION_NOT_ACTIVE' });
     }
-    const issuedAt = now();
+    const issuedAt = Math.floor(now() / 1000);
     const ticket = signedValue({
       typ: TICKET_TYPE, aud: TICKET_AUDIENCE, iss: TOKEN_ISSUER,
       jti: crypto.randomBytes(16).toString('hex'), ...session.scope, session_id: id,
       session_nonce: session.nonce,
-      issued_at: issuedAt, expires_at: issuedAt + TICKET_TTL_MS
+      issued_at: issuedAt, exp: issuedAt + Math.floor(TICKET_TTL_MS / 1000)
     }, ticketKey);
     return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer')
       .send({ ticket, expires_in: TICKET_TTL_MS / 1000 });
@@ -449,17 +465,17 @@ export function buildApp({
       !await sessionRemainsAuthorized(record.session_id, session) ||
       !await consumeTicket(record)
     ) return reply.code(401).send({ error: 'TICKET_INVALID' });
-    const issuedAt = now();
+    const issuedAt = Math.floor(now() / 1000);
     const viewerSession = signedValue({
       typ: COOKIE_TYPE, aud: COOKIE_AUDIENCE, iss: TOKEN_ISSUER,
       jti: crypto.randomBytes(16).toString('hex'), ...Object.fromEntries(SCOPE_KEYS.map((key) => [key, record[key]])),
       session_id: record.session_id, session_nonce: record.session_nonce,
-      issued_at: issuedAt, expires_at: issuedAt + COOKIE_TTL_MS
+      issued_at: issuedAt, exp: issuedAt + Math.floor(COOKIE_TTL_MS / 1000)
     }, cookieKey);
     return reply
       .header('cache-control', 'no-store')
       .header('referrer-policy', 'no-referrer')
-      .header('set-cookie', `jd_browser_session=${viewerSession}; Max-Age=${COOKIE_TTL_MS / 1000}; Path=/jd-browser/novnc/${encodeURIComponent(storeId)}/; HttpOnly; Secure; SameSite=Strict`)
+      .header('set-cookie', `jd_browser_session=${viewerSession}; Max-Age=${TICKET_TTL_MS / 1000}; Path=/jd-browser/novnc/${encodeURIComponent(storeId)}/; HttpOnly; Secure; SameSite=Strict`)
       .code(204).send();
   });
 
@@ -479,21 +495,38 @@ export function buildApp({
   });
 
   app.post('/internal/jd-browser/capture', { preHandler: verifyCapture }, async (request, reply) => {
-    const scope = normalizedScope(request.body);
+    if (!request.body || Object.keys(request.body).some((key) => !['scope', 'dataset'].includes(key)) || typeof request.body.dataset !== 'string' || !['metrics', 'orders', 'products', 'ads'].includes(request.body.dataset)) {
+      return reply.code(400).send({ status: 'INVALID_CAPTURE_REQUEST', data: {} });
+    }
+    const scope = normalizedScope(request.body.scope);
+    if (!scope) return reply.code(400).send({ status: 'INVALID_CAPTURE_REQUEST', data: {} });
+    if (scope.namespace !== sessionNamespace) return reply.code(403).send({ status: 'SCOPE_REJECTED', data: {} });
     const session = scope && browserSessions.get(sessionId(scope));
     if (!session || !await sessionRemainsAuthorized(sessionId(scope), session)) {
       return reply.code(409).send({ status: 'LOGIN_REQUIRED', data: {} });
     }
     const page = session.context.pages()[0] || await session.context.newPage();
     await page.goto(dashboardUrl, { waitUntil: 'domcontentloaded' });
-    const metrics = await page.evaluate(() => Object.fromEntries(
-      [...document.querySelectorAll('[data-metric]')]
-        .map((node) => [node.getAttribute('data-metric'), node.textContent?.trim()])
-        .filter(([key, value]) => key && value)
-    ));
-    if (!Object.keys(metrics).length) return reply.code(422).send({ status: 'JD_METRIC_NOT_FOUND', data: {} });
+    const dataset = request.body.dataset;
+    const captured = await page.evaluate((datasetName) => {
+      if (datasetName === 'metrics') {
+        return Object.fromEntries(
+          [...document.querySelectorAll('[data-metric]')]
+            .map((node) => [node.getAttribute('data-metric'), node.textContent?.trim()])
+            .filter(([key, value]) => key && value)
+        );
+      }
+      const node = document.querySelector(`script[type="application/json"][data-dataset="${datasetName}"]`);
+      if (!node) return null;
+      try { return JSON.parse(node.textContent || ''); }
+      catch (_error) { return null; }
+    }, dataset);
+    const validCapture = dataset === 'metrics'
+      ? captured && !Array.isArray(captured) && typeof captured === 'object' && Object.keys(captured).length > 0
+      : Array.isArray(captured) && captured.every((row) => row && !Array.isArray(row) && typeof row === 'object');
+    if (!validCapture) return reply.code(422).send({ status: 'JD_DATASET_NOT_FOUND', data: {} });
     return { status: 'OK', data: { source: 'jd_cloud_playwright', captured_at: new Date(now()).toISOString(),
-      store_id: scope.store_id, ...metrics } };
+      store_id: scope.store_id, [dataset]: captured } };
   });
 
   app.get('/internal/jd-browser/sessions/:sid', { preHandler: verifyControl }, async (request, reply) => {
@@ -504,6 +537,7 @@ export function buildApp({
   });
 
   app.delete('/internal/jd-browser/sessions/:sid', { preHandler: verifyControl }, async (request, reply) => {
+    if (!parseSessionId(request.params.sid, sessionNamespace)) return reply.code(400).send({ error: 'invalid_session_id' });
     const session = browserSessions.get(request.params.sid);
     await destroySession(request.params.sid, session);
     return { ok: true };
@@ -526,6 +560,7 @@ export async function startFromEnv() {
     ) throw new Error('R297_CONTROLLED_CANARY_DASHBOARD_URL_INVALID');
     dashboardUrl = candidate.href;
   }
+  if (!/^([a-z0-9][a-z0-9-]{1,31})$/.test(String(process.env.JD_SESSION_NAMESPACE || ''))) throw new Error('JD_SESSION_NAMESPACE_REQUIRED');
   const app = buildApp({
     captureToken: process.env.JD_BROWSER_CAPTURE_TOKEN,
     controlToken: process.env.JD_BROWSER_CONTROL_TOKEN,
@@ -534,7 +569,8 @@ export async function startFromEnv() {
     masterKey: process.env.JD_SESSION_MASTER_KEY,
     dashboardUrl,
     profileRoot: process.env.JD_PROFILE_ROOT,
-    archiveRoot: process.env.JD_SESSION_ARCHIVE_ROOT
+    archiveRoot: process.env.JD_SESSION_ARCHIVE_ROOT,
+    sessionNamespace: process.env.JD_SESSION_NAMESPACE
   });
   await app.listen({ host: '127.0.0.1', port: Number(process.env.RUNTIME_API_PORT || 8788) });
   return app;

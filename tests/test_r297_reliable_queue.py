@@ -247,11 +247,16 @@ def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypa
         def read(self, *_args):
             return json.dumps({
                 "status": "OK",
-                "data": {"store_id": "3", "source": "jd_cloud_playwright", "gmv": "1"},
+                "data": {
+                    "store_id": "3",
+                    "source": "jd_cloud_playwright",
+                    "metrics": {"gmv": "1"},
+                },
             }).encode()
 
     monkeypatch.setenv("JD_BROWSER_CAPTURE_TOKEN", "c" * 32)
     monkeypatch.setenv("JD_BROWSER_CAPTURE_BASE_URL", "http://127.0.0.1:18787/internal/jd-browser/")
+    monkeypatch.setenv("JD_SESSION_NAMESPACE", "ci")
     monkeypatch.setattr(jd_collectors, "urlopen", lambda request, timeout: captured.append(request.full_url) or Response())
     store = SimpleNamespace(id=3, tenant_id=1, company_id=2, platform="jd")
     account = SimpleNamespace(store=store)
@@ -259,7 +264,65 @@ def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypa
     result = jd_collectors.JdSmartCollector()._capture(account, "metrics", store)
 
     assert captured == ["http://127.0.0.1:18787/internal/jd-browser/capture"]
-    assert result["store_id"] == "3"
+    assert result == {"gmv": "1"}
+
+
+@pytest.mark.parametrize(
+    ("dataset", "captured"),
+    (
+        ("metrics", {"gmv": "1"}),
+        ("orders", [{"order_no": "ORDER-1"}]),
+        ("products", [{"sku_id": "SKU-1"}]),
+        ("ads", [{"campaign_id": "CAMPAIGN-1"}]),
+    ),
+)
+def test_collector_unwraps_each_runtime_dataset_schema(monkeypatch, dataset, captured):
+    from backend.services import jd_collectors
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, *_args):
+            return json.dumps({
+                "status": "OK",
+                "data": {"store_id": "3", "source": "jd_cloud_playwright", dataset: captured},
+            }).encode()
+
+    monkeypatch.setenv("JD_BROWSER_CAPTURE_TOKEN", "c" * 32)
+    monkeypatch.setenv("JD_SESSION_NAMESPACE", "ci")
+    monkeypatch.setattr(jd_collectors, "urlopen", lambda *_args, **_kwargs: Response())
+    store = SimpleNamespace(id=3, tenant_id=1, company_id=2, platform="jd")
+
+    assert jd_collectors.JdSmartCollector()._capture(SimpleNamespace(store=store), dataset, store) == captured
+
+
+def test_collector_rejects_non_object_rows_from_runtime(monkeypatch):
+    from backend.services import jd_collectors
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, *_args):
+            return json.dumps({
+                "status": "OK",
+                "data": {"store_id": "3", "source": "jd_cloud_playwright", "orders": ["invalid-row"]},
+            }).encode()
+
+    monkeypatch.setenv("JD_BROWSER_CAPTURE_TOKEN", "c" * 32)
+    monkeypatch.setenv("JD_SESSION_NAMESPACE", "ci")
+    monkeypatch.setattr(jd_collectors, "urlopen", lambda *_args, **_kwargs: Response())
+    store = SimpleNamespace(id=3, tenant_id=1, company_id=2, platform="jd")
+
+    with pytest.raises(jd_collectors.JdCollectorError, match="响应校验失败"):
+        jd_collectors.JdSmartCollector()._capture(SimpleNamespace(store=store), "orders", store)
 
 
 def test_claim_moves_ready_task_to_processing_and_ack_removes_it(monkeypatch):

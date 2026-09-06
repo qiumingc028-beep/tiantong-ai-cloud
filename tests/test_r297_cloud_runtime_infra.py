@@ -94,8 +94,35 @@ def test_ci_builds_and_runs_runtime_with_real_health_xvfb_chromium_and_novnc_che
     assert "codex/r297-cloud-integration" in workflow
     assert "services/jd-cloud-browser-runtime/Dockerfile" in workflow
     assert "npm test" in workflow
-    for name in ("JD_BROWSER_CAPTURE_TOKEN_REQUIRED", "JD_BROWSER_CONTROL_TOKEN", "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY", "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY"):
-        assert name in workflow
+    required = (
+        "JD_SESSION_NAMESPACE",
+        "JD_BROWSER_CAPTURE_TOKEN",
+        "JD_BROWSER_CONTROL_TOKEN",
+        "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY",
+        "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY",
+        "JD_SESSION_MASTER_KEY",
+    )
+    empty_environment = next(
+        line.strip() for line in workflow.splitlines() if "runtime-empty.log" in line
+    )
+    assert empty_environment == (
+        'if docker run --rm "$S12_JD_RUNTIME_IMAGE" '
+        '>/tmp/runtime-empty.log 2>&1; then exit 1; fi'
+    )
+    assert "--env" not in empty_environment
+    assert "--publish" not in empty_environment and " -p " not in empty_environment
+    assert workflow.count("runtime-empty.log") == 1
+    assert f"for missing in {' '.join(required)}; do" in workflow
+    matrix = workflow.split(f"for missing in {' '.join(required)}; do", 1)[1].split("esac", 1)[0]
+    for missing in required:
+        arm = matrix.split(f"{missing}) args=(", 1)[1].split(");;", 1)[0]
+        assert f'"{missing}=' not in arm
+        for present in required:
+            if present != missing:
+                assert f'"{present}=' in arm
+    assert 'grep -F "${missing}_REQUIRED" /tmp/runtime-missing.log' in workflow
+    assert "cat /tmp/runtime-empty.log" not in workflow
+    assert "cat /tmp/runtime-missing.log" not in workflow
     for evidence in (
         "RUNTIME_HEALTH_STATUS=200",
         "RUNTIME_XVFB_PID=",
