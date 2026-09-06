@@ -11,6 +11,7 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from backend.config import get_settings
+from backend import main as backend_main
 from backend.main import app
 from backend.models import EmployeeLog
 from backend.routers import jd_workbench
@@ -141,6 +142,8 @@ def test_owner_audit_saga_reconciles_after_success_update_commit_crash(
                 raise RuntimeError("audit update commit failed")
 
     monkeypatch.setattr(jd_workbench, "urlopen", runtime)
+    monkeypatch.setattr(backend_main, "SessionLocal", test_db)
+    monkeypatch.setattr(backend_main, "seed_defaults", lambda _db: None)
     event.listen(Session, "before_flush", fail_success_update)
     try:
         safe_client = TestClient(app, raise_server_exceptions=False)
