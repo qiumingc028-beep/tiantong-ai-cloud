@@ -15,10 +15,12 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlsplit
 from urllib.request import Request as UrlRequest, urlopen
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -248,6 +250,29 @@ def _require_owner_store(store_id: int, request: Request, db: Session) -> tuple[
 
 
 RUNTIME_BASE = "http://jd-browser-runtime:8787/internal/jd-browser"
+RUNTIME_REQUEST_TIMEOUT_SECONDS = 30
+
+
+def _runtime_base() -> str:
+    candidate = os.getenv("JD_BROWSER_RUNTIME_BASE_URL", RUNTIME_BASE).rstrip("/")
+    if os.getenv("APP_ENV", "").strip().lower() == "production" and os.getenv("R297_CONTROLLED_CANARY") == "1":
+        raise HTTPException(status_code=503, detail="生产环境禁止受控Canary运行时")
+    if candidate == RUNTIME_BASE:
+        return candidate
+    parsed = urlsplit(candidate)
+    if (
+        os.getenv("R297_CONTROLLED_CANARY") != "1"
+        or parsed.scheme != "http"
+        or parsed.hostname != "127.0.0.1"
+        or parsed.port is None
+        or parsed.path != "/internal/jd-browser"
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HTTPException(status_code=503, detail="云端登录运行时配置无效")
+    return candidate
 
 
 def _runtime_session_id(store: Store) -> str:
@@ -258,18 +283,19 @@ def _runtime_session_id(store: Store) -> str:
 
 
 def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    runtime_base = _runtime_base()
     token = get_settings().JD_BROWSER_CONTROL_TOKEN
     if not isinstance(token, str) or len(token.encode("utf-8")) < 32:
         raise HTTPException(status_code=503, detail="云端登录运行时控制凭据未配置")
     body = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
     request = UrlRequest(
-        f"{RUNTIME_BASE}{path}",
+        f"{runtime_base}{path}",
         data=body,
         headers={"content-type": "application/json", "x-internal-token": token},
         method=method,
     )
     try:
-        with urlopen(request, timeout=10) as response:
+        with urlopen(request, timeout=RUNTIME_REQUEST_TIMEOUT_SECONDS) as response:
             raw = response.read(512 * 1024)
         result = json.loads(raw)
     except (HTTPError, URLError, TimeoutError, ValueError, OSError) as exc:
@@ -296,18 +322,86 @@ def _saga_finish(db: Session, row: EmployeeLog, status: str) -> None:
     detail["status"] = status; detail["updated_at"] = _now().isoformat()
     row.detail = json.dumps(detail, separators=(",", ":")); db.commit()
 
+
+OWNER_SAGA_ACTIONS = frozenset(
+    {
+        "owner_login_session_create",
+        "owner_login_session_status",
+        "owner_login_session_revoke",
+        "owner_login_ticket",
+    }
+)
+OWNER_SESSION_STATUSES = frozenset(
+    {"ACTIVE", "LOGIN_REQUIRED", "REVOKED", "EXPIRED", "HUMAN_ACTION_REQUIRED"}
+)
+OWNER_SAGA_RECONCILE_BATCH_SIZE = 25
+_owner_saga_reconcile_after_id = 0
+
+
 def reconcile_pending_owner_action_audits(db: Session) -> int:
+    global _owner_saga_reconcile_after_id
     count = 0
-    for row in db.query(EmployeeLog).filter(EmployeeLog.action == "owner_login_session_create").all():
-        try: detail = json.loads(row.detail or "")
-        except (TypeError, ValueError): continue
-        if detail.get("status") != "PENDING": continue
-        sid = ":".join([detail.get("namespace", ""), str(detail.get("tenant_id", "")), str(detail.get("company_id", "")), str(detail.get("store_id", "")), detail.get("platform", "")])
+    query = (
+        db.query(EmployeeLog)
+        .filter(
+            EmployeeLog.action.in_(OWNER_SAGA_ACTIONS),
+            or_(
+                EmployeeLog.detail.like('%"status":"PENDING"%'),
+                EmployeeLog.detail.like('%"status": "PENDING"%'),
+            ),
+        )
+    )
+    rows = (
+        query.filter(EmployeeLog.id > _owner_saga_reconcile_after_id)
+        .order_by(EmployeeLog.id)
+        .limit(OWNER_SAGA_RECONCILE_BATCH_SIZE)
+        .all()
+    )
+    if not rows and _owner_saga_reconcile_after_id:
+        _owner_saga_reconcile_after_id = 0
+        rows = query.order_by(EmployeeLog.id).limit(OWNER_SAGA_RECONCILE_BATCH_SIZE).all()
+    if rows:
+        _owner_saga_reconcile_after_id = rows[-1].id
+    for row in rows:
+        try:
+            detail = json.loads(row.detail or "")
+        except (TypeError, ValueError):
+            continue
+        if detail.get("status") != "PENDING":
+            continue
+        if detail.get("operation") != row.action:
+            _saga_finish(db, row, "FAILED")
+            count += 1
+            continue
+        if row.action == "owner_login_ticket":
+            _saga_finish(db, row, "FAILED")
+            count += 1
+            continue
+        scope = [
+            detail.get("namespace"),
+            detail.get("tenant_id"),
+            detail.get("company_id"),
+            detail.get("store_id"),
+            detail.get("platform"),
+        ]
+        if not all(isinstance(value, str) and value for value in scope):
+            _saga_finish(db, row, "FAILED")
+            count += 1
+            continue
+        sid = ":".join(scope)
         try:
             result = _runtime_call("GET", f"/sessions/{quote(sid, safe='')}")
-            _saga_finish(db, row, "SUCCESS" if result.get("status") in {"ACTIVE", "LOGIN_REQUIRED"} else "FAILED")
         except HTTPException:
-            _saga_finish(db, row, "FAILED")
+            continue
+        status = result.get("status") if set(result) == {"status"} else None
+        success = (
+            status in {"ACTIVE", "LOGIN_REQUIRED"}
+            if row.action == "owner_login_session_create"
+            else status in OWNER_SESSION_STATUSES
+            if row.action == "owner_login_session_status"
+            else status == "REVOKED"
+        )
+        _saga_finish(db, row, "SUCCESS" if success else "FAILED")
         count += 1
     return count
 
@@ -322,10 +416,28 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
     audit = _saga_pending(db, user, store, "owner_login_session_create")
     namespace = sid.split(":", 1)[0]
     try:
-        result = _runtime_call("POST", "/sessions", {"namespace": namespace, "tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": str(store.platform)})
+        result = await run_in_threadpool(
+            _runtime_call,
+            "POST",
+            "/sessions",
+            {
+                "namespace": namespace,
+                "tenant_id": str(store.tenant_id),
+                "company_id": str(store.company_id),
+                "store_id": str(store.id),
+                "platform": str(store.platform),
+            },
+        )
     except HTTPException:
-        _saga_finish(db, audit, "FAILED"); raise
-    if set(result) != {"session_id", "expires_in", "restored"} or result.get("session_id") != sid or type(result.get("expires_in")) is not int or not (0 < result["expires_in"] <= 600) or type(result.get("restored")) is not bool:
+        raise
+    if (
+        set(result) != {"session_id", "expires_in", "restored"}
+        or result.get("session_id") != sid
+        or type(result.get("expires_in")) is not int
+        or not (0 < result["expires_in"] <= 600)
+        or type(result.get("restored")) is not bool
+    ):
+        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
     try: _saga_finish(db, audit, "SUCCESS")
     except Exception as exc: raise HTTPException(status_code=503, detail="审计状态暂不可用") from exc
@@ -335,25 +447,37 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
 @router.get("/stores/{store_id}/login-session")
 async def owner_login_session_status(store_id: int, request: Request, db: Session = Depends(get_db)):
     user, store = _require_owner_store(store_id, request, db)
+    audit = _saga_pending(db, user, store, "owner_login_session_status")
     sid = _runtime_session_id(store)
-    result = _runtime_call("GET", f"/sessions/{quote(sid, safe='')}")
+    try:
+        result = await run_in_threadpool(_runtime_call, "GET", f"/sessions/{quote(sid, safe='')}")
+    except HTTPException:
+        _saga_finish(db, audit, "FAILED")
+        raise
     if set(result) != {"status"}:
+        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
     status = result.get("status")
     if status not in {"ACTIVE", "LOGIN_REQUIRED", "REVOKED", "EXPIRED", "HUMAN_ACTION_REQUIRED"}:
+        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
-    _audit_owner_action(db, user, store, "owner_login_session_status")
+    _saga_finish(db, audit, "SUCCESS")
     return {"store_id": store.id, "status": status}
 
 
 @router.delete("/stores/{store_id}/login-session")
 async def delete_owner_login_session(store_id: int, request: Request, db: Session = Depends(get_db)):
     user, store = _require_owner_store(store_id, request, db)
+    audit = _saga_pending(db, user, store, "owner_login_session_revoke")
     sid = _runtime_session_id(store)
-    result = _runtime_call("DELETE", f"/sessions/{quote(sid, safe='')}")
+    try:
+        result = await run_in_threadpool(_runtime_call, "DELETE", f"/sessions/{quote(sid, safe='')}")
+    except HTTPException:
+        raise
     if set(result) != {"ok"} or result.get("ok") is not True:
+        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录会话销毁失败")
-    _audit_owner_action(db, user, store, "owner_login_session_revoke")
+    _saga_finish(db, audit, "SUCCESS")
     return {"ok": True, "store_id": store.id, "status": "REVOKED"}
 
 
@@ -363,11 +487,22 @@ async def owner_login_ticket(store_id: int, request: Request, db: Session = Depe
     body = await _json_body(request)
     if body:
         raise _generic_bad_request()
+    audit = _saga_pending(db, user, store, "owner_login_ticket")
     sid = _runtime_session_id(store)
-    result = _runtime_call("POST", "/tickets", {"session_id": sid})
-    if set(result) != {"ticket", "expires_in"} or not isinstance(result.get("ticket"), str) or not result["ticket"] or type(result.get("expires_in")) is not int or not (0 < result["expires_in"] <= 120):
+    try:
+        result = await run_in_threadpool(_runtime_call, "POST", "/tickets", {"session_id": sid})
+    except HTTPException:
+        raise
+    if (
+        set(result) != {"ticket", "expires_in"}
+        or not isinstance(result.get("ticket"), str)
+        or not result["ticket"]
+        or type(result.get("expires_in")) is not int
+        or not (0 < result["expires_in"] <= 120)
+    ):
+        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
-    _audit_owner_action(db, user, store, "owner_login_ticket")
+    _saga_finish(db, audit, "SUCCESS")
     return {"ticket": result["ticket"], "expires_in": result["expires_in"]}
 
 
@@ -802,6 +937,33 @@ async def list_device_stores(request: Request, db: Session = Depends(get_db)):
     return result
 
 
+def resume_store_after_human_action(
+    db: Session,
+    device: JdWorkbenchDevice,
+    store: Store,
+    row: JdWorkbenchStoreStatus,
+    now: datetime,
+) -> None:
+    row.reason_code = None
+    row.retry_count = 0
+    row.last_error_at = None
+    row.next_sync_at = now
+    policy = db.query(JdWorkbenchSyncPolicy).filter(
+        JdWorkbenchSyncPolicy.tenant_id == device.tenant_id,
+        JdWorkbenchSyncPolicy.company_id == device.company_id,
+        JdWorkbenchSyncPolicy.store_id == store.id,
+    ).with_for_update().one_or_none()
+    if policy:
+        if policy.active_task_id is not None or policy.queue_state is not None:
+            policy.claim_generation += 1
+        policy.active_task_id = None
+        policy.queue_state = None
+        policy.lease_worker_id = None
+        policy.lease_started_at = None
+        policy.lease_heartbeat_at = None
+        policy.visibility_deadline = None
+
+
 @router.post("/heartbeat")
 async def heartbeat(request: Request, db: Session = Depends(get_db)):
     device, user = await _device_context(request, db)
@@ -838,6 +1000,7 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
             raise _generic_bad_request()
         store = require_authorized_store(db, user, store_id=store_id, write=True)
         row = _status_row(db, device.device_id, store.id)
+        prior_status = row.status
         row.status = status
         row.reason_code = reason_code
         if last_attempt_at is not None:
@@ -848,6 +1011,8 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
             row.last_error_at = now
         elif status in {"IDLE", "ONLINE", "SYNCING"}:
             row.last_error_at = None
+        if prior_status in {"ERROR", "HUMAN_ACTION_REQUIRED"} and status in {"IDLE", "ONLINE"}:
+            resume_store_after_human_action(db, device, store, row, now)
         row.updated_at = now
     device.client_version = client_version
     device.status = status

@@ -414,6 +414,11 @@ def test_real_adapter_captures_private_png_with_isolated_profile(tmp_path, monke
         return process
 
     monkeypatch.setattr(adapter_module.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(
+        adapter_module._WebSocket,
+        "wait_for",
+        lambda *_args, **_kwargs: pytest.fail("capture must use the authenticated DOM ready condition"),
+    )
     requests = []
     with protected_workflow_page(requests) as (target_url, authorization):
         origin = authorization.origin
@@ -454,6 +459,94 @@ def test_real_adapter_captures_private_png_with_isolated_profile(tmp_path, monke
     assert all("Library/Application Support/Google/Chrome" not in argument for argument in commands[0])
     assert not list(tmp_path.rglob("profile-*"))
     screenshot.unlink()
+
+
+def test_real_adapter_reports_bounded_chrome_startup_timeout_and_cleans_process(tmp_path, monkeypatch):
+    signals = []
+
+    class FakeProcess:
+        pid = 43210
+
+        def __init__(self):
+            self.wait_calls = 0
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout):
+            self.wait_calls += 1
+            assert timeout == 5
+            if self.wait_calls == 1:
+                raise adapter_module.subprocess.TimeoutExpired("fake-chrome", timeout)
+            return 0
+
+    authorization = SimpleNamespace(clear=lambda: None)
+    settings = SimpleNamespace(
+        PAGE_CAPTURE_CHROME_PATH="/isolated/fake-chrome",
+        PAGE_CAPTURE_OUTPUT_ROOT=str(tmp_path / "captures"),
+        PAGE_CAPTURE_TIMEOUT_SECONDS=0.01,
+        PAGE_CAPTURE_STARTUP_TIMEOUT_SECONDS=0.01,
+    )
+    adapter = OpenClawAdapter(settings=settings)
+    monkeypatch.setattr(adapter, "validate", lambda _context: ("http://127.0.0.1/page", authorization))
+    monkeypatch.setattr(adapter_module.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monotonic_reads = iter((100.0, 101.0))
+    monkeypatch.setattr(adapter_module.time, "monotonic", lambda: next(monotonic_reads))
+    monkeypatch.setattr(adapter_module.os, "killpg", lambda pid, sig: signals.append((pid, sig)))
+
+    with pytest.raises(TimeoutError) as exc_info:
+        adapter._capture(SimpleNamespace())
+
+    message = str(exc_info.value)
+    assert "stage=devtools_port" in message
+    assert "pid=43210" in message
+    assert "port=unavailable" in message
+    assert "xvfb=not_required_headless" in message
+    assert "sandbox=enabled" in message
+    assert signals == [
+        (43210, adapter_module.signal.SIGTERM),
+        (43210, adapter_module.signal.SIGKILL),
+    ]
+    assert not list(tmp_path.rglob("profile-*"))
+
+
+def test_real_adapter_reports_dom_ready_timeout_without_leaking_auth_and_cleans_process(
+    tmp_path, monkeypatch, chrome_path
+):
+    def timeout(*_args):
+        raise TimeoutError("authorized workflow page did not become ready")
+
+    monkeypatch.setattr(OpenClawAdapter, "_verify_workflow_page", staticmethod(timeout))
+    requests = []
+    with protected_workflow_page(requests) as (target_url, authorization):
+        token = authorization.token
+        settings = SimpleNamespace(
+            PAGE_CAPTURE_ALLOWED_ORIGINS=[authorization.origin],
+            PAGE_CAPTURE_CHROME_PATH=chrome_path,
+            PAGE_CAPTURE_OUTPUT_ROOT=str(tmp_path / "captures"),
+            PAGE_CAPTURE_TIMEOUT_SECONDS=1,
+            PAGE_CAPTURE_STARTUP_TIMEOUT_SECONDS=30,
+            OPENCLAW_ADAPTER_ENABLED=True,
+        )
+        with pytest.raises(TimeoutError) as exc_info:
+            OpenClawAdapter(settings=settings).execute_action(
+                SimpleNamespace(
+                    session_id="r297-timeout",
+                    trace_id="r297-timeout",
+                    action_type="截图",
+                    target_url=target_url,
+                    capture_authorization=authorization,
+                )
+            )
+
+    message = str(exc_info.value)
+    assert "stage=authenticated_dom_ready" in message
+    assert "devtools=ready" in message
+    assert "sandbox=enabled" in message
+    assert token not in message
+    assert authorization.token == ""
+    assert not list(tmp_path.rglob("*.png"))
+    assert not list(tmp_path.rglob("profile-*"))
 
 
 def test_real_adapter_uses_workflow_bound_readonly_auth_and_verifies_owner_page(tmp_path, chrome_path):

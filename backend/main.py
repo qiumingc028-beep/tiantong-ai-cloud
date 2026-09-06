@@ -97,8 +97,6 @@ def startup():
     db = SessionLocal()
     try:
         seed_defaults(db)
-        from .routers.jd_workbench import reconcile_pending_owner_action_audits
-        reconcile_pending_owner_action_audits(db)
         from .alpha_workflow.registry import ensure_default_scenarios
         from .observability.service import ensure_default_alert_rules, ensure_default_circuit_breakers
 
