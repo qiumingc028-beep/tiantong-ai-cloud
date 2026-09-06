@@ -1,0 +1,85 @@
+name: R297 isolated PostgreSQL candidate validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/r297-cloud-integration
+  pull_request:
+    branches:
+      - codex/r297-cloud-integration
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U ci -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+    env:
+      APP_ENV: test
+      RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      V2_ALPHA_POSTGRES_ADMIN_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
+      STORE_AUTHZ_POSTGRES_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
+      REDIS_URL: redis://127.0.0.1:6379/0
+      CI_PYTEST_COLLECTION_MANIFEST: /tmp/r297-postgres/collected-nodeids.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install locked application requirements
+        run: python -m pip install -r requirements.txt
+      - name: Run complete selected contracts against PostgreSQL 16
+        timeout-minutes: 25
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          mkdir -p /tmp/r297-postgres
+          python -m pytest -q --tb=short --show-capture=no \
+            -p ops.ci_pytest_gate --junitxml=/tmp/r297-postgres/junit.xml \
+            tests/test_r297_owner_audit_saga_contract.py \
+            tests/test_r297_dataset_validation.py \
+            tests/test_r297_jd_collector_business_idempotency.py \
+            tests/test_r297_reliable_queue_postgresql.py \
+            tests/test_r297_jd_workbench_hash_uniqueness_migration.py \
+            tests/test_r297_jd_business_uniqueness_migration.py
+          python - <<'PY'
+          from pathlib import Path
+          from ops.ci_pytest_gate import validate_report
+          result = validate_report(Path('/tmp/r297-postgres/junit.xml'),
+                                   Path('/tmp/r297-postgres/collected-nodeids.json'), minimum=1)
+          print('POSTGRES_TARGETED_CONTRACTS=' + str(result))
+          print('RELEASE_APPROVAL=NOT_GRANTED')
+          PY
+      - name: Upload actual database test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-postgres-${{ env.RELEASE_SOURCE_SHA }}
+          path: /tmp/r297-postgres/
+          if-no-files-found: error
+          retention-days: 14
