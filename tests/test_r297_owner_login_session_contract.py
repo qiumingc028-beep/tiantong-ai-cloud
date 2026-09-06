@@ -35,7 +35,8 @@ class _RuntimeResponse:
         self.status = status
 
     def read(self, size: int = -1) -> bytes:
-        return json.dumps(self.payload).encode("utf-8")[:size] if size >= 0 else json.dumps(self.payload).encode("utf-8")
+        payload = json.dumps(self.payload).encode("utf-8")
+        return payload if size < 0 else payload[:size]
 
     def __enter__(self):
         return self
@@ -204,6 +205,47 @@ def test_owner_create_session_delegates_server_derived_scope_to_runtime(client, 
     }
     assert response.json() == {"store_id": 1, "status": "LOGIN_REQUIRED", "expires_in": 600}
     assert "session_id" not in response.json()
+
+
+def test_controlled_canary_uses_explicit_loopback_runtime(monkeypatch, client, owner_headers, runtime_recorder):
+    monkeypatch.setenv("R297_CONTROLLED_CANARY", "1")
+    monkeypatch.setenv(
+        "JD_BROWSER_RUNTIME_BASE_URL",
+        "http://127.0.0.1:18787/internal/jd-browser",
+    )
+
+    response = client.post("/api/jd-workbench/stores/1/login-session", headers=owner_headers, json={})
+
+    assert response.status_code == 200
+    assert runtime_recorder.requests[-1][0].full_url.startswith("http://127.0.0.1:18787/")
+    assert response.json() == {"store_id": 1, "status": "LOGIN_REQUIRED", "expires_in": 600}
+    assert "session_id" not in response.json()
+
+
+def test_controlled_canary_is_hard_disabled_in_production(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("R297_CONTROLLED_CANARY", "1")
+    monkeypatch.setenv(
+        "JD_BROWSER_RUNTIME_BASE_URL",
+        "http://127.0.0.1:18787/internal/jd-browser",
+    )
+
+    with pytest.raises(jd_workbench.HTTPException) as error:
+        jd_workbench._runtime_base()
+
+    assert error.value.status_code == 503
+    assert error.value.detail == "生产环境禁止受控Canary运行时"
+
+
+def test_runtime_override_fails_closed_outside_controlled_loopback(monkeypatch, client, owner_headers, runtime_recorder):
+    monkeypatch.setenv("R297_CONTROLLED_CANARY", "1")
+    monkeypatch.setenv("JD_BROWSER_RUNTIME_BASE_URL", "https://example.invalid/internal/jd-browser")
+
+    response = client.post("/api/jd-workbench/stores/1/login-session", headers=owner_headers, json={})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "云端登录运行时配置无效"}
+    assert runtime_recorder.requests == []
 
 
 def test_owner_session_status_is_read_from_runtime(client, owner_headers, runtime_recorder):

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { buildApp } from '../server.mjs';
+import { buildApp, startFromEnv } from '../server.mjs';
 
 const controlToken = 'i'.repeat(32);
 const captureToken = 'c'.repeat(32);
@@ -41,6 +41,25 @@ test('expiry contract keeps JWT seconds separate from browser milliseconds', () 
   const issuedAt = Math.floor(nowMs / 1000);
 
   assertExpiryContract({ issued_at: issuedAt, exp: issuedAt + 60 }, nowMs);
+});
+
+test('production runtime rejects controlled canary before listening', async () => {
+  const previous = {
+    APP_ENV: process.env.APP_ENV,
+    R297_CONTROLLED_CANARY: process.env.R297_CONTROLLED_CANARY,
+    R297_CONTROLLED_CANARY_DASHBOARD_URL: process.env.R297_CONTROLLED_CANARY_DASHBOARD_URL
+  };
+  process.env.APP_ENV = 'production';
+  process.env.R297_CONTROLLED_CANARY = '1';
+  process.env.R297_CONTROLLED_CANARY_DASHBOARD_URL = 'http://host.docker.internal/r297-controlled-canary.html';
+  try {
+    await assert.rejects(startFromEnv(), /R297_CONTROLLED_CANARY_FORBIDDEN_IN_PRODUCTION/);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('viewer ticket and cookie keys are independently required', () => {
@@ -110,6 +129,48 @@ test('capture and control credentials cannot be used interchangeably', async (t)
   const captureHeaders = { 'x-internal-token': captureToken };
   assert.equal((await app.inject({ method: 'GET', url: '/internal/jd-browser/health', headers: captureHeaders })).statusCode, 401);
   assert.equal((await app.inject({ method: 'POST', url: '/internal/jd-browser/capture', headers: controlHeaders })).statusCode, 401);
+});
+
+test('explicit controlled dashboard is used by the real capture path', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-runtime-canary-'));
+  const visited = [];
+  const page = {
+    goto: async (url) => { visited.push(url); },
+    evaluate: async () => ({ gmv: '1.00', orders: '1' })
+  };
+  const app = buildApp({
+    captureToken,
+    controlToken,
+    viewerTicketSigningKey: viewerSigningKey,
+    viewerCookieSigningKey,
+    masterKey,
+    sessionNamespace,
+    dashboardUrl: 'http://host.docker.internal:18789/controlled-canary',
+    authorizeSession: async () => true,
+    profileRoot: path.join(root, 'profiles'),
+    archiveRoot: path.join(root, 'archives'),
+    launchContext: async () => ({
+      route: async () => {},
+      storageState: async () => ({ cookies: [] }),
+      close: async () => {},
+      pages: () => [page]
+    })
+  });
+  t.after(async () => { await app.close(); await fs.rm(root, { recursive: true, force: true }); });
+  const headers = { 'x-internal-token': controlToken };
+  assert.equal((await app.inject({
+    method: 'POST', url: '/internal/jd-browser/sessions', headers,
+    payload: scope('3', { tenant_id: '1', company_id: '2' })
+  })).statusCode, 200);
+  const captured = await app.inject({
+    method: 'POST', url: '/internal/jd-browser/capture',
+    headers: { 'x-internal-token': captureToken },
+    payload: { scope: scope('3', { tenant_id: '1', company_id: '2' }), dataset: 'metrics' }
+  });
+  assert.equal(captured.statusCode, 200);
+  assert.equal(captured.json().status, 'OK');
+  assert.equal(captured.json().data.metrics.gmv, '1.00');
+  assert.deepEqual(visited, ['http://host.docker.internal:18789/controlled-canary']);
 });
 
 test('capability credentials must be distinct', () => {
@@ -239,12 +300,12 @@ for (const vector of contract.invalid_capture_request_cases) {
   });
 }
 
-async function controlledCaptureApp(t) {
+async function controlledCaptureApp(t, captures = { metrics: contract.controlled_capture_metrics }) {
   const captureNow = 5_000_000;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-capture-test-'));
   const page = {
     goto: async () => {},
-    evaluate: async () => contract.controlled_capture_metrics
+    evaluate: async (_callback, dataset) => captures[dataset]
   };
   const app = buildApp({
     captureToken,
@@ -293,6 +354,40 @@ test('controlled read-only capture succeeds after an authorized login', async (t
       metrics: contract.controlled_capture_metrics
     }
   });
+});
+
+test('capture preserves independent schemas for all four datasets', async (t) => {
+  const captures = {
+    metrics: { gmv: '1.00' },
+    orders: [{ order_no: 'ORDER-1' }],
+    products: [{ sku_id: 'SKU-1' }],
+    ads: [{ campaign_id: 'CAMPAIGN-1' }]
+  };
+  const { app } = await controlledCaptureApp(t, captures);
+  for (const [dataset, expected] of Object.entries(captures)) {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/jd-browser/capture',
+      headers: { 'x-internal-token': captureToken },
+      payload: { scope: contract.valid_scope, dataset }
+    });
+    assert.equal(response.statusCode, 200, dataset);
+    const data = response.json().data;
+    assert.deepEqual(Object.keys(data).sort(), ['captured_at', dataset, 'source', 'store_id'].sort());
+    assert.deepEqual(data[dataset], expected);
+  }
+});
+
+test('capture rejects non-object rows in list datasets', async (t) => {
+  const { app } = await controlledCaptureApp(t, { orders: ['invalid-row'] });
+  const response = await app.inject({
+    method: 'POST',
+    url: '/internal/jd-browser/capture',
+    headers: { 'x-internal-token': captureToken },
+    payload: { scope: contract.valid_scope, dataset: 'orders' }
+  });
+  assert.equal(response.statusCode, 422);
+  assert.deepEqual(response.json(), { status: 'JD_DATASET_NOT_FOUND', data: {} });
 });
 
 for (const vector of contract.capture_cases.filter(({ name }) => name !== 'valid_metrics')) {
@@ -455,7 +550,9 @@ test('backend ticket is single-use and exchanges for a short-lived noVNC cookie'
     method: 'POST', url: '/internal/jd-browser/sessions', headers: { 'x-internal-token': controlToken },
     payload: scope('store')
   });
+  assert.deepEqual(Object.keys(nearlyExpired.json()).sort(), ['expires_in', 'restored', 'session_id']);
   assert.equal(nearlyExpired.json().expires_in, 1, 'existing sessions report remaining TTL without extension');
+  assert.equal(nearlyExpired.json().restored, false);
   now += 2_000;
   assert.equal((await app.inject({
     method: 'GET',
@@ -646,6 +743,65 @@ test('graceful restart restores encrypted state and revoke removes every session
   assert.equal((await fs.readdir(archiveRoot)).filter((name) => name.endsWith('.enc')).length, 0);
   assert.deepEqual(await fs.readdir(path.join(root, 'profiles')), []);
   await second.close();
+});
+
+test('restart restores profile but rotates viewer authority and revoke survives another restart', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-runtime-viewer-restart-'));
+  const archiveRoot = path.join(root, 'archives');
+  const profileRoot = path.join(root, 'profiles');
+  const launchContext = async () => ({
+    route: async () => {}, storageState: async () => ({ cookies: [] }),
+    close: async () => {}, pages: () => []
+  });
+  const options = {
+    captureToken, controlToken, viewerTicketSigningKey: viewerSigningKey,
+    viewerCookieSigningKey, masterKey, authorizeSession: async () => true,
+    sessionNamespace,
+    archiveRoot, profileRoot, launchContext
+  };
+  const sessionPayload = scope('3', { tenant_id: '1', company_id: '2' });
+  const sessionId = [sessionNamespace, '1', '2', '3', 'jd'].join(':');
+  const createSession = (app) => app.inject({
+    method: 'POST', url: '/internal/jd-browser/sessions',
+    headers: { 'x-internal-token': controlToken }, payload: sessionPayload
+  });
+  const issueTicket = (app) => app.inject({
+    method: 'POST', url: '/internal/jd-browser/tickets',
+    headers: { 'x-internal-token': controlToken }, payload: { session_id: sessionId }
+  });
+  const exchange = (app, ticket) => app.inject({
+    method: 'POST', url: '/internal/jd-browser/viewer/exchange/3', payload: { ticket }
+  });
+  const authorize = (app, cookie) => app.inject({
+    method: 'GET', url: '/internal/jd-browser/viewer/authorize',
+    headers: { cookie, 'x-original-uri': '/jd-browser/novnc/3/vnc.html' }
+  });
+
+  const first = buildApp(options);
+  assert.equal((await createSession(first)).statusCode, 200);
+  const oldTicket = (await issueTicket(first)).json().ticket;
+  const oldCookie = (await exchange(first, oldTicket)).headers['set-cookie'];
+  assert.equal((await authorize(first, oldCookie)).statusCode, 204);
+  await first.close();
+
+  const second = buildApp(options);
+  assert.equal((await createSession(second)).json().restored, true);
+  assert.equal((await authorize(second, oldCookie)).statusCode, 401);
+  assert.equal((await exchange(second, oldTicket)).statusCode, 401);
+  const newTicket = (await issueTicket(second)).json().ticket;
+  const newCookie = (await exchange(second, newTicket)).headers['set-cookie'];
+  assert.equal((await authorize(second, newCookie)).statusCode, 204);
+  assert.equal((await second.inject({
+    method: 'DELETE', url: `/internal/jd-browser/sessions/${encodeURIComponent(sessionId)}`,
+    headers: { 'x-internal-token': controlToken }
+  })).statusCode, 200);
+  await second.close();
+
+  const third = buildApp(options);
+  t.after(async () => { await third.close(); await fs.rm(root, { recursive: true, force: true }); });
+  assert.equal((await authorize(third, newCookie)).statusCode, 401);
+  assert.deepEqual((await fs.readdir(archiveRoot)).filter((name) => name.endsWith('.enc')), []);
+  assert.deepEqual(await fs.readdir(profileRoot), []);
 });
 
 test('database revocation invalidates viewer and capture access and control can always destroy', async (t) => {

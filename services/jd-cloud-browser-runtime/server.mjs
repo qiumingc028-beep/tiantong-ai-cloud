@@ -118,7 +118,7 @@ function decryptArchive(payload, masterKey, aad) {
   }
 }
 
-function installReadOnlyPolicy(context) {
+function installReadOnlyPolicy(context, dashboardUrl = ROUTES.dashboard) {
   return context.route('**/*', async (route) => {
     const request = route.request();
     let frame;
@@ -128,6 +128,10 @@ function installReadOnlyPolicy(context) {
     const resourceType = isMainFrameSource && request.resourceType() === 'document'
       ? 'mainFrame'
       : request.resourceType();
+    if (
+      dashboardUrl !== ROUTES.dashboard && request.method() === 'GET' &&
+      resourceType === 'mainFrame' && request.url() === dashboardUrl
+    ) return route.continue();
     const decision = classifyRequest({
       url: request.url(), method: request.method(), resourceType,
       currentMainFrameUrl: frame?.url() || ROUTES.dashboard,
@@ -204,6 +208,7 @@ export function buildApp({
   archiveRoot = '/data/jd-session-archives',
   sessionNamespace,
   authorizeSession,
+  dashboardUrl = ROUTES.dashboard,
   launchContext = (directory) => chromium.launchPersistentContext(directory, {
     headless: false,
     chromiumSandbox: true
@@ -253,7 +258,7 @@ export function buildApp({
   }
 
   async function removePlaintextProfile(id) {
-    await fs.rm(profileDirectory(id), { recursive: true, force: true });
+    await fs.rm(profileDirectory(id), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 
   async function runAllCleanup(steps, initialError = null) {
@@ -382,7 +387,7 @@ export function buildApp({
     await purgeExpired();
     if (browserSessions.has(id)) {
       const active = browserSessions.get(id);
-      return { session_id: id, expires_in: remainingSeconds(active.expiresAt) };
+      return { session_id: id, expires_in: remainingSeconds(active.expiresAt), restored: false };
     }
     if (browserSessions.size) return reply.code(409).send({ error: 'ACTIVE_SESSION_EXISTS' });
     let restored;
@@ -406,8 +411,9 @@ export function buildApp({
           for (const entry of state?.localStorage || []) globalThis.localStorage.setItem(entry.name, entry.value);
         }, { origins: restored.storage_state.origins });
       }
-      await installReadOnlyPolicy(context);
-      const nonce = restored?.session_nonce || crypto.randomBytes(16).toString('hex');
+      await installReadOnlyPolicy(context, dashboardUrl);
+      // Viewer authority is intentionally process-bound: restore JD state, never a pre-restart cookie.
+      const nonce = crypto.randomBytes(16).toString('hex');
       browserSessions.set(id, {
         context, scope, nonce: restored ? crypto.randomBytes(16).toString('hex') : nonce,
         expiresAt: restored?.expires_at || now() + SESSION_TTL_MS
@@ -500,15 +506,27 @@ export function buildApp({
       return reply.code(409).send({ status: 'LOGIN_REQUIRED', data: {} });
     }
     const page = session.context.pages()[0] || await session.context.newPage();
-    await page.goto(ROUTES.dashboard, { waitUntil: 'domcontentloaded' });
-    const metrics = await page.evaluate(() => Object.fromEntries(
-      [...document.querySelectorAll('[data-metric]')]
-        .map((node) => [node.getAttribute('data-metric'), node.textContent?.trim()])
-        .filter(([key, value]) => key && value)
-    ));
-    if (!Object.keys(metrics).length) return reply.code(422).send({ status: 'JD_METRIC_NOT_FOUND', data: {} });
+    await page.goto(dashboardUrl, { waitUntil: 'domcontentloaded' });
+    const dataset = request.body.dataset;
+    const captured = await page.evaluate((datasetName) => {
+      if (datasetName === 'metrics') {
+        return Object.fromEntries(
+          [...document.querySelectorAll('[data-metric]')]
+            .map((node) => [node.getAttribute('data-metric'), node.textContent?.trim()])
+            .filter(([key, value]) => key && value)
+        );
+      }
+      const node = document.querySelector(`script[type="application/json"][data-dataset="${datasetName}"]`);
+      if (!node) return null;
+      try { return JSON.parse(node.textContent || ''); }
+      catch (_error) { return null; }
+    }, dataset);
+    const validCapture = dataset === 'metrics'
+      ? captured && !Array.isArray(captured) && typeof captured === 'object' && Object.keys(captured).length > 0
+      : Array.isArray(captured) && captured.every((row) => row && !Array.isArray(row) && typeof row === 'object');
+    if (!validCapture) return reply.code(422).send({ status: 'JD_DATASET_NOT_FOUND', data: {} });
     return { status: 'OK', data: { source: 'jd_cloud_playwright', captured_at: new Date(now()).toISOString(),
-      store_id: scope.store_id, metrics } };
+      store_id: scope.store_id, [dataset]: captured } };
   });
 
   app.get('/internal/jd-browser/sessions/:sid', { preHandler: verifyControl }, async (request, reply) => {
@@ -529,6 +547,19 @@ export function buildApp({
 }
 
 export async function startFromEnv() {
+  let dashboardUrl = ROUTES.dashboard;
+  if (process.env.R297_CONTROLLED_CANARY === '1') {
+    if ((process.env.APP_ENV || '').trim().toLowerCase() === 'production') {
+      throw new Error('R297_CONTROLLED_CANARY_FORBIDDEN_IN_PRODUCTION');
+    }
+    const candidate = new URL(process.env.R297_CONTROLLED_CANARY_DASHBOARD_URL || '');
+    if (
+      candidate.protocol !== 'http:' || candidate.hostname !== 'host.docker.internal' ||
+      candidate.pathname !== '/r297-controlled-canary.html' || candidate.username || candidate.password ||
+      candidate.search || candidate.hash
+    ) throw new Error('R297_CONTROLLED_CANARY_DASHBOARD_URL_INVALID');
+    dashboardUrl = candidate.href;
+  }
   if (!/^([a-z0-9][a-z0-9-]{1,31})$/.test(String(process.env.JD_SESSION_NAMESPACE || ''))) throw new Error('JD_SESSION_NAMESPACE_REQUIRED');
   const app = buildApp({
     captureToken: process.env.JD_BROWSER_CAPTURE_TOKEN,
@@ -536,9 +567,10 @@ export async function startFromEnv() {
     viewerTicketSigningKey: process.env.JD_BROWSER_VIEWER_TICKET_SIGNING_KEY,
     viewerCookieSigningKey: process.env.JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY,
     masterKey: process.env.JD_SESSION_MASTER_KEY,
+    dashboardUrl,
     profileRoot: process.env.JD_PROFILE_ROOT,
-    archiveRoot: process.env.JD_SESSION_ARCHIVE_ROOT
-    ,sessionNamespace: process.env.JD_SESSION_NAMESPACE
+    archiveRoot: process.env.JD_SESSION_ARCHIVE_ROOT,
+    sessionNamespace: process.env.JD_SESSION_NAMESPACE
   });
   await app.listen({ host: '127.0.0.1', port: Number(process.env.RUNTIME_API_PORT || 8788) });
   return app;

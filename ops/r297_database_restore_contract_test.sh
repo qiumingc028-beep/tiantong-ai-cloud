@@ -49,7 +49,7 @@ SQL
 createdb "$source_db"
 psql --set=ON_ERROR_STOP=1 --dbname="$source_db" <<'SQL'
 CREATE TABLE alembic_version (version_num varchar(128) PRIMARY KEY);
-INSERT INTO alembic_version VALUES ('0049_r297_jd_multistore_autosync');
+INSERT INTO alembic_version VALUES ('0050_r297_reliable_sync_queue');
 CREATE TABLE restore_probe (id bigint PRIMARY KEY, store_id bigint NOT NULL UNIQUE, payload text NOT NULL);
 INSERT INTO restore_probe VALUES (1, 101, 'before-cutover');
 SQL

@@ -131,6 +131,16 @@ def test_ci_builds_and_runs_runtime_with_real_health_xvfb_chromium_and_novnc_che
         "RUNTIME_UID=",
         "RUNTIME_ENV_NAMES=",
         "RUNTIME_RESTART=PASS",
+        "RESTART_COMMAND=PASS",
+        "HEALTH_READY=PASS",
+        "PROFILE_RESTORED=PASS",
+        "OLD_COOKIE_REJECTED=PASS",
+        "NEW_TICKET_ISSUED=PASS",
+        "NEW_COOKIE_ACCEPTED=PASS",
+        "OLD_TICKET_REPLAY_REJECTED=PASS",
+        "REVOKE_PERSISTED=PASS",
+        "SECOND_RESTART_OLD_COOKIE_REJECTED=PASS",
+        "ARTIFACT_CLEANUP=PASS",
     ):
         assert evidence in workflow
     assert workflow.count('docker port "$container" 8787/tcp') >= 1
@@ -163,6 +173,9 @@ def test_database_restore_contract_is_fail_closed():
     preflight = read("ops/r297_workbench_preflight.sh")
     assert "assert payload" not in preflight
     assert "jd-browser-runtime" in preflight
+    assert "ops.r297_evidence_preflight" in preflight
+    assert "--role verifier" in preflight
+    assert "page_event_receiver authenticated_observer verifier" not in preflight
 
 
 def test_database_restore_failure_injection_hooks_fail_closed():
