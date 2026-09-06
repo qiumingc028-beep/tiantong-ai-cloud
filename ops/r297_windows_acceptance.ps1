@@ -40,7 +40,7 @@ function Assert-BackendTlsBinding([string]$Origin, [byte[]]$ExpectedCertificateB
 
 $head = (& git rev-parse HEAD).Trim()
 Require ($head -match '^[0-9a-f]{40}$') 'CHECKOUT_HEAD_INVALID'
-Require ($env:GITHUB_SHA -eq $head) 'EVIDENCE_COMMIT_MUST_EQUAL_GITHUB_SHA'
+Require ($env:RELEASE_SOURCE_SHA -eq $head) 'EVIDENCE_COMMIT_MUST_EQUAL_RELEASE_SOURCE_SHA'
 Require ($env:R297_WINDOWS_CANARY_BACKEND_HTTPS_URL -match '^https://[^/]+/?$') 'CONTROLLED_BACKEND_HTTPS_URL_REQUIRED'
 Require (-not [string]::IsNullOrWhiteSpace($env:R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER)) 'CONTROLLED_BACKEND_PAIRING_ISSUER_REQUIRED'
 Require ($env:R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64 -match '^[A-Za-z0-9+/=]+$') 'CONTROLLED_BACKEND_SERVER_CERTIFICATE_REQUIRED'

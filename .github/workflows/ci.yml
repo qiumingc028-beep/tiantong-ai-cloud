@@ -85,6 +85,10 @@ jobs:
               -e 's#(postgres(ql)?://)[^/@:]+:[^@/]+@#\1[REDACTED]@#Ig' | \
             tee /tmp/pytest-results.log
 
+      - name: Sanitize isolated repository test artifacts
+        if: always()
+        run: python ops/r297_ci_redact.py /tmp/pytest-results.xml /tmp/pytest-results.log
+
       - name: Upload isolated repository test results
         if: always()
         uses: actions/upload-artifact@v7
@@ -112,6 +116,7 @@ jobs:
 
   test-and-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:16
@@ -666,6 +671,10 @@ jobs:
               -e 's#(postgres(ql)?://)[^/@:]+:[^@/]+@#\1[REDACTED]@#Ig' | \
             tee /tmp/r297-process-evidence.log
 
+      - name: Sanitize R297 process evidence log
+        if: always()
+        run: python ops/r297_ci_redact.py /tmp/r297-process-evidence.log
+
       - name: Upload R297 process evidence log
         if: always()
         uses: actions/upload-artifact@v7
@@ -703,6 +712,16 @@ jobs:
               -e 's#(postgres(ql)?://)[^/@:]+:[^@/]+@#\1[REDACTED]@#Ig' | \
             tee /tmp/r297-process-evidence-results.log
 
+      - name: Sanitize R297 process evidence validation artifacts
+        if: always()
+        run: |
+          for artifact in \
+            /tmp/r297-process-evidence-results.xml \
+            /tmp/r297-process-evidence-results.log \
+            /tmp/r297-process-evidence.log; do
+            test ! -f "$artifact" || python ops/r297_ci_redact.py "$artifact"
+          done
+
       - name: Upload R297 process evidence validation
         if: always()
         uses: actions/upload-artifact@v7
@@ -712,7 +731,7 @@ jobs:
             /tmp/r297-process-evidence-results.xml
             /tmp/r297-process-evidence-results.log
             /tmp/r297-process-evidence.log
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Verify CI Redis queue and lock residue
