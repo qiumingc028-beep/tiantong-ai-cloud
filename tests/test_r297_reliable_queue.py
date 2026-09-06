@@ -937,6 +937,6 @@ def test_machine_evidence_entrypoints_bind_checkout_head_and_write_hashes():
     assert "R297_PROCESS_ACCEPTANCE_EVIDENCE.json.sha256" in ci
     assert "R297_SENSITIVE_FIXTURE.json" in ci
     assert "python ops/r297_process_acceptance.py" in ci
-    assert "$env:GITHUB_SHA -eq $head" in windows
+    assert "$env:RELEASE_SOURCE_SHA -eq $head" in windows
     assert '"$evidencePath.sha256"' in windows
     assert "ops/r297_windows_acceptance.ps1" in windows_ci
