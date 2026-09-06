@@ -92,6 +92,8 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
     rows = JztCollector().fetch_ads_today(account)
     saved = 0
     for row in rows:
+        if not str(row.get("campaign_id", "")).strip():
+            raise JdCollectorError("广告缺少 campaign_id")
         existing = db.query(JdAd).filter(JdAd.store_id == store_id, JdAd.stat_date == (stat_date or date.today()), JdAd.campaign_id == str(row.get("campaign_id", ""))).one_or_none()
         ad = existing or JdAd(store_id=store_id, account_id=account.id, stat_date=stat_date or date.today(), campaign_id=str(row.get("campaign_id", "")))
         if not existing:
@@ -208,6 +210,8 @@ def save_order(db: Session, store_id: int, row: dict):
 
 
 def save_product(db: Session, store_id: int, row: dict):
+    if not str(row.get("sku_id", "")).strip():
+        raise JdCollectorError("商品缺少 sku_id")
     product = db.query(JdProduct).filter(JdProduct.store_id == store_id, JdProduct.sku_id == str(row.get("sku_id", "")).strip(), JdProduct.stat_date == (parse_date(row.get("stat_date")) or date.today())).one_or_none() or JdProduct(
         store_id=store_id,
         sku_id=str(row.get("sku_id", "")).strip(),
