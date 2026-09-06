@@ -313,14 +313,29 @@ def _saga_pending(db: Session, user: User, store: Store, action: str) -> Employe
     detail = {"status": "PENDING", "namespace": get_settings().JD_SESSION_NAMESPACE,
               "tenant_id": str(store.tenant_id), "company_id": str(store.company_id),
               "store_id": str(store.id), "platform": str(store.platform), "operation": action,
-              "created_at": _now().isoformat(), "updated_at": _now().isoformat()}
+              "created_at": _now().isoformat(), "updated_at": _now().isoformat(),
+              "claim_token": uuid.uuid4().hex,
+              "claim_until": (_now() + timedelta(seconds=60)).isoformat()}
     row = EmployeeLog(user_id=user.id, store_id=store.id, action=action, detail=json.dumps(detail, separators=(",", ":")))
-    db.add(row); db.commit(); return row
+    db.add(row)
+    db.commit()
+    row._owner_claim_token = detail["claim_token"]
+    return row
 
 def _saga_finish(db: Session, row: EmployeeLog, status: str) -> None:
-    detail = json.loads(row.detail or "{}")
-    detail["status"] = status; detail["updated_at"] = _now().isoformat()
-    row.detail = json.dumps(detail, separators=(",", ":")); db.commit()
+    expected_token = getattr(row, "_owner_claim_token", json.loads(row.detail or "{}").get("claim_token"))
+    try:
+        row = db.query(EmployeeLog).filter_by(id=row.id).with_for_update().populate_existing().one()
+        detail = json.loads(row.detail or "{}")
+        if detail.get("status") != "PENDING" or detail.get("claim_token") != expected_token:
+            raise HTTPException(status_code=503, detail="审计操作已由恢复流程接管")
+        detail.update(status=status, updated_at=_now().isoformat())
+        detail.pop("claim_until", None)
+        row.detail = json.dumps(detail, separators=(",", ":"))
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="审计状态暂不可用") from exc
 
 
 OWNER_SAGA_ACTIONS = frozenset(
@@ -363,17 +378,39 @@ def reconcile_pending_owner_action_audits(db: Session) -> int:
     if rows:
         _owner_saga_reconcile_after_id = rows[-1].id
     for row in rows:
+        row = (
+            db.query(EmployeeLog).filter_by(id=row.id)
+            .with_for_update(skip_locked=True).populate_existing().one_or_none()
+        )
+        if row is None:
+            db.rollback()
+            continue
         try:
             detail = json.loads(row.detail or "")
         except (TypeError, ValueError):
+            db.rollback()
             continue
         if detail.get("status") != "PENDING":
+            db.rollback()
             continue
-        if detail.get("operation") != row.action:
-            _saga_finish(db, row, "FAILED")
-            count += 1
+        try:
+            claim_until = datetime.fromisoformat(detail["claim_until"]) if detail.get("claim_until") else None
+            if claim_until is not None and _aware(claim_until) > _now():
+                db.rollback()
+                continue
+        except (TypeError, ValueError):
+            db.rollback()
             continue
+        # Ticket issuance has no authoritative outcome lookup. Keep it pending;
+        # reissuing or declaring failure would invent a result for an unknown action.
         if row.action == "owner_login_ticket":
+            db.rollback()
+            continue
+        detail.update(claim_token=uuid.uuid4().hex, claim_until=(_now() + timedelta(seconds=60)).isoformat())
+        row.detail = json.dumps(detail, separators=(",", ":"))
+        db.commit()
+        row._owner_claim_token = detail["claim_token"]
+        if detail.get("operation") != row.action:
             _saga_finish(db, row, "FAILED")
             count += 1
             continue
@@ -392,6 +429,7 @@ def reconcile_pending_owner_action_audits(db: Session) -> int:
         try:
             result = _runtime_call("GET", f"/sessions/{quote(sid, safe='')}")
         except HTTPException:
+            _saga_finish(db, row, "PENDING")
             continue
         status = result.get("status") if set(result) == {"status"} else None
         success = (
@@ -401,8 +439,9 @@ def reconcile_pending_owner_action_audits(db: Session) -> int:
             if row.action == "owner_login_session_status"
             else status == "REVOKED"
         )
-        _saga_finish(db, row, "SUCCESS" if success else "FAILED")
-        count += 1
+        if success:
+            _saga_finish(db, row, "SUCCESS")
+            count += 1
     return count
 
 
@@ -437,7 +476,6 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
         or not (0 < result["expires_in"] <= 600)
         or type(result.get("restored")) is not bool
     ):
-        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
     try: _saga_finish(db, audit, "SUCCESS")
     except Exception as exc: raise HTTPException(status_code=503, detail="审计状态暂不可用") from exc
@@ -452,7 +490,6 @@ async def owner_login_session_status(store_id: int, request: Request, db: Sessio
     try:
         result = await run_in_threadpool(_runtime_call, "GET", f"/sessions/{quote(sid, safe='')}")
     except HTTPException:
-        _saga_finish(db, audit, "FAILED")
         raise
     if set(result) != {"status"}:
         _saga_finish(db, audit, "FAILED")
@@ -475,7 +512,6 @@ async def delete_owner_login_session(store_id: int, request: Request, db: Sessio
     except HTTPException:
         raise
     if set(result) != {"ok"} or result.get("ok") is not True:
-        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录会话销毁失败")
     _saga_finish(db, audit, "SUCCESS")
     return {"ok": True, "store_id": store.id, "status": "REVOKED"}
@@ -500,7 +536,6 @@ async def owner_login_ticket(store_id: int, request: Request, db: Session = Depe
         or type(result.get("expires_in")) is not int
         or not (0 < result["expires_in"] <= 120)
     ):
-        _saga_finish(db, audit, "FAILED")
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
     _saga_finish(db, audit, "SUCCESS")
     return {"ticket": result["ticket"], "expires_in": result["expires_in"]}

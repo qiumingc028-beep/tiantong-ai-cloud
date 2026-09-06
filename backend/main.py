@@ -103,6 +103,11 @@ def startup():
         ensure_default_scenarios(db)
         ensure_default_alert_rules(db)
         ensure_default_circuit_breakers(db)
+        try:
+            jd_workbench.reconcile_pending_owner_action_audits(db)
+        except Exception as exc:
+            db.rollback()
+            logger.warning("owner_action_audit_startup_warning: %s", type(exc).__name__)
     finally:
         db.close()
 

@@ -49,6 +49,15 @@ assert.throws(() => login.sessionState(7, {store_id: 7, status: 'UNKNOWN_FROM_RU
 assert.throws(() => login.sessionState(7, {store_id: 7, status: 'active'}), /登录状态响应无效/);
 
 const requestOnce = (status, body) => async () => ({status, json: async () => body});
+for (const status of ['EXPIRED', 'HUMAN_ACTION_REQUIRED']) {
+  assert.deepEqual(await login.createClient(requestOnce(200, {store_id: 7, status})).status(7), {store_id: 7, status});
+  assert.notEqual(login.statusView(status).code, 'INVALID');
+}
+const closeController = new AbortController();
+await login.createClient(async (_path, options) => {
+  assert.equal(options.signal, closeController.signal);
+  return {status: 204};
+}).close(7, closeController.signal);
 await assert.rejects(login.createClient(requestOnce(201, {})).create(7), /HTTP状态无效/);
 for (const expires_in of [true, 0, -1, 121, 1.5]) {
   await assert.rejects(login.createClient(requestOnce(200, {ticket: 'x', expires_in})).ticket(7), /登录凭证响应无效/);
@@ -299,6 +308,21 @@ resolveOld({store_id: 1, status: 'ONLINE'});
 await oldRequest;
 assert.deepEqual(crossStore, [2]);
 
+const pending = [];
+const reentrant = login.createPoller({
+  fetchStatus: (_id, signal) => new Promise(resolve => pending.push({resolve, signal})),
+  onStatus: () => {}, onError: error => { throw error; },
+  setTimer: () => 1, clearTimer: () => {}
+});
+const first = reentrant.start(7);
+const second = reentrant.start(7);
+pending[0].resolve({store_id: 7, status: 'ACTIVE'});
+await first;
+assert.equal(reentrant.active(), true);
+assert.equal(pending[1].signal.aborted, false);
+pending[1].resolve({store_id: 7, status: 'REVOKED'});
+await second;
+
 let pendingPollSignal;
 let resolvePendingPoll;
 const pendingPoller = login.createPoller({
@@ -453,8 +477,16 @@ def test_runtime_container_ci_check_has_timeout_and_safe_stage_diagnostics():
     assert "cleanup_done=1" in runtime_step
     assert "timeout 1s docker inspect --format '{{json .State}}'" in runtime_step
     assert "timeout 1s docker stats --no-stream" in runtime_step
-    assert "docker inspect" not in runtime_step.replace("timeout 1s docker inspect --format '{{json .State}}'", "")
-    assert runtime_step.count("timeout 1s docker ") == 6
+    allowed_inspects = (
+        "timeout 1s docker inspect --format '{{json .State}}'",
+        "timeout 1s docker inspect --format 'STATE={{.State.Status}} EXIT={{.State.ExitCode}} PID={{.State.Pid}} RESTARTS={{.RestartCount}}'",
+    )
+    remaining = runtime_step
+    for command in allowed_inspects:
+        assert command in remaining
+        remaining = remaining.replace(command, "")
+    assert "docker inspect" not in remaining
+    assert runtime_step.count("timeout 1s docker ") == 7
 
     with tempfile.TemporaryDirectory() as directory:
         marker = Path(directory) / "cleanup"

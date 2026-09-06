@@ -455,7 +455,7 @@ jobs:
             failure_status=$?
             trap - ERR
             echo "RUNTIME_RESTART_FAILED_STEP=$restart_step EXIT_CODE=$failure_status" >&2
-            docker inspect --format 'STATE={{.State.Status}} EXIT={{.State.ExitCode}} PID={{.State.Pid}} RESTARTS={{.RestartCount}}' "$container" >&2 || true
+            timeout 1s docker inspect --format 'STATE={{.State.Status}} EXIT={{.State.ExitCode}} PID={{.State.Pid}} RESTARTS={{.RestartCount}}' "$container" >&2 || true
             docker exec "$container" sh -c 'for process in /proc/[0-9]*; do test -r "$process/comm" && printf "%s %s\n" "${process##*/}" "$(cat "$process/comm")"; done' >&2 || true
             docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles /data/jd-session-archives -maxdepth 3 -printf "%M %u:%g %s %p\n"' >&2 || true
             for status_file in /tmp/runtime-health.json /tmp/runtime-session.json /tmp/runtime-restored.json; do

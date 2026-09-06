@@ -21,7 +21,7 @@ from backend.models import Store, User, UserStoreMembership
 
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "desktop" / "jd-workbench"
-FINAL_REVISION = "0053_r297_jd_workbench_hash_uniqueness"
+FINAL_REVISION = "0054_r297_jd_business_uniqueness"
 
 
 def read(path: Path) -> str:

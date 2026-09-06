@@ -81,7 +81,8 @@ def test_duplicate_business_key_in_one_collection_batch_is_idempotent(test_db, m
     account_type = "jd_smart" if target == "product" else "jzt"
     account = _account(session, account_type)
     key = "sku_id" if target == "product" else "campaign_id"
-    rows = [{key: "same-key", "clicks": 1}, {key: "same-key", "clicks": 2}]
+    value_key = "stock_quantity" if target == "product" else "clicks"
+    rows = [{key: "same-key", value_key: 1}, {key: "same-key", value_key: 2}]
     if target == "product":
         monkeypatch.setattr(jd_collectors.JdSmartCollector, "fetch_products_today", lambda *_args: rows)
         call = jd_collectors.sync_jd_products

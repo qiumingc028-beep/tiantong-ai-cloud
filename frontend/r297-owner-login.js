@@ -16,6 +16,8 @@
     ONLINE: '登录成功',
     LOGIN_SUCCESS: '登录成功',
     LOGIN_EXPIRED: '登录失效',
+    EXPIRED: '登录失效',
+    HUMAN_ACTION_REQUIRED: '需要人工处理',
     TICKET_EXPIRED: 'ticket过期',
     AUTHORIZATION_REVOKED: '授权撤销',
     REVOKED: '授权撤销',
@@ -30,9 +32,9 @@
   const TERMINAL_STATUSES = new Set([
     'ONLINE', 'LOGIN_SUCCESS', 'LOGIN_EXPIRED', 'TICKET_EXPIRED',
     'AUTHORIZATION_REVOKED', 'REVOKED', 'SESSION_DESTROYED', 'DESTROYED',
-    'RUNTIME_UNAVAILABLE', 'SYNC_RECOVERED', 'ERROR', 'SYNC_FAILED'
+    'RUNTIME_UNAVAILABLE', 'SYNC_RECOVERED', 'ERROR', 'SYNC_FAILED', 'EXPIRED'
   ]);
-  const SERVER_SESSION_STATUSES = new Set(['LOGIN_REQUIRED', 'ACTIVE', 'REVOKED']);
+  const SERVER_SESSION_STATUSES = new Set(['LOGIN_REQUIRED', 'ACTIVE', 'REVOKED', 'EXPIRED', 'HUMAN_ACTION_REQUIRED']);
   const SESSION_TTL_MAX_SECONDS = 600;
   const TICKET_TTL_MAX_SECONDS = 120;
   const PAGE_CLOSE_OBSERVER_CONTRACT = Object.freeze({
@@ -97,8 +99,8 @@
         if (!exactKeys(data, ['ticket', 'expires_in']) || typeof data.ticket !== 'string' || !data.ticket.trim() || !strictTtl(data.expires_in, TICKET_TTL_MAX_SECONDS)) throw new Error('登录凭证响应无效');
         return Object.freeze({ ticket: data.ticket, expires_in: data.expires_in });
       },
-      close: async value => {
-        const id = storeId(value), response = await send(sessionPath(id), { method: 'DELETE' });
+      close: async (value, signal) => {
+        const id = storeId(value), response = await send(sessionPath(id), { method: 'DELETE', ...(signal ? {signal} : {}) });
         if (response && response.status === 204) return Object.freeze({ store_id: id, status: 'REVOKED' });
         const data = await requiredJson(response, 200);
         if (!exactKeys(data, ['ok', 'store_id', 'status']) || data.ok !== true || !Number.isInteger(data.store_id) || data.store_id !== id || data.status !== 'REVOKED') throw new Error('登录会话销毁响应无效');
@@ -246,12 +248,14 @@
     }
 
     async function poll(token, id) {
-      if (!running || token !== generation || !isAllowed()) return stop();
+      if (!running || token !== generation) return;
+      if (!isAllowed()) return stop();
       const controller = new AbortControllerCtor();
       requestController = controller;
       try {
         const result = await fetchStatus(id, controller.signal);
-        if (!running || token !== generation || !isAllowed()) return stop();
+        if (!running || token !== generation) return;
+        if (!isAllowed()) return stop();
         onStatus(result);
         if (statusView(result && result.status).terminal) return stop();
         timer = setTimer(() => poll(token, id), intervalMs);

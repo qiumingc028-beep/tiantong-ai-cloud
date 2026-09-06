@@ -2,6 +2,8 @@ from datetime import date, datetime, timezone
 import json
 import os
 import hmac
+import re
+from decimal import Decimal, InvalidOperation
 from urllib.request import Request, urlopen
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -12,6 +14,64 @@ from ..models import JdAccount, JdAd, JdDailyMetric, JdOrder, JdProduct, Store
 
 class JdCollectorError(RuntimeError):
     pass
+
+
+DATASET_MODELS = {"metrics": JdDailyMetric, "orders": JdOrder, "products": JdProduct, "ads": JdAd}
+DATASET_FIELDS = {
+    "metrics": "gmv profit_amount visitors_count paid_orders_count ad_spend roi refunds_count after_sales_count favorites_count cart_add_count conversion_rate today_sales visitors orders refunds after_sales",
+    "orders": "order_no order_date paid_amount profit_amount order_status",
+    "products": "sku_id stat_date product_name category_name stock_quantity sales_amount sales_quantity visitors_count conversion_rate",
+    "ads": "campaign_id campaign_name ad_spend clicks impressions roi cpa deal_amount",
+}
+METRIC_ALIASES = {"today_sales": "gmv", "visitors": "visitors_count", "orders": "paid_orders_count",
+                  "refunds": "refunds_count", "after_sales": "after_sales_count"}
+BUSINESS_KEYS = {"orders": "order_no", "products": "sku_id", "ads": "campaign_id"}
+
+
+def validate_dataset(dataset: str, captured):
+    """Validate the complete capture before any persistence or coercion."""
+    if dataset not in DATASET_FIELDS:
+        raise JdCollectorError("未知采集数据集")
+    rows = [captured] if dataset == "metrics" else captured
+    if not isinstance(rows, list):
+        raise JdCollectorError("云端采集响应校验失败")
+    for row in rows:
+        if not isinstance(row, dict) or not row or set(row) - set(DATASET_FIELDS[dataset].split()):
+            raise JdCollectorError("采集字段无效")
+        business_key = BUSINESS_KEYS.get(dataset)
+        if business_key and (not isinstance(row.get(business_key), str) or not row[business_key].strip()):
+            raise JdCollectorError(f"采集缺少 {business_key}")
+        for name, value in row.items():
+            field = METRIC_ALIASES.get(name, name) if dataset == "metrics" else name
+            if name != field and field in row:
+                raise JdCollectorError("采集字段重复")
+            column = DATASET_MODELS[dataset].__table__.columns[field]
+            kind = column.type.python_type
+            if kind is str:
+                valid = isinstance(value, str) and len(value) <= column.type.length and not any(ord(c) < 32 for c in value)
+                if field == business_key:
+                    valid = valid and value == value.strip()
+            elif kind is date:
+                try:
+                    valid = isinstance(value, str) and date.fromisoformat(value).isoformat() == value
+                except ValueError:
+                    valid = False
+            else:
+                valid = type(value) in (int, float, str, Decimal)
+                valid = valid and bool(re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", str(value)))
+                try:
+                    numeric = Decimal(str(value)) if valid else Decimal("NaN")
+                    valid = numeric.is_finite()
+                    if valid and kind is int:
+                        valid = numeric == numeric.to_integral_value() and 0 <= numeric <= 2147483647
+                    elif valid:
+                        scale = column.type.scale
+                        valid = abs(numeric) < Decimal(10) ** (column.type.precision - scale) and numeric == numeric.quantize(Decimal(10) ** -scale)
+                except InvalidOperation:
+                    valid = False
+            if not valid:
+                raise JdCollectorError(f"采集字段类型无效: {name}")
+    return captured
 
 
 class JdSmartCollector:
@@ -52,7 +112,7 @@ class JdSmartCollector:
             and (not isinstance(captured, list) or any(not isinstance(row, dict) for row in captured))
         ):
             raise JdCollectorError("云端采集响应校验失败")
-        return captured
+        return validate_dataset(dataset, captured)
 
     def fetch_today(self, account: JdAccount) -> dict:
         return self._capture(account, "metrics", account.store)
@@ -105,40 +165,43 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
     )
     if not account:
         raise JdCollectorError("店铺未配置京准通账号")
-    rows = JztCollector().fetch_ads_today(account)
-    saved = 0
-    for row in rows:
-        save_ad(db, store_id, account.id, stat_date or date.today(), row)
-        saved += 1
+    rows = validate_dataset("ads", JztCollector().fetch_ads_today(account))
+    saved = set()
+    with db.begin_nested():
+        for row in rows:
+            save_ad(db, store_id, account.id, stat_date or date.today(), row)
+            saved.add(row["campaign_id"])
     account.last_sync_at = datetime.now(timezone.utc)
     account.login_status = "ok"
     account.cookie_status = "ok"
     db.commit()
-    return {"saved": saved}
+    return {"saved": len(saved)}
 
 
 def sync_jd_orders(db: Session, store_id: int, order_date: date | None = None):
     account = get_smart_account(db, store_id)
-    rows = JdSmartCollector().fetch_orders_today(account)
-    saved = 0
-    for row in rows:
-        save_order(db, store_id, {**row, "order_date": row.get("order_date") or (order_date or date.today()).isoformat()})
-        saved += 1
+    rows = validate_dataset("orders", JdSmartCollector().fetch_orders_today(account))
+    saved = set()
+    with db.begin_nested():
+        for row in rows:
+            save_order(db, store_id, {**row, "order_date": row.get("order_date") or (order_date or date.today()).isoformat()})
+            saved.add(row["order_no"])
     account.last_sync_at = datetime.now(timezone.utc)
     db.commit()
-    return {"saved": saved}
+    return {"saved": len(saved)}
 
 
 def sync_jd_products(db: Session, store_id: int, stat_date: date | None = None):
     account = get_smart_account(db, store_id)
-    rows = JdSmartCollector().fetch_products_today(account)
-    saved = 0
-    for row in rows:
-        save_product(db, store_id, {**row, "stat_date": row.get("stat_date") or (stat_date or date.today()).isoformat()})
-        saved += 1
+    rows = validate_dataset("products", JdSmartCollector().fetch_products_today(account))
+    saved = set()
+    with db.begin_nested():
+        for row in rows:
+            save_product(db, store_id, {**row, "stat_date": row.get("stat_date") or (stat_date or date.today()).isoformat()})
+            saved.add((row.get("stat_date") or (stat_date or date.today()).isoformat(), row["sku_id"]))
     account.last_sync_at = datetime.now(timezone.utc)
     db.commit()
-    return {"saved": saved}
+    return {"saved": len(saved)}
 
 
 def get_smart_account(db: Session, store_id: int):
@@ -153,14 +216,8 @@ def get_smart_account(db: Session, store_id: int):
 
 
 def save_jd_daily_metric(db: Session, store_id: int, metric_date: date, payload: dict, source: str):
-    metric = (
-        db.query(JdDailyMetric)
-        .filter(JdDailyMetric.store_id == store_id, JdDailyMetric.metric_date == metric_date)
-        .one_or_none()
-    )
-    if not metric:
-        metric = JdDailyMetric(store_id=store_id, metric_date=metric_date)
-        db.add(metric)
+    validate_dataset("metrics", payload)
+    metric = JdDailyMetric(store_id=store_id, metric_date=metric_date)
     metric.gmv = number(payload.get("gmv") or payload.get("today_sales"))
     metric.profit_amount = number(payload.get("profit_amount"))
     metric.visitors_count = int(number(payload.get("visitors_count") or payload.get("visitors")))
@@ -175,27 +232,30 @@ def save_jd_daily_metric(db: Session, store_id: int, metric_date: date, payload:
     metric.source = source
     metric.raw_payload = None
     metric.synced_at = datetime.now(timezone.utc)
-    db.flush()
-    return metric
+    values = {column.name: getattr(metric, column.name) for column in JdDailyMetric.__table__.columns
+              if column.name not in {"id", "created_at", "updated_at"}}
+    _upsert_business_row(db, JdDailyMetric, ("store_id", "metric_date"), values)
+    return db.query(JdDailyMetric).filter_by(store_id=store_id, metric_date=metric_date).populate_existing().one()
 
 
 def save_order(db: Session, store_id: int, row: dict):
+    validate_dataset("orders", [row])
     order_no = str(row.get("order_no", "")).strip()
     if not order_no:
         raise JdCollectorError("订单缺少 order_no")
-    order = db.query(JdOrder).filter(JdOrder.order_no == order_no).one_or_none()
-    if not order:
-        order = JdOrder(store_id=store_id, order_no=order_no, order_date=parse_date(row.get("order_date")) or date.today())
-        db.add(order)
-    order.paid_amount = number(row.get("paid_amount"))
-    order.profit_amount = number(row.get("profit_amount"))
-    order.order_status = row.get("order_status")
-    order.buyer_pin = None
-    order.raw_payload = None
-    return order
+    values = {
+        "store_id": store_id, "order_no": order_no,
+        "order_date": parse_date(row.get("order_date")) or date.today(),
+        "paid_amount": number(row.get("paid_amount")), "profit_amount": number(row.get("profit_amount")),
+        "order_status": row.get("order_status"), "buyer_pin": None, "raw_payload": None,
+        "synced_at": datetime.now(timezone.utc),
+    }
+    _upsert_business_row(db, JdOrder, ("order_no",), values)
+    return db.query(JdOrder).filter_by(store_id=store_id, order_no=order_no).populate_existing().one()
 
 
 def save_product(db: Session, store_id: int, row: dict):
+    validate_dataset("products", [row])
     raw_sku_id = row.get("sku_id")
     sku_id = str(raw_sku_id).strip() if raw_sku_id is not None else ""
     if not sku_id:
@@ -220,10 +280,11 @@ def save_product(db: Session, store_id: int, row: dict):
         JdProduct.store_id == store_id,
         JdProduct.stat_date == stat_date,
         JdProduct.sku_id == sku_id,
-    ).one()
+    ).populate_existing().one()
 
 
 def save_ad(db: Session, store_id: int, account_id: int | None, stat_date: date, row: dict):
+    validate_dataset("ads", [row])
     raw_campaign_id = row.get("campaign_id")
     campaign_id = str(raw_campaign_id).strip() if raw_campaign_id is not None else ""
     if not campaign_id:
@@ -248,19 +309,24 @@ def save_ad(db: Session, store_id: int, account_id: int | None, stat_date: date,
         JdAd.store_id == store_id,
         JdAd.stat_date == stat_date,
         JdAd.campaign_id == campaign_id,
-    ).one()
+    ).populate_existing().one()
 
 
 def _upsert_business_row(db: Session, model, key_columns: tuple[str, ...], values: dict) -> None:
     if db.get_bind().dialect.name == "postgresql":
         statement = pg_insert(model).values(**values)
-        db.execute(statement.on_conflict_do_update(
+        result = db.execute(statement.on_conflict_do_update(
             index_elements=list(key_columns),
             set_={key: statement.excluded[key] for key in values if key not in key_columns},
+            where=model.store_id == values["store_id"],
         ))
+        if result.rowcount != 1:
+            raise JdCollectorError("采集业务主键与店铺不匹配")
         return
 
     row = db.query(model).filter_by(**{key: values[key] for key in key_columns}).one_or_none()
+    if row is not None and row.store_id != values["store_id"]:
+        raise JdCollectorError("采集业务主键与店铺不匹配")
     if row is None:
         row = model(**{key: values[key] for key in key_columns})
         db.add(row)
