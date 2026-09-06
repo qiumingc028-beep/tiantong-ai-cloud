@@ -126,7 +126,7 @@ jobs:
         run: |
           chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           test -n "$chrome"
-          PAGE_CAPTURE_TEST_CHROME="$chrome" pytest -q \
+          PYTHONPATH=. PAGE_CAPTURE_TEST_CHROME="$chrome" pytest -q \
             tests/test_real_page_capture.py::test_real_adapter_captures_private_png_with_isolated_profile \
             tests/test_real_page_capture.py::test_real_adapter_reports_bounded_chrome_startup_timeout_and_cleans_process \
             tests/test_real_page_capture.py::test_real_adapter_reports_dom_ready_timeout_without_leaking_auth_and_cleans_process
@@ -610,7 +610,11 @@ jobs:
           test -z "$(docker ps --all --quiet --filter "ancestor=$S12_BACKEND_IMAGE")"
           test -z "$(docker ps --all --quiet --filter "ancestor=$S12_WORKER_IMAGE")"
           test -z "$(docker ps --all --quiet --filter "ancestor=$S12_JD_RUNTIME_IMAGE")"
-          docker image rm "$S12_BACKEND_IMAGE" "$S12_WORKER_IMAGE" "$S12_JD_RUNTIME_IMAGE"
+          for image in "$S12_BACKEND_IMAGE" "$S12_WORKER_IMAGE" "$S12_JD_RUNTIME_IMAGE"; do
+            if docker image inspect "$image" >/dev/null 2>&1; then
+              docker image rm "$image"
+            fi
+          done
 
       - name: Validate production compose
         env:
