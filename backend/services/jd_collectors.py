@@ -92,7 +92,21 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
     rows = JztCollector().fetch_ads_today(account)
     saved = 0
     for row in rows:
-        db.add(
+        existing = db.query(JdAd).filter(JdAd.store_id == store_id, JdAd.stat_date == (stat_date or date.today()), JdAd.campaign_id == str(row.get("campaign_id", ""))).one_or_none()
+        ad = existing or JdAd(store_id=store_id, account_id=account.id, stat_date=stat_date or date.today(), campaign_id=str(row.get("campaign_id", "")))
+        if not existing:
+            db.add(ad)
+        else:
+            ad.account_id = account.id
+        ad.campaign_name=row.get("campaign_name", "")
+        ad.ad_spend=number(row.get("ad_spend"))
+        ad.clicks=int(number(row.get("clicks")))
+        ad.impressions=int(number(row.get("impressions")))
+        ad.roi=number(row.get("roi"))
+        ad.cpa=number(row.get("cpa"))
+        ad.deal_amount=number(row.get("deal_amount"))
+        ad.raw_payload=None
+        '''legacy construction removed
             JdAd(
                 store_id=store_id,
                 account_id=account.id,
@@ -106,8 +120,7 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
                 cpa=number(row.get("cpa")),
                 deal_amount=number(row.get("deal_amount")),
                 raw_payload=None,
-            )
-        )
+            )'''
         saved += 1
     account.last_sync_at = datetime.now(timezone.utc)
     account.login_status = "ok"
@@ -195,7 +208,7 @@ def save_order(db: Session, store_id: int, row: dict):
 
 
 def save_product(db: Session, store_id: int, row: dict):
-    product = JdProduct(
+    product = db.query(JdProduct).filter(JdProduct.store_id == store_id, JdProduct.sku_id == str(row.get("sku_id", "")).strip(), JdProduct.stat_date == (parse_date(row.get("stat_date")) or date.today())).one_or_none() or JdProduct(
         store_id=store_id,
         sku_id=str(row.get("sku_id", "")).strip(),
         product_name=row.get("product_name", ""),
@@ -208,7 +221,7 @@ def save_product(db: Session, store_id: int, row: dict):
         stat_date=parse_date(row.get("stat_date")) or date.today(),
         raw_payload=None,
     )
-    db.add(product)
+    if product.id is None: db.add(product)
     return product
 
 
