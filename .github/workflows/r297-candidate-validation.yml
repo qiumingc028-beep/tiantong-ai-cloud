@@ -54,6 +54,14 @@ jobs:
           cache: pip
       - name: Install locked application requirements
         run: python -m pip install -r requirements.txt
+      - name: Restore actual application schema and business data
+        env:
+          R297_RESTORE_ACCEPTANCE_ISOLATED: "1"
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: ci
+          PGPASSWORD: ci
+        run: bash ops/r297_database_restore_contract_test.sh
       - name: Run complete selected contracts against PostgreSQL 16
         timeout-minutes: 25
         run: |

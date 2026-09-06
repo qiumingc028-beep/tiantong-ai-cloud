@@ -47,9 +47,42 @@ SQL
 }
 
 createdb "$source_db"
+python - "$source_db" <<'PYCODE'
+import os
+import subprocess
+import sys
+from datetime import date
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
+from sqlalchemy.orm import Session
+
+url = URL.create("postgresql+psycopg2", username=os.environ["PGUSER"],
+                 password=os.environ.get("PGPASSWORD"), host=os.environ["PGHOST"],
+                 port=int(os.environ.get("PGPORT", "5432")), database=sys.argv[1])
+env = dict(os.environ, DATABASE_URL=url.render_as_string(hide_password=False))
+subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], env=env, check=True)
+subprocess.run([sys.executable, "-m", "alembic", "check"], env=env, check=True)
+from backend.models import Tenant, Company, Store, JdProduct, JdAd
+engine = create_engine(url)
+with Session(engine) as db:
+    tenant = Tenant(tenant_code="RESTORE", tenant_name="isolated restore")
+    db.add(tenant)
+    db.flush()
+    company = Company(tenant_id=tenant.id, company_code="RESTORE", company_name="isolated restore")
+    db.add(company)
+    db.flush()
+    store = Store(tenant_id=tenant.id, company_id=company.id, platform="jd",
+                  store_code="RESTORE", store_name="isolated restore", active=True)
+    db.add(store)
+    db.flush()
+    db.add(JdProduct(store_id=store.id, stat_date=date(2026, 9, 6), sku_id="restore-sku",
+                     product_name="restore product", stock_quantity=7))
+    db.add(JdAd(store_id=store.id, stat_date=date(2026, 9, 6), campaign_id="restore-campaign",
+               campaign_name="restore campaign", clicks=11))
+    db.commit()
+engine.dispose()
+PYCODE
 psql --set=ON_ERROR_STOP=1 --dbname="$source_db" <<'SQL'
-CREATE TABLE alembic_version (version_num varchar(128) PRIMARY KEY);
-INSERT INTO alembic_version VALUES ('0050_r297_reliable_sync_queue');
 CREATE TABLE restore_probe (id bigint PRIMARY KEY, store_id bigint NOT NULL UNIQUE, payload text NOT NULL);
 INSERT INTO restore_probe VALUES (1, 101, 'before-cutover');
 SQL
@@ -75,6 +108,9 @@ inventory "$source_db" > "$work/after-rollback.inventory"
 constraints "$source_db" > "$work/after-rollback.constraints"
 cmp "$work/before.inventory" "$work/after-rollback.inventory"
 cmp "$work/before.constraints" "$work/after-rollback.constraints"
+restored_values="$(psql --set=ON_ERROR_STOP=1 --dbname="$source_db" --tuples-only --no-align \
+  --command="SELECT stock_quantity FROM jd_products WHERE sku_id='restore-sku'; SELECT clicks FROM jd_ads WHERE campaign_id='restore-campaign';")"
+test "$restored_values" = $'7\n11'
 
 createdb "$corrupt_db"
 head -c 128 "$work/before.dump" > "$work/corrupt.dump"
@@ -83,6 +119,7 @@ if pg_restore --exit-on-error --no-owner --dbname="$corrupt_db" "$work/corrupt.d
   exit 1
 fi
 
+echo "R297_APPLICATION_SCHEMA_AND_BUSINESS_DATA_RESTORE=PASS"
 echo "R297_REAL_POSTGRES_RESTORE=PASS"
 echo "R297_REVISION_TABLE_COUNTS_CONSTRAINTS=PASS"
 echo "R297_CORRUPT_BACKUP_REJECTED=PASS"
