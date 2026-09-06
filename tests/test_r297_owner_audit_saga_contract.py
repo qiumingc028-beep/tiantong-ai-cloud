@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import importlib
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.error import URLError
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import event
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session, sessionmaker
 
 from backend.config import get_settings
+from backend import main as backend_main
 from backend.main import app
 from backend.models import EmployeeLog
 from backend.routers import jd_workbench
@@ -141,6 +144,8 @@ def test_owner_audit_saga_reconciles_after_success_update_commit_crash(
                 raise RuntimeError("audit update commit failed")
 
     monkeypatch.setattr(jd_workbench, "urlopen", runtime)
+    monkeypatch.setattr(backend_main, "SessionLocal", test_db)
+    monkeypatch.setattr(backend_main, "seed_defaults", lambda _db: None)
     event.listen(Session, "before_flush", fail_success_update)
     try:
         safe_client = TestClient(app, raise_server_exceptions=False)
@@ -184,6 +189,129 @@ def test_owner_audit_saga_reconciles_after_success_update_commit_crash(
     assert rows[0][1]["status"] == "SUCCESS"
     assert len(runtime_calls) == 2
     _assert_secret_free(test_db, caplog)
+
+
+def test_application_startup_reconciles_pending_owner_audit(
+    test_db, monkeypatch, caplog
+):
+    db = test_db()
+    try:
+        db.add(EmployeeLog(
+            user_id=1,
+            store_id=1,
+            action="owner_login_session_create",
+            detail=json.dumps({
+                "status": "PENDING",
+                "namespace": VECTORS["namespace"],
+                "tenant_id": "1",
+                "company_id": "1",
+                "store_id": "1",
+                "platform": VECTORS["valid_scope"]["platform"],
+                "operation": "owner_login_session_create",
+            }, separators=(",", ":")),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    runtime_calls = []
+    monkeypatch.setattr(
+        jd_workbench,
+        "_runtime_call",
+        lambda method, path, payload=None: runtime_calls.append((method, path, payload)) or {"status": "ACTIVE"},
+    )
+    monkeypatch.setattr(backend_main, "SessionLocal", test_db)
+    monkeypatch.setattr(backend_main, "ensure_tables", lambda: None)
+    monkeypatch.setattr(backend_main, "seed_defaults", lambda _db: None)
+    monkeypatch.setattr("backend.alpha_workflow.registry.ensure_default_scenarios", lambda _db: None)
+    monkeypatch.setattr("backend.observability.service.ensure_default_alert_rules", lambda _db: None)
+    monkeypatch.setattr("backend.observability.service.ensure_default_circuit_breakers", lambda _db: None)
+
+    with TestClient(app):
+        pass
+
+    rows = _audit_rows(test_db, "owner_login_session_create")
+    assert len(rows) == 1
+    assert rows[0][1]["status"] == "SUCCESS"
+    assert len(runtime_calls) == 1
+    _assert_secret_free(test_db, caplog)
+
+
+def test_owner_audit_reconciler_claims_once_across_concurrent_workers(
+    postgres_database_factory, monkeypatch
+):
+    from tests.conftest import _alembic, seed_database
+
+    database_url = postgres_database_factory("r297_owner_audit_concurrent")
+    _alembic(database_url, "upgrade", "head")
+    engine = create_engine(database_url)
+    sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    seed_database(sessions)
+    db = sessions()
+    try:
+        db.add(EmployeeLog(
+            user_id=1,
+            store_id=1,
+            action="owner_login_session_create",
+            detail=json.dumps({
+                "status": "PENDING",
+                "namespace": VECTORS["namespace"],
+                "tenant_id": "1",
+                "company_id": "1",
+                "store_id": "1",
+                "platform": VECTORS["valid_scope"]["platform"],
+                "operation": "owner_login_session_create",
+            }, separators=(",", ":")),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    start = threading.Barrier(2)
+    both_selects_completed = threading.Event()
+    select_count = 0
+    select_count_lock = threading.Lock()
+    runtime_calls = []
+    runtime_calls_lock = threading.Lock()
+
+    def observe_pending_select(_connection, _cursor, statement, _parameters, _context, _executemany):
+        nonlocal select_count
+        if statement.lstrip().upper().startswith("SELECT") and "employee_logs" in statement:
+            with select_count_lock:
+                select_count += 1
+                if select_count == 2:
+                    both_selects_completed.set()
+
+    def runtime(method, path, payload=None):
+        assert both_selects_completed.wait(timeout=5), "both workers must finish the pending-row claim query"
+        with runtime_calls_lock:
+            runtime_calls.append((method, path, payload))
+        return {"status": "ACTIVE"}
+
+    def reconcile():
+        worker_db = sessions()
+        try:
+            start.wait(timeout=5)
+            return jd_workbench.reconcile_pending_owner_action_audits(worker_db)
+        finally:
+            worker_db.close()
+
+    monkeypatch.setattr(jd_workbench, "_owner_saga_reconcile_after_id", 0)
+    monkeypatch.setattr(jd_workbench, "_runtime_call", runtime)
+    event.listen(engine, "after_cursor_execute", observe_pending_select)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            processed = list(executor.map(lambda _index: reconcile(), range(2)))
+        event.remove(engine, "after_cursor_execute", observe_pending_select)
+        assert sum(processed) == 1
+        assert len(runtime_calls) == 1
+        rows = _audit_rows(sessions, "owner_login_session_create")
+        assert len(rows) == 1
+        assert rows[0][1]["status"] == "SUCCESS"
+    finally:
+        if event.contains(engine, "after_cursor_execute", observe_pending_select):
+            event.remove(engine, "after_cursor_execute", observe_pending_select)
+        engine.dispose()
 
 
 @pytest.mark.parametrize(
@@ -249,7 +377,46 @@ def test_worker_periodic_maintenance_runs_owner_audit_reconciler(monkeypatch):
     assert calls == ["terminal", "reaper", "scheduler", "owner_audit"]
 
 
-def test_owner_audit_reconciler_keeps_transient_runtime_failure_pending(test_db, monkeypatch):
+def test_worker_main_repeats_owner_audit_reconciliation_on_poll_interval(monkeypatch):
+    from backend import worker
+
+    class StopWorkerLoop(Exception):
+        pass
+
+    heartbeat_count = 0
+    maintenance_calls = []
+    monotonic_values = iter([
+        0.0,
+        float(worker.JD_SCHEDULER_POLL_SECONDS),
+        float(worker.JD_SCHEDULER_POLL_SECONDS),
+        float(worker.JD_SCHEDULER_POLL_SECONDS * 2),
+        float(worker.JD_SCHEDULER_POLL_SECONDS * 2),
+    ])
+
+    def heartbeat():
+        nonlocal heartbeat_count
+        heartbeat_count += 1
+        if heartbeat_count == 4:
+            raise StopWorkerLoop
+
+    monkeypatch.setattr(worker, "require_service_role", lambda _role: None)
+    monkeypatch.setattr(worker, "update_worker_heartbeat", heartbeat)
+    monkeypatch.setattr(worker.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(worker.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(worker, "run_jd_workbench_maintenance", lambda: maintenance_calls.append("run"))
+    monkeypatch.setattr(worker, "run_daily_scheduler", lambda: None)
+    monkeypatch.setattr(worker, "process_next_tian_shang_worker_execution", lambda: False)
+    monkeypatch.setattr(worker, "process_next_employee_execution", lambda: False)
+    monkeypatch.setattr(worker, "process_next_brain_runtime_execution", lambda: False)
+    monkeypatch.setattr(worker, "process_next_task", lambda: False)
+
+    with pytest.raises(StopWorkerLoop):
+        worker.main()
+
+    assert maintenance_calls == ["run", "run"]
+
+
+def test_owner_audit_reconciler_retries_transient_runtime_failure(test_db, monkeypatch):
     db = test_db()
     try:
         db.add(EmployeeLog(
@@ -270,7 +437,10 @@ def test_owner_audit_reconciler_keeps_transient_runtime_failure_pending(test_db,
     finally:
         db.close()
 
+    runtime_calls = []
+
     def unavailable(*_args, **_kwargs):
+        runtime_calls.append("unavailable")
         raise jd_workbench.HTTPException(status_code=503, detail="temporary")
 
     monkeypatch.setattr(jd_workbench, "_runtime_call", unavailable)
@@ -280,6 +450,19 @@ def test_owner_audit_reconciler_keeps_transient_runtime_failure_pending(test_db,
     finally:
         db.close()
     assert _audit_rows(test_db, "owner_login_session_create")[-1][1]["status"] == "PENDING"
+
+    monkeypatch.setattr(
+        jd_workbench,
+        "_runtime_call",
+        lambda *_args, **_kwargs: runtime_calls.append("success") or {"status": "ACTIVE"},
+    )
+    db = test_db()
+    try:
+        assert jd_workbench.reconcile_pending_owner_action_audits(db) == 1
+    finally:
+        db.close()
+    assert _audit_rows(test_db, "owner_login_session_create")[-1][1]["status"] == "SUCCESS"
+    assert runtime_calls == ["unavailable", "success"]
 
 
 def test_owner_audit_reconciler_processes_a_bounded_batch(test_db, monkeypatch):
