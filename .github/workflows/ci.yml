@@ -122,6 +122,15 @@ jobs:
       - name: Syntax check
         run: python -m py_compile $(find backend tests -name '*.py')
 
+      - name: Verify bounded real Chrome readiness and cleanup
+        run: |
+          chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$chrome"
+          PAGE_CAPTURE_TEST_CHROME="$chrome" pytest -q \
+            tests/test_real_page_capture.py::test_real_adapter_captures_private_png_with_isolated_profile \
+            tests/test_real_page_capture.py::test_real_adapter_reports_bounded_chrome_startup_timeout_and_cleans_process \
+            tests/test_real_page_capture.py::test_real_adapter_reports_dom_ready_timeout_without_leaking_auth_and_cleans_process
+
       - name: Run JD cloud browser runtime Node tests
         working-directory: services/jd-cloud-browser-runtime
         run: npm ci --no-audit --no-fund && npm test

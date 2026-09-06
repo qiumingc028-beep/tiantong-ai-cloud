@@ -467,11 +467,17 @@ def test_real_adapter_reports_bounded_chrome_startup_timeout_and_cleans_process(
     class FakeProcess:
         pid = 43210
 
+        def __init__(self):
+            self.wait_calls = 0
+
         def poll(self):
             return None
 
         def wait(self, timeout):
+            self.wait_calls += 1
             assert timeout == 5
+            if self.wait_calls == 1:
+                raise adapter_module.subprocess.TimeoutExpired("fake-chrome", timeout)
             return 0
 
     authorization = SimpleNamespace(clear=lambda: None)
@@ -497,7 +503,10 @@ def test_real_adapter_reports_bounded_chrome_startup_timeout_and_cleans_process(
     assert "port=unavailable" in message
     assert "xvfb=not_required_headless" in message
     assert "sandbox=enabled" in message
-    assert signals == [(43210, adapter_module.signal.SIGTERM)]
+    assert signals == [
+        (43210, adapter_module.signal.SIGTERM),
+        (43210, adapter_module.signal.SIGKILL),
+    ]
     assert not list(tmp_path.rglob("profile-*"))
 
 
