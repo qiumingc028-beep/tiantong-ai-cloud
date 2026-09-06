@@ -10,7 +10,7 @@ def test_repository_tests_run_and_upload_before_protected_evidence_gate():
 
     repository_job = workflow.split("  repository-tests:", 1)[1].split("\n  test-and-build:", 1)[0]
     assert "needs:" not in repository_job
-    assert "timeout-minutes: 60" in repository_job
+    assert "timeout-minutes: 90" in repository_job
     assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in repository_job
     assert 'test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"' in repository_job
     assert '-m "not r297_process_evidence and not r297_windows_evidence"' in repository_job
