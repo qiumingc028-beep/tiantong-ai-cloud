@@ -525,7 +525,9 @@ class JdWorkbenchPairingCode(Base):
     """One-time desktop pairing code. Only a keyed digest is persisted."""
 
     __tablename__ = "jd_workbench_pairing_codes"
-    __table_args__ = (UniqueConstraint("code_hash"),)
+    __table_args__ = (
+        UniqueConstraint("code_hash", name="uq_jd_workbench_pairing_codes_code_hash"),
+    )
 
     pairing_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -541,7 +543,9 @@ class JdWorkbenchDevice(Base):
     """Revocable R291 desktop identity, separate from browser/user sessions."""
 
     __tablename__ = "jd_workbench_devices"
-    __table_args__ = (UniqueConstraint("token_hash"),)
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_jd_workbench_devices_token_hash"),
+    )
 
     device_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

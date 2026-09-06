@@ -414,6 +414,11 @@ def test_real_adapter_captures_private_png_with_isolated_profile(tmp_path, monke
         return process
 
     monkeypatch.setattr(adapter_module.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(
+        adapter_module._WebSocket,
+        "wait_for",
+        lambda *_args, **_kwargs: pytest.fail("capture must use the authenticated DOM ready condition"),
+    )
     requests = []
     with protected_workflow_page(requests) as (target_url, authorization):
         origin = authorization.origin
@@ -493,6 +498,45 @@ def test_real_adapter_reports_bounded_chrome_startup_timeout_and_cleans_process(
     assert "xvfb=not_required_headless" in message
     assert "sandbox=enabled" in message
     assert signals == [(43210, adapter_module.signal.SIGTERM)]
+    assert not list(tmp_path.rglob("profile-*"))
+
+
+def test_real_adapter_reports_dom_ready_timeout_without_leaking_auth_and_cleans_process(
+    tmp_path, monkeypatch, chrome_path
+):
+    def timeout(*_args):
+        raise TimeoutError("authorized workflow page did not become ready")
+
+    monkeypatch.setattr(OpenClawAdapter, "_verify_workflow_page", staticmethod(timeout))
+    requests = []
+    with protected_workflow_page(requests) as (target_url, authorization):
+        token = authorization.token
+        settings = SimpleNamespace(
+            PAGE_CAPTURE_ALLOWED_ORIGINS=[authorization.origin],
+            PAGE_CAPTURE_CHROME_PATH=chrome_path,
+            PAGE_CAPTURE_OUTPUT_ROOT=str(tmp_path / "captures"),
+            PAGE_CAPTURE_TIMEOUT_SECONDS=1,
+            PAGE_CAPTURE_STARTUP_TIMEOUT_SECONDS=30,
+            OPENCLAW_ADAPTER_ENABLED=True,
+        )
+        with pytest.raises(TimeoutError) as exc_info:
+            OpenClawAdapter(settings=settings).execute_action(
+                SimpleNamespace(
+                    session_id="r297-timeout",
+                    trace_id="r297-timeout",
+                    action_type="截图",
+                    target_url=target_url,
+                    capture_authorization=authorization,
+                )
+            )
+
+    message = str(exc_info.value)
+    assert "stage=authenticated_dom_ready" in message
+    assert "devtools=ready" in message
+    assert "sandbox=enabled" in message
+    assert token not in message
+    assert authorization.token == ""
+    assert not list(tmp_path.rglob("*.png"))
     assert not list(tmp_path.rglob("profile-*"))
 
 

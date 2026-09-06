@@ -340,6 +340,21 @@ class OpenClawAdapter(ComputerExecutorBase):
             time.sleep(0.05)
         raise TimeoutError("authorized workflow page did not become ready")
 
+    @staticmethod
+    def _verify_capture_location(websocket: _WebSocket, authorization) -> str:
+        evaluated = websocket.call("Runtime.evaluate", {"expression": "location.href", "returnByValue": True})
+        final_url = str(((evaluated.get("result") or {}).get("value") or "")).strip()
+        validate_capture_target_url(final_url, [authorization.origin])
+        final_target = urlsplit(final_url)
+        if (
+            f"{final_target.scheme}://{final_target.netloc}" != authorization.origin
+            or final_target.path != authorization.target_path
+            or final_target.query
+            or final_target.fragment
+        ):
+            raise ValueError("page navigation left the authorized capture target")
+        return final_url
+
     def create_session(self, context):
         self._ensure_enabled()
         return {"session_id": context.session_id, "provider": REAL_PROVIDER, "created_at": utcnow().isoformat()}
@@ -393,6 +408,8 @@ class OpenClawAdapter(ComputerExecutorBase):
         process = None
         websocket = None
         stderr_log = None
+        capture_stage = "chrome_start"
+        port = None
         try:
             command = [
                 str(self.settings.PAGE_CAPTURE_CHROME_PATH),
@@ -422,7 +439,6 @@ class OpenClawAdapter(ComputerExecutorBase):
             )
             deadline = time.monotonic() + startup_timeout
             port_file = profile / "DevToolsActivePort"
-            port = None
             targets = None
             startup_stage = "devtools_port"
 
@@ -475,6 +491,7 @@ class OpenClawAdapter(ComputerExecutorBase):
             websocket = _WebSocket(page["webSocketDebuggerUrl"], timeout)
             websocket.call("Page.enable")
             websocket.call("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]})
+            capture_stage = "navigation"
             navigation = websocket.navigate(
                 target_url,
                 list(self.settings.PAGE_CAPTURE_ALLOWED_ORIGINS),
@@ -482,19 +499,13 @@ class OpenClawAdapter(ComputerExecutorBase):
             )
             if navigation.get("errorText"):
                 raise RuntimeError("isolated page navigation failed")
-            websocket.wait_for("Page.loadEventFired", deadline)
-            evaluated = websocket.call("Runtime.evaluate", {"expression": "location.href", "returnByValue": True})
-            final_url = str(((evaluated.get("result") or {}).get("value") or "")).strip()
-            validate_capture_target_url(final_url, list(self.settings.PAGE_CAPTURE_ALLOWED_ORIGINS))
-            final_target = urlsplit(final_url)
-            if (
-                f"{final_target.scheme}://{final_target.netloc}" != authorization.origin
-                or final_target.path != authorization.target_path
-                or final_target.query
-                or final_target.fragment
-            ):
-                raise ValueError("page navigation left the authorized capture target")
+            capture_stage = "target_validation"
+            self._verify_capture_location(websocket, authorization)
+            capture_stage = "authenticated_dom_ready"
             self._verify_workflow_page(websocket, authorization.workflow_id, deadline)
+            capture_stage = "target_validation"
+            final_url = self._verify_capture_location(websocket, authorization)
+            capture_stage = "screenshot"
             captured = websocket.call(
                 "Page.captureScreenshot",
                 {"format": "png", "fromSurface": True, "captureBeyondViewport": False},
@@ -511,6 +522,25 @@ class OpenClawAdapter(ComputerExecutorBase):
                 "size_bytes": len(content),
                 "final_url": final_url,
             }
+        except TimeoutError as exc:
+            screenshot.unlink(missing_ok=True)
+            if process is not None and "stage=" not in str(exc):
+                if stderr_log is not None:
+                    stderr_log.flush()
+                stderr_tail = (
+                    stderr_path.read_text(encoding="utf-8", errors="replace")[-1000:]
+                    if stderr_path.exists() else ""
+                )
+                stderr_tail = redact_text(
+                    " ".join(stderr_tail.replace(str(profile), "[PROFILE]").split())
+                ) or "none"
+                raise TimeoutError(
+                    f"{exc}; stage={capture_stage}; pid={process.pid}; url={target_url}; "
+                    f"devtools={'ready' if port is not None else 'unavailable'}; "
+                    "xvfb=not_required_headless; sandbox=enabled; "
+                    f"stderr_tail={stderr_tail}"
+                ) from exc
+            raise
         except Exception:
             screenshot.unlink(missing_ok=True)
             raise

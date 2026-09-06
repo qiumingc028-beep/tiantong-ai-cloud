@@ -21,7 +21,7 @@ from backend.models import Store, User, UserStoreMembership
 
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "desktop" / "jd-workbench"
-FINAL_REVISION = "0052_r297_postgresql_queue_authority"
+FINAL_REVISION = "0053_r297_jd_workbench_hash_uniqueness"
 
 
 def read(path: Path) -> str:
