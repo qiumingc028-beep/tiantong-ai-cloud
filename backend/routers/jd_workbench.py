@@ -345,7 +345,6 @@ async def owner_login_session_status(store_id: int, request: Request, db: Sessio
     status = result.get("status")
     if status not in {"ACTIVE", "LOGIN_REQUIRED", "REVOKED", "EXPIRED", "HUMAN_ACTION_REQUIRED"}:
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
-    _audit_owner_action(db, user, store, "owner_login_session_status")
     _saga_finish(db, audit, "SUCCESS")
     return {"store_id": store.id, "status": status}
 
@@ -360,7 +359,6 @@ async def delete_owner_login_session(store_id: int, request: Request, db: Sessio
         _saga_finish(db, audit, "FAILED"); raise
     if set(result) != {"ok"} or result.get("ok") is not True:
         raise HTTPException(status_code=503, detail="云端登录会话销毁失败")
-    _audit_owner_action(db, user, store, "owner_login_session_revoke")
     _saga_finish(db, audit, "SUCCESS")
     return {"ok": True, "store_id": store.id, "status": "REVOKED"}
 
@@ -378,7 +376,6 @@ async def owner_login_ticket(store_id: int, request: Request, db: Session = Depe
         _saga_finish(db, audit, "FAILED"); raise
     if set(result) != {"ticket", "expires_in"} or not isinstance(result.get("ticket"), str) or not result["ticket"] or type(result.get("expires_in")) is not int or not (0 < result["expires_in"] <= 120):
         raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
-    _audit_owner_action(db, user, store, "owner_login_ticket")
     _saga_finish(db, audit, "SUCCESS")
     return {"ticket": result["ticket"], "expires_in": result["expires_in"]}
 
