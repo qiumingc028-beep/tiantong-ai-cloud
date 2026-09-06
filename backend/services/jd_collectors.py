@@ -78,7 +78,7 @@ def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None):
     account.login_status = "ok"
     account.cookie_status = "ok"
     db.commit()
-    return result
+    return {"saved": 1}
 
 
 def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
@@ -108,21 +108,6 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
         ad.cpa=number(row.get("cpa"))
         ad.deal_amount=number(row.get("deal_amount"))
         ad.raw_payload=None
-        '''legacy construction removed
-            JdAd(
-                store_id=store_id,
-                account_id=account.id,
-                stat_date=stat_date or date.today(),
-                campaign_id=str(row.get("campaign_id", "")),
-                campaign_name=row.get("campaign_name", ""),
-                ad_spend=number(row.get("ad_spend")),
-                clicks=int(number(row.get("clicks"))),
-                impressions=int(number(row.get("impressions"))),
-                roi=number(row.get("roi")),
-                cpa=number(row.get("cpa")),
-                deal_amount=number(row.get("deal_amount")),
-                raw_payload=None,
-            )'''
         saved += 1
     account.last_sync_at = datetime.now(timezone.utc)
     account.login_status = "ok"
