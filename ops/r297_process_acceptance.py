@@ -247,6 +247,7 @@ def main() -> int:
     environment = os.environ.copy()
     environment.update({
         "JD_SESSION_NAMESPACE": session_namespace,
+        "DEPLOY_COMMIT": head,
         "APP_ENV": "test",
         "SERVICE_ROLE": "backend",
         "DATABASE_URL": f"postgresql+psycopg2://r297:{postgres_password}@127.0.0.1:{postgres_port}/r297_acceptance",

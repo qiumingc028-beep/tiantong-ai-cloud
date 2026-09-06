@@ -21,7 +21,7 @@ from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,7 @@ from ..auth import get_role_permissions, normalize_role, require_permission_user
 from ..config import get_settings
 from ..database import get_db
 from ..models import (
+    JdSyncLog,
     JdWorkbenchDevice,
     JdWorkbenchPairingCode,
     JdWorkbenchRecord,
@@ -288,6 +289,32 @@ def _runtime_session_id(store: Store) -> str:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,31}", namespace):
         raise HTTPException(status_code=503, detail="会话命名空间未配置")
     return f"{namespace}:{store.tenant_id}:{store.company_id}:{store.id}:{store.platform}"
+
+
+@router.get("/stores/{store_id}/acceptance-status")
+def owner_acceptance_status(store_id: int, request: Request, db: Session = Depends(get_db)):
+    """Read-only controlled-run observation; never a production or Worker endpoint."""
+    if (os.getenv("APP_ENV", "").strip().lower() not in {"test", "acceptance"}
+            or os.getenv("R297_CONTROLLED_CANARY") != "1"):
+        raise HTTPException(status_code=404, detail="接口不可用")
+    _, store = _require_owner_store(store_id, request, db)
+    namespace = _runtime_session_id(store).split(":", 1)[0]
+    release_sha = os.getenv("DEPLOY_COMMIT", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", release_sha):
+        raise HTTPException(status_code=503, detail="验收版本未绑定")
+    completed = db.query(func.count(func.distinct(JdSyncLog.sync_window_started_at))).filter(
+        JdSyncLog.tenant_id == store.tenant_id,
+        JdSyncLog.company_id == store.company_id,
+        JdSyncLog.store_id == store.id,
+        JdSyncLog.source == "cloud_scheduler",
+        JdSyncLog.task_type == "sync_jd_smart",
+        JdSyncLog.status == "success",
+        JdSyncLog.finished_at.is_not(None),
+    ).scalar()
+    return {"release_sha": release_sha, "namespace": namespace,
+            "tenant_id": store.tenant_id, "company_id": store.company_id,
+            "store_id": store.id, "platform": "jd",
+            "completed_cycle_count": completed, "observed_at": _now().isoformat()}
 
 
 def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:

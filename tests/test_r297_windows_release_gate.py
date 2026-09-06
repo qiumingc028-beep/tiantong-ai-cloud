@@ -68,7 +68,12 @@ def test_r297_windows_acceptance_requires_controlled_https_pairing_secrets():
     assert "R297_WINDOWS_CANARY_HEALTH_URL" not in workflow + acceptance
     assert "R297_WINDOWS_CANARY_SCHEDULER_URL" not in workflow + acceptance
     assert '"$backendOrigin/api/health"' in acceptance
-    assert '"$backendOrigin/api/jd-workbench/internal/acceptance-status"' in acceptance
+    assert '/api/jd-workbench/stores/$($env:R297_EVIDENCE_STORE_ID)/acceptance-status' in acceptance
+    assert '-Headers $ownerHeaders' in acceptance
+    assert '$health.release.commit -ceq $head' in acceptance
+    assert '$snapshot.release_sha -ceq $head' in acceptance
+    assert acceptance.index('CONTROLLED_BACKEND_RELEASE_MISMATCH') < acceptance.index('$pairingResponse =')
+    assert acceptance.index('$process.WaitForExit(10000)') < acceptance.index('$beforeCycle = [long](Read-CandidateObservation)')
     assert "CONTROLLED_BACKEND_TLS_CERTIFICATE_MISMATCH" in acceptance
     assert "data_source = 'CONTROLLED_CANARY'" in acceptance
 

@@ -55,15 +55,33 @@ Require ($env:R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64 -match '^[A-Za-z0-9+
 
 $backendOrigin = $env:R297_WINDOWS_CANARY_BACKEND_HTTPS_URL.TrimEnd('/')
 $healthUrl = "$backendOrigin/api/health"
-$schedulerUrl = "$backendOrigin/api/jd-workbench/internal/acceptance-status"
+Require ($env:R297_EVIDENCE_STORE_ID -match '^[1-9][0-9]*$') 'CONTROLLED_STORE_ID_REQUIRED'
+$schedulerUrl = "$backendOrigin/api/jd-workbench/stores/$($env:R297_EVIDENCE_STORE_ID)/acceptance-status"
+$ownerHeaders = @{ Authorization = "Bearer $($env:R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER)" }
+$env:R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER = $null
+
+function Read-CandidateObservation {
+  $snapshot = Invoke-RestMethod -Uri $schedulerUrl -Headers $ownerHeaders -TimeoutSec 15
+  Require ($snapshot.release_sha -ceq $head) 'CONTROLLED_BACKEND_RELEASE_MISMATCH'
+  foreach ($field in @('namespace', 'tenant_id', 'company_id', 'store_id', 'platform')) {
+    $expected = [Environment]::GetEnvironmentVariable('R297_EVIDENCE_' + $field.ToUpperInvariant())
+    Require ([string]$snapshot.$field -ceq $expected) 'CONTROLLED_BACKEND_SCOPE_MISMATCH'
+  }
+  Require ($snapshot.completed_cycle_count -is [int] -or $snapshot.completed_cycle_count -is [long]) 'CONTROLLED_CYCLE_COUNT_INVALID'
+  Require ($snapshot.completed_cycle_count -ge 0) 'CONTROLLED_CYCLE_COUNT_INVALID'
+  return $snapshot
+}
 $certificateBytes = [Convert]::FromBase64String($env:R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64)
 $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new($certificateBytes)
 Require ($certificate.NotAfter.ToUniversalTime() -gt [DateTime]::UtcNow) 'CONTROLLED_BACKEND_SERVER_CERTIFICATE_EXPIRED'
 Assert-BackendTlsBinding $backendOrigin $certificateBytes
+$health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 15
+Require ($health.release.commit -ceq $head) 'CONTROLLED_BACKEND_RELEASE_MISMATCH'
+$initialObservation = Read-CandidateObservation
 $pairingResponse = Invoke-RestMethod `
   -Method Post `
   -Uri "$backendOrigin/api/jd-workbench/pairing-codes" `
-  -Headers @{ Authorization = "Bearer $($env:R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER)" } `
+  -Headers $ownerHeaders `
   -TimeoutSec 15
 $pairingCode = [string]$pairingResponse.code
 $env:R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER = $null
@@ -95,7 +113,7 @@ Require ($workbench.Count -eq 1) 'INSTALLED_EXECUTABLE_NOT_UNIQUE'
 
 $beforeHealth = (Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 15).StatusCode
 Require ($beforeHealth -eq 200) 'CONTROLLED_BACKEND_NOT_HEALTHY'
-$beforeCycle = [int](Invoke-RestMethod -Uri $schedulerUrl -TimeoutSec 15).completed_cycle_count
+$beforeCycle = [long]$initialObservation.completed_cycle_count
 $process = Start-Process -FilePath $workbench[0].FullName -ArgumentList @(
   "--remote-debugging-port=$debugPort",
   "--user-data-dir=$userData"
@@ -199,12 +217,16 @@ $electronEventSha = Sha256 $electronEventPath
 
 $afterExitHealth = (Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 15).StatusCode
 Require ($afterExitHealth -eq 200) 'CLOUD_SCHEDULER_DID_NOT_SURVIVE_ELECTRON_EXIT'
+# Take the baseline after native process exit, so activity while Electron was
+# still alive cannot satisfy the post-exit continuation gate.
+$beforeCycle = [long](Read-CandidateObservation).completed_cycle_count
 $afterCycle = $beforeCycle
 for ($attempt = 0; $attempt -lt 60 -and $afterCycle -le $beforeCycle; $attempt++) {
   Start-Sleep -Seconds 1
-  $afterCycle = [int](Invoke-RestMethod -Uri $schedulerUrl -TimeoutSec 15).completed_cycle_count
+  $afterCycle = [long](Read-CandidateObservation).completed_cycle_count
 }
 Require ($afterCycle -gt $beforeCycle) 'CLOUD_SCHEDULER_DID_NOT_ADVANCE_AFTER_ELECTRON_EXIT'
+$ownerHeaders.Clear()
 $restart = Start-Process -FilePath $workbench[0].FullName -ArgumentList @("--user-data-dir=$userData") -PassThru
 Start-Sleep -Seconds 5
 Require (-not $restart.HasExited) 'WORKBENCH_RESTART_FAILED'

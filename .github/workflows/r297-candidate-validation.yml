@@ -61,6 +61,7 @@ jobs:
           mkdir -p /tmp/r297-postgres
           python -m pytest -q --tb=short --show-capture=no \
             -p ops.ci_pytest_gate --junitxml=/tmp/r297-postgres/junit.xml \
+            tests/test_r297_acceptance_status.py \
             tests/test_r297_owner_audit_saga_contract.py \
             tests/test_r297_dataset_validation.py \
             tests/test_r297_jd_collector_business_idempotency.py \

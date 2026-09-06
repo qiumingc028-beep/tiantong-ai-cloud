@@ -64,6 +64,12 @@ It reports names/status only. Do not copy another role's key to satisfy a prefli
 
 ## Remaining integration work and real credentials
 
+Windows observations now use the public Owner-scoped
+`GET /api/jd-workbench/stores/{store_id}/acceptance-status` route. It is disabled outside
+controlled acceptance/test mode. The workflow checks Backend release and all five scope
+fields before issuing a pairing code, then requires a new completed cloud window after
+native Electron exit. This read-only observation is not the independent signed Observer.
+
 The existing Process generator still requires a genuine `--signed-event-bundle`; no bundle
 has been supplied. It creates a fresh isolated database and later requires events for that
 run's namespace, scope and observation times. An old or cross-environment bundle is invalid.
