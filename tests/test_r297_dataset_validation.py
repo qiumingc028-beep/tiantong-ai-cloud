@@ -19,7 +19,7 @@ DATASETS = {
 }
 
 
-def configure_capture(session, monkeypatch, dataset, rows):
+def configure_capture(session, monkeypatch, dataset, rows, **envelope):
     account_type, sync, model, _ = DATASETS[dataset]
     store = session.query(Store).first()
     session.add(JdAccount(store_id=store.id, account_type=account_type, account_name=dataset, active=True))
@@ -30,7 +30,8 @@ def configure_capture(session, monkeypatch, dataset, rows):
     class Response:
         def read(self, size=-1):
             return json.dumps({"status": "OK", "data": {
-                "store_id": str(store.id), "source": "jd_cloud_playwright", dataset: rows,
+                "store_id": str(store.id), "source": "jd_cloud_playwright",
+                "captured_at": "2026-09-06T00:00:00Z", dataset: rows, **envelope,
             }}).encode()[:size]
 
         def __enter__(self):
@@ -156,3 +157,16 @@ def test_cross_store_order_collision_rolls_back_the_entire_batch(test_db, monkey
         db.commit()
         order = db.query(JdOrder).one()
         assert (order.store_id, order.order_no, order.paid_amount) == (other.id, "protected", 99)
+
+
+@pytest.mark.parametrize("envelope", (
+    {"captured_at": None}, {"captured_at": "2026-09-06T00:00:00"},
+    {"captured_at": "invalid"}, {"unexpected": "forbidden"},
+))
+def test_invalid_capture_envelope_is_zero_write(test_db, monkeypatch, envelope):
+    with test_db() as db:
+        store_id, sync, model = configure_capture(db, monkeypatch, "metrics", {"gmv": "1.00"}, **envelope)
+        with pytest.raises(collectors.JdCollectorError):
+            sync(db, store_id)
+        db.commit()
+        assert db.query(model).count() == 0

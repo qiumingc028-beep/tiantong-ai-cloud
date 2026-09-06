@@ -250,6 +250,7 @@ def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypa
                 "data": {
                     "store_id": "3",
                     "source": "jd_cloud_playwright",
+                    "captured_at": "2026-09-06T00:00:00Z",
                     "metrics": {"gmv": "1"},
                 },
             }).encode()
@@ -289,7 +290,7 @@ def test_collector_unwraps_each_runtime_dataset_schema(monkeypatch, dataset, cap
         def read(self, *_args):
             return json.dumps({
                 "status": "OK",
-                "data": {"store_id": "3", "source": "jd_cloud_playwright", dataset: captured},
+                "data": {"store_id": "3", "source": "jd_cloud_playwright", "captured_at": "2026-09-06T00:00:00Z", dataset: captured},
             }).encode()
 
     monkeypatch.setenv("JD_BROWSER_CAPTURE_TOKEN", "c" * 32)
@@ -313,7 +314,7 @@ def test_collector_rejects_non_object_rows_from_runtime(monkeypatch):
         def read(self, *_args):
             return json.dumps({
                 "status": "OK",
-                "data": {"store_id": "3", "source": "jd_cloud_playwright", "orders": ["invalid-row"]},
+                "data": {"store_id": "3", "source": "jd_cloud_playwright", "captured_at": "2026-09-06T00:00:00Z", "orders": ["invalid-row"]},
             }).encode()
 
     monkeypatch.setenv("JD_BROWSER_CAPTURE_TOKEN", "c" * 32)
@@ -937,6 +938,8 @@ def test_machine_evidence_entrypoints_bind_checkout_head_and_write_hashes():
     assert "R297_PROCESS_ACCEPTANCE_EVIDENCE.json.sha256" in ci
     assert "R297_SENSITIVE_FIXTURE.json" in ci
     assert "python ops/r297_process_acceptance.py" in ci
-    assert "$env:GITHUB_SHA -eq $head" in windows
+    assert "$env:RELEASE_SOURCE_SHA -eq $head" in windows
+    assert "$expectedSource -eq $head" in windows
+    assert "$event.pull_request.head.sha" in windows
     assert '"$evidencePath.sha256"' in windows
     assert "ops/r297_windows_acceptance.ps1" in windows_ci

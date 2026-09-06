@@ -40,6 +40,9 @@ jobs:
   build-windows:
     environment: r297-controlled-canary
     runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     defaults:
       run:
         working-directory: desktop/jd-workbench
@@ -49,6 +52,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v7

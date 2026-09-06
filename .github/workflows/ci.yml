@@ -20,6 +20,7 @@ permissions:
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     services:
       postgres:
         image: postgres:16
@@ -69,9 +70,11 @@ jobs:
           cache: pip
 
       - name: Install dependencies
+        id: dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
       - name: Verify CI PostgreSQL isolation
+        id: postgres_probe
         run: |
           python - <<'PY'
           import os
@@ -195,6 +198,7 @@ jobs:
             'sha256sum "$(node -e '\''process.stdout.write(require("playwright").chromium.executablePath())'\'')"'
 
       - name: Verify JD cloud browser runtime container
+        id: runtime_gate
         timeout-minutes: 10
         run: |
           set -euo pipefail
@@ -236,14 +240,14 @@ jobs:
           trap 'cancel_and_cleanup 130' INT
           trap 'cancel_and_cleanup 143' TERM
 
-          runtime_stage="missing-token"
-          echo "RUNTIME_STAGE=missing-token"
           capture_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           control_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           viewer_ticket_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           viewer_cookie_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           master_key="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
           session_namespace="ci"
+          runtime_stage="missing-token"
+          echo "RUNTIME_STAGE=missing-token"
           if docker run --rm "$S12_JD_RUNTIME_IMAGE" >/tmp/runtime-empty.log 2>&1; then exit 1; fi
           for missing in JD_SESSION_NAMESPACE JD_BROWSER_CAPTURE_TOKEN JD_BROWSER_CONTROL_TOKEN JD_BROWSER_VIEWER_TICKET_SIGNING_KEY JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY JD_SESSION_MASTER_KEY; do
             args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key")
@@ -319,7 +323,7 @@ jobs:
           echo "RUNTIME_STAGE=health"
           status=000
           for _ in $(seq 1 60); do
-            status="$(curl --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
+            status="$(curl --connect-timeout 3 --max-time 10 --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
               --header "x-internal-token: $control_token" \
               "http://127.0.0.1:$runtime_port/internal/jd-browser/health" || true)"
             test "$status" = 200 && break
@@ -330,7 +334,7 @@ jobs:
 
           runtime_stage="chromium-session"
           echo "RUNTIME_STAGE=chromium-session"
-          session_status="$(curl --silent --show-error --output /tmp/runtime-session.json --write-out '%{http_code}' \
+          session_status="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --output /tmp/runtime-session.json --write-out '%{http_code}' \
             --header "content-type: application/json" \
             --header "x-internal-token: $control_token" \
             --data '{"namespace":"ci","tenant_id":"1","company_id":"1","store_id":"1","platform":"jd"}' \
@@ -354,7 +358,7 @@ jobs:
           fi
 
           process_pid() {
-            docker exec "$container" sh -c '
+            timeout 1s docker exec "$container" sh -c '
               expected="$1"
               for process in /proc/[0-9]*; do
                 test -r "$process/comm" || continue
@@ -380,8 +384,8 @@ jobs:
 
           runtime_stage="novnc-http"
           echo "RUNTIME_STAGE=novnc-http"
-          unauth_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
-          forged_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Cookie: jd_browser_session=forged' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          unauth_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          forged_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header 'Cookie: jd_browser_session=forged' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
           echo "RUNTIME_NOVNC_UNAUTH_STATUS=$unauth_status"
           echo "RUNTIME_NOVNC_FORGED_COOKIE_STATUS=$forged_status"
           test "$unauth_status" = 401
@@ -394,25 +398,25 @@ jobs:
             exit 1
           fi
 
-          ticket="$(curl --silent --fail --header 'content-type: application/json' \
+          ticket="$(curl --connect-timeout 3 --max-time 10 --silent --fail --header 'content-type: application/json' \
             --header "x-internal-token: $control_token" --data '{"session_id":"ci:1:1:1:jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets" |
             python -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
           echo "RUNTIME_VIEWER_TICKET_ISSUED=YES"
-          cookie="$(curl --silent --show-error --dump-header - --output /dev/null \
+          cookie="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --dump-header - --output /dev/null \
             --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange" |
             awk -F': ' 'tolower($1)=="set-cookie" {sub(/\r$/, "", $2); print $2}')"
           test -n "$cookie"
           echo "RUNTIME_VIEWER_COOKIE_ISSUED=YES"
-          viewer_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+          viewer_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
-          cross_store_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+          cross_store_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/2/vnc.html")"
-          replay_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+          replay_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' \
             --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
-          query_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+          query_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' \
             --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange?ticket=forbidden")"
           echo "RUNTIME_NOVNC_VIEWER_STATUS=$viewer_status"
@@ -448,16 +452,14 @@ jobs:
           print("RUNTIME_NOVNC_WEBSOCKET=PASS")
           PY
 
-          runtime_stage="restart-restore"
-          echo "RUNTIME_STAGE=restart-restore"
           restart_step="RESTART_COMMAND"
           restart_diagnostics() {
             failure_status=$?
             trap - ERR
             echo "RUNTIME_RESTART_FAILED_STEP=$restart_step EXIT_CODE=$failure_status" >&2
             timeout 1s docker inspect --format 'STATE={{.State.Status}} EXIT={{.State.ExitCode}} PID={{.State.Pid}} RESTARTS={{.RestartCount}}' "$container" >&2 || true
-            docker exec "$container" sh -c 'for process in /proc/[0-9]*; do test -r "$process/comm" && printf "%s %s\n" "${process##*/}" "$(cat "$process/comm")"; done' >&2 || true
-            docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles /data/jd-session-archives -maxdepth 3 -printf "%M %u:%g %s %p\n"' >&2 || true
+            timeout 1s docker exec "$container" sh -c 'for process in /proc/[0-9]*; do test -r "$process/comm" && printf "%s %s\n" "${process##*/}" "$(cat "$process/comm")"; done' >&2 || true
+            timeout 1s docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles /data/jd-session-archives -maxdepth 3 -printf "%M %u:%g %s %p\n"' >&2 || true
             for status_file in /tmp/runtime-health.json /tmp/runtime-session.json /tmp/runtime-restored.json; do
               test ! -f "$status_file" || python -c '
           import json, pathlib, re, sys
@@ -475,7 +477,7 @@ jobs:
           print(f"STATUS_FILE={path.name} CONTENT={json.dumps(redact(value), sort_keys=True)}")
           ' "$status_file" >&2
             done
-            docker logs "$container" 2>&1 | R_CAPTURE="$capture_token" R_CONTROL="$control_token" R_TICKET_KEY="$viewer_ticket_key" R_COOKIE_KEY="$viewer_cookie_key" R_MASTER="$master_key" R_OLD_TICKET="${ticket:-}" R_NEW_TICKET="${new_ticket:-}" R_OLD_COOKIE="${cookie:-}" R_NEW_COOKIE="${new_cookie:-}" python -c '
+            timeout 1s docker logs --tail 200 "$container" 2>&1 | R_CAPTURE="$capture_token" R_CONTROL="$control_token" R_TICKET_KEY="$viewer_ticket_key" R_COOKIE_KEY="$viewer_cookie_key" R_MASTER="$master_key" R_OLD_TICKET="${ticket:-}" R_NEW_TICKET="${new_ticket:-}" R_OLD_COOKIE="${cookie:-}" R_NEW_COOKIE="${new_cookie:-}" python -c '
           import os, re, sys
           text = sys.stdin.read()
           for name in ("R_CAPTURE", "R_CONTROL", "R_TICKET_KEY", "R_COOKIE_KEY", "R_MASTER", "R_OLD_TICKET", "R_NEW_TICKET", "R_OLD_COOKIE", "R_NEW_COOKIE"):
@@ -490,7 +492,7 @@ jobs:
           wait_runtime_health() {
             status=000
             for _ in $(seq 1 60); do
-              status="$(curl --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
+              status="$(curl --connect-timeout 3 --max-time 10 --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
                 --header "x-internal-token: $control_token" \
                 "http://127.0.0.1:$runtime_port/internal/jd-browser/health" || true)"
               test "$status" = 200 && return 0
@@ -499,6 +501,8 @@ jobs:
             return 1
           }
           trap restart_diagnostics ERR
+          runtime_stage="restart-restore"
+          echo "RUNTIME_STAGE=restart-restore"
 
           docker restart "$container" >/dev/null
           echo "RESTART_COMMAND=PASS"
@@ -508,7 +512,7 @@ jobs:
           echo "HEALTH_READY=PASS HTTP_STATUS=$status"
 
           restart_step="PROFILE_RESTORED"
-          restored_status="$(curl --silent --show-error --output /tmp/runtime-restored.json --write-out '%{http_code}' \
+          restored_status="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --output /tmp/runtime-restored.json --write-out '%{http_code}' \
             --header "content-type: application/json" \
             --header "x-internal-token: $control_token" \
             --data '{"namespace":"ci","tenant_id":"1","company_id":"1","store_id":"1","platform":"jd"}' \
@@ -519,20 +523,20 @@ jobs:
           echo "PROFILE_RESTORED=PASS HTTP_STATUS=$restored_status"
 
           restart_step="OLD_COOKIE_REJECTED"
-          old_cookie_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+          old_cookie_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
           test "$old_cookie_status" = 401
           echo "OLD_COOKIE_REJECTED=PASS HTTP_STATUS=$old_cookie_status"
 
           restart_step="OLD_TICKET_REPLAY_REJECTED"
-          old_ticket_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+          old_ticket_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' \
             --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
           test "$old_ticket_status" = 401
           echo "OLD_TICKET_REPLAY_REJECTED=PASS HTTP_STATUS=$old_ticket_status"
 
           restart_step="NEW_TICKET_ISSUED"
-          new_ticket_response="$(curl --silent --show-error --write-out $'\n%{http_code}' \
+          new_ticket_response="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --write-out $'\n%{http_code}' \
             --header 'content-type: application/json' --header "x-internal-token: $control_token" \
             --data '{"session_id":"ci:1:1:1:jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets")"
@@ -544,20 +548,20 @@ jobs:
           echo "NEW_TICKET_ISSUED=PASS HTTP_STATUS=$new_ticket_status"
 
           restart_step="NEW_COOKIE_ACCEPTED"
-          new_cookie_response="$(curl --silent --show-error --dump-header - --output /dev/null --write-out $'HTTP_STATUS:%{http_code}' \
+          new_cookie_response="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --dump-header - --output /dev/null --write-out $'HTTP_STATUS:%{http_code}' \
             --header 'content-type: application/json' --data "{\"ticket\":\"$new_ticket\"}" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
           new_cookie_status="${new_cookie_response##*HTTP_STATUS:}"
           test "$new_cookie_status" = 204
           new_cookie="$(printf '%s' "$new_cookie_response" | awk -F': ' 'tolower($1)=="set-cookie" {sub(/\r$/, "", $2); print $2}')"
           test -n "$new_cookie"
-          new_viewer_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $new_cookie" \
+          new_viewer_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $new_cookie" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
           test "$new_viewer_status" = 200
           echo "NEW_COOKIE_ACCEPTED=PASS HTTP_STATUS=$new_viewer_status"
 
           restart_step="REVOKE_PERSISTED"
-          revoke_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --request DELETE \
+          revoke_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --request DELETE \
             --header "x-internal-token: $control_token" \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions/ci%3A1%3A1%3A1%3Ajd")"
           test "$revoke_status" = 200
@@ -569,7 +573,7 @@ jobs:
           echo "REVOKE_PERSISTED=PASS HTTP_STATUS=$revoke_status"
 
           restart_step="SECOND_RESTART_OLD_COOKIE_REJECTED"
-          second_old_cookie_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $new_cookie" \
+          second_old_cookie_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $new_cookie" \
             "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
           test "$second_old_cookie_status" = 401
           echo "SECOND_RESTART_OLD_COOKIE_REJECTED=PASS HTTP_STATUS=$second_old_cookie_status"
@@ -582,6 +586,7 @@ jobs:
           trap - ERR
 
       - name: Verify R297 signed-event and read-only observer protocol
+        id: protocol_gate
         env:
           APP_ENV: test
         run: |
@@ -591,57 +596,8 @@ jobs:
             tests/test_r297_windows_event_signer.py \
             tests/test_r297_evidence_preflight.py
 
-      - name: Generate R297 real-process acceptance evidence
-        env:
-          APP_ENV: acceptance
-        run: |
-          PYTHONPATH=. python ops/r297_process_acceptance.py /tmp/r297-process-acceptance \
-            --runtime-image "$S12_JD_RUNTIME_IMAGE"
-
-      - name: Upload R297 process acceptance evidence
-        uses: actions/upload-artifact@v7
-        with:
-          name: r297-process-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
-          path: |
-            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_RAW.jsonl
-            /tmp/r297-process-acceptance/R297_SENSITIVE_FIXTURE.json
-            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
-            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json.sha256
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Run tests
-        env:
-          R297_PROCESS_ACCEPTANCE_EVIDENCE: /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
-        run: |
-          bash -n ops/r297_workbench_deploy.sh
-          python -m pytest -v tests/ --junitxml=/tmp/pytest-results.xml
-          python - <<'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-
-          result_path = Path("/tmp/pytest-results.xml")
-          root = ET.parse(result_path).getroot()
-          if root.tag == "testsuite":
-              suites = [root]
-          elif all(name in root.attrib for name in ("tests", "failures", "errors", "skipped")):
-              suites = [root]
-          else:
-              suites = root.findall("testsuite")
-          totals = {
-              name: sum(int(suite.attrib.get(name, "0")) for suite in suites)
-              for name in ("tests", "failures", "errors", "skipped")
-          }
-          assert totals == {
-              "tests": 1846,
-              "failures": 0,
-              "errors": 0,
-              "skipped": 0,
-          }, totals
-          print("CI_PYTEST_RESULT=1846_PASS/0_SKIP/0_FAIL/0_ERROR")
-          PY
-
       - name: Generate R297 native pagehide evidence
+        timeout-minutes: 5
         if: ${{ !cancelled() }}
         run: |
           evidence_dir="$RUNNER_TEMP/r297-native-pagehide"
@@ -665,6 +621,45 @@ jobs:
           path: ${{ runner.temp }}/r297-native-pagehide/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Generate R297 real-process acceptance evidence
+        if: ${{ !cancelled() && steps.runtime_gate.outcome == 'success' && steps.protocol_gate.outcome == 'success' }}
+        timeout-minutes: 30
+        env:
+          APP_ENV: acceptance
+        run: |
+          PYTHONPATH=. python ops/r297_process_acceptance.py /tmp/r297-process-acceptance \
+            --runtime-image "$S12_JD_RUNTIME_IMAGE"
+
+      - name: Upload R297 process acceptance evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-process-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_RAW.jsonl
+            /tmp/r297-process-acceptance/R297_SENSITIVE_FIXTURE.json
+            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
+            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Run tests
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
+        timeout-minutes: 90
+        env:
+          R297_PROCESS_ACCEPTANCE_EVIDENCE: /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
+        run: |
+          bash -n ops/r297_workbench_deploy.sh
+          python -m ops.ci_pytest_gate /tmp/r297-pytest
+
+      - name: Upload complete pytest execution report
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-pytest-${{ github.event.pull_request.head.sha || github.sha }}
+          path: /tmp/r297-pytest/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Verify CI Redis queue and lock residue
         if: always()

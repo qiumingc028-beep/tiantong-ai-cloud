@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -11,6 +13,7 @@ require_service_role("backend")
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import text
 
 from .core.orchestrator import handle_event as orchestrator_handle_event
@@ -110,6 +113,41 @@ def startup():
             logger.warning("owner_action_audit_startup_warning: %s", type(exc).__name__)
     finally:
         db.close()
+
+
+OWNER_AUDIT_POLL_SECONDS = 30
+
+
+def _recover_owner_audits_once():
+    # The Backend owns the control credential; the capture Worker does not.
+    db = SessionLocal()
+    try:
+        jd_workbench.reconcile_pending_owner_action_audits(db)
+    except Exception:
+        db.rollback()
+        logger.warning("owner_audit_recovery_retry_pending")
+    finally:
+        db.close()
+
+
+async def _owner_audit_recovery_loop():
+    while True:
+        await asyncio.sleep(OWNER_AUDIT_POLL_SECONDS)
+        await run_in_threadpool(_recover_owner_audits_once)
+
+
+@app.on_event("startup")
+async def start_owner_audit_recovery():
+    app.state.owner_audit_recovery_task = asyncio.create_task(_owner_audit_recovery_loop())
+
+
+@app.on_event("shutdown")
+async def stop_owner_audit_recovery():
+    task = getattr(app.state, "owner_audit_recovery_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 app.include_router(users.router)

@@ -530,6 +530,7 @@ export function buildApp({
   });
 
   app.get('/internal/jd-browser/sessions/:sid', { preHandler: verifyControl }, async (request, reply) => {
+    if (!parseSessionId(request.params.sid, sessionNamespace)) return reply.code(400).send({ error: 'invalid_session_id' });
     await purgeExpired();
     const session = browserSessions.get(request.params.sid);
     if (session && !await sessionRemainsAuthorized(request.params.sid, session)) return { status: 'REVOKED' };

@@ -104,8 +104,14 @@ class JdSmartCollector:
         if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") != "OK":
             raise JdCollectorError("需要人工处理登录或风控")
         data = result["data"]
-        if not isinstance(data, dict) or str(data.get("store_id")) != str(store.id) or data.get("source") != "jd_cloud_playwright":
+        if (not isinstance(data, dict) or set(data) != {"source", "captured_at", "store_id", dataset}
+                or str(data.get("store_id")) != str(store.id) or data.get("source") != "jd_cloud_playwright"):
             raise JdCollectorError("云端采集响应校验失败")
+        try:
+            if datetime.fromisoformat(data["captured_at"].replace("Z", "+00:00")).tzinfo is None:
+                raise ValueError("missing timezone")
+        except (TypeError, ValueError, AttributeError):
+            raise JdCollectorError("云端采集响应校验失败") from None
         captured = data.get(dataset)
         if (dataset == "metrics" and not isinstance(captured, dict)) or (
             dataset != "metrics"

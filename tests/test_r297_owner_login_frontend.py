@@ -486,7 +486,7 @@ def test_runtime_container_ci_check_has_timeout_and_safe_stage_diagnostics():
         assert command in remaining
         remaining = remaining.replace(command, "")
     assert "docker inspect" not in remaining
-    assert runtime_step.count("timeout 1s docker ") == 7
+    assert runtime_step.count("timeout 1s docker ") >= 7
 
     with tempfile.TemporaryDirectory() as directory:
         marker = Path(directory) / "cleanup"

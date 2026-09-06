@@ -43,7 +43,7 @@ def run(*argv: str, env: dict[str, str] | None = None, capture: bool = True) -> 
         check=False,
     )
     if result.returncode:
-        raise RuntimeError(f"COMMAND_FAILED:{argv[0]}:{result.returncode}:{result.stderr[-500:]}")
+        raise RuntimeError(f"COMMAND_FAILED:{Path(argv[0]).name}:{result.returncode}")
     return result.stdout.strip()
 
 
@@ -86,7 +86,7 @@ def post_json(url: str, payload: dict, headers: dict[str, str]) -> dict:
         with urlopen(request, timeout=45) as response:
             return json.loads(response.read())
     except HTTPError as exc:
-        raise RuntimeError(f"HTTP_POST_FAILED:{exc.code}:{exc.read(2000).decode(errors='replace')}") from exc
+        raise RuntimeError(f"HTTP_POST_FAILED:{exc.code}") from exc
 
 
 def device_post(url: str, path: str, payload: dict, token: str, private_key: Path) -> dict:
@@ -198,6 +198,7 @@ def main() -> int:
     head = run("git", "rev-parse", "HEAD")
     if head != os.environ.get("RELEASE_SOURCE_SHA"):
         raise RuntimeError("RELEASE_SOURCE_SHA_MISMATCH")
+    session_namespace = f"r297-acceptance-{head[:12]}"
     output = args.output_directory.resolve()
     ledger_value = os.getenv("R297_EVIDENCE_NONCE_LEDGER", "")
     if not ledger_value:
@@ -245,6 +246,7 @@ def main() -> int:
 
     environment = os.environ.copy()
     environment.update({
+        "JD_SESSION_NAMESPACE": session_namespace,
         "APP_ENV": "test",
         "SERVICE_ROLE": "backend",
         "DATABASE_URL": f"postgresql+psycopg2://r297:{postgres_password}@127.0.0.1:{postgres_port}/r297_acceptance",
@@ -337,7 +339,7 @@ def main() -> int:
         policy = JdWorkbenchSyncPolicy(tenant_id=store.tenant_id, company_id=store.company_id, store_id=store.id, enabled=False, interval_seconds=300)
         db.add_all([status_row, policy])
         db.commit()
-        scope = {"tenant_id": store.tenant_id, "company_id": store.company_id, "store_id": store.id, "platform": store.platform}
+        scope = {"namespace": session_namespace, "tenant_id": store.tenant_id, "company_id": store.company_id, "store_id": store.id, "platform": store.platform}
         db.close()
 
         commands.append("start controlled canary HTTP process")
@@ -398,6 +400,8 @@ def main() -> int:
         runtime_env = {
             **os.environ,
             **fixture_env,
+            "JD_SESSION_NAMESPACE": session_namespace,
+            "APP_ENV": "acceptance",
             "JD_BROWSER_CAPTURE_TOKEN": capture_token,
             "JD_BROWSER_CONTROL_TOKEN": control_token,
             "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY": ticket_key,
@@ -416,6 +420,7 @@ def main() -> int:
             "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=512m,uid=10001,gid=10001,mode=1777",
             "--tmpfs", "/tmp/.X11-unix:rw,nosuid,nodev,noexec,size=1m,uid=0,gid=0,mode=1777",
             "--mount", f"type=volume,source={runtime_volume},target=/data/jd-session-archives",
+            "--env", "JD_SESSION_NAMESPACE", "--env", "APP_ENV",
             "--env", "JD_BROWSER_CAPTURE_TOKEN", "--env", "JD_BROWSER_CONTROL_TOKEN",
             "--env", "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY", "--env", "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY",
             "--env", "JD_SESSION_MASTER_KEY", "--env", "R297_CONTROLLED_CANARY", "--env", "R297_CONTROLLED_CANARY_DASHBOARD_URL",
@@ -433,7 +438,7 @@ def main() -> int:
         )
         capture_probe = post_json(
             f"http://127.0.0.1:{runtime_port}/internal/jd-browser/capture",
-            {**scope, "dataset": "metrics"},
+            {"scope": scope, "dataset": "metrics"},
             {"x-internal-token": capture_token},
         )
         if capture_probe.get("status") != "OK":

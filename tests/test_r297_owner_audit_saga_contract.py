@@ -628,3 +628,37 @@ def test_worker_startup_runs_maintenance_before_consuming_tasks(monkeypatch):
     monkeypatch.setattr(worker, "run_jd_workbench_maintenance", maintenance)
     with pytest.raises(RuntimeError, match="startup maintenance reached"):
         worker.main()
+
+
+
+def test_backend_periodic_recovery_survives_transient_failure(test_db, monkeypatch):
+    with test_db() as db:
+        db.add(EmployeeLog(action="owner_login_session_create", detail=json.dumps({
+            "status": "PENDING", "namespace": VECTORS["namespace"], "tenant_id": "1",
+            "company_id": "1", "store_id": "1", "platform": "jd", "operation": "owner_login_session_create",
+        })))
+        db.commit()
+    calls = []
+    recovered = threading.Event()
+
+    def runtime(*_args, **_kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise jd_workbench.HTTPException(status_code=503, detail="temporary")
+        recovered.set()
+        return {"status": "ACTIVE"}
+
+    monkeypatch.setattr(jd_workbench, "_runtime_call", runtime)
+    monkeypatch.setattr(backend_main, "OWNER_AUDIT_POLL_SECONDS", 0.02)
+    monkeypatch.setattr(backend_main, "SessionLocal", test_db)
+    monkeypatch.setattr(backend_main, "ensure_tables", lambda: None)
+    monkeypatch.setattr(backend_main, "seed_defaults", lambda _db: None)
+    monkeypatch.setattr("backend.alpha_workflow.registry.ensure_default_scenarios", lambda _db: None)
+    monkeypatch.setattr("backend.observability.service.ensure_default_alert_rules", lambda _db: None)
+    monkeypatch.setattr("backend.observability.service.ensure_default_circuit_breakers", lambda _db: None)
+    with TestClient(app):
+        assert recovered.wait(5), "Backend must retry without capture Worker control credentials"
+    assert len(calls) == 2
+    assert app.state.owner_audit_recovery_task.done()
+    with test_db() as db:
+        assert json.loads(db.query(EmployeeLog).filter_by(action="owner_login_session_create").one().detail)["status"] == "SUCCESS"

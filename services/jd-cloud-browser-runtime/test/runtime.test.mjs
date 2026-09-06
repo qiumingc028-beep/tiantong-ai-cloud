@@ -1021,3 +1021,19 @@ test('one display serves only one active session and expiry closes it', async (t
   assert.equal(status.json().status, 'REVOKED');
   assert.equal(closeCount, 1);
 });
+
+
+test('legacy or malformed session IDs are rejected by GET and DELETE', async (t) => {
+  const app = await activeApp(t, { storeId: 1 });
+  for (const sid of ['1:1:1:jd', 'ci:1:1:1:1:jd', scopedSessionId(1) + ':extra']) {
+    for (const method of ['GET', 'DELETE']) {
+      const response = await app.inject({method, url: '/internal/jd-browser/sessions/' + encodeURIComponent(sid),
+        headers: {'x-internal-token': controlToken}});
+      assert.equal(response.statusCode, 400);
+    }
+  }
+  const response = await app.inject({method: 'GET', url: '/internal/jd-browser/sessions/' + encodeURIComponent(scopedSessionId(1)),
+    headers: {'x-internal-token': controlToken}});
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().status, 'ACTIVE');
+});

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 import math
 import os
 import re
@@ -221,6 +222,13 @@ async def authorize_browser_session(request: Request, db: Session = Depends(get_
     required = {"namespace", "tenant_id", "company_id", "store_id", "platform"}
     if set(body) != required:
         raise _generic_bad_request()
+    if body["platform"] != "jd":
+        raise _generic_bad_request()
+    for name in ("tenant_id", "company_id", "store_id"):
+        value = body[name]
+        if not ((type(value) is int and value > 0) or
+                (type(value) is str and re.fullmatch(r"[1-9][0-9]*", value))):
+            raise _generic_bad_request()
     if body["namespace"] != get_settings().JD_SESSION_NAMESPACE:
         raise HTTPException(status_code=403, detail="会话命名空间不匹配")
     try:
@@ -317,8 +325,12 @@ def _saga_pending(db: Session, user: User, store: Store, action: str) -> Employe
               "claim_token": uuid.uuid4().hex,
               "claim_until": (_now() + timedelta(seconds=60)).isoformat()}
     row = EmployeeLog(user_id=user.id, store_id=store.id, action=action, detail=json.dumps(detail, separators=(",", ":")))
-    db.add(row)
-    db.commit()
+    try:
+        db.add(row)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="审计状态暂不可用") from exc
     row._owner_claim_token = detail["claim_token"]
     return row
 
@@ -356,6 +368,7 @@ _owner_saga_reconcile_after_id = 0
 def reconcile_pending_owner_action_audits(db: Session) -> int:
     global _owner_saga_reconcile_after_id
     count = 0
+    started = time.monotonic()
     query = (
         db.query(EmployeeLog)
         .filter(
@@ -378,6 +391,8 @@ def reconcile_pending_owner_action_audits(db: Session) -> int:
     if rows:
         _owner_saga_reconcile_after_id = rows[-1].id
     for row in rows:
+        if time.monotonic() - started >= 30:
+            break
         row = (
             db.query(EmployeeLog).filter_by(id=row.id)
             .with_for_update(skip_locked=True).populate_existing().one_or_none()

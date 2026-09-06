@@ -1419,6 +1419,8 @@ def write_employee_log(db, task_type: str, status: str, detail: dict, attempt: i
 
 
 def reconcile_owner_action_audits() -> int:
+    if not get_settings().JD_BROWSER_CONTROL_TOKEN:
+        return 0
     db = SessionLocal()
     try:
         from .routers.jd_workbench import reconcile_pending_owner_action_audits
