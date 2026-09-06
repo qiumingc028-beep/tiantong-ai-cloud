@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from backend.database import Base
 from backend.config import get_settings
-from backend.models import Permission, Role, Store, User, UserStoreMembership
+from backend.models import Company, Permission, Role, Store, Tenant, User, UserStoreMembership
 
 
 CLIENT_VERSION = "2.91.0-test"
@@ -28,15 +28,43 @@ TEST_RSA_D_B64 = "AYKWaeaE0CqzyGt8my2TuZDX8TAnwAeqRZ64K1541lnC7BZcLLDN_MP4biSs0L
 def test_browser_runtime_control_scope_must_match_an_active_database_store(client, test_db, monkeypatch):
     token = "r" * 32
     monkeypatch.setenv("JD_BROWSER_CONTROL_TOKEN", token)
+    monkeypatch.setenv("JD_SESSION_NAMESPACE", "ci")
     get_settings.cache_clear()
     with test_db() as db:
         store = db.query(Store).filter(Store.store_code == "JD01").one()
-    scope = {
-        "tenant_id": store.tenant_id,
-        "company_id": store.company_id,
-        "store_id": store.id,
-        "platform": store.platform,
-    }
+        scope = {
+            "namespace": "ci",
+            "tenant_id": store.tenant_id,
+            "company_id": store.company_id,
+            "store_id": store.id,
+            "platform": store.platform,
+        }
+        foreign_tenant = Tenant(
+            tenant_code="runtime-foreign",
+            tenant_name="Runtime Foreign",
+            active=True,
+        )
+        db.add(foreign_tenant)
+        db.flush()
+        foreign_company = Company(
+            tenant_id=foreign_tenant.id,
+            company_code="runtime-foreign",
+            company_name="Runtime Foreign",
+            active=True,
+        )
+        db.add(foreign_company)
+        db.flush()
+        foreign_store = Store(
+            platform="jd",
+            store_code="RUNTIME-FOREIGN",
+            store_name="Runtime Foreign",
+            tenant_id=foreign_tenant.id,
+            company_id=foreign_company.id,
+            active=True,
+        )
+        db.add(foreign_store)
+        db.commit()
+        foreign_store_id = foreign_store.id
     try:
         assert client.post(
             "/api/jd-workbench/internal/browser-session-authorize",
@@ -44,7 +72,20 @@ def test_browser_runtime_control_scope_must_match_an_active_database_store(clien
         ).status_code == 204
         assert client.post(
             "/api/jd-workbench/internal/browser-session-authorize",
-            headers={"x-internal-token": token}, json={**scope, "store_id": store.id + 1000},
+            headers={"x-internal-token": token},
+            json={key: value for key, value in scope.items() if key != "namespace"},
+        ).status_code == 400
+        assert client.post(
+            "/api/jd-workbench/internal/browser-session-authorize",
+            headers={"x-internal-token": token}, json={**scope, "namespace": "other"},
+        ).status_code == 403
+        assert client.post(
+            "/api/jd-workbench/internal/browser-session-authorize",
+            headers={"x-internal-token": token}, json={**scope, "platform": "tmall"},
+        ).status_code == 404
+        assert client.post(
+            "/api/jd-workbench/internal/browser-session-authorize",
+            headers={"x-internal-token": token}, json={**scope, "store_id": foreign_store_id},
         ).status_code == 404
         assert client.post(
             "/api/jd-workbench/internal/browser-session-authorize",
