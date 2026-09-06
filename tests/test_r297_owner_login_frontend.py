@@ -166,8 +166,12 @@ for (const status of [403, 503]) await assert.rejects(login.runPreflight({
 }), status === 403 ? /店铺授权预检失败/ : /Runtime健康检查失败/);
 
 const sockets = [];
-class OpenSocket {
-  constructor(url, protocol) { this.url = url; this.protocol = protocol; sockets.push(this); queueMicrotask(() => this.onopen()); }
+class SocketHarness {
+  addEventListener(type, handler) { this[`_${type}`] = handler; }
+  removeEventListener(type, handler) { if (this[`_${type}`] === handler) delete this[`_${type}`]; }
+}
+class OpenSocket extends SocketHarness {
+  constructor(url, protocol) { super(); this.url = url; this.protocol = protocol; sockets.push(this); queueMicrotask(() => this._open()); }
   close() { this.closed = true; }
 }
 assert.deepEqual(await login.verifyNoVncWebSocket({
@@ -179,8 +183,8 @@ assert.equal(sockets[0].protocol, 'binary');
 assert.equal(sockets[0].url.includes('?'), false);
 assert.equal(sockets[0].closed, true);
 
-class FailedSocket {
-  constructor() { queueMicrotask(() => this.onerror()); }
+class FailedSocket extends SocketHarness {
+  constructor() { super(); queueMicrotask(() => this._error()); }
   close() { this.closed = true; }
 }
 await assert.rejects(login.verifyNoVncWebSocket({
@@ -200,7 +204,7 @@ assert.equal(abortedSocketCount, 0);
 
 let pendingClosed = 0;
 let clearedTimer = 0;
-class PendingSocket { close() { pendingClosed += 1; } }
+class PendingSocket extends SocketHarness { close() { pendingClosed += 1; } }
 const pendingController = new AbortController();
 const pendingSocket = login.verifyNoVncWebSocket({
   WebSocketCtor: PendingSocket, location: {protocol: 'https:', host: 'internal.example'}, storeId: 7,

@@ -177,18 +177,24 @@
       const socket = new WebSocketCtor(`wss://${location.host}/jd-browser/novnc/${id}/websockify`, 'binary');
       const timer = setTimer(() => finish(new Error('noVNC WebSocket连接超时')), timeoutMs);
       const abort = () => finish(new Error('noVNC WebSocket连接已取消'));
+      const opened = () => finish();
+      const failed = () => finish(new Error('noVNC WebSocket连接失败'));
+      const closed = () => finish(new Error('noVNC WebSocket连接提前关闭'));
       function finish(error) {
         if (settled) return;
         settled = true;
         clearTimer(timer);
         if (signal) signal.removeEventListener('abort', abort);
+        socket.removeEventListener('open', opened);
+        socket.removeEventListener('error', failed);
+        socket.removeEventListener('close', closed);
         try { socket.close(); } catch (_error) {}
         if (error) reject(error);
         else resolve(Object.freeze({ store_id: id, websocket: 'connected' }));
       }
-      socket.onopen = () => finish();
-      socket.onerror = () => finish(new Error('noVNC WebSocket连接失败'));
-      socket.onclose = () => finish(new Error('noVNC WebSocket连接提前关闭'));
+      socket.addEventListener('open', opened, { once: true });
+      socket.addEventListener('error', failed, { once: true });
+      socket.addEventListener('close', closed, { once: true });
       if (signal) {
         if (signal.aborted) return abort();
         signal.addEventListener('abort', abort, { once: true });
