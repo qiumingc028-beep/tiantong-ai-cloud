@@ -216,13 +216,13 @@ def _sign(event: dict) -> dict:
     return {**event, "signature": base64.urlsafe_b64encode(signature).rstrip(b"=").decode()}
 
 
-def _bundle(now: datetime) -> dict:
+def _bundle(now: datetime, nonce_suffix: str = "") -> dict:
     common = _scope()
     page = _sign({
         **common,
         "event_type": "web_page_close",
         "issuer": "page_event_receiver",
-        "nonce": "page-close-nonce-0001",
+        "nonce": f"page-close-nonce-0001{nonce_suffix}",
         "observed_at": (now - timedelta(seconds=4)).isoformat(),
         "sequence": 1,
         "payload": {
@@ -238,7 +238,7 @@ def _bundle(now: datetime) -> dict:
         **common,
         "event_type": "authenticated_observer",
         "issuer": "authenticated_observer",
-        "nonce": "page-observer-nonce-01",
+        "nonce": f"page-observer-nonce-01{nonce_suffix}",
         "observed_at": (now - timedelta(seconds=3)).isoformat(),
         "sequence": 2,
         "payload": {
@@ -257,7 +257,7 @@ def _bundle(now: datetime) -> dict:
         **common,
         "event_type": "electron_exit",
         "issuer": "windows_runner",
-        "nonce": "electron-exit-nonce-01",
+        "nonce": f"electron-exit-nonce-01{nonce_suffix}",
         "observed_at": (now - timedelta(seconds=2)).isoformat(),
         "sequence": 3,
         "payload": {"exited": True, "process_id": 4201},
@@ -266,7 +266,7 @@ def _bundle(now: datetime) -> dict:
         **common,
         "event_type": "authenticated_observer",
         "issuer": "authenticated_observer",
-        "nonce": "electron-observer-0001",
+        "nonce": f"electron-observer-0001{nonce_suffix}",
         "observed_at": (now - timedelta(seconds=1)).isoformat(),
         "sequence": 4,
         "payload": {
@@ -311,16 +311,16 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
     assert result["evidence_trust_manifest_id"] == "r297-evidence-trust-test-v1"
     assert result["evidence_trust_manifest_sha256"] == "0eac4b3fc49f913f33762dbedbe41916c3ef50eb1128211d7d93281c78902fed"
     ledger = json.loads(ledger_path.read_text())
-    assert len(ledger) == 4
+    assert len(ledger) == 5
     assert all(set(entry) == {
         "namespace", "tenant_id", "company_id", "store_id", "platform",
         "release_sha", "event_type", "key_id", "nonce",
         "run_id", "run_attempt", "challenge",
     } for entry in ledger)
 
-    with pytest.raises(ValueError, match="replayed evidence nonce"):
+    with pytest.raises(ValueError, match="replayed acceptance run"):
         verify_acceptance_event_bundle(
-            _bundle(now), expected_scope=_scope(), now=now,
+            _bundle(now, "-fresh"), expected_scope=_scope(), now=now,
             nonce_ledger=ledger_path,
         )
 
@@ -385,7 +385,21 @@ def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda _: verify(), range(2)))
 
-    assert sorted(results) == ["accepted", "replayed evidence nonce"]
+    assert sorted(results) == ["accepted", "replayed acceptance run"]
+
+
+def test_acceptance_source_run_is_consumed_once_across_scopes(tmp_path):
+    from ops.r297_evidence_events import _record_nonces
+
+    ledger = _nonce_ledger(tmp_path)
+    first = {
+        **_scope(), "event_type": "acceptance_run",
+        "key_id": "source_pagehide_workflow", "nonce": _scope()["run_id"],
+    }
+    _record_nonces(ledger, [first])
+
+    with pytest.raises(ValueError, match="replayed acceptance run"):
+        _record_nonces(ledger, [{**first, "tenant_id": 999, "store_id": 999}])
 
 
 @pytest.mark.parametrize(

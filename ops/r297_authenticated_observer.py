@@ -52,6 +52,12 @@ _BINDING_FIELDS = {
 }
 
 
+def acceptance_run_id(workflow_run_id: int) -> str:
+    if type(workflow_run_id) is not int or workflow_run_id <= 0:
+        raise ValueError("pagehide workflow run id invalid")
+    return f"r297-gh-{workflow_run_id}"
+
+
 def _read_binding_file(path: Path, *, environment: str) -> bytes:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
@@ -424,6 +430,8 @@ def main() -> int:
             args.artifact_root, expected_release_sha=args.release_sha,
             binding=binding, archive_path=args.artifact_archive,
         )
+        if scope["run_id"] != acceptance_run_id(raw["workflow_run_id"]):
+            raise ValueError("pagehide artifact workflow run mismatch")
         payload = {
             "closed": True, "source": "browser_pagehide",
             **{field: raw[field] for field in (

@@ -545,6 +545,14 @@ def _record_nonces(nonce_ledger: Path, bindings: list[dict]) -> None:
         ):
             raise ValueError("evidence nonce ledger invalid")
         ledger_values.update(json.dumps(value, separators=(",", ":"), sort_keys=True) for value in loaded)
+        consumed_runs = {
+            value["nonce"] for value in loaded if value["event_type"] == "acceptance_run"
+        }
+        requested_runs = {
+            value["nonce"] for value in bindings if value["event_type"] == "acceptance_run"
+        }
+        if consumed_runs.intersection(requested_runs):
+            raise ValueError("replayed acceptance run")
         canonical_bindings = {
             json.dumps(value, separators=(",", ":"), sort_keys=True) for value in bindings
         }

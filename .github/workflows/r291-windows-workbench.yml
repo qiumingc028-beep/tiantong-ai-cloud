@@ -2,6 +2,11 @@ name: R297 Windows Workbench Release Gate
 
 on:
   workflow_dispatch:
+    inputs:
+      pagehide_workflow_run_id:
+        description: GitHub Actions run ID that produced the bound same-HEAD native pagehide artifact
+        required: true
+        type: string
   pull_request:
     branches:
       - main
@@ -38,7 +43,6 @@ permissions:
 
 jobs:
   build-windows:
-    environment: r297-controlled-canary
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -128,6 +132,62 @@ jobs:
             [System.Text.UTF8Encoding]::new($false)
           )
 
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tiantong-ai-jd-workbench-r297-build-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            desktop/jd-workbench/dist/*.exe
+            desktop/jd-workbench/dist/*.zip
+            desktop/jd-workbench/dist/SHA256SUMS.txt
+            desktop/jd-workbench/dist/chromium-info.json
+          if-no-files-found: error
+          retention-days: 14
+
+  formal-windows-acceptance:
+    name: formal-windows-acceptance
+    if: github.event_name == 'workflow_dispatch'
+    needs: build-windows
+    environment: r297-controlled-canary
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python for signed evidence
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js for acceptance probes
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Download exact-SHA Windows build artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tiantong-ai-jd-workbench-r297-build-${{ github.sha }}
+          path: desktop/jd-workbench/dist
+
+      - name: Bind controlled acceptance run to pagehide workflow
+        shell: pwsh
+        working-directory: .
+        env:
+          R297_SOURCE_PAGEHIDE_WORKFLOW_RUN_ID: ${{ inputs.pagehide_workflow_run_id }}
+        run: |
+          if ($env:R297_SOURCE_PAGEHIDE_WORKFLOW_RUN_ID -notmatch '^[1-9][0-9]*$') {
+            throw 'R297_PAGEHIDE_WORKFLOW_RUN_ID_INVALID'
+          }
+          "R297_ACCEPTANCE_RUN_ID=r297-gh-$env:R297_SOURCE_PAGEHIDE_WORKFLOW_RUN_ID" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Require independent trusted Windows signer
         shell: pwsh
         working-directory: .
@@ -185,7 +245,6 @@ jobs:
           R297_EVIDENCE_COMPANY_ID: ${{ vars.R297_EVIDENCE_COMPANY_ID }}
           R297_EVIDENCE_STORE_ID: ${{ vars.R297_EVIDENCE_STORE_ID }}
           R297_EVIDENCE_PLATFORM: jd
-          R297_ACCEPTANCE_RUN_ID: ${{ vars.R297_ACCEPTANCE_RUN_ID }}
           APP_ENV: acceptance
         run: |
           python -m ops.r297_evidence_preflight --role windows_runner

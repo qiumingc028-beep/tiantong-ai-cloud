@@ -122,3 +122,19 @@ def test_candidate_workflow_fails_before_windows_signing_key_is_exposed():
     assert candidate.index("R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED") < candidate.index(
         "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64"
     )
+def test_r297_windows_acceptance_run_id_is_per_dispatch_not_static_environment_state():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "pagehide_workflow_run_id:" in workflow
+    assert "required: true" in workflow
+    assert "R297_SOURCE_PAGEHIDE_WORKFLOW_RUN_ID: ${{ inputs.pagehide_workflow_run_id }}" in workflow
+    assert 'R297_ACCEPTANCE_RUN_ID=r297-gh-$env:R297_SOURCE_PAGEHIDE_WORKFLOW_RUN_ID' in workflow
+    assert "vars.R297_ACCEPTANCE_RUN_ID" not in workflow
+    assert "formal-windows-acceptance:" in workflow
+    assert "name: formal-windows-acceptance" in workflow
+    assert "if: github.event_name == 'workflow_dispatch'" in workflow
+    build_job = workflow.split("  build-windows:", 1)[1].split("  formal-windows-acceptance:", 1)[0]
+    formal_job = workflow.split("  formal-windows-acceptance:", 1)[1]
+    assert "environment: r297-controlled-canary" not in build_job
+    assert "actions/setup-node@v7" in formal_job
+    assert 'node-version: "24"' in formal_job
