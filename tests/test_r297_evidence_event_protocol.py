@@ -202,6 +202,50 @@ def test_bound_file_publish_is_exclusive_under_concurrency(tmp_path):
     digest = hashlib.sha256(content).hexdigest()
     assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
 
+
+def test_bound_file_publish_recovers_sidecar_write_crash(monkeypatch, tmp_path):
+    from ops import r297_evidence_events
+
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    original_replace = r297_evidence_events._replace_file
+    calls = 0
+
+    def crash_before_sidecar(path, value):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("sidecar crash injection")
+        original_replace(path, value)
+
+    monkeypatch.setattr(r297_evidence_events, "_replace_file", crash_before_sidecar)
+    with pytest.raises(OSError, match="sidecar crash injection"):
+        write_sha256_bound_file(output, content)
+    assert output.read_bytes() == content
+    assert not Path(f"{output}.sha256").exists()
+
+    monkeypatch.setattr(r297_evidence_events, "_replace_file", original_replace)
+    digest = write_sha256_bound_file(output, content)
+    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+
+
+def test_bound_file_publish_rejects_hardlinked_body_and_orphan_sidecar(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    output.write_bytes(content)
+    output.chmod(0o600)
+    os.link(output, output.with_name("attacker-hardlink"))
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, content)
+
+    output.with_name("attacker-hardlink").unlink()
+    output.unlink()
+    Path(f"{output}.sha256").write_text(f"{'0' * 64}  {output.name}\n", encoding="ascii")
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, content)
+
 def _integer(value: str) -> int:
     return int.from_bytes(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)), "big")
 
@@ -367,6 +411,50 @@ def test_bundle_precheck_preserves_run_until_formal_verification(monkeypatch, tm
     assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
     with pytest.raises(ValueError, match="missing or consumed"):
         verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=ledger)
+def test_candidate_bundle_builder_cannot_receive_any_signer_private_key(monkeypatch):
+    from ops.r297_evidence_bundle import build_bundle
+
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    for variable in (
+        "R297_PAGE_EVENT_RECEIVER_PRIVATE_KEY_PATH",
+        "R297_OBSERVER_PRIVATE_KEY_PATH",
+        "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH",
+    ):
+        with monkeypatch.context() as isolated:
+            isolated.setenv(variable, "/must-not-be-readable-by-candidate")
+            with pytest.raises(RuntimeError, match="verifier must not receive signer private keys"):
+                build_bundle(_bundle(now)["events"], expected_scope=_scope(), now=now)
+
+
+def test_signed_chain_binds_run_attempt_and_random_challenge(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    expected_scope = {**_scope(), "run_attempt": 2, "challenge": "challenge-6ea4d915d7f8435880868439"}
+    events = []
+    for event in _bundle(now)["events"]:
+        unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
+        events.append(_sign({**unsigned, "run_attempt": 2, "challenge": expected_scope["challenge"]}))
+
+    result = verify_acceptance_event_bundle(
+        {"events": events}, expected_scope=expected_scope, now=now, nonce_ledger=_nonce_ledger(tmp_path),
+    )
+
+    assert result["authenticated_observer"]["run_attempt"] == 2
+    assert result["authenticated_observer"]["challenge"] == expected_scope["challenge"]
+
+    spliced_events = []
+    for index, event in enumerate(_bundle(now)["events"]):
+        unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
+        spliced_events.append(_sign({
+            **unsigned,
+            "run_attempt": 1 if index == 2 else 2,
+            "challenge": "challenge-from-another-run-0001" if index == 2 else expected_scope["challenge"],
+        }))
+
+    with pytest.raises(ValueError, match="run_attempt mismatch|challenge mismatch"):
+        verify_acceptance_event_bundle(
+            {"events": spliced_events}, expected_scope=expected_scope, now=now,
+            nonce_ledger=_nonce_ledger(tmp_path),
+        )
 
 
 def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
