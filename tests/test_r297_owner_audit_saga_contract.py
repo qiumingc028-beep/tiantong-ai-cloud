@@ -473,6 +473,9 @@ def test_owner_audit_reconciler_retries_transient_runtime_failure(test_db, monke
         "_runtime_call",
         lambda *_args, **_kwargs: runtime_calls.append("success") or _receipt(_args[1]),
     )
+    # A successful later observation remains recoverable after the persisted backoff.
+    after_backoff = jd_workbench._now() + timedelta(seconds=31)
+    monkeypatch.setattr(jd_workbench, "_now", lambda: after_backoff)
     db = test_db()
     try:
         assert jd_workbench.reconcile_pending_owner_action_audits(db) == 1
@@ -516,7 +519,7 @@ def test_owner_audit_reconciler_processes_a_bounded_batch(test_db, monkeypatch):
     assert statuses.count("PENDING") == 3
 
 
-def test_owner_status_invalid_runtime_response_finishes_audit_failed(
+def test_owner_status_unknown_runtime_response_remains_recoverable_not_failed(
     client, owner_headers, test_db, monkeypatch
 ):
     monkeypatch.setattr(jd_workbench, "urlopen", lambda *_args, **_kwargs: _Response({"status": "UNKNOWN"}, _args[0]))
@@ -524,7 +527,8 @@ def test_owner_status_invalid_runtime_response_finishes_audit_failed(
     response = client.get("/api/jd-workbench/stores/1/login-session", headers=owner_headers)
 
     assert response.status_code == 503
-    assert _audit_rows(test_db, "owner_login_session_status")[-1][1]["status"] == "FAILED"
+    assert _audit_rows(test_db, "owner_login_session_status")[-1][1]["status"] == "PENDING"
+    assert response.json()["detail"]["status"] == "UNKNOWN"
 
 
 def test_invalid_owner_ticket_request_does_not_create_pending_audit(
@@ -649,6 +653,18 @@ def test_worker_startup_runs_maintenance_before_consuming_tasks(monkeypatch):
 
 
 def test_backend_periodic_recovery_survives_transient_failure(test_db, monkeypatch):
+    # Advance the observation clock after persisting backoff, not the scheduler's wall clock.
+    real_now = jd_workbench._now
+    monkeypatch.setattr(jd_workbench, "_now", lambda: real_now() + (timedelta(seconds=31) if backed_off.is_set() else timedelta()))
+    backed_off = threading.Event()
+    finish = jd_workbench._saga_finish
+
+    def finish_and_advance(db, row, status):
+        finish(db, row, status)
+        if status == "PENDING":
+            backed_off.set()
+
+    monkeypatch.setattr(jd_workbench, "_saga_finish", finish_and_advance)
     with test_db() as db:
         db.add(EmployeeLog(action="owner_login_session_create", detail=json.dumps({
             "operation_id": uuid.uuid4().hex,

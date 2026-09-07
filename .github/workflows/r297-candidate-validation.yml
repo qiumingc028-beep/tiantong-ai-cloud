@@ -72,12 +72,14 @@ jobs:
             tests/test_r297_acceptance_status.py \
             tests/test_r297_owner_audit_saga_contract.py \
             tests/test_r297_owner_operation_causality.py \
+            tests/test_r297_owner_unknown_recovery.py \
             tests/test_r297_owner_login_session_contract.py \
             tests/test_r297_jd_session_contract_vectors.py \
             tests/test_r291_jd_workbench_cloud.py \
             tests/test_r297_reliable_queue.py \
             tests/test_r297_dataset_validation.py \
             tests/test_r297_dataset_required_fields.py \
+            tests/test_r297_empty_dataset_evidence.py \
             tests/test_r297_runtime_trust_boundaries.py \
             tests/test_r297_jd_collector_business_idempotency.py \
             tests/test_r297_reliable_queue_postgresql.py \

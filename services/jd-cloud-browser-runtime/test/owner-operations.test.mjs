@@ -234,3 +234,47 @@ test('controlled container authorization allows only the mapped host gateway and
   process.env.JD_BROWSER_SESSION_AUTH_URL = 'http://host.docker.internal:18000/api/jd-workbench/internal/browser-session-authorize';
   assert.throws(f.start, /JD_SESSION_AUTH_DESTINATION_INVALID/);
 });
+
+for (const fault of ['rename', 'file-sync', 'directory-sync']) {
+  test(`recover ${fault} after the effect using the same operation without executing again`, async t => {
+    let effects = 0;
+    let injected = false;
+    const f = await fixture(t, {launchContext: async () => {
+      effects++;
+      return {route: async () => {}, close: async () => {}, storageState: async () => ({cookies: [], origins: []})};
+    }});
+    const id = crypto.randomBytes(16).toString('hex');
+    const originalRename = fs.rename, originalOpen = fs.open;
+    t.mock.method(fs, 'rename', async (...args) => {
+      if (fault === 'rename' && effects && !injected && args[1].endsWith(`${id}.json`)) {
+        injected = true; throw new Error('controlled rename failure');
+      }
+      return originalRename(...args);
+    });
+    t.mock.method(fs, 'open', async (...args) => {
+      const handle = await originalOpen(...args);
+      const matches = fault === 'file-sync' ? String(args[0]).includes(`${id}.json.`) :
+        fault === 'directory-sync' && String(args[0]).endsWith('/owner-operations');
+      if (effects && !injected && matches) {
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => { if (!injected) { injected = true; throw new Error('controlled fsync failure'); } return sync(); };
+      }
+      return handle;
+    });
+    let app = f.start();
+    const request = {method: 'POST', url: '/internal/jd-browser/sessions', payload: f.scope,
+      headers: {...f.headers, 'x-owner-operation-id': id}};
+    assert.equal((await app.inject(request)).statusCode, 503);
+    assert.equal(injected, true);
+    assert.equal((await app.inject(request)).statusCode, 409);
+    assert.equal(effects, 1);
+    await app.close();
+    app = f.start();
+    const receipt = await app.inject({method: 'GET', url: `/internal/jd-browser/operations/${id}`, headers: f.headers});
+    assert.equal(receipt.statusCode, 200);
+    assert.equal(receipt.json().operation_id, id);
+    assert.equal(receipt.json().status, 'SUCCESS');
+    assert.equal((await app.inject(request)).statusCode, 409);
+    assert.equal(effects, 1);
+  });
+}
