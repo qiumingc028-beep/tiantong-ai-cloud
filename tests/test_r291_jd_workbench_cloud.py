@@ -82,7 +82,7 @@ def test_browser_runtime_control_scope_must_match_an_active_database_store(clien
         assert client.post(
             "/api/jd-workbench/internal/browser-session-authorize",
             headers={"x-internal-token": token}, json={**scope, "platform": "tmall"},
-        ).status_code == 404
+        ).status_code == 400  # Unsupported platform is invalid scope, not a database lookup.
         assert client.post(
             "/api/jd-workbench/internal/browser-session-authorize",
             headers={"x-internal-token": token}, json={**scope, "store_id": foreign_store_id},

@@ -627,9 +627,11 @@ jobs:
         timeout-minutes: 30
         env:
           APP_ENV: acceptance
+          R297_SIGNED_EVENT_BUNDLE: /tmp/r297-signed-event-bundle.json
         run: |
           PYTHONPATH=. python ops/r297_process_acceptance.py /tmp/r297-process-acceptance \
-            --runtime-image "$S12_JD_RUNTIME_IMAGE"
+            --runtime-image "$S12_JD_RUNTIME_IMAGE" \
+            --signed-event-bundle "$R297_SIGNED_EVENT_BUNDLE"
 
       - name: Upload R297 process acceptance evidence
         uses: actions/upload-artifact@v7

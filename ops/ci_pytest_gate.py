@@ -6,7 +6,10 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
+
+from ops.r297_ci_redact import _redact_text, redact
 
 
 def pytest_collection_finish(session):
@@ -36,10 +39,30 @@ def main() -> int:
     manifest = output / "collected-nodeids.json"
     report = output / "junit.xml"
     env = dict(os.environ, CI_PYTEST_COLLECTION_MANIFEST=str(manifest))
-    result = subprocess.run([
-        sys.executable, "-m", "pytest", "-v", "tests/", "--tb=short", "--show-capture=no",
-        "-p", "ops.ci_pytest_gate", f"--junitxml={report}",
-    ], env=env, check=False)
+    print("CI_PYTEST_STARTED=ALL_COLLECTED_TESTS", flush=True)
+    # Failure tracebacks can include credentials. Do not send raw subprocess
+    # output to Actions; sanitize it before either logging or artifact upload.
+    # The raw JUnit file is outside the upload directory, including if a job is
+    # cancelled before pytest finishes. Only a sanitized copy may be published.
+    with tempfile.TemporaryDirectory(prefix="r297-ci-pytest-") as raw_directory:
+        raw_report = Path(raw_directory) / "junit.xml"
+        result = subprocess.run([
+            sys.executable, "-m", "pytest", "-v", "tests/", "--tb=short", "--show-capture=no",
+            "-p", "ops.ci_pytest_gate", f"--junitxml={raw_report}",
+        ], env=env, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+           text=True, encoding="utf-8", errors="replace")
+        try:
+            safe_output = _redact_text(result.stdout or "")
+            (output / "pytest.log").write_text(safe_output, encoding="utf-8")
+            if raw_report.exists():
+                redact(raw_report)
+                report.write_text(raw_report.read_text(encoding="utf-8"), encoding="utf-8")
+        except Exception:
+            report.unlink(missing_ok=True)
+            (output / "pytest.log").unlink(missing_ok=True)
+            print("CI_PYTEST_RESULT=BLOCK (REPORT_SANITIZATION_FAILED)")
+            return 1
+    print(safe_output, end="", flush=True)
     try:
         totals = validate_report(report, manifest)
     except (OSError, ValueError, ET.ParseError) as exc:
