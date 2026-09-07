@@ -9,6 +9,7 @@ on:
       - "feature/**"
       - "codex/r291-*"
       - codex/r297-cloud-integration
+      - codex/r297-takeover-infra-evidence
   pull_request:
     branches:
       - main
@@ -210,19 +211,17 @@ jobs:
           cancelled=0
           cleanup_done=0
           redacted_runtime_logs() {
-            timeout 1s docker logs --tail 200 "$container" 2>&1 | \
+            runtime_log="$(mktemp "$RUNNER_TEMP/r297-runtime-container.XXXXXX")"
+            timeout 1s docker logs --tail 200 "$container" >"$runtime_log" 2>&1 || true
+            if R297_REDACT_EXACT_ENV_NAMES=R_CAPTURE,R_CONTROL,R_TICKET_KEY,R_COOKIE_KEY,R_MASTER \
               R_CAPTURE="$capture_token" R_CONTROL="$control_token" \
               R_TICKET_KEY="$viewer_ticket_key" R_COOKIE_KEY="$viewer_cookie_key" \
-              R_MASTER="$master_key" python -c '
-          import os, sys
-          from ops.r297_ci_redact import _redact_text
-          text = sys.stdin.read()
-          for name in ("R_CAPTURE", "R_CONTROL", "R_TICKET_KEY", "R_COOKIE_KEY", "R_MASTER"):
-              value = os.environ.get(name)
-              if value:
-                  text = text.replace(value, "[REDACTED]")
-          sys.stderr.write(_redact_text(text))
-          ' || true
+              R_MASTER="$master_key" python ops/r297_ci_redact.py "$runtime_log"; then
+              cat "$runtime_log" >&2
+            else
+              echo "RUNTIME_LOG_REDACTION_FAILED" >&2
+            fi
+            rm -f "$runtime_log"
           }
           cleanup() {
             test "$cleanup_done" = 0 || return

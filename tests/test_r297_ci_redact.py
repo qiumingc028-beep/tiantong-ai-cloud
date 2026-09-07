@@ -151,3 +151,49 @@ def test_ci_redactor_handles_driver_urls_and_unquoted_private_key_blocks(tmp_pat
     for value in ("DBVALUE", "REDISVALUE", "SYNTHETICKEYBODY"):
         assert value not in result
     assert "NEXT_DIAGNOSTIC=failed" in result
+
+
+def test_ci_redactor_removes_exact_ephemeral_values_from_runtime_logs(tmp_path, monkeypatch):
+    artifact = tmp_path / "runtime.log"
+    artifact.write_text("opaque-runtime-value\n", encoding="utf-8")
+    monkeypatch.setenv("R297_REDACT_EXACT_ENV_NAMES", "R_CAPTURE")
+    monkeypatch.setenv("R_CAPTURE", "opaque-runtime-value")
+
+    redact(artifact)
+
+    assert artifact.read_text(encoding="utf-8") == "[REDACTED]\n"
+
+
+def test_runtime_diagnostic_failure_keeps_raw_log_private_and_unpublished(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    import textwrap
+
+    workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
+    declaration = "          redacted_runtime_logs() {"
+    function = textwrap.dedent(declaration + workflow.split(declaration, 1)[1].split("          cleanup() {", 1)[0])
+    script = r'''
+set -euo pipefail
+umask 022
+container=fixture
+capture_token=opaque-runtime-value
+control_token=fixture-control
+viewer_ticket_key=fixture-ticket
+viewer_cookie_key=fixture-cookie
+master_key=fixture-master
+timeout() { printf '%s\n' "$capture_token"; }
+python() {
+  "$TEST_PYTHON" -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))' "$runtime_log"
+  return 19
+}
+'''
+    result = subprocess.run(["bash", "-c", script + function + "\nredacted_runtime_logs\n"],
+        env={**os.environ, "RUNNER_TEMP": str(tmp_path), "TEST_PYTHON": sys.executable},
+        text=True, capture_output=True)
+    assert result.returncode == 0
+    assert result.stdout == "0o600\n"
+    assert result.stderr == "RUNTIME_LOG_REDACTION_FAILED\n"
+    assert "opaque-runtime-value" not in result.stdout + result.stderr
+    assert list(tmp_path.iterdir()) == []
