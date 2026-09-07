@@ -177,6 +177,8 @@ test('default authorizer pins its credential destination and bounds unknown resu
     return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), {once: true}));
   });
   const app = f.start();
+  // AbortSignal.timeout is unref'ed; retain the real server lifecycle while awaiting it.
+  await app.listen({port: 0, host: '127.0.0.1'});
   const response = await app.inject({method: 'POST', url: '/internal/jd-browser/sessions', payload: f.scope,
     headers: {...f.headers, 'x-owner-operation-id': crypto.randomBytes(16).toString('hex')}});
   assert.equal(response.statusCode, 403);
