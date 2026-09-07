@@ -113,6 +113,35 @@ def test_native_pagehide_artifact_is_raw_input_not_observer_result(tmp_path):
     assert "scheduler_continues" not in result
 
 
+def test_page_receiver_requires_run_id_derived_from_bound_workflow_run(monkeypatch):
+    from ops.r297_authenticated_observer import produce_page_event_receiver
+
+    raw = {
+        "artifact_evidence_sha256": "1" * 64,
+        "artifact_archive_sha256": "2" * 64,
+        "artifact_id": 9965082823,
+        "artifact_name": "r297-native-pagehide-test",
+        "workflow_run_id": 33949515935,
+        "event_type": "web_page_close",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "release_sha": "0850641e7b624109e7a30456889fdbd2331d8d75",
+        "store_id": 7,
+    }
+    scope = {
+        "namespace": "r297-acceptance-0850641e7b62",
+        "tenant_id": 1,
+        "company_id": 2,
+        "store_id": 7,
+        "platform": "jd",
+        "release_sha": raw["release_sha"],
+        "run_id": "caller-selected-run-id",
+    }
+    monkeypatch.setenv("APP_ENV", "test")
+
+    with pytest.raises(ValueError, match="workflow run"):
+        produce_page_event_receiver(raw, scope)
+
+
 def test_native_pagehide_artifact_rejects_cross_head(tmp_path):
     from ops.r297_authenticated_observer import load_native_pagehide_artifact
 
@@ -243,7 +272,7 @@ def test_page_event_receiver_signs_raw_artifact_with_separate_test_key(monkeypat
     scope = {
         "namespace": "r297-acceptance-0850641e7b62", "tenant_id": 1, "company_id": 2,
         "store_id": 7, "platform": "jd", "release_sha": "0850641e7b624109e7a30456889fdbd2331d8d75",
-        "run_id": "r297-run-20260907-0001",
+        "run_id": "r297-gh-33949515935",
     }
     event = produce_page_event_receiver({
         "event_type": "web_page_close", "observed_at": "2026-09-05T07:12:06.709Z",

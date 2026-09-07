@@ -51,6 +51,12 @@ _BINDING_FIELDS = {
 }
 
 
+def acceptance_run_id(workflow_run_id: int) -> str:
+    if type(workflow_run_id) is not int or workflow_run_id <= 0:
+        raise ValueError("pagehide workflow run id invalid")
+    return f"r297-gh-{workflow_run_id}"
+
+
 def _read_binding_file(path: Path, *, environment: str) -> bytes:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
@@ -257,8 +263,9 @@ def produce_page_event_receiver(raw_artifact: dict, authenticated_scope: dict) -
         raw_artifact.get("event_type") != "web_page_close"
         or raw_artifact.get("store_id") != authenticated_scope["store_id"]
         or raw_artifact.get("release_sha") != authenticated_scope["release_sha"]
+        or authenticated_scope["run_id"] != acceptance_run_id(raw_artifact.get("workflow_run_id"))
     ):
-        raise ValueError("pagehide artifact scope mismatch")
+        raise ValueError("pagehide artifact scope or workflow run mismatch")
     manifest, _ = load_trust_manifest(environment=environment)
     event = {
         **authenticated_scope,
@@ -412,6 +419,8 @@ def main() -> int:
             args.artifact_root, expected_release_sha=args.release_sha,
             binding=binding, archive_path=args.artifact_archive,
         )
+        if scope["run_id"] != acceptance_run_id(raw["workflow_run_id"]):
+            raise ValueError("pagehide artifact workflow run mismatch")
         payload = {
             "closed": True, "source": "browser_pagehide",
             **{field: raw[field] for field in (
