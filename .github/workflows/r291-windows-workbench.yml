@@ -27,6 +27,7 @@ on:
       - codex/r297-cloud-integration
       - codex/r297-jd-multistore-autosync
       - codex/r297-release-gates
+      - codex/r297-takeover-infra-evidence-r2
     paths:
       - desktop/jd-workbench/**
       - tests/test_r291_jd_workbench_client_static.py
@@ -36,6 +37,7 @@ on:
       - ops/r297_windows_event_signer.py
       - ops/r297_evidence_preflight.py
       - ops/r297_evidence_events.py
+      - ops/r297_trusted_windows_observer.py
       - .github/workflows/r291-windows-workbench.yml
 
 permissions:

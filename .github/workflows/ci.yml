@@ -9,7 +9,7 @@ on:
       - "feature/**"
       - "codex/r291-*"
       - codex/r297-cloud-integration
-      - codex/r297-takeover-infra-evidence
+      - codex/r297-takeover-infra-evidence-r2
   pull_request:
     branches:
       - main
