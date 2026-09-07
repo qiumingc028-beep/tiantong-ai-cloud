@@ -428,6 +428,18 @@ test('capture rejects non-object rows in list datasets', async (t) => {
   assert.deepEqual(response.json(), { status: 'JD_DATASET_NOT_FOUND', data: {} });
 });
 
+test('missing dataset selector cannot certify an empty dataset', async (t) => {
+  const { app } = await controlledCaptureApp(t, {});
+  const response = await app.inject({
+    method: 'POST',
+    url: '/internal/jd-browser/capture',
+    headers: { 'x-internal-token': captureToken },
+    payload: { scope: contract.valid_scope, dataset: 'orders' }
+  });
+  assert.equal(response.statusCode, 422);
+  assert.deepEqual(response.json(), { status: 'JD_DATASET_NOT_FOUND', data: {} });
+});
+
 for (const vector of contract.capture_cases.filter(({ name }) => name !== 'valid_metrics')) {
   test(`capture contract: ${vector.name}`, async (t) => {
     const { app } = await controlledCaptureApp(t);
