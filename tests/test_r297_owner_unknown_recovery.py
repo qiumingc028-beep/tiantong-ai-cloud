@@ -100,6 +100,40 @@ def test_lost_success_response_then_reload_requires_confirming_old_operation_bef
     assert calls == [old_key, new_key]
 
 
+@pytest.mark.parametrize("stale_field", ("next_recovery_at", "next_manual_check_at"))
+def test_manual_check_cannot_steal_an_active_automatic_claim(client, owner_headers, test_db, monkeypatch, stale_field):
+    clock = api._now()
+    monkeypatch.setattr(api, "_now", lambda: clock)
+    key, claim = secrets.token_hex(16), secrets.token_hex(16)
+    with test_db() as db:
+        db.add(EmployeeLog(user_id=1, store_id=1, action=OPERATIONS[0][2], detail=json.dumps({
+            **SCOPE, "operation": OPERATIONS[0][2], "operation_id": key, "status": "PENDING",
+            "claim_token": claim, "claim_until": (clock + timedelta(seconds=60)).isoformat(),
+            stale_field: (clock - timedelta(seconds=1)).isoformat(),
+            "recovery_deadline": (clock + timedelta(minutes=15)).isoformat(),
+        })))
+        db.commit()
+    calls = []
+    monkeypatch.setattr(api, "_runtime_call", lambda *args, **kwargs: calls.append(args) or {
+        "operation_id": key, "operation": OPERATIONS[0][2], "session_id": SID,
+        "status": "SUCCESS", "response_sha256": "a" * 64,
+    })
+    path = f"/api/jd-workbench/stores/1/login-operations/{key}"
+    query = client.get(path, headers=owner_headers)
+    blocked = client.post(path + "/reconcile", headers=owner_headers, json={})
+    assert blocked.status_code == 409
+    assert query.json()["retry_after_seconds"] == 60
+    assert calls == []
+    with test_db() as db:
+        assert json.loads(db.query(EmployeeLog).filter_by(action=OPERATIONS[0][2]).one().detail)["claim_token"] == claim
+    clock += timedelta(seconds=61)
+    recovered = client.post(path + "/reconcile", headers=owner_headers, json={})
+    assert recovered.status_code == 200
+    assert recovered.json()["status"] == "SUCCESS"
+    assert recovered.json()["retry_after_seconds"] == 0
+    assert len(calls) == 1
+
+
 def test_browser_retry_retains_the_logical_operation_key_without_secret_storage():
     import subprocess
 

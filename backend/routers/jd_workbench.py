@@ -462,9 +462,17 @@ def _saga_finish(db: Session, row: EmployeeLog, status: str) -> None:
         raise HTTPException(status_code=503, detail="审计状态暂不可用") from exc
 
 
+def _owner_retry_after(detail: dict) -> int:
+    if detail.get("status") == "SUCCESS":
+        return 0
+    now = _now()
+    deadlines = [_aware(datetime.fromisoformat(detail[key]))
+                 for key in ("claim_until", "next_recovery_at", "next_manual_check_at") if detail.get(key)]
+    return max(0, math.ceil((max(deadlines, default=now) - now).total_seconds()))
+
+
 def _owner_operation_view(detail: dict, store_id: int) -> dict:
-    due = detail.get("next_manual_check_at") or detail.get("next_recovery_at") or detail.get("claim_until")
-    retry_after = max(0, int((_aware(datetime.fromisoformat(due)) - _now()).total_seconds())) if due else 0
+    retry_after = _owner_retry_after(detail)
     return {"operation_id": detail.get("operation_id"), "operation": detail.get("operation"),
             "status": "UNKNOWN" if detail.get("status") in {"PENDING", "UNKNOWN"} else detail.get("status"),
             "recovery_status": detail.get("status"), "retry_after_seconds": retry_after,
@@ -512,8 +520,7 @@ async def owner_operation_result(store_id: int, operation_id: str, request: Requ
         return _owner_operation_view(detail, store.id)
     if await _json_body(request):
         raise _generic_bad_request()
-    due = detail.get("next_manual_check_at") or detail.get("next_recovery_at") or detail.get("claim_until")
-    if due and _aware(datetime.fromisoformat(due)) > _now():
+    if _owner_retry_after(detail) > 0:
         db.rollback()
         raise HTTPException(status_code=409, detail=_owner_operation_view(detail, store.id))
     detail.update(status="PENDING", claim_token=uuid.uuid4().hex, claim_until=(_now() + timedelta(seconds=60)).isoformat(),
