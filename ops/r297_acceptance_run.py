@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Issue and consume one-use R297 acceptance challenges on a protected host."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import stat
+
+
+_SCOPE_FIELDS = {"namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha"}
+
+
+_RUN_LIFETIME = timedelta(minutes=5)
+
+
+def _validate_parent(path: Path) -> None:
+    parent = path.parent.lstat()
+    if (
+        path.parent.is_symlink() or not stat.S_ISDIR(parent.st_mode)
+        or parent.st_uid != os.geteuid() or stat.S_IMODE(parent.st_mode) != 0o700
+    ):
+        raise RuntimeError("acceptance run ledger directory permissions invalid")
+
+
+def _open_protected(path: Path) -> int:
+    descriptor = os.open(path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1
+    ):
+        os.close(descriptor)
+        raise RuntimeError("acceptance run ledger permissions invalid")
+    return descriptor
+
+
+def _update(path: Path, mutate):
+    _validate_parent(path)
+    lock_descriptor = _open_protected(Path(f"{path}.lock"))
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        descriptor = _open_protected(path)
+        try:
+            with os.fdopen(os.dup(descriptor), "r", encoding="utf-8") as handle:
+                ledger = json.load(handle)
+        finally:
+            os.close(descriptor)
+        if not isinstance(ledger, dict) or set(ledger) != {"schema_version", "runs"} or ledger["schema_version"] != 1 or not isinstance(ledger["runs"], list):
+            raise ValueError("acceptance run ledger invalid")
+        result = mutate(ledger["runs"])
+        content = (json.dumps(ledger, sort_keys=True) + "\n").encode()
+        temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
+        temporary_descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            remaining = memoryview(content)
+            while remaining:
+                written = os.write(temporary_descriptor, remaining)
+                if written <= 0:
+                    raise OSError("acceptance run ledger short write")
+                remaining = remaining[written:]
+            os.fsync(temporary_descriptor)
+            os.close(temporary_descriptor)
+            temporary_descriptor = -1
+            os.replace(temporary, path)
+            directory_descriptor = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        finally:
+            if temporary_descriptor >= 0:
+                os.close(temporary_descriptor)
+            temporary.unlink(missing_ok=True)
+        return result
+    finally:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)
+
+
+def _require_live(record: dict, now: datetime) -> None:
+    try:
+        issued_at = datetime.fromisoformat(record["issued_at"])
+        if issued_at.tzinfo is None:
+            raise ValueError
+        issued_at = issued_at.astimezone(timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("acceptance run issue time invalid") from None
+    if issued_at > now + timedelta(seconds=30) or now - issued_at > _RUN_LIFETIME:
+        raise ValueError("acceptance run expired")
+
+
+def issue_acceptance_run(
+    ledger: Path, *, scope: dict, source_workflow_run_id: int,
+    run_attempt: int, now: datetime | None = None,
+) -> dict:
+    if (
+        set(scope) != _SCOPE_FIELDS or not re.fullmatch(r"[0-9a-f]{40}", str(scope.get("release_sha", "")))
+        or type(source_workflow_run_id) is not int or source_workflow_run_id <= 0
+        or type(run_attempt) is not int or run_attempt <= 0
+    ):
+        raise ValueError("acceptance run binding invalid")
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    challenge = secrets.token_urlsafe(32)
+    run_id = f"r297-{run_attempt}-{hashlib.sha256(challenge.encode()).hexdigest()[:24]}"
+    record = {
+        **scope, "source_workflow_run_id": source_workflow_run_id,
+        "run_id": run_id, "run_attempt": run_attempt, "challenge": challenge,
+        "issued_at": now.isoformat(), "consumed_at": None, "state": "issued",
+    }
+
+    def mutate(runs):
+        matches = [
+            item for item in runs
+            if isinstance(item, dict) and item.get("source_workflow_run_id") == source_workflow_run_id
+        ]
+        if matches:
+            existing = matches[0]
+            same_binding = (
+                len(matches) == 1 and existing.get("state") == "issued"
+                and existing.get("run_attempt") == run_attempt
+                and all(existing.get(field) == scope[field] for field in _SCOPE_FIELDS)
+            )
+            if not same_binding:
+                raise ValueError("source workflow run already consumed")
+            _require_live(existing, now)
+            return existing
+        runs.append(record)
+        return record
+
+    return _update(ledger, mutate)
+
+
+def consume_acceptance_run(
+    ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
+    now: datetime | None = None,
+) -> None:
+    required = _SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}
+    if set(expected_scope) != required:
+        raise ValueError("acceptance run binding invalid")
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+    def mutate(runs):
+        matches = [item for item in runs if isinstance(item, dict) and item.get("run_id") == expected_scope["run_id"]]
+        if len(matches) != 1 or matches[0].get("state") != "issued":
+            raise ValueError("acceptance run missing or consumed")
+        record = matches[0]
+        _require_live(record, now)
+        if record.get("source_workflow_run_id") != source_workflow_run_id:
+            raise ValueError("acceptance source workflow mismatch")
+        for field in required:
+            if type(record.get(field)) is not type(expected_scope[field]) or record.get(field) != expected_scope[field]:
+                raise ValueError("acceptance run scope mismatch")
+        record["state"] = "consumed"
+        record["consumed_at"] = now.isoformat()
+
+    _update(ledger, mutate)
+
+
+def validate_acceptance_run(
+    ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
+    now: datetime | None = None,
+) -> None:
+    required = _SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}
+    if set(expected_scope) != required:
+        raise ValueError("acceptance run binding invalid")
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    _validate_parent(ledger)
+    lock_descriptor = _open_protected(Path(f"{ledger}.lock"))
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_SH)
+        descriptor = _open_protected(ledger)
+        try:
+            with os.fdopen(os.dup(descriptor), "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        finally:
+            os.close(descriptor)
+        if (
+            not isinstance(payload, dict) or set(payload) != {"schema_version", "runs"}
+            or payload["schema_version"] != 1 or not isinstance(payload["runs"], list)
+        ):
+            raise ValueError("acceptance run ledger invalid")
+        runs = payload["runs"]
+        matches = [item for item in runs or [] if isinstance(item, dict) and item.get("run_id") == expected_scope["run_id"]]
+        if len(matches) != 1 or matches[0].get("state") != "issued":
+            raise ValueError("acceptance run missing or consumed")
+        _require_live(matches[0], now)
+        if matches[0].get("source_workflow_run_id") != source_workflow_run_id:
+            raise ValueError("acceptance source workflow mismatch")
+        for field in required:
+            if type(matches[0].get(field)) is not type(expected_scope[field]) or matches[0].get(field) != expected_scope[field]:
+                raise ValueError("acceptance run scope mismatch")
+    finally:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)
+
+
+def main() -> int:
+    import argparse
+    from ops.r297_evidence_events import write_sha256_bound_file
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("ledger", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--source-workflow-run-id", type=int, required=True)
+    parser.add_argument("--run-attempt", type=int, required=True)
+    parser.add_argument("--namespace", required=True)
+    parser.add_argument("--tenant-id", type=int, required=True)
+    parser.add_argument("--company-id", type=int, required=True)
+    parser.add_argument("--store-id", type=int, required=True)
+    parser.add_argument("--platform", required=True)
+    parser.add_argument("--release-sha", required=True)
+    args = parser.parse_args()
+    record = issue_acceptance_run(
+        args.ledger,
+        scope={
+            "namespace": args.namespace, "tenant_id": args.tenant_id,
+            "company_id": args.company_id, "store_id": args.store_id,
+            "platform": args.platform, "release_sha": args.release_sha,
+        },
+        source_workflow_run_id=args.source_workflow_run_id,
+        run_attempt=args.run_attempt,
+    )
+    digest = write_sha256_bound_file(
+        args.output, (json.dumps(record, sort_keys=True) + "\n").encode(),
+    )
+    print(f"R297_ACCEPTANCE_RUN_BINDING={args.output}")
+    print(f"R297_ACCEPTANCE_RUN_BINDING_SHA256={digest}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

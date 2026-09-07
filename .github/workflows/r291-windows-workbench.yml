@@ -128,6 +128,12 @@ jobs:
             [System.Text.UTF8Encoding]::new($false)
           )
 
+      - name: Require independent trusted Windows signer
+        shell: pwsh
+        working-directory: .
+        run: |
+          throw 'R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED'
+
       - name: Materialize protected Windows evidence trust material
         shell: pwsh
         working-directory: .

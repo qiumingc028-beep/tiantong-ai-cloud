@@ -112,3 +112,13 @@ def test_r297_windows_acceptance_signs_only_after_real_electron_exit():
     assert "R297_WINDOWS_ELECTRON_EXIT_EVENT.json.sha256" in workflow
     assert "ops.r297_evidence_preflight --role windows_runner" in workflow
     assert "process_is_running(process_id)" in signer
+
+
+def test_candidate_workflow_fails_before_windows_signing_key_is_exposed():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    candidate = workflow.split("  build-windows:", 1)[1]
+
+    assert "R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED" in candidate
+    assert candidate.index("R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED") < candidate.index(
+        "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64"
+    )

@@ -2,6 +2,30 @@
 
 Status: BLOCK. This document grants no main merge, production deployment, or release approval.
 
+## Integration review of role ⑤ increment
+
+Source `dda5460aae3c7cb3b3c165e8f6b63b4352da8f4d` is applied incrementally to
+`acd7cb1ff63ff8ed6cd7e71eaa537d272bc135f3`, not by merging its parent history.
+Owner UNKNOWN recovery, verified empty datasets and worker fencing remain unchanged.
+Bundle construction now validates the protected run without consuming it; only formal
+verification consumes the run. Runtime diagnostics identify an exited process and redact
+logs, but do not establish or repair the health failure's root cause (owned by role ⑤).
+
+Formal orchestration still has these explicit code/wiring blockers:
+
+- Run consumption and the separate nonce ledger/output publication are not one recoverable
+  transaction. A crash after consumption fails closed but cannot yet resume that acceptance.
+- The current run-ledger reader requires its writer's UID and writable 0600 files. An
+  independently isolated Receiver needs a trusted read-only challenge interface; do not
+  grant it the orchestrator/verifier's writable identity to make this code pass.
+- The five-minute run/event limit is not proven compatible with both long-cycle observations.
+  Do not simply widen the freshness limit or call controlled tests real acceptance.
+- The candidate Windows job stops before signing-key materialization. A pinned independent
+  signer and trusted observation resource are still absent; adding Secrets is not the fix.
+
+Role ⑤ must supply the remaining protected orchestration design/fixes and actual container
+failure diagnostics. These blockers are not waived by integrating this reviewable candidate.
+
 ## 2026-09-07 read-only environment observation
 
 - Candidate source inspected: `402b078fadcfaecb07472813738c56f3c4e47b37`.
@@ -14,6 +38,24 @@ Status: BLOCK. This document grants no main merge, production deployment, or rel
 - The protected trust manifest, pagehide binding, their sidecars and the persistent nonce
   ledger were absent from the isolated host. No candidate deployment or evidence run was
   attempted.
+- Role ⑤ later reported the following environment changes in its handoff; the integrator
+  has not reverified them and they are not acceptance evidence for the current HEAD.
+  In an earlier separately authorized environment-repair run, loopback port 18443 originally
+  presented an expired internal self-signed certificate whose
+  hostname did not match `internal.tiantongai.com`. On 2026-09-07 it was replaced, with a
+  rollback copy retained, by the host's existing Let's Encrypt certificate for
+  `internal.tiantongai.com`; verified HTTPS returned 200 and Nginx remained healthy. This did
+  not deploy candidate application code. This task did not rotate or overwrite TLS material.
+- Three distinct acceptance signing keys were generated. The Receiver and Observer private
+  keys are installed under separate non-login identities with mode 0400; the verifier cannot
+  read either key. The root-owned trust manifest and sidecar are mode 0444, and the verifier's
+  persistent nonce ledger and lock are mode 0600 in a mode-0700 directory. The Windows private
+  key remains pending protected GitHub Environment provisioning.
+- The same-HEAD pagehide binding remains absent until the final RC artifact exists. A proposed
+  Observer role was not widened to all database tables: the old 0042 database lacks the three
+  candidate scheduler tables, so the partial role was removed and must be created after the RC
+  migration with SELECT limited to `stores`, `jd_workbench_sync_policies`, and `jd_sync_logs`.
+  No candidate deployment or evidence run was attempted.
 - Same-head native pagehide artifacts exist for Actions runs `34071629609` (artifact
   `10000690778`) and `34071628655` (artifact `10000688691`). They remain unsigned raw inputs,
   not formal Observer or Process evidence.
@@ -74,6 +116,12 @@ After planned code convergence, role ⑥ registers RC_HEAD separately from relea
 The GitHub connection was verified on 2026-09-07 with create/list/delete probes for both an
 Environment Secret and an Environment Variable. It can administer `r297-controlled-canary`.
 No formal value was available, so no required Secret or scope Variable was invented or set.
+- Subsequent role ⑤ handoff (not reverified by the integrator) reports scope variables for namespace
+`r297-controlled-canary` and tenant/company/store `1/1/3`. The environment still has no
+required reviewer or branch policy, so signing keys were not uploaded into an unprotected
+environment. If the selected policy forbids self-review, first invite one trusted collaborator
+who can review this Environment; GitHub does not universally require a second reviewer.
+Restrict deployments to the integration and evidence branches before provisioning Secrets.
 
 Open repository Settings → Environments → `r297-controlled-canary` → Add environment secret.
 Use that Environment, not a repository-wide secret. The existing Windows workflow already
@@ -89,9 +137,13 @@ reads these exact names:
 | `R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64` | Base64 of the exact Backend server certificate DER | Verify certificate chain, hostname and certificate binding |
 
 Also set Environment variables `R297_EVIDENCE_NAMESPACE`, `R297_EVIDENCE_TENANT_ID`,
-`R297_EVIDENCE_COMPANY_ID`, `R297_EVIDENCE_STORE_ID`, and a fresh per-execution
-`R297_ACCEPTANCE_RUN_ID` to the actual authorized acceptance scope. Platform is fixed to
-`jd`. Do not invent IDs, reuse a run ID, or use a production Owner token.
+`R297_EVIDENCE_COMPANY_ID`, and `R297_EVIDENCE_STORE_ID` to the actual authorized acceptance
+scope. Platform is fixed to `jd`. A protected orchestrator must issue a fresh `run_id`,
+positive `run_attempt`, and random challenge in the persistent run ledger, bound once to the
+pagehide workflow run, candidate SHA, and complete scope. Every producer validates that same
+record and the verifier atomically consumes it. Do not use static Environment run IDs, invent
+IDs, reuse a source run, or use a production Owner token. Pull-request and push runs retain
+the build/security checks but do not consume protected material or claim formal acceptance.
 
 Protect the Environment with reviewed branch/deployment rules and required review before
 releasing real material to a candidate. No secret belongs in an issue, PR body, workflow
@@ -110,6 +162,7 @@ mount a file or produce an event.
 | Observer | `R297_OBSERVER_PRIVATE_KEY_PATH` | Mount a different Observer private PEM only in the Observer process |
 | Observer | `R297_OBSERVER_DATABASE_URL` | Inject a PostgreSQL URL for the candidate DB's SELECT-only role |
 | verifier | `R297_EVIDENCE_NONCE_LEDGER` | Supply a persistent, writable nonce ledger outside the disposable output directory |
+| orchestrator/verifier | `R297_ACCEPTANCE_RUN_LEDGER` | Persist issued/consumed run challenges outside disposable jobs |
 | all roles | `/etc/tiantong/r297-evidence-trust-manifest.json` and `.sha256` | Administrator provisions the approved root-owned, read-only trust anchor |
 | page receiver | `/etc/tiantong/r297-pagehide-artifact-binding.json` and `.sha256` | Pin the newly generated candidate artifact's run/SHA/archive/content hashes |
 
@@ -132,6 +185,11 @@ The page receiver, two database observations (after page close and after Electro
 Windows runner must be orchestrated against the same live acceptance run before teardown.
 This orchestration and final material wiring are still BLOCK; merely adding Secrets cannot
 certify it. `signed-event-bundle` is generated evidence, not a manually authored Secret.
+The current candidate Windows workflow is not an independent signing boundary because it
+checks out candidate code while holding the signing key. Formal signing must move to a
+protected fixed `SIGNER_SHA` and a trusted Windows observation resource that executes no
+candidate script or downloaded executable. Until then, do not give the candidate job the
+Windows private key or call its output formal Windows evidence.
 
 Actual JD login requires the Owner to use the controlled public login/noVNC flow, including
 any required verification. Do not submit the JD password/cookies to ChatGPT or GitHub.
