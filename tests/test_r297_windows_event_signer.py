@@ -33,6 +33,8 @@ def _scope():
         "platform": "jd",
         "release_sha": "3147ef047f4664965905f4127e020f6ce15323f0",
         "run_id": "r297-run-20260907-0001",
+        "run_attempt": 1,
+        "challenge": "challenge-value-00000001",
     }
 
 
@@ -135,7 +137,8 @@ def test_windows_signer_cli_recovers_body_only_publish_crash(monkeypatch, tmp_pa
         "--namespace", scope["namespace"], "--tenant-id", str(scope["tenant_id"]),
         "--company-id", str(scope["company_id"]), "--store-id", str(scope["store_id"]),
         "--platform", scope["platform"], "--release-sha", scope["release_sha"],
-        "--run-id", scope["run_id"], "--process-id", "4201",
+        "--run-id", scope["run_id"], "--run-attempt", str(scope["run_attempt"]),
+        "--challenge", scope["challenge"], "--process-id", "4201",
         "--process-started-at", started.isoformat(),
     ])
 

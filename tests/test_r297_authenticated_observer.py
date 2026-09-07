@@ -28,6 +28,8 @@ def _page_event(observed_at: datetime) -> dict:
         "platform": "jd",
         "release_sha": "0850641e7b624109e7a30456889fdbd2331d8d75",
         "run_id": "r297-run-20260907-0001",
+        "run_attempt": 1,
+        "challenge": "challenge-value-00000001",
         "event_type": "web_page_close",
         "issuer": "page_event_receiver",
         "observed_at": observed_at.isoformat(),
@@ -55,6 +57,8 @@ def _electron_event(observed_at: datetime) -> dict:
         "platform": "jd",
         "release_sha": "0850641e7b624109e7a30456889fdbd2331d8d75",
         "run_id": "r297-run-20260907-0001",
+        "run_attempt": 1,
+        "challenge": "challenge-value-00000001",
         "event_type": "electron_exit",
         "issuer": "windows_runner",
         "observed_at": observed_at.isoformat(),
@@ -111,6 +115,65 @@ def test_native_pagehide_artifact_is_raw_input_not_observer_result(tmp_path):
         "store_id": 7,
     }
     assert "scheduler_continues" not in result
+
+
+def test_page_receiver_requires_protected_run_challenge_not_source_run_id(monkeypatch, tmp_path):
+    from ops.r297_authenticated_observer import produce_page_event_receiver
+    from ops.r297_acceptance_run import issue_acceptance_run
+    from tests.test_r297_evidence_event_protocol import _PRIVATE_KEYS
+
+    raw = {
+        "artifact_evidence_sha256": "1" * 64,
+        "artifact_archive_sha256": "2" * 64,
+        "artifact_id": 9965082823,
+        "artifact_name": "r297-native-pagehide-test",
+        "workflow_run_id": 33949515935,
+        "event_type": "web_page_close",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "release_sha": "0850641e7b624109e7a30456889fdbd2331d8d75",
+        "store_id": 7,
+    }
+    scope = {
+        "namespace": "r297-acceptance-0850641e7b62",
+        "tenant_id": 1,
+        "company_id": 2,
+        "store_id": 7,
+        "platform": "jd",
+        "release_sha": raw["release_sha"],
+        "run_id": "placeholder-run-id",
+        "run_attempt": 1,
+        "challenge": "placeholder-challenge",
+    }
+    monkeypatch.setenv("APP_ENV", "test")
+    root = tmp_path / "run-ledger"
+    root.mkdir(mode=0o700)
+    ledger = root / "runs.json"
+    ledger.write_text('{"schema_version":1,"runs":[]}\n')
+    ledger.chmod(0o600)
+    lock = root / "runs.json.lock"
+    lock.write_text("")
+    lock.chmod(0o600)
+    record = issue_acceptance_run(
+        ledger,
+        scope={field: scope[field] for field in ("namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha")},
+        source_workflow_run_id=raw["workflow_run_id"], run_attempt=1,
+    )
+    scope.update({field: record[field] for field in ("run_id", "run_attempt", "challenge")})
+    monkeypatch.setenv("R297_ACCEPTANCE_RUN_LEDGER", str(ledger))
+    modulus, private = _PRIVATE_KEYS["page_event_receiver"]
+    private_path = tmp_path / "page-receiver-test-key.json"
+    private_path.write_text(json.dumps({
+        "environment": "test", "key_id": "r297-page_event_receiver-test",
+        "n": modulus, "d": private,
+    }))
+    private_path.chmod(0o600)
+    monkeypatch.setenv("R297_PAGE_EVENT_RECEIVER_TEST_PRIVATE_KEY_PATH", str(private_path))
+
+    event = produce_page_event_receiver(raw, scope)
+
+    assert event["run_id"] == record["run_id"]
+    assert event["run_id"] != f'r297-gh-{raw["workflow_run_id"]}'
+    assert event["payload"]["workflow_run_id"] == raw["workflow_run_id"]
 
 
 def test_native_pagehide_artifact_rejects_cross_head(tmp_path):
@@ -244,6 +307,8 @@ def test_page_event_receiver_signs_raw_artifact_with_separate_test_key(monkeypat
         "namespace": "r297-acceptance-0850641e7b62", "tenant_id": 1, "company_id": 2,
         "store_id": 7, "platform": "jd", "release_sha": "0850641e7b624109e7a30456889fdbd2331d8d75",
         "run_id": "r297-run-20260907-0001",
+        "run_attempt": 1,
+        "challenge": "challenge-value-00000001",
     }
     event = produce_page_event_receiver({
         "event_type": "web_page_close", "observed_at": "2026-09-05T07:12:06.709Z",
@@ -291,9 +356,11 @@ def test_observer_event_is_signed_from_read_only_database_snapshot(monkeypatch, 
     event = produce_authenticated_observer(page, snapshot, observed_at=now)
 
     assert {field: event[field] for field in (
-        "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
+        "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+        "run_id", "run_attempt", "challenge",
     )} == {field: page[field] for field in (
-        "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
+        "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+        "run_id", "run_attempt", "challenge",
     )}
     assert event["payload"]["subject_nonce"] == page["nonce"]
     assert event["payload"]["subject_event_sha256"] == signed_event_sha256(page)

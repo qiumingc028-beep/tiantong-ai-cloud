@@ -455,6 +455,13 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert "mock" not in combined.lower()
 
 
+def test_runtime_diagnostic_script_stays_inside_yaml_run_block():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    step = workflow.split("- name: Verify JD cloud browser runtime container", 1)[1].split("\n      - name:", 1)[0]
+    script = step.split("run: |\n", 1)[1]
+    assert all(not line.strip() or line.startswith("          ") for line in script.splitlines())
+
+
 def test_runtime_container_ci_check_has_timeout_and_safe_stage_diagnostics():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     runtime_step = workflow.split("- name: Verify JD cloud browser runtime container", 1)[1].split("- name: Run tests", 1)[0]
@@ -478,9 +485,19 @@ def test_runtime_container_ci_check_has_timeout_and_safe_stage_diagnostics():
     assert "cleanup_done=1" in runtime_step
     assert "timeout 1s docker inspect --format '{{json .State}}'" in runtime_step
     assert "timeout 1s docker stats --no-stream" in runtime_step
+    assert "RUNTIME_EXITED_BEFORE_HEALTH" in runtime_step
+    assert "docker inspect --format '{{.State.Running}}'" in runtime_step
+    assert "docker logs --tail 200" in runtime_step
+    assert 'echo "RUNTIME_LOG_REDACTION_FAILED"' in runtime_step
+    assert runtime_step.index('python ops/r297_ci_redact.py "$runtime_log"; then') < runtime_step.index('cat "$runtime_log"')
+    assert "RUNTIME_HEALTH_STATUS=$status" in runtime_step
+    runtime_start = Path("services/jd-cloud-browser-runtime/start-runtime.sh").read_text()
+    assert "RUNTIME_COMPONENT_EXIT=" in runtime_start
+    assert "wait -n -p exited_pid" in runtime_start
     allowed_inspects = (
         "timeout 1s docker inspect --format '{{json .State}}'",
         "timeout 1s docker inspect --format 'STATE={{.State.Status}} EXIT={{.State.ExitCode}} PID={{.State.Pid}} RESTARTS={{.RestartCount}}'",
+        "docker inspect --format '{{.State.Running}}'",
     )
     remaining = runtime_step
     for command in allowed_inspects:

@@ -108,6 +108,8 @@ def _scope() -> dict:
         "platform": "jd",
         "release_sha": "9b466ac80122e35893cbaa408735136acc88331a",
         "run_id": "r297-run-20260907-0001",
+        "run_attempt": 1,
+        "challenge": "challenge-value-00000001",
     }
 
 
@@ -134,6 +136,38 @@ def test_bound_file_publish_recovers_body_only_crash(tmp_path):
 
     assert output.read_bytes() == content
     assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+
+
+def test_bound_file_publish_recovers_verified_hardlink_publish_crash(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    temporary = output.with_name(f".{output.name}.0123456789abcdef")
+    temporary.write_bytes(content)
+    temporary.chmod(0o600)
+    os.link(temporary, output)
+
+    digest = write_sha256_bound_file(output, content)
+
+    assert output.stat().st_nlink == 1
+    assert not temporary.exists()
+    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+
+
+def test_bound_file_publish_rejects_unknown_second_hardlink(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    output.write_bytes(content)
+    output.chmod(0o600)
+    unknown = output.parent / "unknown-link"
+    os.link(output, unknown)
+
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, content)
+
+    assert unknown.exists()
+    assert not Path(f"{output}.sha256").exists()
 
 
 def test_bound_file_publish_rejects_mismatched_or_committed_output(tmp_path):
@@ -281,7 +315,7 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
     assert all(set(entry) == {
         "namespace", "tenant_id", "company_id", "store_id", "platform",
         "release_sha", "event_type", "key_id", "nonce",
-        "run_id",
+        "run_id", "run_attempt", "challenge",
     } for entry in ledger)
 
     with pytest.raises(ValueError, match="replayed evidence nonce"):
@@ -303,6 +337,36 @@ def test_bundle_builder_accepts_only_complete_same_scope_signed_chain(monkeypatc
     source["events"][2]["release_sha"] = "0" * 40
     with pytest.raises(ValueError, match="release_sha mismatch"):
         build_bundle(source["events"], expected_scope=_scope(), now=now)
+
+
+def test_bundle_precheck_preserves_run_until_formal_verification(monkeypatch, tmp_path):
+    """Exercise acceptance control flow with the test trust provider, not formal evidence."""
+    from ops import r297_evidence_events
+    from ops.r297_acceptance_run import issue_acceptance_run, validate_acceptance_run
+    from ops.r297_evidence_bundle import build_bundle
+    from tests.test_r297_acceptance_run import _ledger
+
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    scope = _scope()
+    run_ledger = _ledger(tmp_path)
+    record = issue_acceptance_run(run_ledger,
+        scope={field: value for field, value in scope.items() if field not in {"run_id", "run_attempt", "challenge"}},
+        source_workflow_run_id=33949515935, run_attempt=1, now=now)
+    scope.update({field: record[field] for field in ("run_id", "run_attempt", "challenge")})
+    monkeypatch.setitem(globals(), "_scope", lambda: scope)
+    trust = load_trust_manifest(environment="test")
+    monkeypatch.setattr(r297_evidence_events, "load_trust_manifest", lambda **kwargs: trust)
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    monkeypatch.setenv("R297_ACCEPTANCE_RUN_LEDGER", str(run_ledger))
+
+    bundle = build_bundle(_bundle(now)["events"], expected_scope=scope, now=now)
+    validate_acceptance_run(run_ledger, expected_scope=scope, source_workflow_run_id=33949515935, now=now)
+    ledger = _nonce_ledger(tmp_path)
+    result = verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=ledger)
+    assert result["authenticated_observer"]["verified_subject_count"] == 2
+    assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
+    with pytest.raises(ValueError, match="missing or consumed"):
+        verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=ledger)
 
 
 def test_signed_evidence_events_reject_concurrent_replay(tmp_path):

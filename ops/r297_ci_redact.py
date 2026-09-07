@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -56,6 +57,10 @@ _PRIVATE_KEY = re.compile(
 
 
 def _redact_text(value: str) -> str:
+    for name in filter(None, os.environ.get("R297_REDACT_EXACT_ENV_NAMES", "").split(",")):
+        secret = os.environ.get(name)
+        if secret:
+            value = value.replace(secret, "[REDACTED]")
     value = _PRIVATE_KEY.sub("[REDACTED PRIVATE KEY]", value)
     for pattern, replacement in _HEADER_RULES:
         value = pattern.sub(replacement, value)

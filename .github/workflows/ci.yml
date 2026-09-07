@@ -9,6 +9,7 @@ on:
       - "feature/**"
       - "codex/r291-*"
       - codex/r297-cloud-integration
+      - codex/r297-takeover-infra-evidence
   pull_request:
     branches:
       - main
@@ -209,6 +210,19 @@ jobs:
           runtime_stage="setup"
           cancelled=0
           cleanup_done=0
+          redacted_runtime_logs() {
+            runtime_log="$(mktemp "$RUNNER_TEMP/r297-runtime-container.XXXXXX")"
+            timeout 1s docker logs --tail 200 "$container" >"$runtime_log" 2>&1 || true
+            if R297_REDACT_EXACT_ENV_NAMES=R_CAPTURE,R_CONTROL,R_TICKET_KEY,R_COOKIE_KEY,R_MASTER \
+              R_CAPTURE="$capture_token" R_CONTROL="$control_token" \
+              R_TICKET_KEY="$viewer_ticket_key" R_COOKIE_KEY="$viewer_cookie_key" \
+              R_MASTER="$master_key" python ops/r297_ci_redact.py "$runtime_log"; then
+              cat "$runtime_log" >&2
+            else
+              echo "RUNTIME_LOG_REDACTION_FAILED" >&2
+            fi
+            rm -f "$runtime_log"
+          }
           cleanup() {
             test "$cleanup_done" = 0 || return
             cleanup_done=1
@@ -226,6 +240,7 @@ jobs:
               timeout 1s docker inspect --format '{{json .State}}' "$container"
               timeout 1s docker stats --no-stream --format 'RUNTIME_CPU={{.CPUPerc}} MEMORY={{.MemUsage}}' "$container"
               timeout 1s df -h / /var/lib/docker
+              redacted_runtime_logs
             fi
             cleanup
           }
@@ -327,8 +342,13 @@ jobs:
               --header "x-internal-token: $control_token" \
               "http://127.0.0.1:$runtime_port/internal/jd-browser/health" || true)"
             test "$status" = 200 && break
+            if test "$(docker inspect --format '{{.State.Running}}' "$container")" != true; then
+              echo "RUNTIME_EXITED_BEFORE_HEALTH=YES"
+              break
+            fi
             sleep 1
           done
+          echo "RUNTIME_HEALTH_STATUS=$status"
           test "$status" = 200
           echo "RUNTIME_HEALTH_STATUS=200"
 

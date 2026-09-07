@@ -41,7 +41,8 @@ except ModuleNotFoundError as exc:
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _ARTIFACT_MANIFEST_RE = re.compile(r"r297-native-pagehide-manifest-[0-9a-f]{40}\.json")
 _SCOPE_FIELDS = (
-    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+    "run_id", "run_attempt", "challenge",
 )
 _RAW_PAGE_EVENT_FIELDS = {"event", "observed_at", "store_id", "release_sha"}
 _PAGEHIDE_BINDING = Path("/etc/tiantong/r297-pagehide-artifact-binding.json")
@@ -259,6 +260,15 @@ def produce_page_event_receiver(raw_artifact: dict, authenticated_scope: dict) -
         or raw_artifact.get("release_sha") != authenticated_scope["release_sha"]
     ):
         raise ValueError("pagehide artifact scope mismatch")
+    run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
+    if environment != "test" and not run_ledger:
+        raise RuntimeError("acceptance run ledger missing")
+    if run_ledger:
+        from ops.r297_acceptance_run import validate_acceptance_run
+        validate_acceptance_run(
+            Path(run_ledger), expected_scope=authenticated_scope,
+            source_workflow_run_id=raw_artifact["workflow_run_id"],
+        )
     manifest, _ = load_trust_manifest(environment=environment)
     event = {
         **authenticated_scope,
@@ -400,6 +410,8 @@ def main() -> int:
     receive.add_argument("--platform", required=True)
     receive.add_argument("--release-sha", required=True)
     receive.add_argument("--run-id", required=True)
+    receive.add_argument("--run-attempt", type=int, required=True)
+    receive.add_argument("--challenge", required=True)
     observe = subparsers.add_parser("observe")
     observe.add_argument("page_event", type=Path)
     observe.add_argument("output", type=Path)

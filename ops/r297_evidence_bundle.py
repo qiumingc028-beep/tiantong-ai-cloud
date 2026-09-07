@@ -15,7 +15,8 @@ from ops.r297_evidence_events import verify_acceptance_event_bundle, write_sha25
 
 
 _SCOPE_FIELDS = (
-    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+    "run_id", "run_attempt", "challenge",
 )
 _SIGNER_VARIABLES = (
     "R297_PAGE_EVENT_RECEIVER_PRIVATE_KEY_PATH",
@@ -43,6 +44,7 @@ def build_bundle(events: list[dict], *, expected_scope: dict, now: datetime) -> 
             expected_scope=expected_scope,
             now=now,
             nonce_ledger=ledger,
+            consume_run=False,
         )
     return bundle
 
@@ -67,6 +69,8 @@ def main() -> int:
     parser.add_argument("--platform", required=True)
     parser.add_argument("--release-sha", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-attempt", type=int, required=True)
+    parser.add_argument("--challenge", required=True)
     args = parser.parse_args()
     scope = {field: getattr(args, field) for field in _SCOPE_FIELDS}
     events = [_read_bound_event(path) for path in args.events]
