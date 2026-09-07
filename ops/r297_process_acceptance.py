@@ -776,6 +776,7 @@ def main() -> int:
         "store_id": scope["store_id"],
         "platform": scope["platform"],
         "release_sha": head,
+        "run_id": os.getenv("R297_ACCEPTANCE_RUN_ID", ""),
     }
     observations.update(verify_acceptance_event_bundle(
         bundle,

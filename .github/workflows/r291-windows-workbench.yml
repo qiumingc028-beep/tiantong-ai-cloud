@@ -179,6 +179,7 @@ jobs:
           R297_EVIDENCE_COMPANY_ID: ${{ vars.R297_EVIDENCE_COMPANY_ID }}
           R297_EVIDENCE_STORE_ID: ${{ vars.R297_EVIDENCE_STORE_ID }}
           R297_EVIDENCE_PLATFORM: jd
+          R297_ACCEPTANCE_RUN_ID: ${{ vars.R297_ACCEPTANCE_RUN_ID }}
           APP_ENV: acceptance
         run: |
           python -m ops.r297_evidence_preflight --role windows_runner

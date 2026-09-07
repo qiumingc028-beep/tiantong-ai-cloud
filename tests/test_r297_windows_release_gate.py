@@ -73,7 +73,11 @@ def test_r297_windows_acceptance_requires_controlled_https_pairing_secrets():
     assert '$health.release.commit -ceq $head' in acceptance
     assert '$snapshot.release_sha -ceq $head' in acceptance
     assert acceptance.index('CONTROLLED_BACKEND_RELEASE_MISMATCH') < acceptance.index('$pairingResponse =')
-    assert acceptance.index('$process.WaitForExit(10000)') < acceptance.index('$beforeCycle = [long](Read-CandidateObservation)')
+    assert acceptance.index('$beforeCycle = [long]$alignedObservation.completed_cycle_count') < acceptance.index('$process.WaitForExit(10000)')
+    assert '$observationWindowSeconds = 240' in acceptance
+    assert '$observationDeadline = [DateTime]::UtcNow.AddSeconds($observationWindowSeconds)' in acceptance
+    assert '$attempt -lt 60 -and $afterCycle -le $beforeCycle' not in acceptance
+    assert 'latest_completed_at) -gt $electronExitAt' in acceptance
     assert "CONTROLLED_BACKEND_TLS_CERTIFICATE_MISMATCH" in acceptance
     assert "data_source = 'CONTROLLED_CANARY'" in acceptance
 
@@ -94,6 +98,7 @@ def test_r297_windows_acceptance_signs_only_after_real_electron_exit():
     for name in (
         "R297_EVIDENCE_NAMESPACE", "R297_EVIDENCE_TENANT_ID",
         "R297_EVIDENCE_COMPANY_ID", "R297_EVIDENCE_STORE_ID", "R297_EVIDENCE_PLATFORM",
+        "R297_ACCEPTANCE_RUN_ID",
     ):
         assert name in workflow
         assert name in acceptance

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
+import sys
 
 import pytest
 
@@ -30,6 +32,7 @@ def _scope():
         "store_id": 7,
         "platform": "jd",
         "release_sha": "3147ef047f4664965905f4127e020f6ce15323f0",
+        "run_id": "r297-run-20260907-0001",
     }
 
 
@@ -110,3 +113,31 @@ def test_windows_process_probe_declares_pointer_width_and_last_error_contract():
     assert "WAIT_OBJECT_0" in source
     assert "WAIT_TIMEOUT" in source
     assert "raise OSError(ctypes.get_last_error()" in source
+
+
+def test_windows_signer_cli_recovers_body_only_publish_crash(monkeypatch, tmp_path):
+    from ops import r297_windows_event_signer as signer
+
+    _test_key(monkeypatch, tmp_path)
+    now = datetime.now(timezone.utc)
+    started = now - timedelta(seconds=3)
+    event = signer.produce_electron_exit_event(
+        scope=_scope(), process_id=4201, process_started_at=started,
+        observed_at=now, process_is_running=lambda _pid: False,
+    )
+    output = tmp_path / "evidence" / "electron.json"
+    output.parent.mkdir(mode=0o700)
+    output.write_text(json.dumps(event, sort_keys=True) + "\n", encoding="utf-8")
+    output.chmod(0o600)
+    scope = _scope()
+    monkeypatch.setattr(sys, "argv", [
+        "r297_windows_event_signer.py", str(output),
+        "--namespace", scope["namespace"], "--tenant-id", str(scope["tenant_id"]),
+        "--company-id", str(scope["company_id"]), "--store-id", str(scope["store_id"]),
+        "--platform", scope["platform"], "--release-sha", scope["release_sha"],
+        "--run-id", scope["run_id"], "--process-id", "4201",
+        "--process-started-at", started.isoformat(),
+    ])
+
+    assert signer.main() == 0
+    assert Path(f"{output}.sha256").is_file()

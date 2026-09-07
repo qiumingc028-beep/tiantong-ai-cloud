@@ -300,9 +300,32 @@ def owner_acceptance_status(store_id: int, request: Request, db: Session = Depen
     _, store = _require_owner_store(store_id, request, db)
     namespace = _runtime_session_id(store).split(":", 1)[0]
     release_sha = os.getenv("DEPLOY_COMMIT", "")
+    run_id = os.getenv("R297_ACCEPTANCE_RUN_ID", "")
     if not re.fullmatch(r"[0-9a-f]{40}", release_sha):
         raise HTTPException(status_code=503, detail="验收版本未绑定")
-    completed = db.query(func.count(func.distinct(JdSyncLog.sync_window_started_at))).filter(
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{16,128}", run_id):
+        raise HTTPException(status_code=503, detail="验收运行未绑定")
+    policy = db.query(JdWorkbenchSyncPolicy).filter(
+        JdWorkbenchSyncPolicy.tenant_id == store.tenant_id,
+        JdWorkbenchSyncPolicy.company_id == store.company_id,
+        JdWorkbenchSyncPolicy.store_id == store.id,
+    ).one_or_none()
+    if policy is None or not policy.enabled or policy.interval_seconds not in ALLOWED_SYNC_INTERVAL_SECONDS:
+        raise HTTPException(status_code=503, detail="验收调度未启用")
+    next_sync_at = db.query(func.min(JdWorkbenchStoreStatus.next_sync_at)).filter(
+        JdWorkbenchStoreStatus.store_id == store.id,
+        JdWorkbenchStoreStatus.status.in_(("ONLINE", "IDLE")),
+    ).scalar()
+    if next_sync_at is None:
+        raise HTTPException(status_code=503, detail="验收调度时间未绑定")
+    now = _now()
+    if next_sync_at.tzinfo is None:
+        next_sync_at = next_sync_at.replace(tzinfo=timezone.utc)
+    next_sync_in_seconds = max(0, int((next_sync_at - now).total_seconds()))
+    completed, latest_completed_at = db.query(
+        func.count(func.distinct(JdSyncLog.sync_window_started_at)),
+        func.max(JdSyncLog.finished_at),
+    ).filter(
         JdSyncLog.tenant_id == store.tenant_id,
         JdSyncLog.company_id == store.company_id,
         JdSyncLog.store_id == store.id,
@@ -310,11 +333,14 @@ def owner_acceptance_status(store_id: int, request: Request, db: Session = Depen
         JdSyncLog.task_type == "sync_jd_smart",
         JdSyncLog.status == "success",
         JdSyncLog.finished_at.is_not(None),
-    ).scalar()
-    return {"release_sha": release_sha, "namespace": namespace,
+    ).one()
+    return {"release_sha": release_sha, "run_id": run_id, "namespace": namespace,
             "tenant_id": store.tenant_id, "company_id": store.company_id,
             "store_id": store.id, "platform": "jd",
-            "completed_cycle_count": completed, "observed_at": _now().isoformat()}
+            "completed_cycle_count": completed, "interval_seconds": policy.interval_seconds,
+            "next_sync_in_seconds": next_sync_in_seconds,
+            "latest_completed_at": latest_completed_at.isoformat() if latest_completed_at else None,
+            "observed_at": now.isoformat()}
 
 
 def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None, *, operation_id: str | None = None) -> dict[str, Any]:

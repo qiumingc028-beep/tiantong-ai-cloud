@@ -46,7 +46,7 @@ _ALLOWED_EVENTS_BY_ISSUER = {
     "windows_runner": ["electron_exit"],
 }
 _SCOPE_FIELDS = {
-    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
 }
 _FIELDS = {
     *_SCOPE_FIELDS, "event_type", "issuer", "observed_at",
@@ -76,6 +76,73 @@ def signed_event_sha256(event: dict) -> str:
     return hashlib.sha256(
         json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
     ).hexdigest()
+
+
+def write_sha256_bound_file(path: Path, content: bytes) -> str:
+    """Publish bytes with a sidecar commit marker and recover a body-only crash."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent_metadata = path.parent.stat()
+    if (
+        path.parent.is_symlink()
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or (os.name != "nt" and (
+            parent_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+        ))
+    ):
+        raise RuntimeError("evidence output directory permissions invalid")
+    sidecar = Path(f"{path}.sha256")
+    digest = hashlib.sha256(content).hexdigest()
+    if sidecar.exists():
+        raise FileExistsError(sidecar)
+    if path.exists():
+        metadata = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or (os.name != "nt" and (
+                metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+            ))
+            or path.read_bytes() != content
+        ):
+            raise FileExistsError(path)
+    else:
+        _replace_file(path, content)
+    _replace_file(sidecar, f"{digest}  {path.name}\n".encode("ascii"))
+    return digest
+
+
+def _replace_file(path: Path, content: bytes) -> None:
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
+    descriptor: int | None = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        handle = os.fdopen(descriptor, "wb")
+        descriptor = None
+        with handle:
+            if handle.write(content) != len(content):
+                raise OSError("short evidence write")
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Hard-link publication is exclusive: concurrent writers cannot replace
+        # either half of the digest-bound pair after their preflight checks.
+        os.link(temporary, path)
+        temporary.unlink()
+        if os.name != "nt":
+            directory_descriptor = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def validate_page_event_payload(payload: object) -> None:
@@ -486,6 +553,7 @@ def verify_acceptance_event_bundle(
     if (
         not _SHA_RE.fullmatch(str(expected_scope.get("release_sha", "")))
         or not _scope_identity(expected_scope.get("namespace"))
+        or not _scope_identity(expected_scope.get("run_id"))
         or not _scope_identity(expected_scope.get("tenant_id"))
         or not _scope_identity(expected_scope.get("company_id"))
         or type(expected_scope.get("store_id")) is not int

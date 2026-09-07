@@ -2,6 +2,22 @@
 
 Status: BLOCK. This document grants no main merge, production deployment, or release approval.
 
+## 2026-09-07 read-only environment observation
+
+- Candidate source inspected: `402b078fadcfaecb07472813738c56f3c4e47b37`.
+- `https://internal.tiantongai.com/api/health` returned HTTP 200, but reported release
+  `8f4e105002afe22ee84cf738cb4ad9209e06bba6`; it is not the candidate.
+- Backend, Worker, PostgreSQL, Redis and Nginx were running on the isolated host, and the
+  Worker heartbeat was current. This only proves the old isolated deployment was healthy.
+- Loopback port 18443 presented an expired internal self-signed certificate whose hostname
+  did not match `internal.tiantongai.com`; it is not an acceptable candidate TLS endpoint.
+- The protected trust manifest, pagehide binding, their sidecars and the persistent nonce
+  ledger were absent from the isolated host. No candidate deployment or evidence run was
+  attempted.
+- Same-head native pagehide artifacts exist for Actions runs `34071629609` (artifact
+  `10000690778`) and `34071628655` (artifact `10000688691`). They remain unsigned raw inputs,
+  not formal Observer or Process evidence.
+
 ## Candidate and code gates
 
 Use the current `codex/r297-cloud-integration` commit as the candidate; record its full SHA
@@ -55,8 +71,9 @@ After planned code convergence, role ⑥ registers RC_HEAD separately from relea
 
 ## User configuration: existing Windows workflow
 
-The GitHub connection available to this takeover supports Git/PR/Actions operations but does
-not expose Secrets or Environment administration. Secret values were neither read nor set.
+The GitHub connection was verified on 2026-09-07 with create/list/delete probes for both an
+Environment Secret and an Environment Variable. It can administer `r297-controlled-canary`.
+No formal value was available, so no required Secret or scope Variable was invented or set.
 
 Open repository Settings → Environments → `r297-controlled-canary` → Add environment secret.
 Use that Environment, not a repository-wide secret. The existing Windows workflow already
@@ -72,8 +89,9 @@ reads these exact names:
 | `R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64` | Base64 of the exact Backend server certificate DER | Verify certificate chain, hostname and certificate binding |
 
 Also set Environment variables `R297_EVIDENCE_NAMESPACE`, `R297_EVIDENCE_TENANT_ID`,
-`R297_EVIDENCE_COMPANY_ID`, `R297_EVIDENCE_STORE_ID` to the actual authorized acceptance
-scope. Platform is fixed to `jd`. Do not invent IDs or use a production Owner token.
+`R297_EVIDENCE_COMPANY_ID`, `R297_EVIDENCE_STORE_ID`, and a fresh per-execution
+`R297_ACCEPTANCE_RUN_ID` to the actual authorized acceptance scope. Platform is fixed to
+`jd`. Do not invent IDs, reuse a run ID, or use a production Owner token.
 
 Protect the Environment with reviewed branch/deployment rules and required review before
 releasing real material to a candidate. No secret belongs in an issue, PR body, workflow
@@ -120,6 +138,30 @@ any required verification. Do not submit the JD password/cookies to ChatGPT or G
 The Runtime currently relies on dataset selectors whose compatibility with an actual JD
 page is unverified. Authorized real-page observations are needed to finish and validate
 those adapters; controlled HTML cannot substitute for them.
+
+The executable producer order is:
+
+1. `python -m ops.r297_authenticated_observer receive ...` validates the same-HEAD native
+   pagehide Artifact and its protected binding, then emits a signed page event plus sidecar.
+2. In the Observer-only identity, `python -m ops.r297_authenticated_observer observe ...`
+   reads the live candidate database with the SELECT-only role and signs the first observation.
+3. The Windows workflow installs and exits the real Electron client, then emits its signed
+   exit event plus sidecar. It aligns the exit to within 120 seconds of the database-reported
+   next cycle, then uses a bounded 240-second post-exit observation window.
+4. Before the candidate environment is stopped, the Observer runs `observe` again against
+   the signed Electron event.
+5. In a verifier-only identity, `python -m ops.r297_evidence_bundle OUTPUT PAGE PAGE_OBSERVER
+   ELECTRON ELECTRON_OBSERVER --namespace ... --tenant-id ... --company-id ... --store-id ...
+   --platform jd --release-sha ... --run-id ...` verifies all four sidecars, signatures,
+   roles, order and scope, then publishes the bundle with a crash-recoverable sidecar commit
+   marker. It refuses signer private keys.
+
+The formal verifier still enforces its five-minute freshness window and durable nonce ledger.
+The Windows client remains alive until the database-authoritative `next_sync_at` is within
+120 seconds, then exits and signs; this supports 300/900/1800/3600-second policies without
+making an old event acceptable. Every event also carries the same protected run ID, so two
+runs on one release/store cannot be combined. Do not tear down the database or runtime until
+the bundle and formal Process evidence have both completed.
 
 Only after the code, stable PostgreSQL migration/recovery, same-SHA real Windows/Process,
 real JD read-only data parity, zero-leak and independent security gates pass can the
