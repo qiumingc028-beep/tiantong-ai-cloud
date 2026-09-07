@@ -19,6 +19,14 @@ class JdCollectorError(RuntimeError):
     pass
 
 
+class VerifiedEmptyDataset(list):
+    """Zero rows whose scope/date/completeness was verified at the Runtime seam."""
+    def __init__(self, dataset: str, target_date: date):
+        super().__init__()
+        self.dataset = dataset
+        self.target_date = target_date
+
+
 DATASET_MODELS = {"metrics": JdDailyMetric, "orders": JdOrder, "products": JdProduct, "ads": JdAd}
 DATASET_FIELDS = {
     "metrics": "gmv profit_amount visitors_count paid_orders_count ad_spend roi refunds_count after_sales_count favorites_count cart_add_count conversion_rate today_sales visitors orders refunds after_sales",
@@ -44,6 +52,8 @@ def validate_dataset(dataset: str, captured):
     rows = [captured] if dataset == "metrics" else captured
     if not isinstance(rows, list):
         raise JdCollectorError("云端采集响应校验失败")
+    if not rows and (not isinstance(rows, VerifiedEmptyDataset) or rows.dataset != dataset):
+        raise JdCollectorError("空数据缺少完整性证明")
     for row in rows:
         if not isinstance(row, dict) or not row or set(row) - set(DATASET_FIELDS[dataset].split()):
             raise JdCollectorError("采集字段无效")
@@ -94,7 +104,7 @@ class JdSmartCollector:
     没有授权时不会伪造数据。
     """
 
-    def _capture(self, account: JdAccount, dataset: str, store: Store):
+    def _capture(self, account: JdAccount, dataset: str, store: Store, target_date: date | None = None):
         try:
             endpoint = runtime_base("JD_BROWSER_CAPTURE_BASE_URL")
             namespace = session_namespace(os.getenv("JD_SESSION_NAMESPACE", "").strip())
@@ -104,6 +114,9 @@ class JdSmartCollector:
         if len(token.encode()) < 32:
             raise JdCollectorError("云端浏览器内部认证未配置")
         payload = {"scope": {"namespace": namespace, "tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": "jd"}, "dataset": dataset}
+        target_date = target_date or date.today()
+        if dataset != "metrics":
+            payload["date_range"] = {"start": target_date.isoformat(), "end": target_date.isoformat()}
         try:
             with urlopen(Request(endpoint + "/capture", data=json.dumps(payload).encode(), headers={"content-type": "application/json", "x-internal-token": token}), timeout=45) as response:
                 result = json.loads(response.read(1_000_000))
@@ -112,7 +125,8 @@ class JdSmartCollector:
         if not isinstance(result, dict) or set(result) != {"status", "data"} or result.get("status") != "OK":
             raise JdCollectorError("需要人工处理登录或风控")
         data = result["data"]
-        if (not isinstance(data, dict) or set(data) != {"source", "captured_at", "store_id", dataset}
+        if (not isinstance(data, dict) or set(data) - {"source", "captured_at", "store_id", dataset, "empty_evidence"}
+                or not {"source", "captured_at", "store_id", dataset}.issubset(data)
                 or str(data.get("store_id")) != str(store.id) or data.get("source") != "jd_cloud_playwright"):
             raise JdCollectorError("云端采集响应校验失败")
         try:
@@ -126,23 +140,35 @@ class JdSmartCollector:
             and (not isinstance(captured, list) or any(not isinstance(row, dict) for row in captured))
         ):
             raise JdCollectorError("云端采集响应校验失败")
+        if dataset != "metrics" and captured == []:
+            expected = {"dataset": dataset, "store_id": str(store.id), "range_start": target_date.isoformat(),
+                        "range_end": target_date.isoformat(), "authenticated": True, "permission_granted": True,
+                        "empty_state": True, "total_count": 0, "pagination_complete": True,
+                        "source": "authenticated_network_response"}
+            evidence = data.get("empty_evidence")
+            if (not isinstance(evidence, dict) or evidence != expected
+                    or any(type(evidence.get(key)) is not type(value) for key, value in expected.items())):
+                raise JdCollectorError("空数据缺少登录、权限、日期范围或完整性证明")
+            captured = VerifiedEmptyDataset(dataset, target_date)
+        elif "empty_evidence" in data:
+            raise JdCollectorError("非空数据不得附带空态证明")
         return validate_dataset(dataset, captured)
 
     def fetch_today(self, account: JdAccount) -> dict:
         return self._capture(account, "metrics", account.store)
 
-    def fetch_orders_today(self, account: JdAccount) -> list[dict]:
-        return self._capture(account, "orders", account.store)
+    def fetch_orders_today(self, account: JdAccount, target_date: date | None = None) -> list[dict]:
+        return self._capture(account, "orders", account.store, target_date)
 
-    def fetch_products_today(self, account: JdAccount) -> list[dict]:
-        return self._capture(account, "products", account.store)
+    def fetch_products_today(self, account: JdAccount, target_date: date | None = None) -> list[dict]:
+        return self._capture(account, "products", account.store, target_date)
 
 
 class JztCollector:
     """京准通采集适配器。"""
 
-    def fetch_ads_today(self, account: JdAccount) -> list[dict]:
-        return JdSmartCollector()._capture(account, "ads", account.store)
+    def fetch_ads_today(self, account: JdAccount, target_date: date | None = None) -> list[dict]:
+        return JdSmartCollector()._capture(account, "ads", account.store, target_date)
 
 
 def sync_jd_smart(db: Session, store_id: int, metric_date: date | None = None, completion_log=None, before_commit=None):
@@ -179,7 +205,7 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
     )
     if not account:
         raise JdCollectorError("店铺未配置京准通账号")
-    rows = validate_dataset("ads", JztCollector().fetch_ads_today(account))
+    rows = validate_dataset("ads", JztCollector().fetch_ads_today(account, stat_date))
     saved = set()
     with db.begin_nested():
         for row in rows:
@@ -194,7 +220,7 @@ def sync_jzt(db: Session, store_id: int, stat_date: date | None = None):
 
 def sync_jd_orders(db: Session, store_id: int, order_date: date | None = None):
     account = get_smart_account(db, store_id)
-    rows = validate_dataset("orders", JdSmartCollector().fetch_orders_today(account))
+    rows = validate_dataset("orders", JdSmartCollector().fetch_orders_today(account, order_date))
     saved = set()
     with db.begin_nested():
         for row in rows:
@@ -207,7 +233,7 @@ def sync_jd_orders(db: Session, store_id: int, order_date: date | None = None):
 
 def sync_jd_products(db: Session, store_id: int, stat_date: date | None = None):
     account = get_smart_account(db, store_id)
-    rows = validate_dataset("products", JdSmartCollector().fetch_products_today(account))
+    rows = validate_dataset("products", JdSmartCollector().fetch_products_today(account, stat_date))
     saved = set()
     with db.begin_nested():
         for row in rows:

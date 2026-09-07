@@ -300,12 +300,26 @@ for (const vector of contract.invalid_capture_request_cases) {
   });
 }
 
-async function controlledCaptureApp(t, captures = { metrics: contract.controlled_capture_metrics }) {
+async function controlledCaptureApp(t, captures = { metrics: contract.controlled_capture_metrics }, emptyEvidence) {
   const captureNow = 5_000_000;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-capture-test-'));
+  const frame = {};
   const page = {
     goto: async () => {},
-    evaluate: async (_callback, dataset) => captures[dataset]
+    url: () => 'https://shop.jd.com/jdm/home',
+    mainFrame: () => frame,
+    evaluate: async (_callback, dataset) => captures[dataset],
+    waitForResponse: async predicate => {
+      if (!emptyEvidence) throw new Error('no verified network response');
+      const query = new URLSearchParams(Object.fromEntries(['dataset', 'store_id', 'range_start', 'range_end'].map(key => [key, emptyEvidence[key]])));
+      const response = {url: () => `https://shop.jd.com/fixture-api?${query}`, status: () => emptyEvidence.http_status || 200,
+        fromServiceWorker: () => emptyEvidence.cached === true, headers: () => ({'content-type': 'application/json'}),
+        request: () => ({method: () => 'GET', redirectedFrom: () => null,
+          timing: () => ({startTime: emptyEvidence.stale ? captureNow - 1 : captureNow}), frame: () => frame}),
+        json: async () => ({...emptyEvidence, status: 'OK', records: []})};
+      if (!await predicate(response)) throw new Error('network response rejected');
+      return response;
+    }
   };
   const app = buildApp({
     captureToken,
@@ -377,6 +391,30 @@ test('capture preserves independent schemas for all four datasets', async (t) =>
     assert.deepEqual(data[dataset], expected);
   }
 });
+
+for (const dataset of ['orders', 'products', 'ads']) {
+  test(`empty ${dataset} requires authenticated scope, range and completed zero evidence`, async t => {
+    const evidence = {dataset, store_id: contract.valid_scope.store_id,
+      range_start: '2026-09-06', range_end: '2026-09-06', authenticated: true, permission_granted: true,
+      empty_state: true, total_count: 0, pagination_complete: true};
+    const {app} = await controlledCaptureApp(t, {[dataset]: []}, evidence);
+    const request = {method: 'POST', url: '/internal/jd-browser/capture', headers: {'x-internal-token': captureToken},
+      payload: {scope: contract.valid_scope, dataset, date_range: {start: '2026-09-06', end: '2026-09-06'}}};
+    assert.equal((await app.inject(request)).statusCode, 200);
+    for (const [field, invalid] of Object.entries({authenticated: false, permission_granted: false, store_id: 'wrong',
+      range_start: '2026-09-05', range_end: '2026-09-07', empty_state: false, total_count: 1, pagination_complete: false,
+      http_status: 403, cached: true, stale: true})) {
+      const original = evidence[field];
+      evidence[field] = invalid;
+      assert.equal((await app.inject(request)).statusCode, 422, field);
+      if (original === undefined) delete evidence[field]; else evidence[field] = original;
+    }
+    delete request.payload.date_range;
+    assert.equal((await app.inject(request)).statusCode, 422, 'empty without requested range cannot prove coverage');
+    const unproven = await controlledCaptureApp(t, {[dataset]: []});
+    assert.equal((await unproven.app.inject(request)).statusCode, 422, 'bare empty cannot be a successful capture');
+  });
+}
 
 test('capture rejects non-object rows in list datasets', async (t) => {
   const { app } = await controlledCaptureApp(t, { orders: ['invalid-row'] });

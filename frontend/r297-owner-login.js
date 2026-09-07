@@ -67,7 +67,9 @@
     let detail = '';
     try { detail = (await response.json()).detail; } catch (_error) {}
     const unexpectedSuccess = response && response.status >= 200 && response.status < 300;
-    const error = new Error(unexpectedSuccess ? '云端登录HTTP状态无效' : typeof detail === 'string' && detail ? detail : '云端登录请求失败，请稍后重试');
+    const operation = detail && typeof detail === 'object' && /^[0-9a-f]{32}$/.test(detail.operation_id || '') ? detail : null;
+    const error = new Error(unexpectedSuccess ? '云端登录HTTP状态无效' : operation ? `${operation.message}（操作 ${operation.operation_id}）` : typeof detail === 'string' && detail ? detail : '云端登录请求失败，请稍后重试');
+    if (operation) error.operation = operation;
     error.status = response && response.status;
     return error;
   }
@@ -80,29 +82,63 @@
   function createClient(request) {
     if (typeof request !== 'function') throw new Error('登录接口不可用');
     const emptyPost = Object.freeze({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    const send = async (path, options) => { try { return await request(path, options); } catch (_error) { throw new Error('网络连接失败，请稍后重试'); } };
+    const pending = new Map();
+    const acknowledged = new Map();
+    const slot = (path, method) => `r297-owner-operation:${method}:${path}`;
+    const remember = (name, key) => pending.set(name, key);
+    const complete = (path, method, confirmedKey) => {
+      const name = slot(path, method);
+      acknowledged.set(name, confirmedKey || pending.get(name));
+      pending.delete(name);
+    };
+    const send = async (path, options = {}) => {
+      const method = options.method || 'GET', name = slot(path, method);
+      let key = pending.get(name);
+      if (!/^[0-9a-f]{32}$/.test(key || '')) key = root.crypto.randomUUID().replaceAll('-', '');
+      // Backend durably reserves/coalesces this key before the effect, including after reload.
+      remember(name, key);
+      let response;
+      try { response = await request(path, {...options, headers: {...options.headers, 'x-owner-operation-id': key,
+        ...(acknowledged.has(name) ? {'x-owner-ack-operation-id': acknowledged.get(name)} : {})}}); }
+      catch (_error) { throw new Error('网络连接失败，请稍后重试'); }
+      if (response.status === 409) {
+        const body = await response.json();
+        if (body.detail && /^[0-9a-f]{32}$/.test(body.detail.operation_id || '')) {
+          if (body.detail.status === 'SUCCESS') complete(path, method, body.detail.operation_id);
+          else remember(name, body.detail.operation_id);
+        }
+        return {status: response.status, json: async () => body};
+      }
+      return response;
+    };
     return Object.freeze({
       create: async (value, signal) => {
         const id = storeId(value), data = await requiredJson(await send(sessionPath(id), signal ? { ...emptyPost, signal } : emptyPost), 200);
         if (!exactKeys(data, ['store_id', 'status', 'expires_in']) || data.status !== 'LOGIN_REQUIRED' || !strictTtl(data.expires_in, SESSION_TTL_MAX_SECONDS)) throw new Error('登录会话响应无效');
-        return sessionState(id, data);
+        const result = sessionState(id, data);
+        complete(sessionPath(id), 'POST');
+        return result;
       },
       status: async (value, signal) => {
         const id = storeId(value), options = signal ? { signal } : undefined;
         const data = await requiredJson(await send(sessionPath(id), options), 200);
         if (!exactKeys(data, ['store_id', 'status'])) throw new Error('登录状态响应无效');
-        return sessionState(id, data);
+        const result = sessionState(id, data);
+        complete(sessionPath(id), 'GET');
+        return result;
       },
       ticket: async (value, signal) => {
         const id = storeId(value), options = signal ? { ...emptyPost, signal } : emptyPost;
         const data = await requiredJson(await send(`/api/jd-workbench/stores/${id}/login-ticket`, options), 200);
         if (!exactKeys(data, ['ticket', 'expires_in']) || typeof data.ticket !== 'string' || !data.ticket.trim() || !strictTtl(data.expires_in, TICKET_TTL_MAX_SECONDS)) throw new Error('登录凭证响应无效');
+        complete(`/api/jd-workbench/stores/${id}/login-ticket`, 'POST');
         return Object.freeze({ ticket: data.ticket, expires_in: data.expires_in });
       },
       close: async (value, signal) => {
         const id = storeId(value), response = await send(sessionPath(id), { method: 'DELETE', ...(signal ? {signal} : {}) });
         const data = await requiredJson(response, 200);
         if (!exactKeys(data, ['ok', 'store_id', 'status']) || data.ok !== true || !Number.isInteger(data.store_id) || data.store_id !== id || data.status !== 'REVOKED') throw new Error('登录会话销毁响应无效');
+        complete(sessionPath(id), 'DELETE');
         return Object.freeze({ store_id: id, status: 'REVOKED' });
       }
     });

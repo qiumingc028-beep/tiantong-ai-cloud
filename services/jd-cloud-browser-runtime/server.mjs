@@ -430,14 +430,36 @@ export function buildApp({
     await syncOperationDirectory(operationRoot);
   }
 
-  async function readOperation(id) {
-    const value = await fs.readFile(path.join(operationRoot, `${id}.json`), 'utf8');
+  function decodeOperation(value, id) {
     const [body, signature, ...extra] = value.split('.');
     const record = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (extra.length || !safeEqual(signOperation(record), value) || !signature ||
         record.operation_id !== id || !parseSessionId(record.session_id, sessionNamespace) ||
         !Object.values(operationTypes).includes(record.operation) ||
-        !['PENDING', 'SUCCESS'].includes(record.status)) throw new Error('OWNER_OPERATION_INVALID');
+        !['PENDING', 'SUCCESS'].includes(record.status) ||
+        (record.status === 'SUCCESS' && !/^[0-9a-f]{64}$/.test(record.response_sha256 || ''))) throw new Error('OWNER_OPERATION_INVALID');
+    return record;
+  }
+
+  async function readOperation(id) {
+    let record = decodeOperation(await fs.readFile(path.join(operationRoot, `${id}.json`), 'utf8'), id);
+    if (record.status === 'PENDING') {
+      // The signed SUCCESS temporary is causal evidence produced after the effect,
+      // not a guess from current session state. Retry persistence, never the effect.
+      for (const name of await fs.readdir(operationRoot)) {
+        if (!new RegExp(`^${id}\\.json\\.[0-9a-f]{16}\\.tmp$`).test(name)) continue;
+        try {
+          const completed = decodeOperation(await fs.readFile(path.join(operationRoot, name), 'utf8'), id);
+          if (completed.status !== 'SUCCESS' || completed.operation !== record.operation || completed.session_id !== record.session_id) continue;
+          await writeOperation(completed);
+          record = completed;
+          break;
+        } catch (_error) { /* Keep UNKNOWN/PENDING when persistence or proof is unavailable. */ }
+      }
+    }
+    // A previous rename may have succeeded while its directory fsync failed.
+    // A queried SUCCESS must be durable before it can confirm the old effect.
+    if (record.status === 'SUCCESS') await syncOperationDirectory(operationRoot);
     return record;
   }
 
@@ -638,8 +660,15 @@ export function buildApp({
   });
 
   app.post('/internal/jd-browser/capture', { preHandler: verifyCapture }, async (request, reply) => {
-    if (!request.body || Object.keys(request.body).some((key) => !['scope', 'dataset'].includes(key)) || typeof request.body.dataset !== 'string' || !['metrics', 'orders', 'products', 'ads'].includes(request.body.dataset)) {
+    if (!request.body || Object.keys(request.body).some((key) => !['scope', 'dataset', 'date_range'].includes(key)) || typeof request.body.dataset !== 'string' || !['metrics', 'orders', 'products', 'ads'].includes(request.body.dataset)) {
       return reply.code(400).send({ status: 'INVALID_CAPTURE_REQUEST', data: {} });
+    }
+    const range = request.body.date_range;
+    const calendarDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+      Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+    if (range !== undefined && (!range || request.body.dataset === 'metrics' ||
+        Object.keys(range).sort().join(',') !== 'end,start' || !calendarDate(range.start) || !calendarDate(range.end) || range.start > range.end)) {
+      return reply.code(400).send({status: 'INVALID_CAPTURE_REQUEST', data: {}});
     }
     const scope = normalizedScope(request.body.scope);
     if (!scope) return reply.code(400).send({ status: 'INVALID_CAPTURE_REQUEST', data: {} });
@@ -649,8 +678,30 @@ export function buildApp({
       return reply.code(409).send({ status: 'LOGIN_REQUIRED', data: {} });
     }
     const page = session.context.pages()[0] || await session.context.newPage();
-    await page.goto(dashboardUrl, { waitUntil: 'domcontentloaded' });
     const dataset = request.body.dataset;
+    const observedAfter = now();
+    let networkEvidence = null;
+    // Listen before navigation. DOM flags alone cannot authenticate an empty result.
+    const emptyProof = dataset !== 'metrics' && range && typeof page.waitForResponse === 'function'
+      ? page.waitForResponse(async response => {
+        try {
+          const req = response.request(), url = new URL(response.url());
+          if (response.status() !== 200 || response.fromServiceWorker() || req.method() !== 'GET' || req.redirectedFrom() ||
+              req.timing().startTime < observedAfter || req.frame() !== page.mainFrame() ||
+              url.origin !== new URL(dashboardUrl).origin ||
+              !String(response.headers()['content-type'] || '').includes('application/json') ||
+              url.searchParams.get('dataset') !== dataset || url.searchParams.get('store_id') !== scope.store_id ||
+              url.searchParams.get('range_start') !== range.start || url.searchParams.get('range_end') !== range.end) return false;
+          const body = await response.json();
+          const expected = {dataset, store_id: scope.store_id, range_start: range.start, range_end: range.end,
+            authenticated: true, permission_granted: true, empty_state: true, total_count: 0, pagination_complete: true};
+          if (!body || body.status !== 'OK' || !Array.isArray(body.records) || body.records.length !== 0 ||
+              Object.entries(expected).some(([key, value]) => body[key] !== value)) return false;
+          networkEvidence = {...expected, source: 'authenticated_network_response'};
+          return true;
+        } catch (_error) { return false; }
+      }, {timeout: 5000}).then(() => networkEvidence, () => null) : Promise.resolve(null);
+    await page.goto(dashboardUrl, { waitUntil: 'domcontentloaded' });
     const captured = await page.evaluate((datasetName) => {
       if (datasetName === 'metrics') {
         return Object.fromEntries(
@@ -668,8 +719,19 @@ export function buildApp({
       ? captured && !Array.isArray(captured) && typeof captured === 'object' && Object.keys(captured).length > 0
       : Array.isArray(captured) && captured.every((row) => row && !Array.isArray(row) && typeof row === 'object');
     if (!validCapture) return reply.code(422).send({ status: 'JD_DATASET_NOT_FOUND', data: {} });
+    let emptyEvidence;
+    if (dataset !== 'metrics' && captured.length === 0) {
+      // A missing selector or [] is not proof that an authenticated date range is empty.
+      if (!range || typeof page.url !== 'function' || page.url() !== dashboardUrl) {
+        return reply.code(422).send({status: 'JD_EMPTY_DATASET_UNVERIFIED', data: {}});
+      }
+      emptyEvidence = await emptyProof;
+      if (!emptyEvidence) {
+        return reply.code(422).send({status: 'JD_EMPTY_DATASET_UNVERIFIED', data: {}});
+      }
+    }
     return { status: 'OK', data: { source: 'jd_cloud_playwright', captured_at: new Date(now()).toISOString(),
-      store_id: scope.store_id, [dataset]: captured } };
+      store_id: scope.store_id, [dataset]: captured, ...(emptyEvidence ? {empty_evidence: emptyEvidence} : {}) } };
   });
 
   app.get('/internal/jd-browser/sessions/:sid', { preHandler: verifyControl }, async (request, reply) => {

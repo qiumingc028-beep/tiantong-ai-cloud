@@ -386,12 +386,44 @@ def _audit_owner_action(db: Session, user: User, store: Store, action: str) -> N
     db.add(EmployeeLog(user_id=user.id, store_id=store.id, action=action, detail="owner_login_session"))
     db.commit()
 
-def _saga_pending(db: Session, user: User, store: Store, action: str) -> EmployeeLog:
+def _saga_pending(db: Session, user: User, store: Store, action: str, operation_id: str | None = None,
+                  acknowledged_operation_id: str | None = None) -> EmployeeLog:
+    # Invalid local configuration is a precondition failure, not an unknown effect.
+    _runtime_base()
+    if operation_id is not None and not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+        raise _generic_bad_request()
+    # Serialize reservation before releasing the durable intent to Runtime.
+    db.query(Store).filter_by(id=store.id).with_for_update().one()
+    rows = db.query(EmployeeLog).filter_by(user_id=user.id, store_id=store.id, action=action).filter(or_(
+        EmployeeLog.detail.like('%"status":"PENDING"%'), EmployeeLog.detail.like('%"status": "PENDING"%'),
+        EmployeeLog.detail.like('%"status":"UNKNOWN"%'), EmployeeLog.detail.like('%"status": "UNKNOWN"%'),
+        EmployeeLog.detail.like('%"requires_acknowledgement":true%'),
+        EmployeeLog.detail.contains(operation_id) if operation_id else False,
+    )).order_by(EmployeeLog.id.desc()).all()
+    for previous in rows:
+        try:
+            old = json.loads(previous.detail or "{}")
+        except (TypeError, ValueError):
+            continue
+        if (isinstance(old, dict) and old.get("status") == "SUCCESS"
+                and old.get("operation_id") == acknowledged_operation_id and old.get("operation_id") != operation_id):
+            old["requires_acknowledgement"] = False
+            previous.detail = json.dumps(old, separators=(",", ":"))
+        if isinstance(old, dict) and (old.get("operation_id") == operation_id and operation_id is not None
+                                     or old.get("status") in {"PENDING", "UNKNOWN"}
+                                     or old.get("requires_acknowledgement") is True and old.get("status") == "SUCCESS"):
+            db.rollback()
+            raise HTTPException(status_code=409, detail=_owner_operation_view(old, store.id))
+    if operation_id and db.query(EmployeeLog.id).filter(EmployeeLog.detail.contains(operation_id)).first():
+        db.rollback()
+        raise HTTPException(status_code=409, detail="操作幂等键已使用")
     detail = {"status": "PENDING", "namespace": get_settings().JD_SESSION_NAMESPACE,
               "tenant_id": str(store.tenant_id), "company_id": str(store.company_id),
               "store_id": str(store.id), "platform": str(store.platform), "operation": action,
               "created_at": _now().isoformat(), "updated_at": _now().isoformat(),
-              "operation_id": uuid.uuid4().hex,
+              "operation_id": operation_id or uuid.uuid4().hex,
+              "requires_acknowledgement": True,
+              "recovery_deadline": (_now() + timedelta(minutes=15)).isoformat(),
               "claim_token": uuid.uuid4().hex,
               "claim_until": (_now() + timedelta(seconds=60)).isoformat()}
     row = EmployeeLog(user_id=user.id, store_id=store.id, action=action, detail=json.dumps(detail, separators=(",", ":")))
@@ -413,11 +445,88 @@ def _saga_finish(db: Session, row: EmployeeLog, status: str) -> None:
             raise HTTPException(status_code=503, detail="审计操作已由恢复流程接管")
         detail.update(status=status, updated_at=_now().isoformat())
         detail.pop("claim_until", None)
+        if status == "PENDING":
+            attempts = int(detail.get("recovery_attempts", 0)) + 1
+            deadline = detail.setdefault("recovery_deadline", (_now() + timedelta(minutes=15)).isoformat())
+            expired = _aware(datetime.fromisoformat(deadline)) <= _now()
+            detail.update(recovery_attempts=attempts, manual_review_required=expired,
+                          next_recovery_at=None if expired else (_now() + timedelta(seconds=min(30 * 2 ** min(attempts - 1, 4), 300))).isoformat())
+            if expired:
+                detail["status"] = "UNKNOWN"
+        elif status == "SUCCESS":
+            detail.update(manual_review_required=False, next_recovery_at=None)
         row.detail = json.dumps(detail, separators=(",", ":"))
         db.commit()
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=503, detail="审计状态暂不可用") from exc
+
+
+def _owner_operation_view(detail: dict, store_id: int) -> dict:
+    due = detail.get("next_manual_check_at") or detail.get("next_recovery_at") or detail.get("claim_until")
+    retry_after = max(0, int((_aware(datetime.fromisoformat(due)) - _now()).total_seconds())) if due else 0
+    return {"operation_id": detail.get("operation_id"), "operation": detail.get("operation"),
+            "status": "UNKNOWN" if detail.get("status") in {"PENDING", "UNKNOWN"} else detail.get("status"),
+            "recovery_status": detail.get("status"), "retry_after_seconds": retry_after,
+            "recovery_deadline": detail.get("recovery_deadline"),
+            "manual_review_required": bool(detail.get("manual_review_required")),
+            "query_url": f"/api/jd-workbench/stores/{store_id}/login-operations/{detail.get('operation_id')}",
+            "message": "结果尚不能确认；请查询原操作，勿重复执行" if detail.get("status") != "SUCCESS" else "该操作已确认完成"}
+
+
+def _owner_unknown(db: Session, row: EmployeeLog) -> HTTPException:
+    try:
+        _saga_finish(db, row, "PENDING")
+    except HTTPException:
+        # Even if the audit update fails, retain the already persisted operation ID.
+        db.rollback()
+    detail = json.loads(row.detail or "{}")
+    return HTTPException(status_code=503, detail=_owner_operation_view(detail, row.store_id),
+                         headers={"x-owner-operation-id": detail["operation_id"], "Retry-After": "30"})
+
+
+def _receipt_confirms_operation(detail: dict, result: dict) -> bool:
+    return (set(result) == {"operation_id", "operation", "session_id", "status", "response_sha256"}
+            and result.get("operation_id") == detail.get("operation_id")
+            and result.get("operation") == detail.get("operation")
+            and result.get("session_id") == ":".join(str(detail.get(key, "")) for key in ("namespace", "tenant_id", "company_id", "store_id", "platform"))
+            and result.get("status") == "SUCCESS" and isinstance(result.get("response_sha256"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", result["response_sha256"]) is not None)
+
+
+@router.get("/stores/{store_id}/login-operations/{operation_id}")
+@router.post("/stores/{store_id}/login-operations/{operation_id}/reconcile")
+async def owner_operation_result(store_id: int, operation_id: str, request: Request, db: Session = Depends(get_db)):
+    user, store = _require_owner_store(store_id, request, db)
+    if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+        raise _generic_bad_request()
+    row = db.query(EmployeeLog).filter(EmployeeLog.store_id == store.id, EmployeeLog.user_id == user.id,
+                                      EmployeeLog.action.in_(OWNER_SAGA_ACTIONS), EmployeeLog.detail.contains(operation_id)).with_for_update().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="操作不存在")
+    detail = json.loads(row.detail)
+    if detail.get("operation_id") != operation_id:
+        raise HTTPException(status_code=404, detail="操作不存在")
+    if request.method == "GET" or detail.get("status") == "SUCCESS":
+        db.rollback()
+        return _owner_operation_view(detail, store.id)
+    if await _json_body(request):
+        raise _generic_bad_request()
+    due = detail.get("next_manual_check_at") or detail.get("next_recovery_at") or detail.get("claim_until")
+    if due and _aware(datetime.fromisoformat(due)) > _now():
+        db.rollback()
+        raise HTTPException(status_code=409, detail=_owner_operation_view(detail, store.id))
+    detail.update(status="PENDING", claim_token=uuid.uuid4().hex, claim_until=(_now() + timedelta(seconds=60)).isoformat(),
+                  next_manual_check_at=(_now() + timedelta(minutes=5)).isoformat())
+    row.detail = json.dumps(detail, separators=(",", ":"))
+    db.commit()
+    row._owner_claim_token = detail["claim_token"]
+    try:
+        result = await run_in_threadpool(_runtime_call, "GET", f"/operations/{operation_id}")
+    except HTTPException:
+        result = {}
+    _saga_finish(db, row, "SUCCESS" if _receipt_confirms_operation(detail, result) else "PENDING")
+    return _owner_operation_view(json.loads(row.detail), store.id)
 
 
 OWNER_SAGA_ACTIONS = frozenset(
@@ -483,6 +592,17 @@ def reconcile_pending_owner_action_audits(db: Session) -> int:
             if claim_until is not None and _aware(claim_until) > _now():
                 db.rollback()
                 continue
+            deadline = detail.get("recovery_deadline")
+            if deadline and _aware(datetime.fromisoformat(deadline)) <= _now():
+                # Do not infer failure or execute again when the receipt is lost.
+                detail.update(status="UNKNOWN", manual_review_required=True, next_recovery_at=None)
+                row.detail = json.dumps(detail, separators=(",", ":"))
+                db.commit()
+                continue
+            due = detail.get("next_recovery_at")
+            if due and _aware(datetime.fromisoformat(due)) > _now():
+                db.rollback()
+                continue
         except (TypeError, ValueError):
             db.rollback()
             continue
@@ -514,11 +634,7 @@ def reconcile_pending_owner_action_audits(db: Session) -> int:
         except HTTPException:
             _saga_finish(db, row, "PENDING")
             continue
-        success = (set(result) == {"operation_id", "operation", "session_id", "status", "response_sha256"}
-                   and result.get("operation_id") == operation_id and result.get("operation") == row.action
-                   and result.get("session_id") == sid and result.get("status") == "SUCCESS"
-                   and isinstance(result.get("response_sha256"), str)
-                   and re.fullmatch(r"[0-9a-f]{64}", result["response_sha256"]) is not None)
+        success = _receipt_confirms_operation(detail, result)
         if success:
             _saga_finish(db, row, "SUCCESS")
             count += 1
@@ -534,7 +650,7 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
     if body:
         raise _generic_bad_request()
     sid = _runtime_session_id(store)
-    audit = _saga_pending(db, user, store, "owner_login_session_create")
+    audit = _saga_pending(db, user, store, "owner_login_session_create", request.headers.get("x-owner-operation-id"), request.headers.get("x-owner-ack-operation-id"))
     namespace = sid.split(":", 1)[0]
     try:
         result = await run_in_threadpool(
@@ -551,7 +667,7 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
             operation_id=json.loads(audit.detail)["operation_id"],
         )
     except HTTPException:
-        raise
+        raise _owner_unknown(db, audit)
     if (
         set(result) != {"session_id", "expires_in", "restored"}
         or result.get("session_id") != sid
@@ -559,7 +675,7 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
         or not (0 < result["expires_in"] <= 600)
         or type(result.get("restored")) is not bool
     ):
-        raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
+        raise _owner_unknown(db, audit)
     try: _saga_finish(db, audit, "SUCCESS")
     except Exception as exc: raise HTTPException(status_code=503, detail="审计状态暂不可用") from exc
     return {"store_id": store.id, "status": "LOGIN_REQUIRED", "expires_in": result["expires_in"]}
@@ -568,20 +684,18 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
 @router.get("/stores/{store_id}/login-session")
 async def owner_login_session_status(store_id: int, request: Request, db: Session = Depends(get_db)):
     user, store = _require_owner_store(store_id, request, db)
-    audit = _saga_pending(db, user, store, "owner_login_session_status")
     sid = _runtime_session_id(store)
+    audit = _saga_pending(db, user, store, "owner_login_session_status", request.headers.get("x-owner-operation-id"), request.headers.get("x-owner-ack-operation-id"))
     try:
         result = await run_in_threadpool(_runtime_call, "GET", f"/sessions/{quote(sid, safe='')}",
                                          operation_id=json.loads(audit.detail)["operation_id"])
     except HTTPException:
-        raise
+        raise _owner_unknown(db, audit)
     if set(result) != {"status"}:
-        _saga_finish(db, audit, "FAILED")
-        raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
+        raise _owner_unknown(db, audit)
     status = result.get("status")
     if status not in {"ACTIVE", "LOGIN_REQUIRED", "REVOKED", "EXPIRED", "HUMAN_ACTION_REQUIRED"}:
-        _saga_finish(db, audit, "FAILED")
-        raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
+        raise _owner_unknown(db, audit)
     _saga_finish(db, audit, "SUCCESS")
     return {"store_id": store.id, "status": status}
 
@@ -589,15 +703,15 @@ async def owner_login_session_status(store_id: int, request: Request, db: Sessio
 @router.delete("/stores/{store_id}/login-session")
 async def delete_owner_login_session(store_id: int, request: Request, db: Session = Depends(get_db)):
     user, store = _require_owner_store(store_id, request, db)
-    audit = _saga_pending(db, user, store, "owner_login_session_revoke")
     sid = _runtime_session_id(store)
+    audit = _saga_pending(db, user, store, "owner_login_session_revoke", request.headers.get("x-owner-operation-id"), request.headers.get("x-owner-ack-operation-id"))
     try:
         result = await run_in_threadpool(_runtime_call, "DELETE", f"/sessions/{quote(sid, safe='')}",
                                          operation_id=json.loads(audit.detail)["operation_id"])
     except HTTPException:
-        raise
+        raise _owner_unknown(db, audit)
     if set(result) != {"ok"} or result.get("ok") is not True:
-        raise HTTPException(status_code=503, detail="云端登录会话销毁失败")
+        raise _owner_unknown(db, audit)
     _saga_finish(db, audit, "SUCCESS")
     return {"ok": True, "store_id": store.id, "status": "REVOKED"}
 
@@ -608,13 +722,13 @@ async def owner_login_ticket(store_id: int, request: Request, db: Session = Depe
     body = await _json_body(request)
     if body:
         raise _generic_bad_request()
-    audit = _saga_pending(db, user, store, "owner_login_ticket")
     sid = _runtime_session_id(store)
+    audit = _saga_pending(db, user, store, "owner_login_ticket", request.headers.get("x-owner-operation-id"), request.headers.get("x-owner-ack-operation-id"))
     try:
         result = await run_in_threadpool(_runtime_call, "POST", "/tickets", {"session_id": sid},
                                          operation_id=json.loads(audit.detail)["operation_id"])
     except HTTPException:
-        raise
+        raise _owner_unknown(db, audit)
     if (
         set(result) != {"ticket", "expires_in"}
         or not isinstance(result.get("ticket"), str)
@@ -622,7 +736,7 @@ async def owner_login_ticket(store_id: int, request: Request, db: Session = Depe
         or type(result.get("expires_in")) is not int
         or not (0 < result["expires_in"] <= 120)
     ):
-        raise HTTPException(status_code=503, detail="云端登录运行时响应无效")
+        raise _owner_unknown(db, audit)
     _saga_finish(db, audit, "SUCCESS")
     return {"ticket": result["ticket"], "expires_in": result["expires_in"]}
 

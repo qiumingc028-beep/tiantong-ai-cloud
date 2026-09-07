@@ -299,9 +299,12 @@ def test_delete_session_rejects_missing_or_invalid_authentication(client, header
 
 
 def test_owner_delete_session_is_authenticated_runtime_idempotent(client, owner_headers, runtime_recorder):
+    import secrets
+    operation_id = secrets.token_hex(16)
     responses = [
-        client.delete("/api/jd-workbench/stores/1/login-session", headers=owner_headers),
-        client.delete("/api/jd-workbench/stores/1/login-session", headers=owner_headers),
+        client.delete("/api/jd-workbench/stores/1/login-session", headers={**owner_headers, "x-owner-operation-id": operation_id}),
+        # A deliberate second intent confirms the first result; an unknown retry cannot do this.
+        client.delete("/api/jd-workbench/stores/1/login-session", headers={**owner_headers, "x-owner-ack-operation-id": operation_id}),
     ]
 
     assert [response.status_code for response in responses] == [200, 200]
