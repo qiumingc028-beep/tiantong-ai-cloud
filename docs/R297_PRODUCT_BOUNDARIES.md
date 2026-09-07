@@ -24,7 +24,9 @@ Capture/control requests use only
 only `http://backend:8000/api/jd-workbench/internal/browser-session-authorize`.
 Python transports disable environment proxies and HTTP redirects. Authorization
 fetch rejects redirects. An explicitly enabled non-production controlled canary
-may use `http://127.0.0.1:<port>` with the same fixed paths; production rejects it.
+may use `http://127.0.0.1:<port>` with the same fixed paths; the container's
+authorization callback may also use the explicitly mapped `host.docker.internal`
+host gateway. Production rejects both controlled overrides.
 
 Production `JD_SESSION_NAMESPACE` must be `r297-` followed by 24 lowercase random
 hex digits (96 bits). Generate it once per deployment with

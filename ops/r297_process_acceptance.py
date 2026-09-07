@@ -348,7 +348,11 @@ def main() -> int:
         canary_root.mkdir()
         (canary_root / "r297-controlled-canary.html").write_text(
             '<!doctype html><html><body><span data-metric="gmv">123.45</span>'
-            '<span data-metric="orders">2</span><span data-metric="visitors">3</span></body></html>',
+            '<span data-metric="orders">2</span><span data-metric="visitors">3</span>'
+            '<span data-metric="profit_amount">10.00</span><span data-metric="ad_spend">5.00</span>'
+            '<span data-metric="roi">2.00</span><span data-metric="refunds_count">0</span>'
+            '<span data-metric="after_sales_count">0</span><span data-metric="favorites_count">1</span>'
+            '<span data-metric="cart_add_count">1</span><span data-metric="conversion_rate">0.50</span></body></html>',
             encoding="utf-8",
         )
         canary_handle = canary_log.open("ab", buffering=0)
@@ -377,7 +381,7 @@ def main() -> int:
             backend_host = run(
                 "docker", "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}"
             )
-            runtime_backend_host = backend_host
+            runtime_backend_host = "host.docker.internal"
         else:
             backend_host = "127.0.0.1"
             runtime_backend_host = "host.docker.internal"

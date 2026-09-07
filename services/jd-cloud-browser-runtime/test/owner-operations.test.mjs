@@ -213,3 +213,22 @@ test('late revocation of an old grant cannot remove its replacement session', as
     payload: {session_id: replacement.json().session_id}});
   assert.equal(ticket.statusCode, 200, 'late old authorization must not destroy the replacement');
 });
+
+test('controlled container authorization allows only the mapped host gateway and fixed path', async t => {
+  const f = await fixture(t, {authorizeSession: undefined});
+  const keys = ['APP_ENV', 'R297_CONTROLLED_CANARY', 'JD_BROWSER_SESSION_AUTH_URL'];
+  const original = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  t.after(() => { for (const key of keys) { if (original[key] === undefined) delete process.env[key]; else process.env[key] = original[key]; } });
+  process.env.APP_ENV = 'acceptance';
+  process.env.R297_CONTROLLED_CANARY = '1';
+  process.env.JD_BROWSER_SESSION_AUTH_URL = 'http://host.docker.internal:18000/api/jd-workbench/internal/browser-session-authorize';
+  await f.start().ready();
+  process.env.JD_BROWSER_SESSION_AUTH_URL = 'http://example.invalid:18000/api/jd-workbench/internal/browser-session-authorize';
+  assert.throws(f.start, /JD_SESSION_AUTH_DESTINATION_INVALID/);
+  process.env.JD_BROWSER_SESSION_AUTH_URL = 'http://host.docker.internal:18000/credential-sink';
+  assert.throws(f.start, /JD_SESSION_AUTH_DESTINATION_INVALID/);
+  process.env.APP_ENV = 'production';
+  f.options.sessionNamespace = 'r297-' + crypto.randomBytes(12).toString('hex');
+  process.env.JD_BROWSER_SESSION_AUTH_URL = 'http://host.docker.internal:18000/api/jd-workbench/internal/browser-session-authorize';
+  assert.throws(f.start, /JD_SESSION_AUTH_DESTINATION_INVALID/);
+});

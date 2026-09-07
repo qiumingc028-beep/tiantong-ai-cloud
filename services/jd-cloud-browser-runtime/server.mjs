@@ -189,7 +189,7 @@ function defaultSessionAuthorizer(controlToken) {
   if (destination !== 'http://backend:8000/api/jd-workbench/internal/browser-session-authorize') {
     const url = new URL(destination);
     if (process.env.APP_ENV === 'production' || process.env.R297_CONTROLLED_CANARY !== '1' ||
-        url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || url.username || url.password ||
+        url.protocol !== 'http:' || !['127.0.0.1', 'host.docker.internal'].includes(url.hostname) || !url.port || url.username || url.password ||
         url.pathname !== '/api/jd-workbench/internal/browser-session-authorize' || url.search || url.hash) {
       throw new Error('JD_SESSION_AUTH_DESTINATION_INVALID');
     }

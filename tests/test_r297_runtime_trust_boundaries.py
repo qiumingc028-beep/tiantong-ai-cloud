@@ -121,3 +121,19 @@ def test_production_runtime_enables_namespace_pin():
 
     runtime = Path("docker-compose.prod.yml").read_text().split("\n  postgres:\n", 1)[0]
     assert "\n    environment:\n      APP_ENV: production\n" in runtime
+
+
+def test_controlled_process_page_declares_complete_synthetic_observations():
+    import ast
+    import re
+    from pathlib import Path
+
+    source = Path("ops/r297_process_acceptance.py").read_text()
+    pages = [node.value for node in ast.walk(ast.parse(source))
+             if isinstance(node, ast.Constant) and isinstance(node.value, str)
+             and node.value.startswith("<!doctype html>")]
+    assert len(pages) == 1
+    observed = dict(re.findall(r'<span data-metric="([a-z_]+)">([^<]+)</span>', pages[0]))
+    assert jd_collectors.validate_dataset("metrics", observed) == observed
+    assert observed["gmv"] == "123.45"
+    assert 'runtime_backend_host = backend_host' not in source
