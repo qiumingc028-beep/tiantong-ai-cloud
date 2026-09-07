@@ -317,7 +317,7 @@ def owner_acceptance_status(store_id: int, request: Request, db: Session = Depen
             "completed_cycle_count": completed, "observed_at": _now().isoformat()}
 
 
-def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None, *, operation_id: str | None = None) -> dict[str, Any]:
     runtime_base = _runtime_base()
     token = get_settings().JD_BROWSER_CONTROL_TOKEN
     if not isinstance(token, str) or len(token.encode("utf-8")) < 32:
@@ -326,12 +326,18 @@ def _runtime_call(method: str, path: str, payload: dict[str, Any] | None = None)
     request = UrlRequest(
         f"{runtime_base}{path}",
         data=body,
-        headers={"content-type": "application/json", "x-internal-token": token},
+        headers={"content-type": "application/json", "x-internal-token": token,
+                 **({"x-owner-operation-id": operation_id} if operation_id else {})},
         method=method,
     )
     try:
         with urlopen(request, timeout=RUNTIME_REQUEST_TIMEOUT_SECONDS) as response:
             raw = response.read(512 * 1024)
+            if operation_id:
+                headers = getattr(response, "headers", {})
+                if (headers.get("x-owner-operation-id") != operation_id or
+                        headers.get("x-owner-result-sha256") != hashlib.sha256(raw).hexdigest()):
+                    raise ValueError("uncorrelated Runtime response")
         result = json.loads(raw)
     except (HTTPError, URLError, TimeoutError, ValueError, OSError) as exc:
         raise HTTPException(status_code=503, detail="云端登录运行时不可用") from exc
@@ -349,6 +355,7 @@ def _saga_pending(db: Session, user: User, store: Store, action: str) -> Employe
               "tenant_id": str(store.tenant_id), "company_id": str(store.company_id),
               "store_id": str(store.id), "platform": str(store.platform), "operation": action,
               "created_at": _now().isoformat(), "updated_at": _now().isoformat(),
+              "operation_id": uuid.uuid4().hex,
               "claim_token": uuid.uuid4().hex,
               "claim_until": (_now() + timedelta(seconds=60)).isoformat()}
     row = EmployeeLog(user_id=user.id, store_id=store.id, action=action, detail=json.dumps(detail, separators=(",", ":")))
@@ -443,9 +450,9 @@ def reconcile_pending_owner_action_audits(db: Session) -> int:
         except (TypeError, ValueError):
             db.rollback()
             continue
-        # Ticket issuance has no authoritative outcome lookup. Keep it pending;
-        # reissuing or declaring failure would invent a result for an unknown action.
-        if row.action == "owner_login_ticket":
+        operation_id = detail.get("operation_id")
+        if not isinstance(operation_id, str) or not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+            # Legacy rows have no causal proof. A current session cannot supply it.
             db.rollback()
             continue
         detail.update(claim_token=uuid.uuid4().hex, claim_until=(_now() + timedelta(seconds=60)).isoformat())
@@ -453,8 +460,7 @@ def reconcile_pending_owner_action_audits(db: Session) -> int:
         db.commit()
         row._owner_claim_token = detail["claim_token"]
         if detail.get("operation") != row.action:
-            _saga_finish(db, row, "FAILED")
-            count += 1
+            _saga_finish(db, row, "PENDING")
             continue
         scope = [
             detail.get("namespace"),
@@ -464,26 +470,24 @@ def reconcile_pending_owner_action_audits(db: Session) -> int:
             detail.get("platform"),
         ]
         if not all(isinstance(value, str) and value for value in scope):
-            _saga_finish(db, row, "FAILED")
-            count += 1
+            _saga_finish(db, row, "PENDING")
             continue
         sid = ":".join(scope)
         try:
-            result = _runtime_call("GET", f"/sessions/{quote(sid, safe='')}")
+            result = _runtime_call("GET", f"/operations/{operation_id}")
         except HTTPException:
             _saga_finish(db, row, "PENDING")
             continue
-        status = result.get("status") if set(result) == {"status"} else None
-        success = (
-            status in {"ACTIVE", "LOGIN_REQUIRED"}
-            if row.action == "owner_login_session_create"
-            else status in OWNER_SESSION_STATUSES
-            if row.action == "owner_login_session_status"
-            else status == "REVOKED"
-        )
+        success = (set(result) == {"operation_id", "operation", "session_id", "status", "response_sha256"}
+                   and result.get("operation_id") == operation_id and result.get("operation") == row.action
+                   and result.get("session_id") == sid and result.get("status") == "SUCCESS"
+                   and isinstance(result.get("response_sha256"), str)
+                   and re.fullmatch(r"[0-9a-f]{64}", result["response_sha256"]) is not None)
         if success:
             _saga_finish(db, row, "SUCCESS")
             count += 1
+        else:
+            _saga_finish(db, row, "PENDING")
     return count
 
 
@@ -508,6 +512,7 @@ async def create_owner_login_session(store_id: int, request: Request, db: Sessio
                 "store_id": str(store.id),
                 "platform": str(store.platform),
             },
+            operation_id=json.loads(audit.detail)["operation_id"],
         )
     except HTTPException:
         raise
@@ -530,7 +535,8 @@ async def owner_login_session_status(store_id: int, request: Request, db: Sessio
     audit = _saga_pending(db, user, store, "owner_login_session_status")
     sid = _runtime_session_id(store)
     try:
-        result = await run_in_threadpool(_runtime_call, "GET", f"/sessions/{quote(sid, safe='')}")
+        result = await run_in_threadpool(_runtime_call, "GET", f"/sessions/{quote(sid, safe='')}",
+                                         operation_id=json.loads(audit.detail)["operation_id"])
     except HTTPException:
         raise
     if set(result) != {"status"}:
@@ -550,7 +556,8 @@ async def delete_owner_login_session(store_id: int, request: Request, db: Sessio
     audit = _saga_pending(db, user, store, "owner_login_session_revoke")
     sid = _runtime_session_id(store)
     try:
-        result = await run_in_threadpool(_runtime_call, "DELETE", f"/sessions/{quote(sid, safe='')}")
+        result = await run_in_threadpool(_runtime_call, "DELETE", f"/sessions/{quote(sid, safe='')}",
+                                         operation_id=json.loads(audit.detail)["operation_id"])
     except HTTPException:
         raise
     if set(result) != {"ok"} or result.get("ok") is not True:
@@ -568,7 +575,8 @@ async def owner_login_ticket(store_id: int, request: Request, db: Session = Depe
     audit = _saga_pending(db, user, store, "owner_login_ticket")
     sid = _runtime_session_id(store)
     try:
-        result = await run_in_threadpool(_runtime_call, "POST", "/tickets", {"session_id": sid})
+        result = await run_in_threadpool(_runtime_call, "POST", "/tickets", {"session_id": sid},
+                                         operation_id=json.loads(audit.detail)["operation_id"])
     except HTTPException:
         raise
     if (
@@ -1014,23 +1022,25 @@ async def list_device_stores(request: Request, db: Session = Depends(get_db)):
     return result
 
 
-def resume_store_after_human_action(
-    db: Session,
-    device: JdWorkbenchDevice,
-    store: Store,
-    row: JdWorkbenchStoreStatus,
-    now: datetime,
-) -> None:
-    row.reason_code = None
-    row.retry_count = 0
-    row.last_error_at = None
-    row.next_sync_at = now
-    policy = db.query(JdWorkbenchSyncPolicy).filter(
-        JdWorkbenchSyncPolicy.tenant_id == device.tenant_id,
-        JdWorkbenchSyncPolicy.company_id == device.company_id,
-        JdWorkbenchSyncPolicy.store_id == store.id,
-    ).with_for_update().one_or_none()
-    if policy:
+def has_jd_recovery_proof(db: Session, policy: JdWorkbenchSyncPolicy | None, failed_at: datetime | None, now: datetime) -> bool:
+    if policy is None or failed_at is None:
+        return False
+    return db.query(JdSyncLog.id).filter(
+        JdSyncLog.tenant_id == policy.tenant_id,
+        JdSyncLog.company_id == policy.company_id,
+        JdSyncLog.store_id == policy.store_id,
+        JdSyncLog.source == "cloud_scheduler",
+        JdSyncLog.task_type == "sync_jd_smart",
+        JdSyncLog.status == "success",
+        JdSyncLog.claim_generation == policy.claim_generation,
+        JdSyncLog.started_at >= failed_at,
+        JdSyncLog.finished_at >= JdSyncLog.started_at,
+        JdSyncLog.finished_at <= now,
+    ).first() is not None
+
+
+def _fence_jd_policy(policy: JdWorkbenchSyncPolicy | None) -> None:
+    if policy is not None:
         if policy.active_task_id is not None or policy.queue_state is not None:
             policy.claim_generation += 1
         policy.active_task_id = None
@@ -1039,6 +1049,45 @@ def resume_store_after_human_action(
         policy.lease_started_at = None
         policy.lease_heartbeat_at = None
         policy.visibility_deadline = None
+
+
+def resume_store_after_human_action(
+    db: Session,
+    device: JdWorkbenchDevice,
+    store: Store,
+    now: datetime,
+) -> bool:
+    policy = db.query(JdWorkbenchSyncPolicy).filter(
+        JdWorkbenchSyncPolicy.tenant_id == device.tenant_id,
+        JdWorkbenchSyncPolicy.company_id == device.company_id,
+        JdWorkbenchSyncPolicy.store_id == store.id,
+    ).with_for_update().one_or_none()
+    blocked_rows = db.query(JdWorkbenchStoreStatus).join(
+        JdWorkbenchDevice, JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id,
+    ).filter(
+        JdWorkbenchStoreStatus.store_id == store.id,
+        JdWorkbenchDevice.tenant_id == device.tenant_id,
+        JdWorkbenchDevice.company_id == device.company_id,
+        or_(JdWorkbenchStoreStatus.status.in_({"ERROR", "HUMAN_ACTION_REQUIRED"}),
+            JdWorkbenchStoreStatus.reason_code.in_(HUMAN_REASON_CODES)),
+    ).with_for_update().populate_existing().all()
+    if not blocked_rows:
+        return False
+    # Device connectivity is not a JD recovery signal. Only a scoped, current
+    # generation capture started after the human-action failure proves recovery.
+    failed_at = (max(_aware(item.last_error_at) for item in blocked_rows)
+                 if all(item.last_error_at is not None for item in blocked_rows) else None)
+    if not has_jd_recovery_proof(db, policy, failed_at, now):
+        raise HTTPException(status_code=409, detail="尚无当前店铺的京东采集恢复证明")
+    for blocked in blocked_rows:
+        blocked.status = "IDLE"
+        blocked.reason_code = None
+        blocked.retry_count = 0
+        blocked.last_error_at = None
+        blocked.next_sync_at = now
+        blocked.updated_at = now
+    _fence_jd_policy(policy)
+    return True
 
 
 @router.post("/heartbeat")
@@ -1076,20 +1125,31 @@ async def heartbeat(request: Request, db: Session = Depends(get_db)):
         if not isinstance(store_id, int) or isinstance(store_id, bool):
             raise _generic_bad_request()
         store = require_authorized_store(db, user, store_id=store_id, write=True)
+        # Match Worker lock order, so a recovery cannot race a new error report.
+        policy = db.query(JdWorkbenchSyncPolicy).filter_by(
+            tenant_id=device.tenant_id, company_id=device.company_id, store_id=store.id,
+        ).with_for_update().one_or_none()
         row = _status_row(db, device.device_id, store.id)
-        prior_status = row.status
+        if (status == "ERROR" and reason_code not in HUMAN_REASON_CODES and
+                (row.status == "HUMAN_ACTION_REQUIRED" or row.reason_code in HUMAN_REASON_CODES)):
+            # A transport error cannot downgrade an unresolved JD human action.
+            status, reason_code = "HUMAN_ACTION_REQUIRED", row.reason_code
+            next_sync_at, retry_count = row.next_sync_at, row.retry_count
+        recovering = False
+        if status not in {"ERROR", "HUMAN_ACTION_REQUIRED"}:
+            recovering = resume_store_after_human_action(db, device, store, now)
+        elif status == "HUMAN_ACTION_REQUIRED" or reason_code in HUMAN_REASON_CODES:
+            _fence_jd_policy(policy)
         row.status = status
         row.reason_code = reason_code
         if last_attempt_at is not None:
             row.last_attempt_at = last_attempt_at
-        row.next_sync_at = next_sync_at
+        row.next_sync_at = now if recovering else next_sync_at
         row.retry_count = retry_count
         if status in {"ERROR", "HUMAN_ACTION_REQUIRED"}:
             row.last_error_at = now
         elif status in {"IDLE", "ONLINE", "SYNCING"}:
             row.last_error_at = None
-        if prior_status in {"ERROR", "HUMAN_ACTION_REQUIRED"} and status in {"IDLE", "ONLINE"}:
-            resume_store_after_human_action(db, device, store, row, now)
         row.updated_at = now
     device.client_version = client_version
     device.status = status
@@ -1105,6 +1165,7 @@ async def sync_data(request: Request, db: Session = Depends(get_db)):
     store = require_authorized_store(db, user, store_id=normalized["store_id"], write=True)
     if normalized["subject_id"] != store.company_id or store.company_id != device.company_id:
         raise HTTPException(status_code=403, detail="没有店铺访问权限")
+    resume_store_after_human_action(db, device, store, _now())
     digest = _payload_digest(normalized)
     existing_batch = db.query(JdWorkbenchSyncBatch).filter(
         JdWorkbenchSyncBatch.tenant_id == device.tenant_id,
@@ -1211,6 +1272,8 @@ async def update_sync_policy(store_id: int, request: Request, db: Session = Depe
     if not isinstance(enabled, bool) or interval_seconds not in ALLOWED_SYNC_INTERVAL_SECONDS:
         raise _generic_bad_request()
     policy = _sync_policy(db, user, store)
+    db.flush()
+    policy = db.query(JdWorkbenchSyncPolicy).filter_by(id=policy.id).with_for_update().populate_existing().one()
     policy.enabled = enabled
     policy.interval_seconds = interval_seconds
     policy.updated_by_user_id = user.id
@@ -1224,6 +1287,11 @@ async def update_sync_policy(store_id: int, request: Request, db: Session = Depe
         JdWorkbenchDevice.revoked_at.is_(None),
     ).all()
     for status_row in statuses:
+        if status_row.status == "HUMAN_ACTION_REQUIRED" or status_row.reason_code in HUMAN_REASON_CODES:
+            # Changing scheduling policy requests a retry, not proof of JD recovery.
+            status_row.next_sync_at = now if enabled else None
+            status_row.updated_at = now
+            continue
         status_row.status = "IDLE" if enabled else "PAUSED"
         status_row.reason_code = None
         status_row.next_sync_at = now if enabled else None

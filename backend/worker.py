@@ -103,8 +103,10 @@ def _clear_policy_lease(policy: JdWorkbenchSyncPolicy) -> None:
     policy.visibility_deadline = None
 
 
-def _status_rows(db, policy: JdWorkbenchSyncPolicy):
-    return db.query(JdWorkbenchStoreStatus).join(
+def _status_rows(db, policy: JdWorkbenchSyncPolicy, *, include_blocked=False):
+    from .routers.jd_workbench import HUMAN_REASON_CODES, has_jd_recovery_proof
+
+    rows = db.query(JdWorkbenchStoreStatus).join(
         JdWorkbenchDevice,
         JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id,
     ).filter(
@@ -113,6 +115,13 @@ def _status_rows(db, policy: JdWorkbenchSyncPolicy):
         JdWorkbenchDevice.company_id == policy.company_id,
         JdWorkbenchDevice.revoked_at.is_(None),
     ).all()
+    if include_blocked:
+        return rows
+    # Every scheduler/reaper/completion writer uses this seam. A prior success
+    # or a still-running capture cannot erase a newer human-action failure.
+    now = datetime.now(timezone.utc)
+    return [row for row in rows if not (row.status == "HUMAN_ACTION_REQUIRED" or row.reason_code in HUMAN_REASON_CODES)
+            or has_jd_recovery_proof(db, policy, row.last_error_at, now)]
 
 
 def run_jd_workbench_scheduler(now=None):
@@ -134,7 +143,8 @@ def run_jd_workbench_scheduler(now=None):
             if policy is None:
                 continue
             statuses = _status_rows(db, policy)
-            status = statuses[0] if statuses else None
+            scheduling_rows = _status_rows(db, policy, include_blocked=True)
+            status = scheduling_rows[0] if scheduling_rows else None
             if status and status.next_sync_at and status.next_sync_at > now:
                 continue
             if policy.active_task_id:
@@ -165,8 +175,9 @@ def run_jd_workbench_scheduler(now=None):
             policy.queue_state = "ready"
             policy.visibility_deadline = now + timedelta(seconds=JD_TASK_VISIBILITY_SECONDS)
             policy.sync_window_started_at = window_started_at
-            for status_row in statuses:
-                status_row.status = "IDLE"
+            for status_row in scheduling_rows:
+                if status_row in statuses:
+                    status_row.status = "IDLE"
                 status_row.last_attempt_at = now
                 status_row.next_sync_at = now + timedelta(seconds=policy.interval_seconds)
             db.commit()

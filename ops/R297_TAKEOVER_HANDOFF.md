@@ -16,6 +16,43 @@ formal evidence remains a failure; a code test report is not release approval.
 Runtime unit tests, controlled canary metrics, native pagehide and Windows packaging are
 separate from real authenticated JD acceptance. No current fixture is proof of a real JD login.
 
+## Owner-operation causal receipts and human recovery
+
+The repair delta starts at `402b078fadcfaecb07472813738c56f3c4e47b37`; use the
+published candidate's full SHA, not that baseline, for the next acceptance run.
+PR49/PR51 history, 0050–0054, dataset validation/upserts and safety tests remain intact.
+
+Backend persists a unique `operation_id` with PENDING before each create/status/ticket/delete
+call. Runtime receives `x-owner-operation-id`, exclusively creates a signed PENDING receipt
+before execution, and fsyncs a SUCCESS receipt with the response SHA256 before returning 200.
+The response echoes the ID and digest; Backend rejects absent/mismatched correlation.
+Only `GET /internal/jd-browser/operations/{id}` can reconcile that operation: current session
+state is not historical proof. Receipts contain scope, action, ID, status and digest, never
+the ticket, cookie or credential. Duplicate IDs cannot execute again. Unknown outcomes,
+missing/corrupt receipts and legacy rows without IDs stay PENDING; they cannot be automatically
+certified from session state. Startup/periodic recovery retains claim-token fencing.
+
+Environment dependency: Runtime's existing archive volume must be persistent, writable and
+support exclusive create, atomic rename and fsync. Keep its master key stable across restarts;
+key loss/rotation without receipt migration makes old receipts unverifiable (PENDING).
+Do not delete receipts as session cleanup. Retention/disk capacity needs operational monitoring;
+disk write failure is fail-closed. Roll out matching Backend/Runtime builds on an authorized
+candidate environment; an older Runtime response lacks proof and the new Backend returns 503.
+No deployment is authorized by this document.
+
+Device ONLINE/IDLE/SYNCING/OFFLINE/PAUSED or a device-uploaded dataset is not proof of JD human
+recovery. The shared check requires a successful cloud capture for the same store and current
+claim generation, started after the latest error and finished by the current time. Missing
+proof returns 409 without clearing the block. Policy toggles can request retry but cannot clear
+human errors. Reporting a human error fences an active Worker immediately. Scheduler/reaper/
+completion status writers preserve the block until a newer proven capture completes; existing
+periodic scheduling remains the recovery probe (a same-window prior success can defer retry to
+the next window). Stale Workers cannot commit or ACK under the revoked generation.
+
+These are controlled contracts, not proof that real JD selectors or human handling work.
+Role ③/④ must verify the published delta; role ②/⑤ must supply any additional branch handoff.
+After planned code convergence, role ⑥ registers RC_HEAD separately from release acceptance.
+
 ## User configuration: existing Windows workflow
 
 The GitHub connection available to this takeover supports Git/PR/Actions operations but does

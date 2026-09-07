@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from urllib.error import URLError
@@ -30,9 +31,11 @@ SESSION_ID = ":".join((SESSION_NAMESPACE, "1", "1", "1", CONTRACT["valid_scope"]
 
 
 class _RuntimeResponse:
-    def __init__(self, payload: dict[str, object], status: int = 200):
+    def __init__(self, payload: dict[str, object], status: int = 200, request=None):
         self.payload = payload
         self.status = status
+        self.headers = {"x-owner-operation-id": request.get_header("X-owner-operation-id"),
+                        "x-owner-result-sha256": hashlib.sha256(self.read()).hexdigest()} if request else {}
 
     def read(self, size: int = -1) -> bytes:
         payload = json.dumps(self.payload).encode("utf-8")
@@ -57,13 +60,13 @@ class _RuntimeRecorder:
         method = request.get_method()
         url = request.full_url
         if method == "POST" and url.endswith("/sessions"):
-            return _RuntimeResponse({"session_id": SESSION_ID, "expires_in": 600, "restored": False})
+            return _RuntimeResponse({"session_id": SESSION_ID, "expires_in": 600, "restored": False}, request=request)
         if method == "GET" and "/sessions/" in url:
-            return _RuntimeResponse({"status": "ACTIVE"})
+            return _RuntimeResponse({"status": "ACTIVE"}, request=request)
         if method == "DELETE" and "/sessions/" in url:
-            return _RuntimeResponse({"ok": True})
+            return _RuntimeResponse({"ok": True}, request=request)
         if method == "POST" and url.endswith("/tickets"):
-            return _RuntimeResponse({"ticket": "viewer-ticket-secret", "expires_in": 60})
+            return _RuntimeResponse({"ticket": "viewer-ticket-secret", "expires_in": 60}, request=request)
         raise AssertionError(f"unexpected runtime request: {method} {url}")
 
 

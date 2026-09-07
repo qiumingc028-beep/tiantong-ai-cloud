@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
@@ -29,8 +31,10 @@ SENSITIVE_VALUES = (CONTROL_TOKEN, "viewer-ticket-secret", "cookie-canary-secret
 
 
 class _Response:
-    def __init__(self, payload: dict[str, object]):
+    def __init__(self, payload: dict[str, object], request=None):
         self.payload = payload
+        self.headers = {"x-owner-operation-id": request.get_header("X-owner-operation-id"),
+                        "x-owner-result-sha256": hashlib.sha256(self.read()).hexdigest()} if request else {}
 
     def read(self, size: int = -1) -> bytes:
         content = json.dumps(self.payload).encode("utf-8")
@@ -41,6 +45,13 @@ class _Response:
 
     def __exit__(self, *_args):
         return False
+
+
+def _receipt(path, operation="owner_login_session_create", status="SUCCESS"):
+    assert "/operations/" in path
+    return {"operation_id": path.rsplit("/", 1)[1], "operation": operation,
+            "session_id": SESSION_ID, "status": status,
+            "response_sha256": hashlib.sha256(b"response").hexdigest() if status == "SUCCESS" else None}
 
 
 @pytest.fixture(autouse=True)
@@ -90,7 +101,7 @@ def test_owner_audit_saga_commits_pending_before_runtime_then_success(
         assert len(rows) == 1
         assert rows[0][1]["status"] == "PENDING"
         observed.append((request, timeout))
-        return _Response({"session_id": SESSION_ID, "expires_in": 600, "restored": False})
+        return _Response({"session_id": SESSION_ID, "expires_in": 600, "restored": False}, request)
 
     monkeypatch.setattr(jd_workbench, "urlopen", runtime)
     response = client.post("/api/jd-workbench/stores/1/login-session", headers=owner_headers, json={})
@@ -130,8 +141,8 @@ def test_owner_audit_saga_reconciles_after_success_update_commit_crash(
     def runtime(request, timeout=None):
         runtime_calls.append((request, timeout))
         if request.get_method() == "POST":
-            return _Response({"session_id": SESSION_ID, "expires_in": 600, "restored": False})
-        return _Response({"status": "ACTIVE"})
+            return _Response({"session_id": SESSION_ID, "expires_in": 600, "restored": False}, request)
+        return _Response(_receipt(request.full_url), request)
 
     def fail_success_update(session, _flush_context, _instances):
         for row in session.dirty:
@@ -211,6 +222,7 @@ def test_owner_audit_saga_reconciles_every_owner_operation(
             store_id=1,
             action=action,
             detail=json.dumps({
+                "operation_id": uuid.uuid4().hex,
                 "status": "PENDING",
                 "namespace": VECTORS["namespace"],
                 "tenant_id": "1",
@@ -228,7 +240,7 @@ def test_owner_audit_saga_reconciles_every_owner_operation(
 
     def runtime(method, path, payload=None):
         calls.append((method, path, payload))
-        return {"status": runtime_status}
+        return _receipt(path, action, "SUCCESS" if runtime_status else "PENDING")
 
     monkeypatch.setattr(jd_workbench, "_runtime_call", runtime)
     db = test_db()
@@ -238,7 +250,7 @@ def test_owner_audit_saga_reconciles_every_owner_operation(
         db.close()
 
     assert _audit_rows(test_db, action)[-1][1]["status"] == expected_status
-    assert len(calls) == (0 if action == "owner_login_ticket" else 1)
+    assert len(calls) == 1
 
 
 def test_worker_periodic_maintenance_runs_owner_audit_reconciler(monkeypatch):
@@ -265,6 +277,7 @@ def test_application_startup_reconciles_pending_owner_audit(
             store_id=1,
             action="owner_login_session_create",
             detail=json.dumps({
+                "operation_id": uuid.uuid4().hex,
                 "status": "PENDING",
                 "namespace": VECTORS["namespace"],
                 "tenant_id": "1",
@@ -282,7 +295,7 @@ def test_application_startup_reconciles_pending_owner_audit(
     monkeypatch.setattr(
         jd_workbench,
         "_runtime_call",
-        lambda method, path, payload=None: runtime_calls.append((method, path, payload)) or {"status": "ACTIVE"},
+        lambda method, path, payload=None: runtime_calls.append((method, path, payload)) or _receipt(path),
     )
     monkeypatch.setattr(backend_main, "SessionLocal", test_db)
     monkeypatch.setattr(backend_main, "ensure_tables", lambda: None)
@@ -318,6 +331,7 @@ def test_owner_audit_reconciler_claims_once_across_concurrent_workers(
             store_id=1,
             action="owner_login_session_create",
             detail=json.dumps({
+                "operation_id": uuid.uuid4().hex,
                 "status": "PENDING",
                 "namespace": VECTORS["namespace"],
                 "tenant_id": "1",
@@ -350,7 +364,7 @@ def test_owner_audit_reconciler_claims_once_across_concurrent_workers(
         assert both_selects_completed.wait(timeout=5), "both workers must finish the pending-row claim query"
         with runtime_calls_lock:
             runtime_calls.append((method, path, payload))
-        return {"status": "ACTIVE"}
+        return _receipt(path)
 
     def reconcile():
         worker_db = sessions()
@@ -426,6 +440,7 @@ def test_owner_audit_reconciler_retries_transient_runtime_failure(test_db, monke
             store_id=1,
             action="owner_login_session_create",
             detail=json.dumps({
+                "operation_id": uuid.uuid4().hex,
                 "status": "PENDING",
                 "namespace": VECTORS["namespace"],
                 "tenant_id": "1",
@@ -456,7 +471,7 @@ def test_owner_audit_reconciler_retries_transient_runtime_failure(test_db, monke
     monkeypatch.setattr(
         jd_workbench,
         "_runtime_call",
-        lambda *_args, **_kwargs: runtime_calls.append("success") or {"status": "ACTIVE"},
+        lambda *_args, **_kwargs: runtime_calls.append("success") or _receipt(_args[1]),
     )
     db = test_db()
     try:
@@ -477,6 +492,7 @@ def test_owner_audit_reconciler_processes_a_bounded_batch(test_db, monkeypatch):
                 store_id=1,
                 action="owner_login_session_status",
                 detail=json.dumps({
+                    "operation_id": uuid.uuid4().hex,
                     "status": "PENDING",
                     "namespace": VECTORS["namespace"],
                     "tenant_id": "1",
@@ -490,7 +506,7 @@ def test_owner_audit_reconciler_processes_a_bounded_batch(test_db, monkeypatch):
     finally:
         db.close()
 
-    monkeypatch.setattr(jd_workbench, "_runtime_call", lambda *_args: {"status": "ACTIVE"})
+    monkeypatch.setattr(jd_workbench, "_runtime_call", lambda *_args: _receipt(_args[1], "owner_login_session_status"))
     db = test_db()
     try:
         assert jd_workbench.reconcile_pending_owner_action_audits(db) == jd_workbench.OWNER_SAGA_RECONCILE_BATCH_SIZE
@@ -503,7 +519,7 @@ def test_owner_audit_reconciler_processes_a_bounded_batch(test_db, monkeypatch):
 def test_owner_status_invalid_runtime_response_finishes_audit_failed(
     client, owner_headers, test_db, monkeypatch
 ):
-    monkeypatch.setattr(jd_workbench, "urlopen", lambda *_args, **_kwargs: _Response({"status": "UNKNOWN"}))
+    monkeypatch.setattr(jd_workbench, "urlopen", lambda *_args, **_kwargs: _Response({"status": "UNKNOWN"}, _args[0]))
 
     response = client.get("/api/jd-workbench/stores/1/login-session", headers=owner_headers)
 
@@ -549,7 +565,7 @@ def test_recovery_does_not_take_over_an_inflight_owner_request(client, owner_hea
     def runtime(*_args, **_kwargs):
         with test_db() as db:
             assert jd_workbench.reconcile_pending_owner_action_audits(db) == 0
-        return _Response({"session_id": SESSION_ID, "expires_in": 600, "restored": False})
+        return _Response({"session_id": SESSION_ID, "expires_in": 600, "restored": False}, _args[0])
 
     monkeypatch.setattr(jd_workbench, "urlopen", runtime)
     response = client.post("/api/jd-workbench/stores/1/login-session", headers=owner_headers, json={})
@@ -567,6 +583,7 @@ def test_postgresql_owner_recovery_claim_and_stale_writer_fencing(postgres_datab
     sessions = sessionmaker(bind=engine, autoflush=False)
     with sessions() as db:
         row = EmployeeLog(action="owner_login_session_create", detail=json.dumps({
+            "operation_id": uuid.uuid4().hex,
             "status": "PENDING", "namespace": VECTORS["namespace"], "tenant_id": "1",
             "company_id": "1", "store_id": "1", "platform": "jd", "operation": "owner_login_session_create",
         }))
@@ -584,7 +601,7 @@ def test_postgresql_owner_recovery_claim_and_stale_writer_fencing(postgres_datab
         if len(calls) == 1:
             entered.set()
             assert release.wait(10)
-            return {"status": "ACTIVE"}
+            return _receipt(_args[1])
         raise jd_workbench.HTTPException(status_code=503, detail="unknown")
 
     monkeypatch.setattr(jd_workbench, "_runtime_call", runtime)
@@ -634,6 +651,7 @@ def test_worker_startup_runs_maintenance_before_consuming_tasks(monkeypatch):
 def test_backend_periodic_recovery_survives_transient_failure(test_db, monkeypatch):
     with test_db() as db:
         db.add(EmployeeLog(action="owner_login_session_create", detail=json.dumps({
+            "operation_id": uuid.uuid4().hex,
             "status": "PENDING", "namespace": VECTORS["namespace"], "tenant_id": "1",
             "company_id": "1", "store_id": "1", "platform": "jd", "operation": "owner_login_session_create",
         })))
@@ -646,7 +664,7 @@ def test_backend_periodic_recovery_survives_transient_failure(test_db, monkeypat
         if len(calls) == 1:
             raise jd_workbench.HTTPException(status_code=503, detail="temporary")
         recovered.set()
-        return {"status": "ACTIVE"}
+        return _receipt(_args[1])
 
     monkeypatch.setattr(jd_workbench, "_runtime_call", runtime)
     monkeypatch.setattr(backend_main, "OWNER_AUDIT_POLL_SECONDS", 0.02)

@@ -368,6 +368,77 @@ export function buildApp({
   const verifyControl = verifyToken(controlKey);
   const verifyCapture = verifyToken(captureKey);
 
+  const operationRoot = path.join(archiveRoot, 'owner-operations');
+  const operationIdPattern = /^[0-9a-f]{32}$/;
+  const operationTypes = {
+    'POST /internal/jd-browser/sessions': 'owner_login_session_create',
+    'GET /internal/jd-browser/sessions/:sid': 'owner_login_session_status',
+    'POST /internal/jd-browser/tickets': 'owner_login_ticket',
+    'DELETE /internal/jd-browser/sessions/:sid': 'owner_login_session_revoke'
+  };
+  const signOperation = record => signedValue(record, crypto.createHmac('sha256', encryptionKey).update('owner-operation-v1').digest());
+
+  async function syncOperationDirectory(directoryPath) {
+    const directory = await fs.open(directoryPath, 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+  }
+
+  async function writeOperation(record, initial = false) {
+    await fs.mkdir(operationRoot, {recursive: true, mode: 0o700});
+    // Persist new directory entries before executing any Owner side effect.
+    await syncOperationDirectory(path.dirname(archiveRoot));
+    await syncOperationDirectory(archiveRoot);
+    const target = path.join(operationRoot, `${record.operation_id}.json`);
+    const filename = initial ? target : `${target}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+    const handle = await fs.open(filename, 'wx', 0o600);
+    try { await handle.writeFile(signOperation(record)); await handle.sync(); }
+    finally { await handle.close(); }
+    if (!initial) await fs.rename(filename, target);
+    await syncOperationDirectory(operationRoot);
+  }
+
+  async function readOperation(id) {
+    const value = await fs.readFile(path.join(operationRoot, `${id}.json`), 'utf8');
+    const [body, signature, ...extra] = value.split('.');
+    const record = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (extra.length || !safeEqual(signOperation(record), value) || !signature ||
+        record.operation_id !== id || !parseSessionId(record.session_id, sessionNamespace) ||
+        !Object.values(operationTypes).includes(record.operation) ||
+        !['PENDING', 'SUCCESS'].includes(record.status)) throw new Error('OWNER_OPERATION_INVALID');
+    return record;
+  }
+
+  app.addHook('preHandler', async (request, reply) => {
+    const id = request.headers['x-owner-operation-id'];
+    if (id === undefined) return;
+    if (!safeEqual(request.headers['x-internal-token'], controlKey)) return reply.code(401).send({error: 'UNAUTHORIZED'});
+    const operation = operationTypes[`${request.method} ${request.routeOptions.url}`];
+    if (!operation || typeof id !== 'string' || !operationIdPattern.test(id)) return reply.code(400).send({error: 'OWNER_OPERATION_INVALID'});
+    const scope = operation === 'owner_login_session_create' ? normalizedScope(request.body)
+      : parseSessionId(operation === 'owner_login_ticket' ? request.body?.session_id : request.params.sid, sessionNamespace);
+    if (!scope || scope.namespace !== sessionNamespace) return reply.code(400).send({error: 'OWNER_OPERATION_SCOPE_INVALID'});
+    const record = {operation_id: id, operation, session_id: sessionId(scope), status: 'PENDING', response_sha256: null};
+    try { await writeOperation(record, true); }
+    catch (error) { return reply.code(error.code === 'EEXIST' ? 409 : 503).send({error: 'OWNER_OPERATION_UNAVAILABLE'}); }
+    request.ownerOperation = record;
+  });
+
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (!request.ownerOperation || reply.statusCode !== 200) return payload;
+    const responseSha = crypto.createHash('sha256').update(payload).digest('hex');
+    const record = {...request.ownerOperation, status: 'SUCCESS', response_sha256: responseSha};
+    try { await writeOperation(record); }
+    catch (_error) { reply.code(503); return JSON.stringify({error: 'OWNER_OPERATION_UNAVAILABLE'}); }
+    reply.header('x-owner-operation-id', record.operation_id).header('x-owner-result-sha256', responseSha);
+    return payload;
+  });
+
+  app.get('/internal/jd-browser/operations/:id', {preHandler: verifyControl}, async (request, reply) => {
+    if (!operationIdPattern.test(request.params.id)) return reply.code(400).send({error: 'OWNER_OPERATION_INVALID'});
+    try { return await readOperation(request.params.id); }
+    catch (error) { return reply.code(error.code === 'ENOENT' ? 404 : 503).send({error: 'OWNER_OPERATION_UNAVAILABLE'}); }
+  });
+
   app.get('/internal/jd-browser/health', { preHandler: verifyControl }, async () => {
     await purgeExpired();
     return { ok: true, service: 'jd-cloud-browser-runtime', sessions: browserSessions.size,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -1133,7 +1133,7 @@ def test_r297_failure_retry_runtime_survives_store_refresh(client, owner_headers
     assert refreshed["last_error_at"]
 
 
-def test_r297_manual_handling_success_report_makes_store_due_for_automatic_resume(client, owner_headers):
+def test_r297_manual_handling_success_report_makes_store_due_for_automatic_resume(client, owner_headers, test_db):
     device_token, _ = _pair_device(client, owner_headers)
     store = _authorized_store(client, device_token)
     blocked = _device_request(
@@ -1152,6 +1152,15 @@ def test_r297_manual_handling_success_report_makes_store_due_for_automatic_resum
     )
     assert blocked.status_code == 200, blocked.text
     assert _authorized_store(client, device_token)["status"] == "HUMAN_ACTION_REQUIRED"
+
+    from backend.models import JdSyncLog, JdWorkbenchSyncPolicy
+    with test_db() as db:
+        policy = db.query(JdWorkbenchSyncPolicy).filter_by(store_id=store["store_id"]).one()
+        now = datetime.now(timezone.utc)
+        db.add(JdSyncLog(tenant_id=policy.tenant_id, company_id=policy.company_id, store_id=policy.store_id,
+            task_id=str(uuid4()), task_type="sync_jd_smart", source="cloud_scheduler", status="success",
+            claim_generation=policy.claim_generation, sync_window_started_at=now, started_at=now, finished_at=now))
+        db.commit()
 
     resumed = _device_request(
         client,
@@ -1173,6 +1182,118 @@ def test_r297_manual_handling_success_report_makes_store_due_for_automatic_resum
     if resumed_at.tzinfo is None:
         resumed_at = resumed_at.replace(tzinfo=timezone.utc)
     assert resumed_at <= datetime.now(timezone.utc)
+
+
+@pytest.mark.parametrize("reported_status,other_device,proof", [
+    (status, other, None) for status in ("ONLINE", "IDLE", "SYNCING", "OFFLINE", "PAUSED") for other in (False, True)
+] + [("ONLINE", False, proof) for proof in ("old_generation", "old_capture", "unfinished", "device", "wrong_task", "future")])
+def test_device_online_cannot_prove_jd_human_recovery(client, owner_headers, test_db, reported_status, other_device, proof):
+    device_token, _ = _pair_device(client, owner_headers)
+    store_id = _authorized_store(client, device_token)["store_id"]
+    blocked = _device_request(client, "POST", "/api/jd-workbench/heartbeat", device_token, {
+        "client_version": CLIENT_VERSION, "status": "HUMAN_ACTION_REQUIRED", "store_id": store_id,
+        "reason_code": "RISK_CONTROL", "retry_count": 3, "next_sync_at": "2099-09-01T08:02:00Z",
+    })
+    assert blocked.status_code == 200
+    before = _authorized_store(client, device_token)
+    if proof:
+        from backend.models import JdSyncLog, JdWorkbenchSyncPolicy
+        with test_db() as db:
+            policy = db.query(JdWorkbenchSyncPolicy).filter_by(store_id=store_id).one()
+            now = datetime.now(timezone.utc)
+            db.add(JdSyncLog(tenant_id=policy.tenant_id, company_id=policy.company_id, store_id=store_id,
+                task_id=str(uuid4()), task_type="sync_jzt" if proof == "wrong_task" else "sync_jd_smart",
+                source="device" if proof == "device" else "cloud_scheduler", status="success",
+                claim_generation=policy.claim_generation - (1 if proof == "old_generation" else 0),
+                sync_window_started_at=now, started_at=now - timedelta(days=1) if proof == "old_capture" else now,
+                finished_at=None if proof == "unfinished" else now + timedelta(days=1) if proof == "future" else now))
+            db.commit()
+    reporting_token = _pair_device(client, owner_headers)[0] if other_device else device_token
+    response = _device_request(client, "POST", "/api/jd-workbench/heartbeat", reporting_token, {
+        "client_version": CLIENT_VERSION, "status": reported_status, "store_id": store_id,
+    })
+    assert response.status_code == 409
+    after = _authorized_store(client, device_token)
+    for field in ("status", "reason_code", "retry_count", "next_sync_at", "last_error_at"):
+        assert after[field] == before[field]
+
+
+@pytest.mark.parametrize("route", ("upload", "policy", "ordinary_error"))
+def test_device_upload_and_policy_toggle_cannot_clear_human_block(client, owner_headers, route):
+    token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, token)
+    assert _device_request(client, "POST", "/api/jd-workbench/heartbeat", token, {
+        "client_version": CLIENT_VERSION, "status": "HUMAN_ACTION_REQUIRED", "store_id": store["store_id"],
+        "reason_code": "RISK_CONTROL",
+    }).status_code == 200
+    if route == "upload":
+        assert _device_request(client, "POST", "/api/jd-workbench/sync", token, _sync_payload(store)).status_code == 409
+    elif route == "policy":
+        assert client.patch(f"/api/jd-workbench/sync-policies/{store['store_id']}", headers=owner_headers,
+                            json={"enabled": True}).status_code == 200
+    else:
+        assert _device_request(client, "POST", "/api/jd-workbench/heartbeat", token, {
+            "client_version": CLIENT_VERSION, "status": "ERROR", "store_id": store["store_id"],
+            "reason_code": "CLOUD_CONNECTION_FAILED",
+        }).status_code == 200
+    current = _authorized_store(client, token)
+    assert current["status"] == "HUMAN_ACTION_REQUIRED"
+    assert current["reason_code"] == "RISK_CONTROL"
+
+
+@pytest.mark.parametrize("reported_status", ("ERROR", "HUMAN_ACTION_REQUIRED"))
+def test_human_error_fences_old_worker_and_blocks_old_success_status_updates(client, owner_headers, test_db, reported_status):
+    from backend import worker
+    from backend.models import JdSyncLog, JdWorkbenchSyncPolicy
+    from backend.services.jd_collectors import JdCollectorError
+
+    token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, token)
+    now = datetime.now(timezone.utc)
+    with test_db() as db:
+        policy = db.query(JdWorkbenchSyncPolicy).filter_by(store_id=store["store_id"]).one()
+        policy.active_task_id, policy.lease_worker_id, policy.queue_state = "old-task", "old-worker", "processing"
+        policy.claim_generation = 7
+        policy.visibility_deadline = now + timedelta(minutes=5)
+        db.add(JdSyncLog(tenant_id=policy.tenant_id, company_id=policy.company_id, store_id=policy.store_id,
+            task_id="previous-task", task_type="sync_jd_smart", source="cloud_scheduler", status="success",
+            claim_generation=7, sync_window_started_at=now, started_at=now, finished_at=now))
+        db.commit()
+    assert _device_request(client, "POST", "/api/jd-workbench/heartbeat", token, {
+        "client_version": CLIENT_VERSION, "status": reported_status, "store_id": store["store_id"],
+        "reason_code": "RISK_CONTROL",
+    }).status_code == 200
+    with test_db() as db:
+        policy = db.query(JdWorkbenchSyncPolicy).filter_by(store_id=store["store_id"]).one()
+        assert policy.claim_generation == 8
+        assert policy.active_task_id is None
+        task = {"task_id": "old-task", "db_claim_generation": 7,
+                "payload": {"tenant_id": policy.tenant_id, "company_id": policy.company_id, "store_id": policy.store_id}}
+        with pytest.raises(JdCollectorError, match="任务租约已失效"):
+            worker._assert_jd_workbench_claim_owned(db, task, "old-worker")
+        assert worker._status_rows(db, policy) == [], "old success cannot authorize scheduler/reaper status clearing"
+        assert len(worker._status_rows(db, policy, include_blocked=True)) == 1, "due-time reads retain blocked stores"
+        fresh = datetime.now(timezone.utc)
+        db.add(JdSyncLog(tenant_id=policy.tenant_id, company_id=policy.company_id, store_id=policy.store_id,
+            task_id="recovery-task", task_type="sync_jd_smart", source="cloud_scheduler", status="success",
+            claim_generation=8, sync_window_started_at=fresh, started_at=fresh, finished_at=fresh))
+        db.commit()
+        assert len(worker._status_rows(db, policy)) == 1, "a fresh proven capture allows state convergence"
+
+
+def test_human_block_keeps_scheduler_future_due_time(client, owner_headers, test_db, monkeypatch):
+    from backend import worker
+
+    token, _ = _pair_device(client, owner_headers)
+    store = _authorized_store(client, token)
+    assert _device_request(client, "POST", "/api/jd-workbench/heartbeat", token, {
+        "client_version": CLIENT_VERSION, "status": "HUMAN_ACTION_REQUIRED", "store_id": store["store_id"],
+        "reason_code": "RISK_CONTROL", "next_sync_at": "2099-09-01T08:02:00Z",
+    }).status_code == 200
+    monkeypatch.setattr(worker, "SessionLocal", test_db)
+    monkeypatch.setattr(worker, "enqueue_task", lambda *_args, **_kwargs: pytest.fail("future retry must not enqueue"))
+    # SQLite returns naive timestamps; PostgreSQL concurrency is covered separately.
+    assert worker.run_jd_workbench_scheduler(now=datetime.now()) == 0
 
 
 def test_r297_device_session_policy_and_status_survive_backend_client_recreation(

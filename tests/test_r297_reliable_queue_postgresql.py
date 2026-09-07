@@ -127,6 +127,7 @@ def test_manual_resume_fences_the_active_claim_generation(postgres_database_fact
         status = JdWorkbenchStoreStatus(
             device_id=device.device_id, store_id=store.id, status="HUMAN_ACTION_REQUIRED",
             reason_code="RISK_CONTROL", retry_count=3, next_sync_at=now + timedelta(days=1),
+            last_error_at=now - timedelta(seconds=1),
         )
         policy = JdWorkbenchSyncPolicy(
             tenant_id=tenant.id, company_id=company.id, store_id=store.id,
@@ -138,7 +139,11 @@ def test_manual_resume_fences_the_active_claim_generation(postgres_database_fact
         db.commit()
         scope = (tenant.id, company.id, store.id)
 
-        resume_store_after_human_action(db, device, store, status, now)
+        db.add(JdSyncLog(tenant_id=tenant.id, company_id=company.id, store_id=store.id,
+            task_id=str(uuid.uuid4()), task_type="sync_jd_smart", source="cloud_scheduler", status="success",
+            claim_generation=7, sync_window_started_at=now, started_at=now, finished_at=now))
+        db.commit()
+        resume_store_after_human_action(db, device, store, now)
         db.commit()
         db.refresh(policy)
         assert policy.claim_generation == 8
