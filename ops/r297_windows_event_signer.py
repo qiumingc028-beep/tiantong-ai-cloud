@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import ctypes
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,14 +13,20 @@ import re
 import secrets
 
 try:
-    from ops.r297_evidence_events import load_trust_manifest, sign_event, verify_signed_event
+    from ops.r297_evidence_events import (
+        load_trust_manifest, sign_event, verify_signed_event, write_sha256_bound_file,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "ops":
         raise
-    from r297_evidence_events import load_trust_manifest, sign_event, verify_signed_event
+    from r297_evidence_events import (
+        load_trust_manifest, sign_event, verify_signed_event, write_sha256_bound_file,
+    )
 
 
-_SCOPE_FIELDS = {"namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha"}
+_SCOPE_FIELDS = {
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
+}
 
 
 def _windows_process_is_running(process_id: int) -> bool:
@@ -117,6 +122,7 @@ def main() -> int:
     parser.add_argument("--store-id", type=int, required=True)
     parser.add_argument("--platform", required=True)
     parser.add_argument("--release-sha", required=True)
+    parser.add_argument("--run-id", required=True)
     parser.add_argument("--process-id", type=int, required=True)
     parser.add_argument("--process-started-at", required=True)
     args = parser.parse_args()
@@ -126,16 +132,27 @@ def main() -> int:
     if started_at.tzinfo is None:
         raise RuntimeError("electron process start time invalid")
     scope = {field: getattr(args, field) for field in _SCOPE_FIELDS}
+    sidecar = Path(f"{args.output}.sha256")
+    if args.output.exists() and not sidecar.exists():
+        content = args.output.read_bytes()
+        existing = json.loads(content)
+        verify_signed_event(
+            existing, event_type="electron_exit", issuer="windows_runner",
+            environment=os.getenv("APP_ENV", "").strip().lower(), now=datetime.now(timezone.utc),
+        )
+        if (
+            any(type(existing.get(field)) is not type(value) or existing.get(field) != value
+                for field, value in scope.items())
+            or existing.get("payload", {}).get("process_id") != args.process_id
+            or existing.get("payload", {}).get("process_started_at") != started_at.astimezone(timezone.utc).isoformat()
+        ):
+            raise ValueError("recovered electron event mismatch")
+        write_sha256_bound_file(args.output, content)
+        return 0
     event = produce_electron_exit_event(
         scope=scope, process_id=args.process_id, process_started_at=started_at,
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    args.output.write_text(json.dumps(event, sort_keys=True) + "\n", encoding="utf-8")
-    args.output.chmod(0o600)
-    digest = hashlib.sha256(args.output.read_bytes()).hexdigest()
-    sidecar = Path(f"{args.output}.sha256")
-    sidecar.write_text(f"{digest}  {args.output.name}\n", encoding="ascii")
-    sidecar.chmod(0o600)
+    write_sha256_bound_file(args.output, (json.dumps(event, sort_keys=True) + "\n").encode())
     return 0
 
 

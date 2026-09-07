@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import re
 from urllib.parse import urlparse
 
 from ops import r297_evidence_events
@@ -49,6 +50,8 @@ def inspect_controlled_material(*, environment: str, role: str) -> dict:
         return {"role": role, "result": "BLOCK", "missing": [], "invalid": ["ENVIRONMENT"]}
     if role not in roles:
         return {"role": role, "result": "BLOCK", "missing": [], "invalid": ["ROLE"]}
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{16,128}", os.getenv("R297_ACCEPTANCE_RUN_ID", "")):
+        missing.append("ACCEPTANCE_RUN_ID")
 
     role_keys = {
         "page_event_receiver": ("PAGE_EVENT_RECEIVER_PRIVATE_KEY",),

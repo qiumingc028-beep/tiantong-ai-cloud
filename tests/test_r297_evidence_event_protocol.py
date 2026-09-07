@@ -7,11 +7,15 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
+from pathlib import Path
 import sys
 
 import pytest
 
-from ops.r297_evidence_events import load_trust_manifest, signed_event_sha256, verify_acceptance_event_bundle
+from ops.r297_evidence_events import (
+    load_trust_manifest, signed_event_sha256, verify_acceptance_event_bundle,
+    write_sha256_bound_file,
+)
 from tests.test_r291_jd_workbench_cloud import TEST_RSA_D, TEST_RSA_N_B64
 
 
@@ -103,6 +107,7 @@ def _scope() -> dict:
         "store_id": 7,
         "platform": "jd",
         "release_sha": "9b466ac80122e35893cbaa408735136acc88331a",
+        "run_id": "r297-run-20260907-0001",
     }
 
 
@@ -117,6 +122,51 @@ def _nonce_ledger(tmp_path):
     lock.chmod(0o600)
     return ledger
 
+
+def test_bound_file_publish_recovers_body_only_crash(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    output.write_bytes(content)
+    output.chmod(0o600)
+
+    digest = write_sha256_bound_file(output, content)
+
+    assert output.read_bytes() == content
+    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+
+
+def test_bound_file_publish_rejects_mismatched_or_committed_output(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    output.write_bytes(b"wrong")
+    output.chmod(0o600)
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, b"right")
+    output.unlink()
+    write_sha256_bound_file(output, b"right")
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, b"right")
+
+
+def test_bound_file_publish_is_exclusive_under_concurrency(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+
+    def publish(content):
+        try:
+            write_sha256_bound_file(output, content)
+            return "published"
+        except FileExistsError:
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(publish, (b"first", b"second")))
+
+    assert sorted(results) == ["published", "rejected"]
+    content = output.read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
+    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
 
 def _integer(value: str) -> int:
     return int.from_bytes(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)), "big")
@@ -231,6 +281,7 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
     assert all(set(entry) == {
         "namespace", "tenant_id", "company_id", "store_id", "platform",
         "release_sha", "event_type", "key_id", "nonce",
+        "run_id",
     } for entry in ledger)
 
     with pytest.raises(ValueError, match="replayed evidence nonce"):
@@ -238,6 +289,20 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
             _bundle(now), expected_scope=_scope(), now=now,
             nonce_ledger=ledger_path,
         )
+
+
+def test_bundle_builder_accepts_only_complete_same_scope_signed_chain(monkeypatch):
+    from ops.r297_evidence_bundle import build_bundle
+
+    monkeypatch.setenv("APP_ENV", "test")
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    source = _bundle(now)
+
+    assert build_bundle(source["events"], expected_scope=_scope(), now=now) == source
+
+    source["events"][2]["release_sha"] = "0" * 40
+    with pytest.raises(ValueError, match="release_sha mismatch"):
+        build_bundle(source["events"], expected_scope=_scope(), now=now)
 
 
 def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
@@ -340,6 +405,7 @@ def test_process_evidence_requires_real_signed_event_inputs(monkeypatch, tmp_pat
         (lambda bundle, now: bundle["events"][0].update(company_id="other"), "company_id mismatch"),
         (lambda bundle, now: bundle["events"][0].update(store_id=8), "store_id mismatch"),
         (lambda bundle, now: bundle["events"][0].update(platform="other"), "platform mismatch"),
+        (lambda bundle, now: bundle["events"][0].update(run_id="other-run-000000"), "run_id mismatch"),
         (lambda bundle, now: bundle["events"][0].update(sequence=True), "event sequence mismatch"),
         (lambda bundle, now: bundle["events"][0].update(observed_at=(now - timedelta(minutes=6)).isoformat()), "expired evidence event"),
         (lambda bundle, now: bundle["events"][0].update(observed_at=(now + timedelta(minutes=1)).isoformat()), "future evidence event"),

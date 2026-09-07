@@ -23,6 +23,7 @@ try:
         signed_event_sha256,
         validate_page_event_payload,
         verify_signed_event,
+        write_sha256_bound_file,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "ops":
@@ -33,12 +34,15 @@ except ModuleNotFoundError as exc:
         signed_event_sha256,
         validate_page_event_payload,
         verify_signed_event,
+        write_sha256_bound_file,
     )
 
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _ARTIFACT_MANIFEST_RE = re.compile(r"r297-native-pagehide-manifest-[0-9a-f]{40}\.json")
-_SCOPE_FIELDS = ("namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha")
+_SCOPE_FIELDS = (
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
+)
 _RAW_PAGE_EVENT_FIELDS = {"event", "observed_at", "store_id", "release_sha"}
 _PAGEHIDE_BINDING = Path("/etc/tiantong/r297-pagehide-artifact-binding.json")
 _BINDING_FIELDS = {
@@ -276,16 +280,28 @@ def produce_page_event_receiver(raw_artifact: dict, authenticated_scope: dict) -
     return sign_event(event, environment=environment, manifest=manifest, issuer="page_event_receiver")
 
 
-def _validate_page_event_receiver(page_event: dict, environment: str, *, now: datetime) -> dict:
-    if (
-        page_event.get("event_type") != "web_page_close"
-        or page_event.get("issuer") != "page_event_receiver"
-        or not _SHA_RE.fullmatch(str(page_event.get("release_sha", "")))
+def _validate_subject_event(subject_event: dict, environment: str, *, now: datetime) -> dict:
+    event_type = subject_event.get("event_type")
+    issuer = subject_event.get("issuer")
+    expected = {
+        "web_page_close": ("page_event_receiver", 1),
+        "electron_exit": ("windows_runner", 3),
+    }.get(event_type)
+    if expected is None or issuer != expected[0] or subject_event.get("sequence") != expected[1]:
+        raise ValueError("invalid observer subject event")
+    if not _SHA_RE.fullmatch(str(subject_event.get("release_sha", ""))):
+        raise ValueError("invalid observer subject event")
+    if event_type == "web_page_close":
+        validate_page_event_payload(subject_event.get("payload"))
+    elif (
+        not isinstance(subject_event.get("payload"), dict)
+        or subject_event["payload"].get("exited") is not True
+        or type(subject_event["payload"].get("process_id")) is not int
+        or subject_event["payload"]["process_id"] <= 0
     ):
-        raise ValueError("invalid pagehide subject event")
-    validate_page_event_payload(page_event.get("payload"))
+        raise ValueError("invalid observer subject event")
     manifest, _ = verify_signed_event(
-        page_event, event_type="web_page_close", issuer="page_event_receiver",
+        subject_event, event_type=event_type, issuer=issuer,
         environment=environment, now=now,
     )
     return manifest
@@ -332,10 +348,42 @@ def produce_authenticated_observer(page_event: dict, snapshot: dict, *, observed
     )
     if not os.getenv(private_key_variable, ""):
         raise RuntimeError("observer private key missing")
-    manifest = _validate_page_event_receiver(page_event, environment, now=observed_at)
+    manifest = _validate_subject_event(page_event, environment, now=observed_at)
     return _produce_authenticated_observer(
         page_event, snapshot, observed_at=observed_at, environment=environment, manifest=manifest
     )
+
+
+def _write_signed_event(path: Path, event: dict) -> None:
+    content = (json.dumps(event, sort_keys=True) + "\n").encode()
+    write_sha256_bound_file(path, content)
+
+
+def _recover_signed_event(
+    path: Path, *, environment: str, event_type: str, issuer: str,
+    expected_scope: dict, subject_event: dict | None = None, expected_payload: dict | None = None,
+) -> bool:
+    if not path.exists() or Path(f"{path}.sha256").exists():
+        return False
+    content = path.read_bytes()
+    event = json.loads(content)
+    verify_signed_event(
+        event, event_type=event_type, issuer=issuer,
+        environment=environment, now=datetime.now(timezone.utc),
+    )
+    if any(type(event.get(field)) is not type(value) or event.get(field) != value
+           for field, value in expected_scope.items()):
+        raise ValueError("recovered evidence event scope mismatch")
+    if expected_payload is not None and event.get("payload") != expected_payload:
+        raise ValueError("recovered evidence event payload mismatch")
+    if subject_event is not None and (
+        event.get("sequence") != subject_event["sequence"] + 1
+        or event.get("payload", {}).get("subject_nonce") != subject_event["nonce"]
+        or event.get("payload", {}).get("subject_event_sha256") != signed_event_sha256(subject_event)
+    ):
+        raise ValueError("recovered observer subject mismatch")
+    write_sha256_bound_file(path, content)
+    return True
 
 
 def main() -> int:
@@ -351,6 +399,7 @@ def main() -> int:
     receive.add_argument("--store-id", type=int, required=True)
     receive.add_argument("--platform", required=True)
     receive.add_argument("--release-sha", required=True)
+    receive.add_argument("--run-id", required=True)
     observe = subparsers.add_parser("observe")
     observe.add_argument("page_event", type=Path)
     observe.add_argument("output", type=Path)
@@ -363,9 +412,20 @@ def main() -> int:
             args.artifact_root, expected_release_sha=args.release_sha,
             binding=binding, archive_path=args.artifact_archive,
         )
+        payload = {
+            "closed": True, "source": "browser_pagehide",
+            **{field: raw[field] for field in (
+                "artifact_evidence_sha256", "artifact_archive_sha256", "artifact_id",
+                "artifact_name", "workflow_run_id",
+            )},
+        }
+        if _recover_signed_event(
+            args.output, environment=environment, event_type="web_page_close",
+            issuer="page_event_receiver", expected_scope=scope, expected_payload=payload,
+        ):
+            return 0
         event = produce_page_event_receiver(raw, scope)
-        args.output.write_text(json.dumps(event, sort_keys=True) + "\n", encoding="utf-8")
-        args.output.chmod(0o600)
+        _write_signed_event(args.output, event)
         return 0
     database_url = os.getenv("R297_OBSERVER_DATABASE_URL", "")
     if not database_url:
@@ -373,14 +433,19 @@ def main() -> int:
     page_event = json.loads(args.page_event.read_text(encoding="utf-8"))
     environment = os.getenv("APP_ENV", "").strip().lower()
     observed_at = datetime.now(timezone.utc)
-    manifest = _validate_page_event_receiver(page_event, environment, now=observed_at)
+    manifest = _validate_subject_event(page_event, environment, now=observed_at)
+    scope = {field: page_event[field] for field in _SCOPE_FIELDS}
+    if _recover_signed_event(
+        args.output, environment=environment, event_type="authenticated_observer",
+        issuer="authenticated_observer", expected_scope=scope, subject_event=page_event,
+    ):
+        return 0
     snapshot = read_scheduler_snapshot(database_url, page_event)
     event = _produce_authenticated_observer(
         page_event, snapshot, observed_at=observed_at,
         environment=environment, manifest=manifest,
     )
-    args.output.write_text(json.dumps(event, sort_keys=True) + "\n", encoding="utf-8")
-    args.output.chmod(0o600)
+    _write_signed_event(args.output, event)
     return 0
 
 

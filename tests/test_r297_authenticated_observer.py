@@ -27,6 +27,7 @@ def _page_event(observed_at: datetime) -> dict:
         "store_id": 7,
         "platform": "jd",
         "release_sha": "0850641e7b624109e7a30456889fdbd2331d8d75",
+        "run_id": "r297-run-20260907-0001",
         "event_type": "web_page_close",
         "issuer": "page_event_receiver",
         "observed_at": observed_at.isoformat(),
@@ -40,6 +41,26 @@ def _page_event(observed_at: datetime) -> dict:
             "artifact_name": "r297-native-pagehide-test",
             "workflow_run_id": 33949515935,
         },
+    })
+
+
+def _electron_event(observed_at: datetime) -> dict:
+    from tests.test_r297_evidence_event_protocol import _sign
+
+    return _sign({
+        "namespace": "r297-acceptance-0850641e7b62",
+        "tenant_id": 1,
+        "company_id": 2,
+        "store_id": 7,
+        "platform": "jd",
+        "release_sha": "0850641e7b624109e7a30456889fdbd2331d8d75",
+        "run_id": "r297-run-20260907-0001",
+        "event_type": "electron_exit",
+        "issuer": "windows_runner",
+        "observed_at": observed_at.isoformat(),
+        "sequence": 3,
+        "nonce": "electron-exit-nonce-01",
+        "payload": {"exited": True, "process_id": 4201},
     })
 
 
@@ -222,6 +243,7 @@ def test_page_event_receiver_signs_raw_artifact_with_separate_test_key(monkeypat
     scope = {
         "namespace": "r297-acceptance-0850641e7b62", "tenant_id": 1, "company_id": 2,
         "store_id": 7, "platform": "jd", "release_sha": "0850641e7b624109e7a30456889fdbd2331d8d75",
+        "run_id": "r297-run-20260907-0001",
     }
     event = produce_page_event_receiver({
         "event_type": "web_page_close", "observed_at": "2026-09-05T07:12:06.709Z",
@@ -269,9 +291,9 @@ def test_observer_event_is_signed_from_read_only_database_snapshot(monkeypatch, 
     event = produce_authenticated_observer(page, snapshot, observed_at=now)
 
     assert {field: event[field] for field in (
-        "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+        "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
     )} == {field: page[field] for field in (
-        "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+        "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
     )}
     assert event["payload"]["subject_nonce"] == page["nonce"]
     assert event["payload"]["subject_event_sha256"] == signed_event_sha256(page)
@@ -279,6 +301,30 @@ def test_observer_event_is_signed_from_read_only_database_snapshot(monkeypatch, 
     manifest, _ = load_trust_manifest(environment="test")
     observer_key = next(key for key in manifest["keys"] if key["issuer"] == "authenticated_observer")
     _verify_signature(event, observer_key)
+
+
+def test_observer_signs_post_electron_database_observation(monkeypatch, tmp_path):
+    from ops.r297_authenticated_observer import produce_authenticated_observer
+    from tests.test_r297_evidence_event_protocol import _PRIVATE_KEYS
+
+    monkeypatch.setenv("APP_ENV", "test")
+    modulus, private = _PRIVATE_KEYS["authenticated_observer"]
+    private_path = tmp_path / "observer-test-key.json"
+    private_path.write_text(json.dumps({
+        "environment": "test", "key_id": "r297-authenticated_observer-test",
+        "n": modulus, "d": private,
+    }))
+    private_path.chmod(0o600)
+    monkeypatch.setenv("R297_OBSERVER_TEST_PRIVATE_KEY_PATH", str(private_path))
+    now = datetime.now(timezone.utc)
+    event = produce_authenticated_observer(_electron_event(now - timedelta(seconds=1)), {
+        "database_read_only": True, "write_privilege_count": 0, "policy_enabled": True,
+        "cloud_cycles_before": 3, "cloud_cycles_after": 4,
+        "eligible_store_ids": [7], "collected_store_ids_after": [7],
+    }, observed_at=now)
+
+    assert event["sequence"] == 4
+    assert event["payload"]["subject_nonce"] == "electron-exit-nonce-01"
 
 
 def test_observer_signing_fails_closed_without_deployment_secret(monkeypatch):

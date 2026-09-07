@@ -67,8 +67,17 @@ function Read-CandidateObservation {
     $expected = [Environment]::GetEnvironmentVariable('R297_EVIDENCE_' + $field.ToUpperInvariant())
     Require ([string]$snapshot.$field -ceq $expected) 'CONTROLLED_BACKEND_SCOPE_MISMATCH'
   }
+  Require ($snapshot.run_id -ceq $env:R297_ACCEPTANCE_RUN_ID) 'CONTROLLED_ACCEPTANCE_RUN_MISMATCH'
   Require ($snapshot.completed_cycle_count -is [int] -or $snapshot.completed_cycle_count -is [long]) 'CONTROLLED_CYCLE_COUNT_INVALID'
   Require ($snapshot.completed_cycle_count -ge 0) 'CONTROLLED_CYCLE_COUNT_INVALID'
+  Require ($snapshot.interval_seconds -is [int] -or $snapshot.interval_seconds -is [long]) 'CONTROLLED_INTERVAL_INVALID'
+  Require ($snapshot.interval_seconds -in @(300, 900, 1800, 3600)) 'CONTROLLED_INTERVAL_INVALID'
+  Require ($snapshot.next_sync_in_seconds -is [int] -or $snapshot.next_sync_in_seconds -is [long]) 'CONTROLLED_NEXT_SYNC_INVALID'
+  Require ($snapshot.next_sync_in_seconds -ge 0 -and $snapshot.next_sync_in_seconds -le $snapshot.interval_seconds) 'CONTROLLED_NEXT_SYNC_INVALID'
+  if ($null -ne $snapshot.latest_completed_at) {
+    $parsedCompletedAt = [DateTimeOffset]::MinValue
+    Require ([DateTimeOffset]::TryParse([string]$snapshot.latest_completed_at, [ref]$parsedCompletedAt)) 'CONTROLLED_LATEST_COMPLETION_INVALID'
+  }
   return $snapshot
 }
 $certificateBytes = [Convert]::FromBase64String($env:R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64)
@@ -190,6 +199,16 @@ socket.close();
     $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase)
   })
   Require ($processTree.Count -ge 2) 'PACKAGED_CHROMIUM_PROCESS_MISSING'
+  # Keep the client alive until the next database-authoritative cycle is close.
+  # This leaves enough of the five-minute signed-event freshness window for upload and observation.
+  $alignmentDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(3600, $initialObservation.interval_seconds))
+  $alignedObservation = Read-CandidateObservation
+  while ([DateTime]::UtcNow -lt $alignmentDeadline -and $alignedObservation.next_sync_in_seconds -gt 120) {
+    Start-Sleep -Seconds ([Math]::Min(15, [Math]::Max(1, $alignedObservation.next_sync_in_seconds - 120)))
+    $alignedObservation = Read-CandidateObservation
+  }
+  Require ($alignedObservation.next_sync_in_seconds -le 120) 'CONTROLLED_SCHEDULER_ALIGNMENT_TIMEOUT'
+  $beforeCycle = [long]$alignedObservation.completed_cycle_count
   $firstPid = $process.Id
 } finally {
   if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
@@ -201,6 +220,7 @@ Require ($env:R297_EVIDENCE_TENANT_ID -match '^\d+$') 'EVIDENCE_TENANT_ID_REQUIR
 Require ($env:R297_EVIDENCE_COMPANY_ID -match '^\d+$') 'EVIDENCE_COMPANY_ID_REQUIRED'
 Require ($env:R297_EVIDENCE_STORE_ID -match '^\d+$') 'EVIDENCE_STORE_ID_REQUIRED'
 Require ($env:R297_EVIDENCE_PLATFORM -match '^[a-z0-9_-]{1,32}$') 'EVIDENCE_PLATFORM_REQUIRED'
+Require ($env:R297_ACCEPTANCE_RUN_ID -match '^[A-Za-z0-9._:-]{16,128}$') 'EVIDENCE_RUN_ID_REQUIRED'
 $electronEventPath = Join-Path $output 'R297_WINDOWS_ELECTRON_EXIT_EVENT.json'
 python -m ops.r297_windows_event_signer `
   $electronEventPath `
@@ -210,22 +230,30 @@ python -m ops.r297_windows_event_signer `
   --store-id $env:R297_EVIDENCE_STORE_ID `
   --platform $env:R297_EVIDENCE_PLATFORM `
   --release-sha $head `
+  --run-id $env:R297_ACCEPTANCE_RUN_ID `
   --process-id $firstPid `
   --process-started-at $processStartedAt
 Require ($LASTEXITCODE -eq 0) 'WINDOWS_ELECTRON_EXIT_SIGNING_FAILED'
 $electronEventSha = Sha256 $electronEventPath
+$electronExitAt = [DateTimeOffset]::Parse((Get-Content -Raw -LiteralPath $electronEventPath | ConvertFrom-Json).observed_at)
 
 $afterExitHealth = (Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 15).StatusCode
 Require ($afterExitHealth -eq 200) 'CLOUD_SCHEDULER_DID_NOT_SURVIVE_ELECTRON_EXIT'
-# Take the baseline after native process exit, so activity while Electron was
-# still alive cannot satisfy the post-exit continuation gate.
-$beforeCycle = [long](Read-CandidateObservation).completed_cycle_count
 $afterCycle = $beforeCycle
-for ($attempt = 0; $attempt -lt 60 -and $afterCycle -le $beforeCycle; $attempt++) {
-  Start-Sleep -Seconds 1
-  $afterCycle = [long](Read-CandidateObservation).completed_cycle_count
+$postExitCycleObserved = $false
+# Alignment above covers the configured interval before signing. Keep the signed
+# event's unchanged five-minute freshness budget for upload and Observer signing.
+$observationWindowSeconds = 240
+$observationDeadline = [DateTime]::UtcNow.AddSeconds($observationWindowSeconds)
+while ([DateTime]::UtcNow -lt $observationDeadline -and -not $postExitCycleObserved) {
+  Start-Sleep -Seconds 5
+  $cycleObservation = Read-CandidateObservation
+  $afterCycle = [long]$cycleObservation.completed_cycle_count
+  if ($null -ne $cycleObservation.latest_completed_at) {
+    $postExitCycleObserved = [DateTimeOffset]::Parse([string]$cycleObservation.latest_completed_at) -gt $electronExitAt
+  }
 }
-Require ($afterCycle -gt $beforeCycle) 'CLOUD_SCHEDULER_DID_NOT_ADVANCE_AFTER_ELECTRON_EXIT'
+Require ($postExitCycleObserved -and $afterCycle -gt $beforeCycle) 'CLOUD_SCHEDULER_DID_NOT_ADVANCE_AFTER_ELECTRON_EXIT'
 $ownerHeaders.Clear()
 $restart = Start-Process -FilePath $workbench[0].FullName -ArgumentList @("--user-data-dir=$userData") -PassThru
 Start-Sleep -Seconds 5

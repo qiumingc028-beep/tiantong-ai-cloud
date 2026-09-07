@@ -33,6 +33,7 @@ def test_preflight_lists_missing_controlled_material_without_values(monkeypatch)
         "TRUST_MANIFEST", "TRUST_MANIFEST_SIDECAR", "PAGEHIDE_BINDING",
         "PAGEHIDE_BINDING_SIDECAR", "BACKEND_HTTPS_URL",
         "PAIRING_ISSUER_AUTHORIZATION", "BACKEND_CERTIFICATE",
+        "ACCEPTANCE_RUN_ID",
     }
     assert "postgresql://" not in rendered
     assert "Bearer " not in rendered
