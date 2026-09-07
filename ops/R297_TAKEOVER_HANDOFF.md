@@ -13,15 +13,22 @@ logs, but do not establish or repair the health failure's root cause (owned by r
 
 Formal orchestration still has these explicit code/wiring blockers:
 
-- Run consumption and the separate nonce ledger/output publication are not one recoverable
-  transaction. A crash after consumption fails closed but cannot yet resume that acceptance.
+- Formal Process generation now reserves the exact signed-bundle transaction, permits only
+  byte-identical nonce recovery, publishes SHA-bound output, and only then commits the run.
+  The protected host still has to mount both persistent ledgers for the same verifier identity.
 - The current run-ledger reader requires its writer's UID and writable 0600 files. An
   independently isolated Receiver needs a trusted read-only challenge interface; do not
   grant it the orchestrator/verifier's writable identity to make this code pass.
 - The five-minute run/event limit is not proven compatible with both long-cycle observations.
   Do not simply widen the freshness limit or call controlled tests real acceptance.
-- The candidate Windows job stops before signing-key materialization. A pinned independent
-  signer and trusted observation resource are still absent; adding Secrets is not the fix.
+- The candidate Windows job contains no signing-key or trust-manifest Secret reference and stops
+  before formal acceptance. The fixed-source entrypoint is
+  `python -m ops.r297_trusted_windows_observer REQUEST OUTPUT`; it checks a
+  protected SHA-bound build manifest and live process, then checks the
+  live PID, executable bytes, exit and post-exit Backend cycle before signing. It must run from
+  a ④-approved `R297_TRUSTED_SIGNER_SHA` under a separate Windows service identity. The trusted
+  Windows observation host/broker is still absent; adding Secrets to the candidate job is not
+  the fix.
 
 Role ⑤ must supply the remaining protected orchestration design/fixes and actual container
 failure diagnostics. These blockers are not waived by integrating this reviewable candidate.
@@ -118,18 +125,19 @@ Environment Secret and an Environment Variable. It can administer `r297-controll
 No formal value was available, so no required Secret or scope Variable was invented or set.
 - Subsequent role ⑤ handoff (not reverified by the integrator) reports scope variables for namespace
 `r297-controlled-canary` and tenant/company/store `1/1/3`. The environment still has no
-required reviewer or branch policy, so signing keys were not uploaded into an unprotected
-environment. If the selected policy forbids self-review, first invite one trusted collaborator
+required reviewer. On 2026-09-07 role ⑤ enabled custom branch restrictions for
+`codex/r297-cloud-integration` and `codex/r297-takeover-infra-evidence-r2`; no signing key was
+uploaded. The repository currently exposes only the owner as a collaborator, so a no-self-review
+rule would have no eligible approver. If that policy is selected, first invite one trusted collaborator
 who can review this Environment; GitHub does not universally require a second reviewer.
 Restrict deployments to the integration and evidence branches before provisioning Secrets.
 
-Open repository Settings → Environments → `r297-controlled-canary` → Add environment secret.
-Use that Environment, not a repository-wide secret. The existing Windows workflow already
-reads these exact names:
+Provision the following names only to the separately approved trusted signer/Observer service.
+The candidate build workflow intentionally does not read them:
 
 | Secret | Value to supply privately | Purpose |
 |---|---|---|
-| `R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64` | Base64 of the acceptance Windows signer's private PEM; never a test key | Sign observed native Windows process exit |
+| `R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64` | Base64 of the acceptance Windows signer's private PEM; never a test key | Materialize only on the fixed-SHA trusted signer host |
 | `R297_EVIDENCE_TRUST_MANIFEST_BASE64` | Base64 of the approved acceptance public-key manifest | Pin three distinct signer roles and their allowed events |
 | `R297_EVIDENCE_TRUST_MANIFEST_SHA256` | SHA256 of the decoded manifest bytes, independently approved | Reject a substituted trust manifest |
 | `R297_WINDOWS_CANARY_BACKEND_HTTPS_URL` | Isolated candidate Backend HTTPS origin | Install/pair against the candidate, never an old production release |
@@ -185,11 +193,18 @@ The page receiver, two database observations (after page close and after Electro
 Windows runner must be orchestrated against the same live acceptance run before teardown.
 This orchestration and final material wiring are still BLOCK; merely adding Secrets cannot
 certify it. `signed-event-bundle` is generated evidence, not a manually authored Secret.
-The current candidate Windows workflow is not an independent signing boundary because it
-checks out candidate code while holding the signing key. Formal signing must move to a
-protected fixed `SIGNER_SHA` and a trusted Windows observation resource that executes no
-candidate script or downloaded executable. Until then, do not give the candidate job the
-Windows private key or call its output formal Windows evidence.
+The candidate build job has no protected Environment or signing key. Its formal job deliberately
+stops before key materialization. Formal signing must invoke the fixed-source trusted Observer
+above on a separate service identity; that process observes but never launches the candidate
+executable. Required protected inputs are `R297_TRUSTED_SIGNER_SHA`,
+`R297_TRUSTED_OBSERVER_BACKEND_HTTPS_URL`, `R297_TRUSTED_OBSERVER_BEARER`,
+`R297_TRUSTED_OBSERVER_CA_PATH`, a root/ACL-protected SHA-bound
+`C:\ProgramData\TiantongAI\r297-windows-artifact-manifest.json` pinned by
+`R297_TRUSTED_WINDOWS_ARTIFACT_MANIFEST_SHA256`, a protected
+`C:\ProgramData\TiantongAI\r297-acceptance-run-binding.json` pinned by
+`R297_TRUSTED_ACCEPTANCE_RUN_BINDING_SHA256`, and the Windows signer private-key mount. Until the trusted
+host and IPC/broker are approved, do not give the candidate job the private key or call its
+output formal Windows evidence.
 
 Actual JD login requires the Owner to use the controlled public login/noVNC flow, including
 any required verification. Do not submit the JD password/cookies to ChatGPT or GitHub.

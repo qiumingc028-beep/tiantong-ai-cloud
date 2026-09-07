@@ -260,6 +260,11 @@ jobs:
           viewer_ticket_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           viewer_cookie_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
           master_key="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
+          create_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          restore_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          first_ticket_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          second_ticket_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          revoke_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
           session_namespace="ci"
           runtime_stage="missing-token"
           echo "RUNTIME_STAGE=missing-token"
@@ -285,6 +290,17 @@ jobs:
           from http.server import BaseHTTPRequestHandler, HTTPServer
 
           class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path != '/r297-controlled-canary.html':
+                      self.send_response(404)
+                      self.end_headers()
+                      return
+                  content = b'<!doctype html><html><body><span data-metric="gmv">1</span></body></html>'
+                  self.send_response(200)
+                  self.send_header('content-type', 'text/html; charset=utf-8')
+                  self.send_header('content-length', str(len(content)))
+                  self.end_headers()
+                  self.wfile.write(content)
               def do_POST(self):
                   try:
                       body = json.loads(self.rfile.read(int(self.headers.get('content-length', '0'))))
@@ -293,6 +309,7 @@ jobs:
                   valid = (
                       self.path == '/api/jd-workbench/internal/browser-session-authorize'
                       and self.headers.get('x-internal-token') == os.environ['MOCK_CONTROL_TOKEN']
+                      and len(self.headers.get('x-owner-session-operation-id', '')) == 32
                       and isinstance(body, dict)
                       and set(body) == {'namespace', 'tenant_id', 'company_id', 'store_id', 'platform'}
                       and body.get('namespace') == 'ci'
@@ -326,6 +343,9 @@ jobs:
             --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" \
             --env "JD_SESSION_MASTER_KEY=$master_key" \
             --env "JD_SESSION_NAMESPACE=$session_namespace" \
+            --env APP_ENV=acceptance \
+            --env R297_CONTROLLED_CANARY=1 \
+            --env R297_CONTROLLED_CANARY_DASHBOARD_URL=http://host.docker.internal:18787/r297-controlled-canary.html \
             --env JD_BROWSER_SESSION_AUTH_URL=http://host.docker.internal:18787/api/jd-workbench/internal/browser-session-authorize \
             --env RUNTIME_API_PORT=8788 \
             --env DISPLAY=:99 \
@@ -357,6 +377,7 @@ jobs:
           session_status="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --output /tmp/runtime-session.json --write-out '%{http_code}' \
             --header "content-type: application/json" \
             --header "x-internal-token: $control_token" \
+            --header "x-owner-operation-id: $create_operation_id" \
             --data '{"namespace":"ci","tenant_id":"1","company_id":"1","store_id":"1","platform":"jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
           if test "$session_status" != 200; then
@@ -419,7 +440,8 @@ jobs:
           fi
 
           ticket="$(curl --connect-timeout 3 --max-time 10 --silent --fail --header 'content-type: application/json' \
-            --header "x-internal-token: $control_token" --data '{"session_id":"ci:1:1:1:jd"}' \
+            --header "x-internal-token: $control_token" --header "x-owner-operation-id: $first_ticket_operation_id" \
+            --data '{"session_id":"ci:1:1:1:jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets" |
             python -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
           echo "RUNTIME_VIEWER_TICKET_ISSUED=YES"
@@ -535,6 +557,7 @@ jobs:
           restored_status="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --output /tmp/runtime-restored.json --write-out '%{http_code}' \
             --header "content-type: application/json" \
             --header "x-internal-token: $control_token" \
+            --header "x-owner-operation-id: $restore_operation_id" \
             --data '{"namespace":"ci","tenant_id":"1","company_id":"1","store_id":"1","platform":"jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
           test "$restored_status" = 200
@@ -558,6 +581,7 @@ jobs:
           restart_step="NEW_TICKET_ISSUED"
           new_ticket_response="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --write-out $'\n%{http_code}' \
             --header 'content-type: application/json' --header "x-internal-token: $control_token" \
+            --header "x-owner-operation-id: $second_ticket_operation_id" \
             --data '{"session_id":"ci:1:1:1:jd"}' \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets")"
           new_ticket_status="${new_ticket_response##*$'\n'}"
@@ -583,6 +607,7 @@ jobs:
           restart_step="REVOKE_PERSISTED"
           revoke_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --request DELETE \
             --header "x-internal-token: $control_token" \
+            --header "x-owner-operation-id: $revoke_operation_id" \
             "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions/ci%3A1%3A1%3A1%3Ajd")"
           test "$revoke_status" = 200
           docker restart "$container" >/dev/null
@@ -599,7 +624,18 @@ jobs:
           echo "SECOND_RESTART_OLD_COOKIE_REJECTED=PASS HTTP_STATUS=$second_old_cookie_status"
 
           restart_step="ARTIFACT_CLEANUP"
-          test -z "$(docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles /data/jd-session-archives -type f -print')"
+          test -z "$(docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles -type f -print')"
+          test -z "$(docker exec "$container" sh -c 'find /data/jd-session-archives -maxdepth 1 -type f -print')"
+          test -z "$(docker exec "$container" sh -c 'find /data/jd-session-archives/.used-viewer-tickets -type f -print')"
+          receipt_count="$(docker exec "$container" sh -c 'find /data/jd-session-archives/owner-operations -maxdepth 1 -type f -name "*.json" | wc -l')"
+          test "$receipt_count" = 5
+          for operation_id in "$create_operation_id" "$restore_operation_id" "$first_ticket_operation_id" "$second_ticket_operation_id" "$revoke_operation_id"; do
+            receipt="$(curl --connect-timeout 3 --max-time 10 --fail --silent \
+              --header "x-internal-token: $control_token" \
+              "http://127.0.0.1:$runtime_port/internal/jd-browser/operations/$operation_id")"
+            python -c 'import json,sys; value=json.loads(sys.argv[1]); assert value["operation_id"]==sys.argv[2] and value["status"]=="SUCCESS"' "$receipt" "$operation_id"
+          done
+          echo "RUNTIME_OWNER_OPERATION_RECEIPTS=$receipt_count"
           test -z "$(docker exec "$container" pgrep -x chrome || true)"
           echo "ARTIFACT_CLEANUP=PASS"
           echo "RUNTIME_RESTART=PASS"

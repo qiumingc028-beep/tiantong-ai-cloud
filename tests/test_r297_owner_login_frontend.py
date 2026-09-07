@@ -491,6 +491,21 @@ def test_runtime_container_ci_check_has_timeout_and_safe_stage_diagnostics():
     assert 'echo "RUNTIME_LOG_REDACTION_FAILED"' in runtime_step
     assert runtime_step.index('python ops/r297_ci_redact.py "$runtime_log"; then') < runtime_step.index('cat "$runtime_log"')
     assert "RUNTIME_HEALTH_STATUS=$status" in runtime_step
+    container_run = runtime_step.split("docker run --detach", 1)[1].split('"$S12_JD_RUNTIME_IMAGE" >/dev/null', 1)[0]
+    assert '--env APP_ENV=acceptance' in container_run
+    assert '--env R297_CONTROLLED_CANARY=1' in container_run
+    assert 'R297_CONTROLLED_CANARY_DASHBOARD_URL=http://host.docker.internal:18787/' in container_run
+    assert 'JD_BROWSER_SESSION_AUTH_URL=http://host.docker.internal:18787/' in container_run
+    for operation in (
+        "create_operation_id", "restore_operation_id", "first_ticket_operation_id",
+        "second_ticket_operation_id", "revoke_operation_id",
+    ):
+        assert f'x-owner-operation-id: ${operation}' in runtime_step
+    assert "RUNTIME_OWNER_OPERATION_RECEIPTS=" in runtime_step
+    assert "internal/jd-browser/operations/$operation_id" in runtime_step
+    assert 'value["status"]=="SUCCESS"' in runtime_step
+    assert "JSON.parse(fs.readFileSync" not in runtime_step
+    assert 'test "$receipt_count" = 5' in runtime_step
     runtime_start = Path("services/jd-cloud-browser-runtime/start-runtime.sh").read_text()
     assert "RUNTIME_COMPONENT_EXIT=" in runtime_start
     assert "wait -n -p exited_pid" in runtime_start

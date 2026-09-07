@@ -520,7 +520,9 @@ def validate_nonce_ledger(nonce_ledger: Path) -> None:
         os.close(descriptor)
 
 
-def _record_nonces(nonce_ledger: Path, bindings: list[dict]) -> None:
+def _record_nonces(
+    nonce_ledger: Path, bindings: list[dict], *, allow_exact_recovery: bool = False,
+) -> None:
     if fcntl is None:
         raise RuntimeError("evidence nonce ledger locking unavailable")
     validate_nonce_ledger(nonce_ledger)
@@ -545,6 +547,11 @@ def _record_nonces(nonce_ledger: Path, bindings: list[dict]) -> None:
         ):
             raise ValueError("evidence nonce ledger invalid")
         ledger_values.update(json.dumps(value, separators=(",", ":"), sort_keys=True) for value in loaded)
+        canonical_bindings = {
+            json.dumps(value, separators=(",", ":"), sort_keys=True) for value in bindings
+        }
+        if allow_exact_recovery and canonical_bindings and canonical_bindings.issubset(ledger_values):
+            return
         consumed_runs = {
             value["nonce"] for value in loaded if value["event_type"] == "acceptance_run"
         }
@@ -553,9 +560,6 @@ def _record_nonces(nonce_ledger: Path, bindings: list[dict]) -> None:
         }
         if consumed_runs.intersection(requested_runs):
             raise ValueError("replayed acceptance run")
-        canonical_bindings = {
-            json.dumps(value, separators=(",", ":"), sort_keys=True) for value in bindings
-        }
         if ledger_values.intersection(canonical_bindings):
             raise ValueError("replayed evidence nonce")
         temporary = nonce_ledger.with_name(f".{nonce_ledger.name}.{secrets.token_hex(8)}")
@@ -565,7 +569,12 @@ def _record_nonces(nonce_ledger: Path, bindings: list[dict]) -> None:
         )
         try:
             content = (json.dumps(updated, sort_keys=True) + "\n").encode()
-            os.write(temporary_descriptor, content)
+            remaining = memoryview(content)
+            while remaining:
+                written = os.write(temporary_descriptor, remaining)
+                if written <= 0:
+                    raise OSError("evidence nonce ledger short write")
+                remaining = remaining[written:]
             os.fsync(temporary_descriptor)
         finally:
             os.close(temporary_descriptor)
@@ -588,6 +597,8 @@ def verify_acceptance_event_bundle(
     nonce_ledger: Path,
     maximum_age: timedelta = timedelta(minutes=5),
     consume_run: bool = True,
+    allow_nonce_recovery: bool = False,
+    reserved_transaction_sha256: str | None = None,
 ) -> dict:
     """Return acceptance sections only after all four independently signed events verify."""
     events = bundle.get("events") if isinstance(bundle, dict) else None
@@ -673,6 +684,13 @@ def verify_acceptance_event_bundle(
     page_result = _observer_result(page_observer, page, expected_scope["store_id"])
     electron_result = _observer_result(electron_observer, electron, expected_scope["store_id"])
 
+    replay_bindings.append({
+        **{field: expected_scope[field] for field in _SCOPE_FIELDS},
+        "event_type": "acceptance_run",
+        "key_id": "protected_orchestrator",
+        "nonce": expected_scope["run_id"],
+    })
+
     environment = os.getenv("APP_ENV", "").strip().lower()
     run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
     if environment in {"acceptance", "production"}:
@@ -681,11 +699,17 @@ def verify_acceptance_event_bundle(
         from ops.r297_acceptance_run import consume_acceptance_run, validate_acceptance_run
         page_event = next(event for event in events if event["event_type"] == "web_page_close")
         run_action = consume_acceptance_run if consume_run else validate_acceptance_run
-        run_action(
-            Path(run_ledger), expected_scope=expected_scope,
-            source_workflow_run_id=page_event["payload"]["workflow_run_id"], now=now,
-        )
-    _record_nonces(nonce_ledger, replay_bindings)
+        run_arguments = {
+            "expected_scope": expected_scope,
+            "source_workflow_run_id": page_event["payload"]["workflow_run_id"],
+            "now": now,
+        }
+        if not consume_run:
+            run_arguments["transaction_sha256"] = reserved_transaction_sha256
+        run_action(Path(run_ledger), **run_arguments)
+    _record_nonces(
+        nonce_ledger, replay_bindings, allow_exact_recovery=allow_nonce_recovery,
+    )
 
     return {
         "evidence_trust_manifest_id": manifest["manifest_id"],

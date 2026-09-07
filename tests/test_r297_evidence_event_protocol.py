@@ -388,6 +388,27 @@ def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
     assert sorted(results) == ["accepted", "replayed acceptance run"]
 
 
+def test_nonce_commit_exact_recovery_is_bounded_to_explicit_transaction_retry(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    ledger = _nonce_ledger(tmp_path)
+    bundle = _bundle(now)
+
+    verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+        consume_run=False,
+    )
+    recovered = verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+        consume_run=False, allow_nonce_recovery=True,
+    )
+    assert recovered["authenticated_observer"]["verified_subject_count"] == 2
+    with pytest.raises(ValueError, match="replayed acceptance run"):
+        verify_acceptance_event_bundle(
+            bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+            consume_run=False,
+        )
+
+
 def test_acceptance_source_run_is_consumed_once_across_scopes(tmp_path):
     from ops.r297_evidence_events import _record_nonces
 
