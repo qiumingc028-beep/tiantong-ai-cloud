@@ -426,33 +426,37 @@ def test_candidate_bundle_builder_cannot_receive_any_signer_private_key(monkeypa
                 build_bundle(_bundle(now)["events"], expected_scope=_scope(), now=now)
 
 
+def _attempt_events(now, expected_scope, *, splice=False):
+    events = []
+    for index, event in enumerate(_bundle(now)["events"]):
+        unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
+        events.append(_sign({
+            **unsigned,
+            "run_attempt": 1 if splice and index == 2 else expected_scope["run_attempt"],
+            "challenge": "challenge-from-another-run-0001" if splice and index == 2 else expected_scope["challenge"],
+        }))
+    return events
+
+
 def test_signed_chain_binds_run_attempt_and_random_challenge(tmp_path):
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
     expected_scope = {**_scope(), "run_attempt": 2, "challenge": "challenge-6ea4d915d7f8435880868439"}
-    events = []
-    for event in _bundle(now)["events"]:
-        unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
-        events.append(_sign({**unsigned, "run_attempt": 2, "challenge": expected_scope["challenge"]}))
 
     result = verify_acceptance_event_bundle(
-        {"events": events}, expected_scope=expected_scope, now=now, nonce_ledger=_nonce_ledger(tmp_path),
+        {"events": _attempt_events(now, expected_scope)},
+        expected_scope=expected_scope, now=now, nonce_ledger=_nonce_ledger(tmp_path),
     )
 
     assert result["authenticated_observer"]["run_attempt"] == 2
     assert result["authenticated_observer"]["challenge"] == expected_scope["challenge"]
 
-    spliced_events = []
-    for index, event in enumerate(_bundle(now)["events"]):
-        unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
-        spliced_events.append(_sign({
-            **unsigned,
-            "run_attempt": 1 if index == 2 else 2,
-            "challenge": "challenge-from-another-run-0001" if index == 2 else expected_scope["challenge"],
-        }))
 
+def test_signed_chain_rejects_cross_attempt_splice(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    expected_scope = {**_scope(), "run_attempt": 2, "challenge": "challenge-6ea4d915d7f8435880868439"}
     with pytest.raises(ValueError, match="run_attempt mismatch|challenge mismatch"):
         verify_acceptance_event_bundle(
-            {"events": spliced_events}, expected_scope=expected_scope, now=now,
+            {"events": _attempt_events(now, expected_scope, splice=True)}, expected_scope=expected_scope, now=now,
             nonce_ledger=_nonce_ledger(tmp_path),
         )
 
