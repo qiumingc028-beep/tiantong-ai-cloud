@@ -176,6 +176,12 @@ jobs:
           name: tiantong-ai-jd-workbench-r297-build-${{ github.sha }}
           path: desktop/jd-workbench/dist
 
+      - name: Require independent trusted Windows signer
+        shell: pwsh
+        working-directory: .
+        run: |
+          throw 'R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED'
+
       - name: Bind controlled acceptance run to pagehide workflow
         shell: pwsh
         working-directory: .
