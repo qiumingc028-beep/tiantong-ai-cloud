@@ -54,10 +54,10 @@ for (const status of ['EXPIRED', 'HUMAN_ACTION_REQUIRED']) {
   assert.notEqual(login.statusView(status).code, 'INVALID');
 }
 const closeController = new AbortController();
-await login.createClient(async (_path, options) => {
+assert.deepEqual(await login.createClient(async (_path, options) => {
   assert.equal(options.signal, closeController.signal);
-  return {status: 204};
-}).close(7, closeController.signal);
+  return {status: 200, json: async () => ({ok: true, store_id: 7, status: 'REVOKED'})};
+}).close(7, closeController.signal), {store_id: 7, status: 'REVOKED'});
 await assert.rejects(login.createClient(requestOnce(201, {})).create(7), /HTTP状态无效/);
 for (const expires_in of [true, 0, -1, 121, 1.5]) {
   await assert.rejects(login.createClient(requestOnce(200, {ticket: 'x', expires_in})).ticket(7), /登录凭证响应无效/);
@@ -70,7 +70,7 @@ await assert.rejects(login.createClient(requestOnce(200, {session_id: 'legacy', 
 await assert.rejects(login.createClient(requestOnce(200, {ticket: 'x', expires_in: 60, extra: true})).ticket(7), /登录凭证响应无效/);
 await assert.rejects(login.createClient(requestOnce(202, {})).close(7), /HTTP状态无效/);
 await assert.rejects(login.createClient(requestOnce(200, {ok: false, store_id: 7, status: 'REVOKED'})).close(7), /销毁响应无效/);
-assert.deepEqual(await login.createClient(requestOnce(204, null)).close(7), {store_id: 7, status: 'REVOKED'});
+await assert.rejects(login.createClient(requestOnce(204, null)).close(7), /HTTP状态无效/);
 await assert.rejects(login.createClient(async () => { throw new TypeError('Failed to fetch'); }).status(7), /网络连接失败，请稍后重试/);
 
 const exchanges = [];
@@ -416,6 +416,7 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert "R297OwnerLogin.isOwner(currentUser)" in page
     assert "store.platform!=='jd'" in page
     assert "if(!store.active)return" in page
+    assert "['ACTIVE','HUMAN_ACTION_REQUIRED'].includes(status.code)" in page
     assert "R297OwnerLogin.openViewer(" in page
     assert "R297OwnerLogin.runPreflight(" in page
     assert "R297OwnerLogin.verifyNoVncWebSocket(" in page

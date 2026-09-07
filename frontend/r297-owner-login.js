@@ -101,7 +101,6 @@
       },
       close: async (value, signal) => {
         const id = storeId(value), response = await send(sessionPath(id), { method: 'DELETE', ...(signal ? {signal} : {}) });
-        if (response && response.status === 204) return Object.freeze({ store_id: id, status: 'REVOKED' });
         const data = await requiredJson(response, 200);
         if (!exactKeys(data, ['ok', 'store_id', 'status']) || data.ok !== true || !Number.isInteger(data.store_id) || data.store_id !== id || data.status !== 'REVOKED') throw new Error('登录会话销毁响应无效');
         return Object.freeze({ store_id: id, status: 'REVOKED' });
