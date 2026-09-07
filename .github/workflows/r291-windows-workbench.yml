@@ -38,7 +38,6 @@ permissions:
 
 jobs:
   build-windows:
-    environment: r297-controlled-canary
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -127,6 +126,50 @@ jobs:
             $lines,
             [System.Text.UTF8Encoding]::new($false)
           )
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tiantong-ai-jd-workbench-r297-build-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            desktop/jd-workbench/dist/*.exe
+            desktop/jd-workbench/dist/*.zip
+            desktop/jd-workbench/dist/SHA256SUMS.txt
+            desktop/jd-workbench/dist/chromium-info.json
+          if-no-files-found: error
+          retention-days: 14
+
+  formal-windows-acceptance:
+    name: formal-windows-acceptance
+    if: github.event_name == 'workflow_dispatch'
+    needs: build-windows
+    environment: r297-controlled-canary
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python for signed evidence
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js for acceptance probes
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Download exact-SHA Windows build artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tiantong-ai-jd-workbench-r297-build-${{ github.sha }}
+          path: desktop/jd-workbench/dist
 
       - name: Require independent trusted Windows signer
         shell: pwsh

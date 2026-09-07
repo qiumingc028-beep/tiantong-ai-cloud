@@ -116,9 +116,29 @@ def test_r297_windows_acceptance_signs_only_after_real_electron_exit():
 
 def test_candidate_workflow_fails_before_windows_signing_key_is_exposed():
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    candidate = workflow.split("  build-windows:", 1)[1]
+    candidate = workflow.split("  formal-windows-acceptance:", 1)[1]
 
     assert "R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED" in candidate
     assert candidate.index("R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED") < candidate.index(
         "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64"
     )
+
+
+def test_windows_build_is_secretless_and_publishes_before_independent_formal_gate():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    build, formal = workflow.split("  build-windows:", 1)[1].split("  formal-windows-acceptance:", 1)
+    assert "environment:" not in build
+    assert "secrets." not in build
+    assert "R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED" not in build
+    assert "npm run dist:win" in build
+    assert "actions/upload-artifact@v7" in build
+    assert "name: tiantong-ai-jd-workbench-r297-build-${{ github.event.pull_request.head.sha || github.sha }}" in build
+    assert "if-no-files-found: error" in build
+    assert "needs: build-windows" in formal
+    assert "if: github.event_name == 'workflow_dispatch'" in formal
+    assert "environment: r297-controlled-canary" in formal
+    assert "actions/download-artifact@v8" in formal
+    assert "name: tiantong-ai-jd-workbench-r297-build-${{ github.sha }}" in formal
+    assert "ref: ${{ github.sha }}" in formal
+    assert formal.index("R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED") < formal.index("secrets.")
+    assert "./ops/r297_windows_acceptance.ps1" in formal

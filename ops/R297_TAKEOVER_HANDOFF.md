@@ -2,6 +2,41 @@
 
 Status: BLOCK. This document grants no main merge, production deployment, or release approval.
 
+## Windows job separation and frontend Runner integration
+
+The integration following `efa916386365c7791287ac966792c45b16f0e71d` imports only
+the two acceptance files from role ② source
+`3c679e28e2f996e6d94096b506a44aab455c8761`; existing pages and product code are unchanged.
+This is source delivery, not approval to publish this Runner's output as formal evidence.
+Review found these open Runner defects for role ② and role ③ to reproduce and repair:
+
+- Direct status/ticket requests do not participate in the current Owner operation/ack
+  protocol and conflict with the page's previously successful operations (HTTP 409).
+- The pagehide timeout does not cancel its inner timer loop, potentially preventing exit.
+- Owner-page WebSocket preflight and popup navigation alone do not establish popup RFB
+  readiness or a real Viewer frame; `novnc_page: PASS` is not reliable acceptance evidence.
+- Expected negative HTTP responses may produce browser console errors; validate this in
+  Chromium and distinguish only those exact negative requests without relaxing other errors.
+
+Role ⑤ source `b5213a5dddaf6ffb52d9be86715d44f92b2a2095` already contains the job
+separation. Its relevant structure is now carried forward by semantic hunks: build-windows
+has no protected Environment/Secrets, publishes the exact-SHA build artifact independently,
+and formal-windows-acceptance downloads that same run's exact-SHA artifact only on manual
+dispatch. The independent-signer throw remains before any private-key materialization.
+A skipped formal job on push/PR is NOT formal acceptance PASS.
+
+The source's older pagehide-ID-derived acceptance run binding is not imported: it does not
+provide the protected run_attempt/challenge protocol already required on mainline. The
+existing Environment run ID is also not sufficient for formal acceptance; role ⑤ must
+replace it with protected orchestration as part of the signer implementation. The hard
+BLOCK remains in place; do not remove it to make candidate code execute with signing keys.
+
+Prior dda5460/e5972bb/b5213a5 patches remain integrated, including protected-run validation,
+non-consuming bundle precheck, independent signer blocking, component-exit diagnostics,
+shared fail-closed redaction and private raw-log files. Patch integration is not inferred
+from ancestry alone. Role ③'s next unpublished tests still require a source path or branch
+handoff; they are not claimed integrated until their exact assertions can be inspected.
+
 ## Integration review of role ⑤ increment
 
 Source `dda5460aae3c7cb3b3c165e8f6b63b4352da8f4d` is applied incrementally to
@@ -20,7 +55,7 @@ Formal orchestration still has these explicit code/wiring blockers:
   grant it the orchestrator/verifier's writable identity to make this code pass.
 - The five-minute run/event limit is not proven compatible with both long-cycle observations.
   Do not simply widen the freshness limit or call controlled tests real acceptance.
-- The candidate Windows job stops before signing-key materialization. A pinned independent
+- The formal Windows job stops before signing-key materialization. A pinned independent
   signer and trusted observation resource are still absent; adding Secrets is not the fix.
 
 Role ⑤ must supply the remaining protected orchestration design/fixes and actual container
