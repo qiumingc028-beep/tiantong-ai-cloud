@@ -411,16 +411,64 @@ def test_bundle_precheck_preserves_run_until_formal_verification(monkeypatch, tm
     assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
     with pytest.raises(ValueError, match="missing or consumed"):
         verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=ledger)
+
+
+def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path):
+    from ops import r297_evidence_events
+    from ops.r297_acceptance_run import issue_acceptance_run
+    from ops.r297_evidence_bundle import build_bundle
+    from tests.test_r297_acceptance_run import _ledger
+
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    scope = _scope()
+    run_ledger = _ledger(tmp_path)
+    record = issue_acceptance_run(
+        run_ledger,
+        scope={field: value for field, value in scope.items() if field not in {"run_id", "run_attempt", "challenge"}},
+        source_workflow_run_id=33949515935,
+        run_attempt=1,
+        now=now,
+    )
+    scope.update({field: record[field] for field in ("run_id", "run_attempt", "challenge")})
+    monkeypatch.setitem(globals(), "_scope", lambda: scope)
+    trust = load_trust_manifest(environment="test")
+    monkeypatch.setattr(r297_evidence_events, "load_trust_manifest", lambda **_kwargs: trust)
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    monkeypatch.setenv("R297_ACCEPTANCE_RUN_LEDGER", str(run_ledger))
+    bundle = build_bundle(_bundle(now)["events"], expected_scope=scope, now=now)
+    nonce_ledger = _nonce_ledger(tmp_path)
+    original_record_nonces = r297_evidence_events._record_nonces
+    monkeypatch.setattr(
+        r297_evidence_events,
+        "_record_nonces",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("nonce ledger crash injection")),
+    )
+
+    with pytest.raises(OSError, match="nonce ledger crash injection"):
+        verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger)
+
+    monkeypatch.setattr(r297_evidence_events, "_record_nonces", original_record_nonces)
+    result = verify_acceptance_event_bundle(
+        bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger,
+    )
+    assert result["authenticated_observer"]["verified_subject_count"] == 2
+    assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
+    assert len(json.loads(nonce_ledger.read_text())) == 4
+
+
 def test_candidate_bundle_builder_cannot_receive_any_signer_private_key(monkeypatch):
     from ops.r297_evidence_bundle import build_bundle
 
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
-    for variable in (
+    variables = (
         "R297_PAGE_EVENT_RECEIVER_PRIVATE_KEY_PATH",
         "R297_OBSERVER_PRIVATE_KEY_PATH",
         "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH",
-    ):
+    )
+    for variable in variables:
         with monkeypatch.context() as isolated:
+            for candidate in variables:
+                isolated.delenv(candidate, raising=False)
             isolated.setenv(variable, "/must-not-be-readable-by-candidate")
             with pytest.raises(RuntimeError, match="verifier must not receive signer private keys"):
                 build_bundle(_bundle(now)["events"], expected_scope=_scope(), now=now)
@@ -430,8 +478,13 @@ def _attempt_events(now, expected_scope, *, splice=False):
     events = []
     for index, event in enumerate(_bundle(now)["events"]):
         unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
+        payload = deepcopy(unsigned["payload"])
+        if unsigned["event_type"] == "authenticated_observer":
+            subject = next(item for item in events if item["nonce"] == payload["subject_nonce"])
+            payload["subject_event_sha256"] = signed_event_sha256(subject)
         events.append(_sign({
             **unsigned,
+            "payload": payload,
             "run_attempt": 1 if splice and index == 2 else expected_scope["run_attempt"],
             "challenge": "challenge-from-another-run-0001" if splice and index == 2 else expected_scope["challenge"],
         }))
