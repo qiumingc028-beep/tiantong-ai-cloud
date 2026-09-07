@@ -108,6 +108,8 @@ def _scope() -> dict:
         "platform": "jd",
         "release_sha": "9b466ac80122e35893cbaa408735136acc88331a",
         "run_id": "r297-run-20260907-0001",
+        "run_attempt": 1,
+        "challenge": "challenge-value-00000001",
     }
 
 
@@ -134,6 +136,38 @@ def test_bound_file_publish_recovers_body_only_crash(tmp_path):
 
     assert output.read_bytes() == content
     assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+
+
+def test_bound_file_publish_recovers_verified_hardlink_publish_crash(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    temporary = output.with_name(f".{output.name}.0123456789abcdef")
+    temporary.write_bytes(content)
+    temporary.chmod(0o600)
+    os.link(temporary, output)
+
+    digest = write_sha256_bound_file(output, content)
+
+    assert output.stat().st_nlink == 1
+    assert not temporary.exists()
+    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+
+
+def test_bound_file_publish_rejects_unknown_second_hardlink(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    output.write_bytes(content)
+    output.chmod(0o600)
+    unknown = output.parent / "unknown-link"
+    os.link(output, unknown)
+
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, content)
+
+    assert unknown.exists()
+    assert not Path(f"{output}.sha256").exists()
 
 
 def test_bound_file_publish_rejects_mismatched_or_committed_output(tmp_path):
@@ -281,7 +315,7 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
     assert all(set(entry) == {
         "namespace", "tenant_id", "company_id", "store_id", "platform",
         "release_sha", "event_type", "key_id", "nonce",
-        "run_id",
+        "run_id", "run_attempt", "challenge",
     } for entry in ledger)
 
     with pytest.raises(ValueError, match="replayed acceptance run"):

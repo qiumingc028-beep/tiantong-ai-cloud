@@ -477,9 +477,17 @@ def test_runtime_container_ci_check_has_timeout_and_safe_stage_diagnostics():
     assert "cleanup_done=1" in runtime_step
     assert "timeout 1s docker inspect --format '{{json .State}}'" in runtime_step
     assert "timeout 1s docker stats --no-stream" in runtime_step
+    assert "RUNTIME_EXITED_BEFORE_HEALTH" in runtime_step
+    assert "docker inspect --format '{{.State.Running}}'" in runtime_step
+    assert "docker logs --tail 200" in runtime_step
+    assert "RUNTIME_HEALTH_STATUS=$status" in runtime_step
+    runtime_start = Path("services/jd-cloud-browser-runtime/start-runtime.sh").read_text()
+    assert "RUNTIME_COMPONENT_EXIT=" in runtime_start
+    assert "wait -n -p exited_pid" in runtime_start
     allowed_inspects = (
         "timeout 1s docker inspect --format '{{json .State}}'",
         "timeout 1s docker inspect --format 'STATE={{.State.Status}} EXIT={{.State.ExitCode}} PID={{.State.Pid}} RESTARTS={{.RestartCount}}'",
+        "docker inspect --format '{{.State.Running}}'",
     )
     remaining = runtime_step
     for command in allowed_inspects:

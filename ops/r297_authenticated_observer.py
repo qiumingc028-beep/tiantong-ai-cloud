@@ -41,7 +41,8 @@ except ModuleNotFoundError as exc:
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _ARTIFACT_MANIFEST_RE = re.compile(r"r297-native-pagehide-manifest-[0-9a-f]{40}\.json")
 _SCOPE_FIELDS = (
-    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+    "run_id", "run_attempt", "challenge",
 )
 _RAW_PAGE_EVENT_FIELDS = {"event", "observed_at", "store_id", "release_sha"}
 _PAGEHIDE_BINDING = Path("/etc/tiantong/r297-pagehide-artifact-binding.json")
@@ -49,12 +50,6 @@ _BINDING_FIELDS = {
     "schema_version", "artifact_id", "artifact_name", "workflow_run_id",
     "release_sha", "archive_sha256", "evidence_sha256",
 }
-
-
-def acceptance_run_id(workflow_run_id: int) -> str:
-    if type(workflow_run_id) is not int or workflow_run_id <= 0:
-        raise ValueError("pagehide workflow run id invalid")
-    return f"r297-gh-{workflow_run_id}"
 
 
 def _read_binding_file(path: Path, *, environment: str) -> bytes:
@@ -263,9 +258,17 @@ def produce_page_event_receiver(raw_artifact: dict, authenticated_scope: dict) -
         raw_artifact.get("event_type") != "web_page_close"
         or raw_artifact.get("store_id") != authenticated_scope["store_id"]
         or raw_artifact.get("release_sha") != authenticated_scope["release_sha"]
-        or authenticated_scope["run_id"] != acceptance_run_id(raw_artifact.get("workflow_run_id"))
     ):
         raise ValueError("pagehide artifact scope or workflow run mismatch")
+    run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
+    if environment != "test" and not run_ledger:
+        raise RuntimeError("acceptance run ledger missing")
+    if run_ledger:
+        from ops.r297_acceptance_run import validate_acceptance_run
+        validate_acceptance_run(
+            Path(run_ledger), expected_scope=authenticated_scope,
+            source_workflow_run_id=raw_artifact["workflow_run_id"],
+        )
     manifest, _ = load_trust_manifest(environment=environment)
     event = {
         **authenticated_scope,
@@ -407,6 +410,8 @@ def main() -> int:
     receive.add_argument("--platform", required=True)
     receive.add_argument("--release-sha", required=True)
     receive.add_argument("--run-id", required=True)
+    receive.add_argument("--run-attempt", type=int, required=True)
+    receive.add_argument("--challenge", required=True)
     observe = subparsers.add_parser("observe")
     observe.add_argument("page_event", type=Path)
     observe.add_argument("output", type=Path)
@@ -419,8 +424,6 @@ def main() -> int:
             args.artifact_root, expected_release_sha=args.release_sha,
             binding=binding, archive_path=args.artifact_archive,
         )
-        if scope["run_id"] != acceptance_run_id(raw["workflow_run_id"]):
-            raise ValueError("pagehide artifact workflow run mismatch")
         payload = {
             "closed": True, "source": "browser_pagehide",
             **{field: raw[field] for field in (

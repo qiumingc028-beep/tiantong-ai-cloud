@@ -46,7 +46,8 @@ _ALLOWED_EVENTS_BY_ISSUER = {
     "windows_runner": ["electron_exit"],
 }
 _SCOPE_FIELDS = {
-    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+    "run_id", "run_attempt", "challenge",
 }
 _FIELDS = {
     *_SCOPE_FIELDS, "event_type", "issuer", "observed_at",
@@ -97,6 +98,9 @@ def write_sha256_bound_file(path: Path, content: bytes) -> str:
         raise FileExistsError(sidecar)
     if path.exists():
         metadata = path.lstat()
+        if metadata.st_nlink == 2:
+            _recover_published_hardlink(path, content, metadata)
+            metadata = path.lstat()
         if (
             path.is_symlink()
             or not stat.S_ISREG(metadata.st_mode)
@@ -112,6 +116,34 @@ def write_sha256_bound_file(path: Path, content: bytes) -> str:
         _replace_file(path, content)
     _replace_file(sidecar, f"{digest}  {path.name}\n".encode("ascii"))
     return digest
+
+
+def _recover_published_hardlink(path: Path, content: bytes, metadata: os.stat_result) -> None:
+    """Remove only the verified temporary link left by our exclusive publisher."""
+    candidates = []
+    pattern = re.compile(rf"\.{re.escape(path.name)}\.[0-9a-f]{{16}}")
+    for candidate in path.parent.iterdir():
+        if not pattern.fullmatch(candidate.name):
+            continue
+        candidate_metadata = candidate.lstat()
+        if (
+            stat.S_ISREG(candidate_metadata.st_mode)
+            and candidate_metadata.st_ino == metadata.st_ino
+            and candidate_metadata.st_dev == metadata.st_dev
+            and candidate_metadata.st_uid == metadata.st_uid
+            and stat.S_IMODE(candidate_metadata.st_mode) == stat.S_IMODE(metadata.st_mode)
+            and candidate.read_bytes() == content
+        ):
+            candidates.append(candidate)
+    if len(candidates) != 1 or path.read_bytes() != content:
+        raise FileExistsError(path)
+    candidates[0].unlink()
+    if os.name != "nt":
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
 
 
 def _replace_file(path: Path, content: bytes) -> None:
@@ -383,6 +415,10 @@ def verify_signed_event(
         or not isinstance(event.get("platform"), str)
         or re.fullmatch(r"[a-z0-9_-]{1,32}", event["platform"]) is None
         or not _SHA_RE.fullmatch(str(event.get("release_sha", "")))
+        or type(event.get("run_attempt")) is not int
+        or event["run_attempt"] <= 0
+        or not isinstance(event.get("challenge"), str)
+        or _NONCE_RE.fullmatch(event["challenge"]) is None
         or type(event.get("sequence")) is not int
         or not isinstance(event.get("nonce"), str)
         or _NONCE_RE.fullmatch(event["nonce"]) is None
@@ -564,6 +600,10 @@ def verify_acceptance_event_bundle(
         or not _scope_identity(expected_scope.get("run_id"))
         or not _scope_identity(expected_scope.get("tenant_id"))
         or not _scope_identity(expected_scope.get("company_id"))
+        or type(expected_scope.get("run_attempt")) is not int
+        or expected_scope["run_attempt"] <= 0
+        or not isinstance(expected_scope.get("challenge"), str)
+        or _NONCE_RE.fullmatch(expected_scope["challenge"]) is None
         or type(expected_scope.get("store_id")) is not int
         or expected_scope["store_id"] <= 0
         or not isinstance(expected_scope.get("platform"), str)
@@ -639,6 +679,17 @@ def verify_acceptance_event_bundle(
         "nonce": expected_scope["run_id"],
     })
     replay_bindings.append(run_binding)
+    environment = os.getenv("APP_ENV", "").strip().lower()
+    run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
+    if environment in {"acceptance", "production"}:
+        if not run_ledger:
+            raise RuntimeError("acceptance run ledger missing")
+        from ops.r297_acceptance_run import consume_acceptance_run
+        page_event = next(event for event in events if event["event_type"] == "web_page_close")
+        consume_acceptance_run(
+            Path(run_ledger), expected_scope=expected_scope,
+            source_workflow_run_id=page_event["payload"]["workflow_run_id"], now=now,
+        )
     _record_nonces(nonce_ledger, replay_bindings)
 
     return {

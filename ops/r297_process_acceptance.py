@@ -777,6 +777,8 @@ def main() -> int:
         "platform": scope["platform"],
         "release_sha": head,
         "run_id": os.getenv("R297_ACCEPTANCE_RUN_ID", ""),
+        "run_attempt": int(os.getenv("R297_ACCEPTANCE_RUN_ATTEMPT", "0")),
+        "challenge": os.getenv("R297_ACCEPTANCE_CHALLENGE", ""),
     }
     observations.update(verify_acceptance_event_bundle(
         bundle,

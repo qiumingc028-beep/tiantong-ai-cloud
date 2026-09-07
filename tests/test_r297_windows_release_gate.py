@@ -114,6 +114,16 @@ def test_r297_windows_acceptance_signs_only_after_real_electron_exit():
     assert "process_is_running(process_id)" in signer
 
 
+def test_candidate_workflow_fails_before_windows_signing_key_is_exposed():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    formal = workflow.split("  formal-windows-acceptance:", 1)[1]
+
+    assert "R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED" in formal
+    assert formal.index("R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED") < formal.index(
+        "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64"
+    )
+
+
 def test_r297_windows_acceptance_run_id_is_per_dispatch_not_static_environment_state():
     workflow = WORKFLOW.read_text(encoding="utf-8")
 

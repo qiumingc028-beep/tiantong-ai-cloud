@@ -9,11 +9,12 @@ Status: BLOCK. This document grants no main merge, production deployment, or rel
   `8f4e105002afe22ee84cf738cb4ad9209e06bba6`; it is not the candidate.
 - Backend, Worker, PostgreSQL, Redis and Nginx were running on the isolated host, and the
   Worker heartbeat was current. This only proves the old isolated deployment was healthy.
-- Loopback port 18443 originally presented an expired internal self-signed certificate whose
+- In an earlier separately authorized environment-repair run, loopback port 18443 originally
+  presented an expired internal self-signed certificate whose
   hostname did not match `internal.tiantongai.com`. On 2026-09-07 it was replaced, with a
   rollback copy retained, by the host's existing Let's Encrypt certificate for
   `internal.tiantongai.com`; verified HTTPS returned 200 and Nginx remained healthy. This did
-  not deploy candidate application code.
+  not deploy candidate application code. This task did not rotate or overwrite TLS material.
 - Three distinct acceptance signing keys were generated. The Receiver and Observer private
   keys are installed under separate non-login identities with mode 0400; the verifier cannot
   read either key. The root-owned trust manifest and sidecar are mode 0444, and the verifier's
@@ -49,8 +50,9 @@ Environment Secret and an Environment Variable. It can administer `r297-controll
 The independently verified internal scope variables are configured for namespace
 `r297-controlled-canary` and tenant/company/store `1/1/3`. The environment still has no
 required reviewer or branch policy, so signing keys were not uploaded into an unprotected
-environment. Add a second trusted collaborator as required reviewer and restrict deployments
-to the integration and evidence branches before provisioning Secrets.
+environment. If the selected policy forbids self-review, first invite one trusted collaborator
+who can review this Environment; GitHub does not universally require a second reviewer.
+Restrict deployments to the integration and evidence branches before provisioning Secrets.
 
 Open repository Settings → Environments → `r297-controlled-canary` → Add environment secret.
 Use that Environment, not a repository-wide secret. The existing Windows workflow already
@@ -67,12 +69,11 @@ reads these exact names:
 
 Also set Environment variables `R297_EVIDENCE_NAMESPACE`, `R297_EVIDENCE_TENANT_ID`,
 `R297_EVIDENCE_COMPANY_ID`, and `R297_EVIDENCE_STORE_ID` to the actual authorized acceptance
-scope. Platform is fixed to `jd`. Start the Linux pagehide run first, seal its artifact
-binding, then dispatch Windows with that run's numeric `pagehide_workflow_run_id`. Both
-chains derive the immutable run ID as `r297-gh-<workflow_run_id>`; the page receiver rejects
-any different value, and the persistent verifier ledger consumes that source run once even
-when a replay uses fresh event nonces. It is deliberately not shared mutable Environment
-state. Do not invent IDs, reuse a source run, or use a production Owner token. Pull-request and push runs retain
+scope. Platform is fixed to `jd`. A protected orchestrator must issue a fresh `run_id`,
+positive `run_attempt`, and random challenge in the persistent run ledger, bound once to the
+pagehide workflow run, candidate SHA, and complete scope. Every producer validates that same
+record and the verifier atomically consumes it. Do not use static Environment run IDs, invent
+IDs, reuse a source run, or use a production Owner token. Pull-request and push runs retain
 the build/security checks but do not consume protected material or claim formal acceptance.
 
 Protect the Environment with reviewed branch/deployment rules and required review before
@@ -92,6 +93,7 @@ mount a file or produce an event.
 | Observer | `R297_OBSERVER_PRIVATE_KEY_PATH` | Mount a different Observer private PEM only in the Observer process |
 | Observer | `R297_OBSERVER_DATABASE_URL` | Inject a PostgreSQL URL for the candidate DB's SELECT-only role |
 | verifier | `R297_EVIDENCE_NONCE_LEDGER` | Supply a persistent, writable nonce ledger outside the disposable output directory |
+| orchestrator/verifier | `R297_ACCEPTANCE_RUN_LEDGER` | Persist issued/consumed run challenges outside disposable jobs |
 | all roles | `/etc/tiantong/r297-evidence-trust-manifest.json` and `.sha256` | Administrator provisions the approved root-owned, read-only trust anchor |
 | page receiver | `/etc/tiantong/r297-pagehide-artifact-binding.json` and `.sha256` | Pin the newly generated candidate artifact's run/SHA/archive/content hashes |
 
@@ -114,6 +116,11 @@ The page receiver, two database observations (after page close and after Electro
 Windows runner must be orchestrated against the same live acceptance run before teardown.
 This orchestration and final material wiring are still BLOCK; merely adding Secrets cannot
 certify it. `signed-event-bundle` is generated evidence, not a manually authored Secret.
+The current candidate Windows workflow is not an independent signing boundary because it
+checks out candidate code while holding the signing key. Formal signing must move to a
+protected fixed `SIGNER_SHA` and a trusted Windows observation resource that executes no
+candidate script or downloaded executable. Until then, do not give the candidate job the
+Windows private key or call its output formal Windows evidence.
 
 Actual JD login requires the Owner to use the controlled public login/noVNC flow, including
 any required verification. Do not submit the JD password/cookies to ChatGPT or GitHub.

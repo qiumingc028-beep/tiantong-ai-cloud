@@ -25,7 +25,8 @@ except ModuleNotFoundError as exc:
 
 
 _SCOPE_FIELDS = {
-    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id",
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+    "run_id", "run_attempt", "challenge",
 }
 
 
@@ -123,6 +124,8 @@ def main() -> int:
     parser.add_argument("--platform", required=True)
     parser.add_argument("--release-sha", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-attempt", type=int, required=True)
+    parser.add_argument("--challenge", required=True)
     parser.add_argument("--process-id", type=int, required=True)
     parser.add_argument("--process-started-at", required=True)
     args = parser.parse_args()

@@ -52,6 +52,10 @@ def inspect_controlled_material(*, environment: str, role: str) -> dict:
         return {"role": role, "result": "BLOCK", "missing": [], "invalid": ["ROLE"]}
     if not re.fullmatch(r"[A-Za-z0-9._:-]{16,128}", os.getenv("R297_ACCEPTANCE_RUN_ID", "")):
         missing.append("ACCEPTANCE_RUN_ID")
+    if not re.fullmatch(r"[1-9][0-9]*", os.getenv("R297_ACCEPTANCE_RUN_ATTEMPT", "")):
+        missing.append("ACCEPTANCE_RUN_ATTEMPT")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", os.getenv("R297_ACCEPTANCE_CHALLENGE", "")):
+        missing.append("ACCEPTANCE_CHALLENGE")
 
     role_keys = {
         "page_event_receiver": ("PAGE_EVENT_RECEIVER_PRIVATE_KEY",),
@@ -99,6 +103,25 @@ def inspect_controlled_material(*, environment: str, role: str) -> dict:
                 r297_evidence_events.validate_nonce_ledger(Path(ledger_value))
             except (RuntimeError, ValueError):
                 invalid.append("NONCE_LEDGER")
+        run_ledger_value = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
+        if not run_ledger_value:
+            missing.append("RUN_LEDGER")
+        else:
+            try:
+                from ops.r297_acceptance_run import validate_acceptance_run
+                validate_acceptance_run(Path(run_ledger_value), expected_scope={
+                    "namespace": os.environ["R297_EVIDENCE_NAMESPACE"],
+                    "tenant_id": int(os.environ["R297_EVIDENCE_TENANT_ID"]),
+                    "company_id": int(os.environ["R297_EVIDENCE_COMPANY_ID"]),
+                    "store_id": int(os.environ["R297_EVIDENCE_STORE_ID"]),
+                    "platform": os.getenv("R297_EVIDENCE_PLATFORM", "jd"),
+                    "release_sha": os.environ["RELEASE_SOURCE_SHA"],
+                    "run_id": os.environ["R297_ACCEPTANCE_RUN_ID"],
+                    "run_attempt": int(os.environ["R297_ACCEPTANCE_RUN_ATTEMPT"]),
+                    "challenge": os.environ["R297_ACCEPTANCE_CHALLENGE"],
+                }, source_workflow_run_id=int(os.environ["R297_SOURCE_PAGEHIDE_WORKFLOW_RUN_ID"]))
+            except (KeyError, OSError, RuntimeError, ValueError):
+                invalid.append("RUN_LEDGER")
 
     if role == "windows_runner":
         backend_url = os.getenv("R297_WINDOWS_CANARY_BACKEND_HTTPS_URL", "")
