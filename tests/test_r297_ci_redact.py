@@ -151,3 +151,14 @@ def test_ci_redactor_handles_driver_urls_and_unquoted_private_key_blocks(tmp_pat
     for value in ("DBVALUE", "REDISVALUE", "SYNTHETICKEYBODY"):
         assert value not in result
     assert "NEXT_DIAGNOSTIC=failed" in result
+
+
+def test_ci_redactor_removes_exact_ephemeral_values_from_runtime_logs(tmp_path, monkeypatch):
+    artifact = tmp_path / "runtime.log"
+    artifact.write_text("opaque-runtime-value\n", encoding="utf-8")
+    monkeypatch.setenv("R297_REDACT_EXACT_ENV_NAMES", "R_CAPTURE")
+    monkeypatch.setenv("R_CAPTURE", "opaque-runtime-value")
+
+    redact(artifact)
+
+    assert artifact.read_text(encoding="utf-8") == "[REDACTED]\n"
