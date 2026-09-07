@@ -4,12 +4,15 @@ import os
 import hmac
 import re
 from decimal import Decimal, InvalidOperation
-from urllib.request import Request, urlopen
+from urllib.request import Request, build_opener, ProxyHandler
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from ..models import JdAccount, JdAd, JdDailyMetric, JdOrder, JdProduct, Store
+from .jd_runtime_contract import NoCredentialRedirect, runtime_base, session_namespace
+
+urlopen = build_opener(ProxyHandler({}), NoCredentialRedirect).open
 
 
 class JdCollectorError(RuntimeError):
@@ -26,6 +29,12 @@ DATASET_FIELDS = {
 METRIC_ALIASES = {"today_sales": "gmv", "visitors": "visitors_count", "orders": "paid_orders_count",
                   "refunds": "refunds_count", "after_sales": "after_sales_count"}
 BUSINESS_KEYS = {"orders": "order_no", "products": "sku_id", "ads": "campaign_id"}
+DATASET_REQUIRED = {
+    "metrics": frozenset("gmv profit_amount visitors_count paid_orders_count ad_spend roi refunds_count after_sales_count favorites_count cart_add_count conversion_rate".split()),
+    "orders": frozenset("order_no paid_amount profit_amount".split()),
+    "products": frozenset("sku_id stock_quantity sales_amount sales_quantity visitors_count conversion_rate".split()),
+    "ads": frozenset("campaign_id ad_spend clicks impressions roi cpa deal_amount".split()),
+}
 
 
 def validate_dataset(dataset: str, captured):
@@ -38,6 +47,9 @@ def validate_dataset(dataset: str, captured):
     for row in rows:
         if not isinstance(row, dict) or not row or set(row) - set(DATASET_FIELDS[dataset].split()):
             raise JdCollectorError("采集字段无效")
+        present = {METRIC_ALIASES.get(name, name) if dataset == "metrics" else name for name in row}
+        if DATASET_REQUIRED[dataset] - present:
+            raise JdCollectorError("采集缺少必填观测字段")
         business_key = BUSINESS_KEYS.get(dataset)
         if business_key and (not isinstance(row.get(business_key), str) or not row[business_key].strip()):
             raise JdCollectorError(f"采集缺少 {business_key}")
@@ -83,18 +95,14 @@ class JdSmartCollector:
     """
 
     def _capture(self, account: JdAccount, dataset: str, store: Store):
-        endpoint = os.getenv(
-            "JD_BROWSER_CAPTURE_BASE_URL",
-            "http://jd-browser-runtime:8787/internal/jd-browser",
-        ).rstrip("/")
+        try:
+            endpoint = runtime_base("JD_BROWSER_CAPTURE_BASE_URL")
+            namespace = session_namespace(os.getenv("JD_SESSION_NAMESPACE", "").strip())
+        except ValueError as exc:
+            raise JdCollectorError("云端浏览器运行时配置无效") from exc
         token = os.getenv("JD_BROWSER_CAPTURE_TOKEN", "")
         if len(token.encode()) < 32:
             raise JdCollectorError("云端浏览器内部认证未配置")
-        if not endpoint:
-            raise JdCollectorError("云端浏览器运行时未配置")
-        namespace = os.getenv("JD_SESSION_NAMESPACE", "").strip()
-        if not namespace:
-            raise JdCollectorError("会话命名空间未配置")
         payload = {"scope": {"namespace": namespace, "tenant_id": str(store.tenant_id), "company_id": str(store.company_id), "store_id": str(store.id), "platform": "jd"}, "dataset": dataset}
         try:
             with urlopen(Request(endpoint + "/capture", data=json.dumps(payload).encode(), headers={"content-type": "application/json", "x-internal-token": token}), timeout=45) as response:

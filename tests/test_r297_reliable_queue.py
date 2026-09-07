@@ -234,6 +234,7 @@ def test_process_evidence_generator_rejects_production_canary_before_writes(monk
 
 def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypatch):
     from backend.services import jd_collectors
+    from tests.test_r297_dataset_required_fields import complete_row
 
     captured = []
 
@@ -251,12 +252,14 @@ def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypa
                     "store_id": "3",
                     "source": "jd_cloud_playwright",
                     "captured_at": "2026-09-06T00:00:00Z",
-                    "metrics": {"gmv": "1"},
+                    "metrics": complete_row("metrics", gmv="1"),
                 },
             }).encode()
 
     monkeypatch.setenv("JD_BROWSER_CAPTURE_TOKEN", "c" * 32)
     monkeypatch.setenv("JD_BROWSER_CAPTURE_BASE_URL", "http://127.0.0.1:18787/internal/jd-browser/")
+    monkeypatch.setenv("R297_CONTROLLED_CANARY", "1")
+    monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("JD_SESSION_NAMESPACE", "ci")
     monkeypatch.setattr(jd_collectors, "urlopen", lambda request, timeout: captured.append(request.full_url) or Response())
     store = SimpleNamespace(id=3, tenant_id=1, company_id=2, platform="jd")
@@ -265,7 +268,7 @@ def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypa
     result = jd_collectors.JdSmartCollector()._capture(account, "metrics", store)
 
     assert captured == ["http://127.0.0.1:18787/internal/jd-browser/capture"]
-    assert result == {"gmv": "1"}
+    assert result == complete_row("metrics", gmv="1")
 
 
 @pytest.mark.parametrize(
@@ -279,6 +282,9 @@ def test_collector_uses_explicit_runtime_base_for_isolated_process_gate(monkeypa
 )
 def test_collector_unwraps_each_runtime_dataset_schema(monkeypatch, dataset, captured):
     from backend.services import jd_collectors
+    from tests.test_r297_dataset_required_fields import complete_row
+
+    captured = complete_row(dataset, **captured) if dataset == "metrics" else [complete_row(dataset, **row) for row in captured]
 
     class Response:
         def __enter__(self):

@@ -2,6 +2,7 @@ from datetime import date, timedelta
 import threading
 
 import pytest
+from tests.test_r297_dataset_required_fields import complete_row
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -26,7 +27,7 @@ def _account(session, account_type: str) -> JdAccount:
 def test_product_replay_updates_one_business_row(test_db, monkeypatch):
     session = test_db()
     account = _account(session, "jd_smart")
-    rows = [{"sku_id": "sku-1", "product_name": "first", "stock_quantity": 1}]
+    rows = [complete_row("products", sku_id="sku-1", product_name="first", stock_quantity=1)]
     monkeypatch.setattr(jd_collectors.JdSmartCollector, "fetch_products_today", lambda *_args: rows)
 
     jd_collectors.sync_jd_products(session, account.store_id, date(2026, 9, 6))
@@ -39,7 +40,7 @@ def test_product_replay_updates_one_business_row(test_db, monkeypatch):
             return original_datetime.now(tz) + timedelta(days=1)
 
     monkeypatch.setattr(jd_collectors, "datetime", LaterDateTime)
-    rows[0] = {"sku_id": "sku-1", "product_name": "updated", "stock_quantity": 2}
+    rows[0] = complete_row("products", sku_id="sku-1", product_name="updated", stock_quantity=2)
     jd_collectors.sync_jd_products(session, account.store_id, date(2026, 9, 6))
 
     products = session.query(JdProduct).all()
@@ -52,7 +53,7 @@ def test_product_replay_updates_one_business_row(test_db, monkeypatch):
 def test_ad_replay_updates_one_business_row(test_db, monkeypatch):
     session = test_db()
     account = _account(session, "jzt")
-    rows = [{"campaign_id": "campaign-1", "campaign_name": "first", "clicks": 1}]
+    rows = [complete_row("ads", campaign_id="campaign-1", campaign_name="first", clicks=1)]
     monkeypatch.setattr(jd_collectors.JztCollector, "fetch_ads_today", lambda *_args: rows)
 
     jd_collectors.sync_jzt(session, account.store_id, date(2026, 9, 6))
@@ -65,7 +66,7 @@ def test_ad_replay_updates_one_business_row(test_db, monkeypatch):
             return original_datetime.now(tz) + timedelta(days=1)
 
     monkeypatch.setattr(jd_collectors, "datetime", LaterDateTime)
-    rows[0] = {"campaign_id": "campaign-1", "campaign_name": "updated", "clicks": 2}
+    rows[0] = complete_row("ads", campaign_id="campaign-1", campaign_name="updated", clicks=2)
     jd_collectors.sync_jzt(session, account.store_id, date(2026, 9, 6))
 
     ads = session.query(JdAd).all()
@@ -82,7 +83,8 @@ def test_duplicate_business_key_in_one_collection_batch_is_idempotent(test_db, m
     account = _account(session, account_type)
     key = "sku_id" if target == "product" else "campaign_id"
     value_key = "stock_quantity" if target == "product" else "clicks"
-    rows = [{key: "same-key", value_key: 1}, {key: "same-key", value_key: 2}]
+    dataset = "products" if target == "product" else "ads"
+    rows = [complete_row(dataset, **{key: "same-key", value_key: 1}), complete_row(dataset, **{key: "same-key", value_key: 2})]
     if target == "product":
         monkeypatch.setattr(jd_collectors.JdSmartCollector, "fetch_products_today", lambda *_args: rows)
         call = jd_collectors.sync_jd_products
@@ -160,16 +162,16 @@ def test_concurrent_business_key_replay_is_atomic(postgres_database_factory, tar
         try:
             barrier.wait(timeout=5)
             if target == "product":
-                jd_collectors.save_product(session, store_id, {
+                jd_collectors.save_product(session, store_id, complete_row("products", **{
                     "sku_id": "sku-concurrent",
                     "stat_date": "2026-09-06",
                     "product_name": label,
-                })
+                }))
             else:
-                jd_collectors.save_ad(session, store_id, None, date(2026, 9, 6), {
+                jd_collectors.save_ad(session, store_id, None, date(2026, 9, 6), complete_row("ads", **{
                     "campaign_id": "campaign-concurrent",
                     "campaign_name": label,
-                })
+                }))
             session.commit()
         except Exception as exc:  # pragma: no cover - asserted below
             errors.append(exc)

@@ -1,5 +1,6 @@
 services:
   jd-browser-runtime:
+    # Runtime must enforce the production identity pin, not just Backend.
     image: ${S12_JD_RUNTIME_IMAGE:-tiantong-jd-browser-runtime:local}
     build:
       context: .
@@ -9,6 +10,7 @@ services:
         BUILD_TIME: ${BUILD_TIME:-unknown}
     restart: unless-stopped
     environment:
+      APP_ENV: production
       JD_BROWSER_CAPTURE_TOKEN: ${JD_BROWSER_CAPTURE_TOKEN:?set JD_BROWSER_CAPTURE_TOKEN in .env.production}
       JD_BROWSER_CONTROL_TOKEN: ${JD_BROWSER_CONTROL_TOKEN:?set JD_BROWSER_CONTROL_TOKEN in .env.production}
       JD_BROWSER_VIEWER_TICKET_SIGNING_KEY: ${JD_BROWSER_VIEWER_TICKET_SIGNING_KEY:?set JD_BROWSER_VIEWER_TICKET_SIGNING_KEY in .env.production}

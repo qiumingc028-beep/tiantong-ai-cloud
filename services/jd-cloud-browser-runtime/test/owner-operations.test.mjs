@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import net from 'node:net';
+import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -106,4 +108,108 @@ test('receipt commit failure cannot return success and keeps the original pendin
   const receipt = await app.inject({method: 'GET', url: `/internal/jd-browser/operations/${id}`, headers: f.headers});
   assert.equal(receipt.json().status, 'PENDING');
   assert.equal(receipt.json().response_sha256, null);
+});
+
+test('revoking the original Owner grant disconnects an already upgraded Viewer', async t => {
+  const upstream = net.createServer(socket => socket.once('data', () => socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')));
+  upstream.listen(0, '127.0.0.1');
+  await once(upstream, 'listening');
+  t.after(() => upstream.close());
+  let authorized = true;
+  const id = crypto.randomBytes(16).toString('hex');
+  const f = await fixture(t, {viewerUpstreamPort: upstream.address().port,
+    authorizeSession: async (_scope, operationId) => authorized && operationId === id});
+  const app = f.start();
+  await app.listen({port: 0, host: '127.0.0.1'});
+  const created = await app.inject({method: 'POST', url: '/internal/jd-browser/sessions', payload: f.scope,
+    headers: {...f.headers, 'x-owner-operation-id': id}});
+  assert.equal(created.statusCode, 200);
+  const ticket = (await app.inject({method: 'POST', url: '/internal/jd-browser/tickets',
+    headers: f.headers, payload: {session_id: created.json().session_id}})).json().ticket;
+  const exchanged = await app.inject({method: 'POST', url: '/internal/jd-browser/viewer/exchange/1', payload: {ticket}});
+  assert.equal(exchanged.statusCode, 204);
+  const socket = net.connect(app.server.address().port, '127.0.0.1');
+  t.after(() => socket.destroy());
+  socket.setTimeout(2000, () => socket.destroy(new Error('Viewer handshake timeout')));
+  socket.write(`GET /internal/jd-browser/viewer/stream/1 HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\nCookie: ${exchanged.headers['set-cookie'].split(';')[0]}\r\n\r\n`);
+  const [response] = await once(socket, 'data');
+  assert.match(response.toString(), /^HTTP\/1.1 101/);
+  const disconnected = once(socket, 'close');
+  authorized = false;
+  await app.inject({method: 'GET', url: '/internal/jd-browser/health', headers: f.headers});
+  await disconnected;
+});
+
+test('production namespace is deployment-specific and pinned across restart', async t => {
+  const f = await fixture(t);
+  const original = process.env.APP_ENV;
+  process.env.APP_ENV = 'production';
+  t.after(() => { if (original === undefined) delete process.env.APP_ENV; else process.env.APP_ENV = original; });
+  for (const placeholder of ['default', 'production', 'ci']) {
+    assert.throws(() => buildApp({...f.options, sessionNamespace: placeholder}), /JD_DEPLOYMENT_NAMESPACE_REQUIRED/);
+  }
+  f.options.sessionNamespace = 'r297-' + crypto.randomBytes(12).toString('hex');
+  const first = f.start();
+  await first.ready();
+  await first.close();
+  const same = f.start();
+  await same.ready();
+  await same.close();
+  f.options.sessionNamespace = 'r297-' + crypto.randomBytes(12).toString('hex');
+  const changed = f.start();
+  await assert.rejects(changed.ready(), /JD_DEPLOYMENT_NAMESPACE_CHANGED/);
+});
+
+test('default authorizer pins its credential destination and bounds unknown results', async t => {
+  const f = await fixture(t, {authorizeSession: undefined});
+  const original = process.env.JD_BROWSER_SESSION_AUTH_URL;
+  t.after(() => { if (original === undefined) delete process.env.JD_BROWSER_SESSION_AUTH_URL; else process.env.JD_BROWSER_SESSION_AUTH_URL = original; });
+  process.env.JD_BROWSER_SESSION_AUTH_URL = 'https://example.invalid/collect';
+  assert.throws(f.start, /JD_SESSION_AUTH_DESTINATION_INVALID/);
+  delete process.env.JD_BROWSER_SESSION_AUTH_URL;
+  let sent = 0;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    sent++;
+    assert.equal(url, 'http://backend:8000/api/jd-workbench/internal/browser-session-authorize');
+    assert.equal(options.redirect, 'error');
+    assert.ok(options.signal instanceof AbortSignal);
+    // A server accepts the request but never resolves it; abort must fail closed.
+    return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), {once: true}));
+  });
+  const app = f.start();
+  const response = await app.inject({method: 'POST', url: '/internal/jd-browser/sessions', payload: f.scope,
+    headers: {...f.headers, 'x-owner-operation-id': crypto.randomBytes(16).toString('hex')}});
+  assert.equal(response.statusCode, 403);
+  assert.equal(sent, 1);
+});
+
+test('late revocation of an old grant cannot remove its replacement session', async t => {
+  const oldId = crypto.randomBytes(16).toString('hex');
+  const newId = crypto.randomBytes(16).toString('hex');
+  let delayOld = false;
+  let release;
+  let entered;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const f = await fixture(t, {authorizeSession: async (_scope, operationId) => {
+    if (delayOld && operationId === oldId) {
+      delayOld = false;
+      entered();
+      return new Promise(resolve => { release = resolve; });
+    }
+    return true;
+  }});
+  const app = f.start();
+  const create = id => app.inject({method: 'POST', url: '/internal/jd-browser/sessions', payload: f.scope,
+    headers: {...f.headers, 'x-owner-operation-id': id}});
+  assert.equal((await create(oldId)).statusCode, 200);
+  delayOld = true;
+  const stale = app.inject({method: 'GET', url: '/internal/jd-browser/health', headers: f.headers});
+  await waiting;
+  const replacement = await create(newId);
+  assert.equal(replacement.statusCode, 200);
+  release(false);
+  await stale;
+  const ticket = await app.inject({method: 'POST', url: '/internal/jd-browser/tickets', headers: f.headers,
+    payload: {session_id: replacement.json().session_id}});
+  assert.equal(ticket.statusCode, 200, 'late old authorization must not destroy the replacement');
 });

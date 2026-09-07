@@ -9,13 +9,14 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.models import Company, JdAccount, JdAd, JdDailyMetric, JdOrder, JdProduct, Store, Tenant
 from backend.services import jd_collectors as collectors
+from tests.test_r297_dataset_required_fields import complete_row
 
 
 DATASETS = {
-    "metrics": ("jd_smart", collectors.sync_jd_smart, JdDailyMetric, {"gmv": "1.00"}),
-    "orders": ("jd_smart", collectors.sync_jd_orders, JdOrder, {"order_no": "order-1", "paid_amount": 1}),
-    "products": ("jd_smart", collectors.sync_jd_products, JdProduct, {"sku_id": "sku-1", "stock_quantity": 1}),
-    "ads": ("jzt", collectors.sync_jzt, JdAd, {"campaign_id": "campaign-1", "clicks": 1}),
+    "metrics": ("jd_smart", collectors.sync_jd_smart, JdDailyMetric, complete_row("metrics", gmv="1.00")),
+    "orders": ("jd_smart", collectors.sync_jd_orders, JdOrder, complete_row("orders", order_no="order-1", paid_amount=1)),
+    "products": ("jd_smart", collectors.sync_jd_products, JdProduct, complete_row("products", sku_id="sku-1", stock_quantity=1)),
+    "ads": ("jzt", collectors.sync_jzt, JdAd, complete_row("ads", campaign_id="campaign-1", clicks=1)),
 }
 
 
@@ -45,12 +46,14 @@ def configure_capture(session, monkeypatch, dataset, rows, **envelope):
 
 
 @pytest.mark.parametrize("dataset", DATASETS)
-@pytest.mark.parametrize("mutation", ("unknown_field", "bool", "nan", "wrong_type"))
+@pytest.mark.parametrize("mutation", ("unknown_field", "bool", "nan", "wrong_type", "missing"))
 def test_invalid_dataset_rejects_entire_batch_before_any_write(test_db, monkeypatch, dataset, mutation):
     row = dict(DATASETS[dataset][3])
     field = {"metrics": "gmv", "orders": "paid_amount", "products": "stock_quantity", "ads": "clicks"}[dataset]
     if mutation == "unknown_field":
         row["unexpected"] = "forbidden"
+    elif mutation == "missing":
+        del row[field]
     else:
         row[field] = {"bool": True, "nan": "NaN", "wrong_type": []}[mutation]
     captured = row if dataset == "metrics" else [dict(DATASETS[dataset][3]), row]

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -184,12 +185,25 @@ async function readArchive(id, archiveRoot, masterKey) {
 }
 
 function defaultSessionAuthorizer(controlToken) {
-  return async (scope) => {
+  const destination = process.env.JD_BROWSER_SESSION_AUTH_URL || 'http://backend:8000/api/jd-workbench/internal/browser-session-authorize';
+  if (destination !== 'http://backend:8000/api/jd-workbench/internal/browser-session-authorize') {
+    const url = new URL(destination);
+    if (process.env.APP_ENV === 'production' || process.env.R297_CONTROLLED_CANARY !== '1' ||
+        url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || url.username || url.password ||
+        url.pathname !== '/api/jd-workbench/internal/browser-session-authorize' || url.search || url.hash) {
+      throw new Error('JD_SESSION_AUTH_DESTINATION_INVALID');
+    }
+  }
+  return async (scope, operationId) => {
+    if (!/^[0-9a-f]{32}$/.test(operationId || '')) return false;
     const response = await fetch(
-      process.env.JD_BROWSER_SESSION_AUTH_URL || 'http://backend:8000/api/jd-workbench/internal/browser-session-authorize',
+      destination,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-internal-token': controlToken },
+        headers: { 'content-type': 'application/json', 'x-internal-token': controlToken,
+          'x-owner-session-operation-id': operationId },
+        redirect: 'error',
+        signal: AbortSignal.timeout(5000),
         body: JSON.stringify(scope)
       }
     );
@@ -208,6 +222,7 @@ export function buildApp({
   archiveRoot = '/data/jd-session-archives',
   sessionNamespace,
   authorizeSession,
+  viewerUpstreamPort = 6080,
   dashboardUrl = ROUTES.dashboard,
   launchContext = (directory) => chromium.launchPersistentContext(directory, {
     headless: false,
@@ -220,23 +235,38 @@ export function buildApp({
   const cookieKey = requiredSecret(viewerCookieSigningKey, 'JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY');
   const encryptionKey = decodeMasterKey(masterKey);
   if (sessionNamespace !== undefined && !/^([a-z0-9][a-z0-9-]{1,31})$/.test(String(sessionNamespace || ''))) throw new Error('JD_SESSION_NAMESPACE_REQUIRED');
+  if (process.env.APP_ENV === 'production' && !/^r297-[0-9a-f]{24}$/.test(sessionNamespace || '')) throw new Error('JD_DEPLOYMENT_NAMESPACE_REQUIRED');
   if (new Set([captureKey, controlKey, ticketKey, cookieKey]).size !== 4) {
     throw new Error('JD_BROWSER_CAPABILITY_TOKENS_MUST_BE_DISTINCT');
   }
   const authorize = authorizeSession || defaultSessionAuthorizer(controlKey);
   const app = Fastify({ logger: false });
   const browserSessions = new Map();
+  app.addHook('onReady', async () => {
+    if (process.env.APP_ENV !== 'production') return;
+    await fs.mkdir(archiveRoot, {recursive: true, mode: 0o700});
+    const identityPath = path.join(archiveRoot, '.deployment-namespace');
+    try {
+      const handle = await fs.open(identityPath, 'wx', 0o600);
+      try { await handle.writeFile(sessionNamespace); await handle.sync(); } finally { await handle.close(); }
+    } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    if (await fs.readFile(identityPath, 'utf8') !== sessionNamespace) throw new Error('JD_DEPLOYMENT_NAMESPACE_CHANGED');
+    const directory = await fs.open(archiveRoot, 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+  });
   app.addHook('onSend', async (_request, reply, payload) => {
     reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer');
     return payload;
   });
 
-  async function isAuthorized(scope) {
-    try { return await authorize(scope) === true; } catch (_error) { return false; }
+  async function isAuthorized(scope, operationId) {
+    try { return await authorize(scope, operationId) === true; } catch (_error) { return false; }
   }
 
   async function sessionRemainsAuthorized(id, session) {
-    if (await isAuthorized(session.scope)) return true;
+    const allowed = session.expiresAt > now() && await isAuthorized(session.scope, session.ownerOperationId);
+    if (browserSessions.get(id) !== session) return false;
+    if (allowed) return true;
     await destroySession(id, session).catch((error) => app.log.error(error));
     return false;
   }
@@ -271,6 +301,7 @@ export function buildApp({
 
   async function suspendSession(id, session) {
     if (!browserSessions.delete(id)) return;
+    for (const socket of session.viewerSockets || []) socket.destroy();
     let archiveError = null;
     try {
       await writeArchive(session.context, id, archiveRoot, encryptionKey, session.expiresAt, session.nonce);
@@ -283,6 +314,7 @@ export function buildApp({
 
   async function destroySession(id, session) {
     browserSessions.delete(id);
+    for (const socket of session?.viewerSockets || []) socket.destroy();
     await runAllCleanup([
       ...(session ? [() => session.context.close()] : []),
       () => removePlaintextProfile(id),
@@ -294,6 +326,7 @@ export function buildApp({
   async function purgeExpired() {
     for (const [id, session] of browserSessions) {
       if (session.expiresAt <= now()) await destroySession(id, session);
+      else await sessionRemainsAuthorized(id, session);
     }
     let entries;
     try { entries = await fs.readdir(archiveRoot, { withFileTypes: true }); }
@@ -450,7 +483,8 @@ export function buildApp({
     if (!scope) return reply.code(400).send({ error: 'SESSION_SCOPE_INVALID' });
     if (scope.namespace !== sessionNamespace) return reply.code(403).send({ error: 'scope_namespace_mismatch' });
     const id = sessionId(scope);
-    if (!await isAuthorized(scope)) {
+    const operationId = request.ownerOperation?.operation_id;
+    if (!await isAuthorized(scope, operationId)) {
       const active = browserSessions.get(id);
       if (active) await destroySession(id, active).catch((error) => app.log.error(error));
       return reply.code(403).send({ error: 'SESSION_SCOPE_REJECTED' });
@@ -458,7 +492,11 @@ export function buildApp({
     await purgeExpired();
     if (browserSessions.has(id)) {
       const active = browserSessions.get(id);
-      return { session_id: id, expires_in: remainingSeconds(active.expiresAt), restored: false };
+      if (active.ownerOperationId === operationId) {
+        return { session_id: id, expires_in: remainingSeconds(active.expiresAt), restored: false };
+      }
+      // A different Owner grant cannot inherit existing Viewer authority.
+      await destroySession(id, active);
     }
     if (browserSessions.size) return reply.code(409).send({ error: 'ACTIVE_SESSION_EXISTS' });
     let restored;
@@ -486,7 +524,7 @@ export function buildApp({
       // Viewer authority is intentionally process-bound: restore JD state, never a pre-restart cookie.
       const nonce = crypto.randomBytes(16).toString('hex');
       browserSessions.set(id, {
-        context, scope, nonce: restored ? crypto.randomBytes(16).toString('hex') : nonce,
+        context, scope, ownerOperationId: operationId, nonce: restored ? crypto.randomBytes(16).toString('hex') : nonce,
         expiresAt: restored?.expires_at || now() + SESSION_TTL_MS
       });
     } catch (error) {
@@ -563,6 +601,40 @@ export function buildApp({
       return reply.code(401).send({ error: 'VIEWER_SESSION_INVALID' });
     }
     return reply.header('cache-control', 'no-store').header('referrer-policy', 'no-referrer').code(204).send();
+  });
+
+  app.server.on('upgrade', (request, socket, head) => {
+    const connectViewer = async () => {
+      const storeId = /^\/internal\/jd-browser\/viewer\/stream\/([A-Za-z0-9_-]{1,64})$/.exec(request.url)?.[1];
+      const viewer = verifiedValue(cookieValue(request.headers.cookie, 'jd_browser_session'), cookieKey,
+        {typ: COOKIE_TYPE, aud: COOKIE_AUDIENCE, now});
+      const session = viewer && browserSessions.get(viewer.session_id);
+      if (!storeId || !viewer || viewer.store_id !== storeId || !session || viewer.session_nonce !== session.nonce ||
+          !await sessionRemainsAuthorized(viewer.session_id, session) || browserSessions.get(viewer.session_id) !== session) {
+        socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      const upstream = net.connect(viewerUpstreamPort, '127.0.0.1');
+      session.viewerSockets ||= new Set();
+      session.viewerSockets.add(socket);
+      const close = () => { clearTimeout(expiry); session.viewerSockets.delete(socket); socket.destroy(); upstream.destroy(); };
+      const expiry = setTimeout(close, Math.max(0, viewer.exp * 1000 - now()));
+      expiry.unref();
+      socket.on('error', close).on('close', close);
+      upstream.on('error', close).on('close', close);
+      upstream.setTimeout(10000, close);
+      upstream.once('data', () => upstream.setTimeout(0));
+      upstream.once('connect', () => {
+        const headers = ['GET /websockify HTTP/1.1', 'Host: 127.0.0.1', 'Connection: Upgrade', 'Upgrade: websocket'];
+        for (const name of ['sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol']) {
+          if (request.headers[name]) headers.push(`${name}: ${request.headers[name]}`);
+        }
+        upstream.write(headers.join('\r\n') + '\r\n\r\n');
+        if (head.length) upstream.write(head);
+        socket.pipe(upstream).pipe(socket);
+      });
+    };
+    void connectViewer().catch(() => socket.destroy());
   });
 
   app.post('/internal/jd-browser/capture', { preHandler: verifyCapture }, async (request, reply) => {

@@ -26,7 +26,10 @@ TEST_RSA_D_B64 = "AYKWaeaE0CqzyGt8my2TuZDX8TAnwAeqRZ64K1541lnC7BZcLLDN_MP4biSs0L
 
 
 def test_browser_runtime_control_scope_must_match_an_active_database_store(client, test_db, monkeypatch):
+    from backend.models import EmployeeLog
+
     token = "r" * 32
+    operation_id = secrets.token_hex(16)
     monkeypatch.setenv("JD_BROWSER_CONTROL_TOKEN", token)
     monkeypatch.setenv("JD_SESSION_NAMESPACE", "ci")
     get_settings.cache_clear()
@@ -65,10 +68,13 @@ def test_browser_runtime_control_scope_must_match_an_active_database_store(clien
         db.add(foreign_store)
         db.commit()
         foreign_store_id = foreign_store.id
+        db.add(EmployeeLog(user_id=1, store_id=scope["store_id"], action="owner_login_session_create",
+            detail=json.dumps({**scope, "operation_id": operation_id, "status": "SUCCESS"})))
+        db.commit()
     try:
         assert client.post(
             "/api/jd-workbench/internal/browser-session-authorize",
-            headers={"x-internal-token": token}, json=scope,
+            headers={"x-internal-token": token, "x-owner-session-operation-id": operation_id}, json=scope,
         ).status_code == 204
         assert client.post(
             "/api/jd-workbench/internal/browser-session-authorize",

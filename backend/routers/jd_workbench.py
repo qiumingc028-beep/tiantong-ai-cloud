@@ -17,7 +17,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
-from urllib.request import Request as UrlRequest, urlopen
+from urllib.request import Request as UrlRequest, build_opener, ProxyHandler
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -43,6 +43,9 @@ from ..models import (
     User,
 )
 from ..store_authorization import authorized_stores, require_authorized_store
+from ..services.jd_runtime_contract import NoCredentialRedirect, RUNTIME_BASE, runtime_base, session_namespace
+
+urlopen = build_opener(ProxyHandler({}), NoCredentialRedirect).open
 
 
 router = APIRouter(prefix="/api/jd-workbench", tags=["jd-workbench"])
@@ -245,6 +248,26 @@ async def authorize_browser_session(request: Request, db: Session = Depends(get_
     ).one_or_none()
     if not found:
         raise HTTPException(status_code=404, detail="店铺会话作用域不存在")
+    operation_id = request.headers.get("x-owner-session-operation-id", "")
+    if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+        raise HTTPException(status_code=403, detail="会话Owner授权已失效")
+    grant = db.query(EmployeeLog).filter(
+        EmployeeLog.store_id == store_id, EmployeeLog.action == "owner_login_session_create",
+        EmployeeLog.detail.contains(operation_id),
+    ).order_by(EmployeeLog.id.desc()).first()
+    try:
+        detail = json.loads(grant.detail) if grant else {}
+    except (TypeError, ValueError):
+        detail = {}
+    if not isinstance(detail, dict):
+        detail = {}
+    owner = db.get(User, grant.user_id) if grant and grant.user_id else None
+    if (detail.get("operation_id") != operation_id or detail.get("status") not in {"PENDING", "SUCCESS"}
+            or any(str(detail.get(key)) != str(value) for key, value in body.items())
+            or owner is None or not owner.active or normalize_role(owner.role) != "owner"
+            or "stores.manage" not in get_role_permissions(db, normalize_role(owner.role))):
+        raise HTTPException(status_code=403, detail="会话Owner授权已失效")
+    require_authorized_store(db, owner, store_id=store_id, write=True)
 
 
 def _require_owner_store(store_id: int, request: Request, db: Session) -> tuple[User, Store]:
@@ -258,36 +281,23 @@ def _require_owner_store(store_id: int, request: Request, db: Session) -> tuple[
     return user, store
 
 
-RUNTIME_BASE = "http://jd-browser-runtime:8787/internal/jd-browser"
 RUNTIME_REQUEST_TIMEOUT_SECONDS = 30
 
 
 def _runtime_base() -> str:
-    candidate = os.getenv("JD_BROWSER_RUNTIME_BASE_URL", RUNTIME_BASE).rstrip("/")
     if os.getenv("APP_ENV", "").strip().lower() == "production" and os.getenv("R297_CONTROLLED_CANARY") == "1":
         raise HTTPException(status_code=503, detail="生产环境禁止受控Canary运行时")
-    if candidate == RUNTIME_BASE:
-        return candidate
-    parsed = urlsplit(candidate)
-    if (
-        os.getenv("R297_CONTROLLED_CANARY") != "1"
-        or parsed.scheme != "http"
-        or parsed.hostname != "127.0.0.1"
-        or parsed.port is None
-        or parsed.path != "/internal/jd-browser"
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise HTTPException(status_code=503, detail="云端登录运行时配置无效")
-    return candidate
+    try:
+        return runtime_base("JD_BROWSER_RUNTIME_BASE_URL")
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="云端登录运行时配置无效") from exc
 
 
 def _runtime_session_id(store: Store) -> str:
-    namespace = get_settings().JD_SESSION_NAMESPACE.strip()
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,31}", namespace):
-        raise HTTPException(status_code=503, detail="会话命名空间未配置")
+    try:
+        namespace = session_namespace(get_settings().JD_SESSION_NAMESPACE.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="会话命名空间未配置") from exc
     return f"{namespace}:{store.tenant_id}:{store.company_id}:{store.id}:{store.platform}"
 
 

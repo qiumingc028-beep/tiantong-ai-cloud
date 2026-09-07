@@ -77,6 +77,8 @@ jobs:
             tests/test_r291_jd_workbench_cloud.py \
             tests/test_r297_reliable_queue.py \
             tests/test_r297_dataset_validation.py \
+            tests/test_r297_dataset_required_fields.py \
+            tests/test_r297_runtime_trust_boundaries.py \
             tests/test_r297_jd_collector_business_idempotency.py \
             tests/test_r297_reliable_queue_postgresql.py \
             tests/test_r297_jd_workbench_hash_uniqueness_migration.py \
