@@ -480,6 +480,8 @@ def test_runtime_container_ci_check_has_timeout_and_safe_stage_diagnostics():
     assert "RUNTIME_EXITED_BEFORE_HEALTH" in runtime_step
     assert "docker inspect --format '{{.State.Running}}'" in runtime_step
     assert "docker logs --tail 200" in runtime_step
+    assert 'echo "RUNTIME_LOG_REDACTION_FAILED"' in runtime_step
+    assert runtime_step.index('python ops/r297_ci_redact.py "$runtime_log"; then') < runtime_step.index('cat "$runtime_log"')
     assert "RUNTIME_HEALTH_STATUS=$status" in runtime_step
     runtime_start = Path("services/jd-cloud-browser-runtime/start-runtime.sh").read_text()
     assert "RUNTIME_COMPONENT_EXIT=" in runtime_start
