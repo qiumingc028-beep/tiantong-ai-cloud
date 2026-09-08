@@ -40,12 +40,17 @@ def record_event(
     now: datetime | None = None,
 ) -> str:
     event = _read_bound_event(event_path)
+    if os.getenv("APP_ENV", "").strip().lower() in {"acceptance", "production"}:
+        from ops.r297_broker_client import broker_request
+        return broker_request({"action": "receipt", "event": event, "source_workflow_run_id": source_workflow_run_id})["result"]
+    return record_event_value(ledger, event, source_workflow_run_id=source_workflow_run_id, now=now)
+
+
+def record_event_value(ledger: Path, event: dict, *, source_workflow_run_id: int, now: datetime | None = None) -> str:
     sequence = event.get("sequence")
     if type(sequence) is not int or sequence not in range(1, len(_ORDER) + 1):
         raise ValueError("evidence event sequence invalid")
     event_type, issuer = _ORDER[sequence - 1]
-    if not event.get("payload", {}).get("freshness_receipt", {}).get("received_at"):
-        raise ValueError("signed freshness receipt missing")
     received_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     scope = {field: event[field] for field in _SCOPE_FIELDS}
     digest = signed_event_sha256(event)

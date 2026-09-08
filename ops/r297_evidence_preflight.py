@@ -98,21 +98,12 @@ def inspect_controlled_material(*, environment: str, role: str) -> dict:
             invalid.append("READ_ONLY_DATABASE_URL")
 
     if role == "verifier":
-        ledger_value = os.getenv("R297_EVIDENCE_NONCE_LEDGER", "")
-        if not ledger_value:
-            missing.append("NONCE_LEDGER")
+        if not os.getenv("R297_ACCEPTANCE_BROKER_SOCKET"):
+            missing.append("BROKER_SOCKET")
         else:
             try:
-                r297_evidence_events.validate_nonce_ledger(Path(ledger_value))
-            except (RuntimeError, ValueError):
-                invalid.append("NONCE_LEDGER")
-        run_ledger_value = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
-        if not run_ledger_value:
-            missing.append("RUN_LEDGER")
-        else:
-            try:
-                from ops.r297_acceptance_run import validate_acceptance_run
-                validate_acceptance_run(Path(run_ledger_value), expected_scope={
+                from ops.r297_broker_client import broker_request
+                broker_request({"action": "validate", "scope": {
                     "namespace": os.environ["R297_EVIDENCE_NAMESPACE"],
                     "tenant_id": int(os.environ["R297_EVIDENCE_TENANT_ID"]),
                     "company_id": int(os.environ["R297_EVIDENCE_COMPANY_ID"]),
@@ -122,9 +113,10 @@ def inspect_controlled_material(*, environment: str, role: str) -> dict:
                     "run_id": os.environ["R297_ACCEPTANCE_RUN_ID"],
                     "run_attempt": int(os.environ["R297_ACCEPTANCE_RUN_ATTEMPT"]),
                     "challenge": os.environ["R297_ACCEPTANCE_CHALLENGE"],
-                }, source_workflow_run_id=int(os.environ["R297_SOURCE_PAGEHIDE_WORKFLOW_RUN_ID"]))
+                }, "source_workflow_run_id": int(os.environ["R297_SOURCE_PAGEHIDE_WORKFLOW_RUN_ID"]),
+                   "transaction_sha256": os.getenv("R297_ACCEPTANCE_TRANSACTION_SHA256")})
             except (KeyError, OSError, RuntimeError, ValueError):
-                invalid.append("RUN_LEDGER")
+                invalid.append("BROKER_TRANSACTION")
 
     if role == "windows_runner":
         backend_url = os.getenv("R297_WINDOWS_CANARY_BACKEND_HTTPS_URL", "")

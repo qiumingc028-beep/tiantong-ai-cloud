@@ -355,9 +355,13 @@ def test_process_evidence_orders_reserve_nonce_publish_and_complete():
 
     source = Path("ops/r297_process_acceptance.py").read_text(encoding="utf-8")
     assert source.index("prepare_acceptance_transaction(") < source.index("docker run isolated postgres:16")
-    assert source.index("reserve_acceptance_run(") < source.index("verify_acceptance_event_bundle(")
-    assert source.index("verify_acceptance_event_bundle(") < source.index("write_sha256_bound_file(evidence")
-    assert source.index("write_sha256_bound_file(evidence") < source.rindex("complete_acceptance_run(")
+    legacy = source.split('    run_ledger_value =', 1)[1].split('\ndef main', 1)[0]
+    assert legacy.index("reserve_acceptance_run(") < legacy.index("verify_acceptance_event_bundle(")
+    assert legacy.index("verify_acceptance_event_bundle(") < legacy.index("write_sha256_bound_file(evidence")
+    assert legacy.index("write_sha256_bound_file(evidence") < legacy.rindex("complete_acceptance_run(")
+    formal = source.split('    run_ledger_value =', 1)[0]
+    assert formal.index('broker_request({"action": "reserve"') < formal.index("write_sha256_bound_file(evidence")
+    assert formal.index("write_sha256_bound_file(evidence") < formal.index('broker_request({"action": "complete"')
     assert "allow_nonce_recovery=reservation == \"recovering\"" in source
 
 
@@ -418,19 +422,15 @@ def test_formal_entry_recovers_output_before_starting_processes(monkeypatch, tmp
     assert calls == ["reserve", "nonce", "staged", "validate", "output", "complete"]
 
 
-@pytest.mark.parametrize("invalid_fence", [None, "missing_commit", "ack_accepted", "same_generation"])
-def test_process_evidence_recovers_body_only_and_completed_publication(tmp_path, invalid_fence):
-    from ops.r297_process_acceptance import recover_published_process_evidence
-
+def process_evidence_fixture(tmp_path, *, invalid_fence=None, verified=None, head="a" * 40, transaction="1" * 64):
     root = tmp_path / "output"
     root.mkdir(mode=0o700)
     evidence = root / "R297_PROCESS_ACCEPTANCE_EVIDENCE.json"
-    transaction = "1" * 64
     raw = root / "raw.jsonl"
     fixture = root / "fixture.json"
     canaries = {key: f"canary-{key}" for key in ("buyer_name", "phone", "address", "cookie", "token", "password")}
     fixture.write_text(json.dumps(canaries), encoding="utf-8")
-    verified = {
+    verified = verified or {
         "web_page_close": {"closed": True},
         "electron_exit": {"exited": True},
         "authenticated_observer": {"verified_subject_count": 2},
@@ -462,7 +462,7 @@ def test_process_evidence_recovers_body_only_and_completed_publication(tmp_path,
     }] + [{"event": "gate_result", "gate": key, "result": value} for key, value in gate_sections.items()]
     raw.write_text("".join(json.dumps(item, sort_keys=True) + "\n" for item in raw_events), encoding="utf-8")
     content = (json.dumps({
-        "commit": "a" * 40,
+        "commit": head,
         "acceptance_transaction_sha256": transaction,
         "mode": "real_process", "mock_count": 0, "controlled_canary": True,
         "data_source": "CONTROLLED_CANARY", "real_jd_acceptance": False,
@@ -477,6 +477,13 @@ def test_process_evidence_recovers_body_only_and_completed_publication(tmp_path,
     }, sort_keys=True) + "\n").encode()
     evidence.write_bytes(content)
     evidence.chmod(0o600)
+    return evidence, content, verified, transaction
+
+
+@pytest.mark.parametrize("invalid_fence", [None, "missing_commit", "ack_accepted", "same_generation"])
+def test_process_evidence_recovers_body_only_and_completed_publication(tmp_path, invalid_fence):
+    from ops.r297_process_acceptance import recover_published_process_evidence
+    evidence, content, verified, transaction = process_evidence_fixture(tmp_path, invalid_fence=invalid_fence)
 
     if invalid_fence is not None:
         with pytest.raises(RuntimeError, match="GATE_INVALID"):

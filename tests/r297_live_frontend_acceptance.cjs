@@ -5,13 +5,15 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync, spawn, spawnSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 
 const REPOSITORY_ROOT = path.resolve(__dirname, '..');
 const SHA_RE = /^[0-9a-f]{40}$/;
 const RUN_RE = /^[A-Za-z0-9._:-]{16,128}$/;
 const SIGNATURE_RE = /^[A-Za-z0-9_-]{342}$/;
+const RUN_BINDING_TTL_MS = 5 * 60 * 1000;
+const RUN_BINDING_FUTURE_SKEW_MS = 30 * 1000;
 const RAW_FIELDS = ['event', 'observed_at', 'release_sha', 'store_id'];
 const SESSION_STATUSES = new Set(['ACTIVE', 'LOGIN_REQUIRED', 'REVOKED', 'EXPIRED', 'HUMAN_ACTION_REQUIRED']);
 const SIGNED_EVENT_FIELDS = [
@@ -20,12 +22,20 @@ const SIGNED_EVENT_FIELDS = [
   'sequence', 'nonce', 'key_id', 'payload', 'signature'
 ];
 const REQUIRED_INPUTS = [
-  'R297_WINDOWS_CANARY_BACKEND_HTTPS_URL', 'R297_EXPECTED_RELEASE_SHA',
-  'R297_ACCEPTANCE_RUN_ID',
+  'R297_WINDOWS_CANARY_BACKEND_HTTPS_URL', 'R297_ACCEPTANCE_RUN_BINDING_PATH',
+  'R297_ACK_BROKER_RESULT_PATH',
   'R297_OWNER_STORAGE_STATE_PATH', 'R297_LIVE_OUTPUT_DIR',
-  'R297_EVIDENCE_NAMESPACE', 'R297_EVIDENCE_TENANT_ID', 'R297_EVIDENCE_COMPANY_ID',
-  'R297_EVIDENCE_STORE_ID', 'R297_EVIDENCE_CROSS_STORE_ID', 'R297_EVIDENCE_CROSS_TENANT_STORE_ID',
+  'R297_EVIDENCE_CROSS_STORE_ID', 'R297_EVIDENCE_CROSS_TENANT_STORE_ID',
   'R297_PAGE_EVENT_RECEIVER_ACK_PATH', 'R297_AUTHENTICATED_OBSERVER_ACK_PATH'
+];
+const RUN_BINDING_FIELDS = [
+  'namespace', 'tenant_id', 'company_id', 'store_id', 'platform', 'release_sha',
+  'source_workflow_run_id', 'run_id', 'run_attempt', 'challenge', 'issued_at', 'consumed_at', 'state', 'event_receipts'
+];
+const BROKER_RESULT_FIELDS = [
+  'schema_version', 'verifier_id', 'result', 'verified_at', 'binding_file_sha256',
+  'receiver_ack_file_sha256', 'observer_ack_file_sha256', 'raw_event_sha256',
+  'receiver_event_sha256', 'observer_event_sha256'
 ];
 
 function required(name) {
@@ -48,31 +58,55 @@ function loadConfig() {
     throw new Error('受控入口必须是无凭据、无查询参数的HTTPS地址');
   }
   if (originUrl.pathname !== '/' && originUrl.pathname !== '') throw new Error('受控入口必须是HTTPS站点根地址');
-  const releaseSha = required('R297_EXPECTED_RELEASE_SHA').toLowerCase();
-  if (!SHA_RE.test(releaseSha)) throw new Error('R297_EXPECTED_RELEASE_SHA无效');
-  const runId = required('R297_ACCEPTANCE_RUN_ID');
-  if (!RUN_RE.test(runId)) throw new Error('R297_ACCEPTANCE_RUN_ID无效');
   const storageState = path.resolve(required('R297_OWNER_STORAGE_STATE_PATH'));
   const outputDir = path.resolve(required('R297_LIVE_OUTPUT_DIR'));
+  const bindingPath = path.resolve(required('R297_ACCEPTANCE_RUN_BINDING_PATH'));
+  const brokerResultPath = path.resolve(required('R297_ACK_BROKER_RESULT_PATH'));
   const receiverAckPath = path.resolve(required('R297_PAGE_EVENT_RECEIVER_ACK_PATH'));
   const observerAckPath = path.resolve(required('R297_AUTHENTICATED_OBSERVER_ACK_PATH'));
   if (!fs.statSync(storageState).isFile()) throw new Error('Owner浏览器会话文件不存在');
   if (receiverAckPath === observerAckPath) throw new Error('Receiver与Observer回执路径必须分离');
-  const acknowledgementInOutput = [receiverAckPath, observerAckPath].some(candidate => {
+  const acknowledgementInOutput = [bindingPath, brokerResultPath, receiverAckPath, observerAckPath].some(candidate => {
     const relative = path.relative(outputDir, candidate);
     return relative === '' || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
   });
   if (acknowledgementInOutput) throw new Error('服务端回执必须位于浏览器验收输出目录之外');
+  const protectedBinding = readProtectedDigestBoundJson(bindingPath, {immutable: true});
+  const binding = protectedBinding.event;
+  if (!exactKeys(binding, RUN_BINDING_FIELDS)
+      || !/^[a-z][a-z0-9_-]{7,79}$/.test(String(binding.namespace || ''))
+      || ['default', 'development', 'production', 'acceptance', 'namespace', 'changeme'].includes(binding.namespace)
+      || binding.platform !== 'jd' || !SHA_RE.test(String(binding.release_sha || ''))
+      || !RUN_RE.test(String(binding.run_id || '')) || !RUN_RE.test(String(binding.challenge || ''))
+      || !Number.isInteger(binding.run_attempt) || binding.run_attempt <= 0
+      || !Number.isInteger(binding.source_workflow_run_id) || binding.source_workflow_run_id <= 0
+      || !Number.isInteger(binding.tenant_id) || binding.tenant_id <= 0
+      || !Number.isInteger(binding.company_id) || binding.company_id <= 0
+      || !Number.isInteger(binding.store_id) || binding.store_id <= 0
+      || binding.state !== 'issued' || binding.consumed_at !== null
+      || !Array.isArray(binding.event_receipts) || binding.event_receipts.length !== 0
+      || Number.isNaN(Date.parse(binding.issued_at))) {
+    throw new Error('受保护run binding无效');
+  }
   return Object.freeze({
-    origin: originUrl.origin, releaseSha, runId,
-    storageState, outputDir, receiverAckPath, observerAckPath,
-    namespace: required('R297_EVIDENCE_NAMESPACE'),
-    tenantId: positiveInteger('R297_EVIDENCE_TENANT_ID'),
-    companyId: positiveInteger('R297_EVIDENCE_COMPANY_ID'),
-    storeId: positiveInteger('R297_EVIDENCE_STORE_ID'),
+    origin: originUrl.origin, releaseSha: binding.release_sha, runId: binding.run_id,
+    runAttempt: binding.run_attempt, challenge: binding.challenge,
+    namespace: binding.namespace, tenantId: binding.tenant_id,
+    companyId: binding.company_id, storeId: binding.store_id,
+    bindingIssuedAt: binding.issued_at,
+    storageState, outputDir, bindingPath, bindingDigest: protectedBinding.digest,
+    brokerResultPath, receiverAckPath, observerAckPath,
     crossStoreId: positiveInteger('R297_EVIDENCE_CROSS_STORE_ID'),
     crossTenantStoreId: positiveInteger('R297_EVIDENCE_CROSS_TENANT_STORE_ID'),
   });
+}
+
+function assertFreshIssuedBinding(binding, now = Date.now()) {
+  const issuedAt = Date.parse(binding.issued_at);
+  if (!Number.isFinite(issuedAt) || issuedAt > now + RUN_BINDING_FUTURE_SKEW_MS
+      || now - issuedAt > RUN_BINDING_TTL_MS) {
+    throw new Error('受保护run binding已过期或时间无效');
+  }
 }
 
 function exactKeys(value, keys) {
@@ -90,6 +124,29 @@ function canonicalJson(value) {
     return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+function readProtectedDigestBoundJson(file, {immutable}) {
+  const parent = fs.lstatSync(path.dirname(file));
+  if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== 0 || (parent.mode & 0o022) !== 0) {
+    throw new Error('受保护回执目录无效');
+  }
+  const readOne = candidate => {
+    const descriptor = fs.openSync(candidate, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try {
+      const metadata = fs.fstatSync(descriptor);
+      if (!metadata.isFile() || metadata.uid !== 0 || metadata.nlink !== 1
+          || (metadata.mode & 0o022) !== 0 || (immutable && (metadata.mode & 0o200) !== 0)) {
+        throw new Error('受保护回执文件无效');
+      }
+      return fs.readFileSync(descriptor);
+    } finally { fs.closeSync(descriptor); }
+  };
+  const content = readOne(file);
+  const sidecar = readOne(`${file}.sha256`).toString('ascii');
+  const digest = crypto.createHash('sha256').update(content).digest('hex');
+  if (sidecar !== `${digest}  ${path.basename(file)}\n`) throw new Error('受保护回执摘要无效');
+  return {event: JSON.parse(content), digest, content};
 }
 
 function waitForCondition(label, predicate, {timeoutMs, signal, pollMs = 50}) {
@@ -135,61 +192,21 @@ function readDigestBoundJson(file) {
   return {event: JSON.parse(content), digest, content};
 }
 
-function verifySignedAcknowledgement(content, eventType, issuer, signal) {
-  const script = [
-    'import json,sys',
-    'from datetime import datetime,timezone',
-    'from ops.r297_evidence_events import verify_signed_event',
-    'event=json.load(sys.stdin)',
-    'verify_signed_event(event,event_type=sys.argv[1],issuer=sys.argv[2],environment="acceptance",now=datetime.now(timezone.utc))',
-  ].join(';');
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(new Error('服务端回执签名验证已取消'));
-    const verifier = spawn('python3', ['-c', script, eventType, issuer], {
-      cwd: REPOSITORY_ROOT, stdio: ['pipe', 'ignore', 'ignore']
-    });
-    let settled = false;
-    let timer = null;
-    let killTimer = null;
-    let stopError = null;
-    const finish = error => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      clearTimeout(killTimer);
-      if (signal) signal.removeEventListener('abort', aborted);
-      if (error) reject(error);
-      else resolve();
-    };
-    const stop = message => {
-      if (stopError) return;
-      stopError = new Error(message);
-      verifier.kill('SIGKILL');
-      killTimer = setTimeout(() => finish(stopError), 2_000);
-    };
-    const aborted = () => stop('服务端回执签名验证已取消');
-    timer = setTimeout(() => stop('服务端回执签名验证超时'), 10_000);
-    if (signal) signal.addEventListener('abort', aborted, {once: true});
-    verifier.stdin.on('error', () => {});
-    verifier.once('error', () => finish(new Error('服务端回执签名验证失败')));
-    verifier.once('close', code => finish(stopError || (code === 0 ? null : new Error('服务端回执签名验证失败'))));
-    verifier.stdin.end(content);
-  });
-}
-
 function assertCommonAcknowledgement(event, config, type, issuer, sequence) {
   assert.ok(exactKeys(event, SIGNED_EVENT_FIELDS), '服务端回执字段错误');
+  // 两份ACK彼此一致不代表当前运行；每份都必须匹配受保护run binding。
   const bindingMatches = event.namespace === config.namespace
     && event.tenant_id === config.tenantId
     && event.company_id === config.companyId
     && event.store_id === config.storeId
     && event.platform === 'jd'
     && event.release_sha === config.releaseSha
-    && event.run_id === config.runId;
+    && event.run_id === config.runId
+    && event.run_attempt === config.runAttempt
+    && event.challenge === config.challenge;
   if (!bindingMatches) throw new Error('服务端回执运行绑定错误');
   assert.deepEqual([event.event_type, event.issuer, event.sequence], [type, issuer, sequence], '服务端回执角色错误');
-  if (!RUN_RE.test(String(event.nonce || ''))
-      || !RUN_RE.test(String(event.key_id || ''))
+  if (!RUN_RE.test(String(event.nonce || '')) || !RUN_RE.test(String(event.key_id || ''))
       || !SIGNATURE_RE.test(String(event.signature || ''))) {
     throw new Error('服务端回执认证字段无效');
   }
@@ -243,8 +260,106 @@ function assertObserverAcknowledgement(event, config, receiverEvent) {
   assert.equal(event.payload.observation_source, 'postgresql_scheduler_state');
   assert.equal(event.payload.database_read_only, true);
   assert.ok(event.payload.cloud_cycles_after > event.payload.cloud_cycles_before);
-  assert.deepEqual(event.payload.eligible_store_ids, [config.storeId]);
-  assert.deepEqual(event.payload.collected_store_ids_after, [config.storeId]);
+  const storeScopeMatches = Array.isArray(event.payload.eligible_store_ids)
+    && event.payload.eligible_store_ids.length === 1
+    && event.payload.eligible_store_ids[0] === config.storeId
+    && Array.isArray(event.payload.collected_store_ids_after)
+    && event.payload.collected_store_ids_after.length === 1
+    && event.payload.collected_store_ids_after[0] === config.storeId;
+  if (!storeScopeMatches) throw new Error('Observer回执店铺范围错误');
+}
+
+function assertBrokerResult(broker, config, receiver, observer, rawEvent, now = Date.now()) {
+  if (!exactKeys(broker.event, BROKER_RESULT_FIELDS)
+      || broker.event.schema_version !== 1
+      || broker.event.verifier_id !== 'tiantong-r297-ack-broker-v1'
+      || broker.event.result !== 'VERIFIED'
+      || Number.isNaN(Date.parse(broker.event.verified_at))
+      || Date.parse(broker.event.verified_at) > now + 30000
+      || now - Date.parse(broker.event.verified_at) > 12 * 60 * 60 * 1000
+      || broker.event.binding_file_sha256 !== config.bindingDigest
+      || broker.event.receiver_ack_file_sha256 !== receiver.digest
+      || broker.event.observer_ack_file_sha256 !== observer.digest
+      || broker.event.raw_event_sha256
+        !== crypto.createHash('sha256').update(canonicalJson(rawEvent)).digest('hex')
+      || broker.event.receiver_event_sha256
+        !== crypto.createHash('sha256').update(canonicalJson(receiver.event)).digest('hex')
+      || broker.event.observer_event_sha256
+        !== crypto.createHash('sha256').update(canonicalJson(observer.event)).digest('hex')) {
+    throw new Error('固定ACK broker验证结果与当前事务不匹配');
+  }
+}
+
+function loadPersistedArtifact(config) {
+  const pagehideDir = path.join(config.outputDir, 'pagehide-artifact');
+  const evidenceName = `r297-native-pagehide-evidence-${config.releaseSha}.json`;
+  const evidence = readDigestBoundJson(path.join(pagehideDir, evidenceName));
+  const manifestPath = path.join(pagehideDir, `r297-native-pagehide-manifest-${config.releaseSha}.json`);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const archivePath = path.join(config.outputDir, `r297-native-pagehide-${config.releaseSha}.zip`);
+  const rawEvents = evidence.event?.raw_events;
+  if (!exactKeys(manifest, ['schema_version', 'release_sha', 'evidence_file', 'evidence_sha256'])
+      || manifest.schema_version !== '1.0' || manifest.release_sha !== config.releaseSha
+      || manifest.evidence_file !== evidenceName || manifest.evidence_sha256 !== evidence.digest
+      || !Array.isArray(rawEvents) || rawEvents.length !== 1
+      || !exactKeys(rawEvents[0], RAW_FIELDS)
+      || rawEvents[0].release_sha !== config.releaseSha || rawEvents[0].store_id !== config.storeId
+      || rawEvents[0].event !== 'web_page_close') {
+    throw new Error('ACK恢复原始事件工件与当前事务不匹配');
+  }
+  const archive = fs.lstatSync(archivePath);
+  if (!archive.isFile() || archive.isSymbolicLink() || archive.nlink !== 1) {
+    throw new Error('ACK恢复归档无效');
+  }
+  return {rawEvent: rawEvents[0], evidenceSha: evidence.digest, archiveSha: sha256File(archivePath)};
+}
+
+function acknowledgementRecoveryState(files, exists = fs.existsSync) {
+  const present = files.filter(file => exists(file)).length;
+  if (!present) return 'NONE';
+  if (present !== files.length) throw new Error('ACK恢复文件不完整或无可信broker来源');
+  return 'COMPLETE';
+}
+
+function recoverAcknowledgedStage(config) {
+  const files = [
+    config.receiverAckPath, `${config.receiverAckPath}.sha256`,
+    config.observerAckPath, `${config.observerAckPath}.sha256`,
+    config.brokerResultPath, `${config.brokerResultPath}.sha256`
+  ];
+  if (acknowledgementRecoveryState(files) === 'NONE') return null;
+  if (fs.existsSync(path.join(config.outputDir, 'r297-live-frontend-manifest.json'))) {
+    throw new Error('当前验收事务已经完成，禁止重放Owner副作用');
+  }
+  const artifact = loadPersistedArtifact(config);
+  const receiver = readDigestBoundJson(config.receiverAckPath);
+  const observer = readDigestBoundJson(config.observerAckPath);
+  const broker = readProtectedDigestBoundJson(config.brokerResultPath, {immutable: true});
+  assertPageReceiverAcknowledgement(receiver.event, config, artifact.rawEvent, artifact);
+  assertObserverAcknowledgement(observer.event, config, receiver.event);
+  assertBrokerResult(broker, config, receiver, observer, artifact.rawEvent);
+  return {receiver: receiver.digest, observer: observer.digest, broker: broker.digest};
+}
+
+async function revokeRecoveredSession(config, requestFactory) {
+  const api = await requestFactory({baseURL: config.origin, storageState: config.storageState});
+  try {
+    const deleted = await api.delete(
+      `/api/jd-workbench/stores/${config.storeId}/login-session`, {timeout: 10_000}
+    );
+    if (deleted.status() !== 200) throw new Error('ACK恢复会话撤销HTTP状态错误');
+    const body = await deleted.json();
+    if (!exactKeys(body, ['ok', 'store_id', 'status']) || body.ok !== true
+        || body.store_id !== config.storeId || body.status !== 'REVOKED') {
+      throw new Error('ACK恢复会话撤销响应无效');
+    }
+    const revoked = await api.get(`/jd-browser/novnc/${config.storeId}/vnc.html`, {
+      timeout: 10_000, maxRedirects: 0
+    });
+    if (![401, 403].includes(revoked.status())) throw new Error('ACK恢复后Viewer访问未失效');
+  } finally {
+    await api.dispose();
+  }
 }
 
 async function waitForViewerReady(popup, storeId, signal) {
@@ -400,6 +515,29 @@ async function ticketNegativeChecks(page, config) {
 async function selfTest() {
   assert.equal(SIGNATURE_RE.test('s'.repeat(342)), true);
   assert.equal(SIGNATURE_RE.test('s'.repeat(128)), false);
+  const now = Date.parse('2026-09-08T00:05:00.000Z');
+  assert.doesNotThrow(() => assertFreshIssuedBinding({issued_at: '2026-09-08T00:00:00.000Z'}, now));
+  assert.throws(() => assertFreshIssuedBinding({issued_at: '2026-09-07T23:59:59.999Z'}, now), /已过期/);
+  assert.throws(() => assertFreshIssuedBinding({issued_at: '2026-09-08T00:05:30.001Z'}, now), /已过期/);
+  const recoveryCalls = [];
+  await revokeRecoveredSession({origin: 'https://acceptance.invalid', storageState: {}, storeId: 3}, async () => ({
+    delete: async (url, options) => {
+      recoveryCalls.push(['DELETE', url, options.timeout]);
+      return {status: () => 200, json: async () => ({ok: true, store_id: 3, status: 'REVOKED'})};
+    },
+    get: async (url, options) => {
+      recoveryCalls.push(['GET', url, options.timeout, options.maxRedirects]);
+      return {status: () => 401};
+    },
+    dispose: async () => recoveryCalls.push(['DISPOSE'])
+  }));
+  assert.deepEqual(recoveryCalls, [
+    ['DELETE', '/api/jd-workbench/stores/3/login-session', 10_000],
+    ['GET', '/jd-browser/novnc/3/vnc.html', 10_000, 0], ['DISPOSE']
+  ]);
+  assert.equal(acknowledgementRecoveryState(['a', 'b'], () => false), 'NONE');
+  assert.equal(acknowledgementRecoveryState(['a', 'b'], () => true), 'COMPLETE');
+  assert.throws(() => acknowledgementRecoveryState(['a', 'b'], value => value === 'a'), /文件不完整/);
   const controller = new AbortController();
   let polls = 0;
   const pending = waitForCondition('自检等待', () => { polls += 1; return false; }, {
@@ -476,7 +614,8 @@ async function selfTest() {
 
   const config = {
     namespace: 'r297-acceptance-test', tenantId: 1, companyId: 2, storeId: 3,
-    releaseSha: '1'.repeat(40), runId: 'r297-run-test-0001'
+    releaseSha: '1'.repeat(40), runId: 'r297-run-test-0001', runAttempt: 1,
+    challenge: 'challenge-test-0001', bindingDigest: '4'.repeat(64)
   };
   const rawEvent = {event: 'web_page_close', observed_at: '2026-09-08T00:00:00.000Z', store_id: 3, release_sha: config.releaseSha};
   const receiver = {
@@ -488,7 +627,51 @@ async function selfTest() {
       artifact_archive_sha256: '3'.repeat(64), artifact_id: 1,
       artifact_name: 'r297-native-pagehide-test', workflow_run_id: 2}
   };
+  const observer = {
+    ...{namespace: config.namespace, tenant_id: 1, company_id: 2, store_id: 3, platform: 'jd', release_sha: config.releaseSha,
+      run_id: config.runId, run_attempt: 1, challenge: config.challenge},
+    event_type: 'authenticated_observer', issuer: 'authenticated_observer', observed_at: '2026-09-08T00:00:01.000Z',
+    sequence: 2, nonce: 'observer-nonce-000001', key_id: 'observer-key-000001', signature: 's'.repeat(342),
+    payload: {
+      subject_nonce: receiver.nonce,
+      subject_event_sha256: crypto.createHash('sha256').update(canonicalJson(receiver)).digest('hex'),
+      scheduler_continues: true, observation_source: 'postgresql_scheduler_state', database_read_only: true,
+      cloud_cycles_before: 1, cloud_cycles_after: 2, eligible_store_ids: [3], collected_store_ids_after: [3]
+    }
+  };
+  const receiverRecord = {event: receiver, digest: '5'.repeat(64)};
+  const observerRecord = {event: observer, digest: '6'.repeat(64)};
+  const broker = {digest: '7'.repeat(64), event: {
+    schema_version: 1, verifier_id: 'tiantong-r297-ack-broker-v1', result: 'VERIFIED',
+    verified_at: '2026-09-08T00:00:02.000Z', binding_file_sha256: config.bindingDigest,
+    receiver_ack_file_sha256: receiverRecord.digest, observer_ack_file_sha256: observerRecord.digest,
+    raw_event_sha256: crypto.createHash('sha256').update(canonicalJson(rawEvent)).digest('hex'),
+    receiver_event_sha256: crypto.createHash('sha256').update(canonicalJson(receiver)).digest('hex'),
+    observer_event_sha256: crypto.createHash('sha256').update(canonicalJson(observer)).digest('hex')
+  }};
   assertPageReceiverAcknowledgement(receiver, config, rawEvent, {evidenceSha: '2'.repeat(64), archiveSha: '3'.repeat(64)});
+  assertObserverAcknowledgement(observer, config, receiver);
+  const brokerNow = Date.parse('2026-09-08T00:00:03.000Z');
+  assertBrokerResult(broker, config, receiverRecord, observerRecord, rawEvent, brokerNow);
+  assert.throws(() => assertBrokerResult(broker, config, receiverRecord, observerRecord, rawEvent,
+    brokerNow + 12 * 60 * 60 * 1000), /当前事务不匹配/);
+  assert.throws(() => assertBrokerResult(broker, config, receiverRecord, observerRecord, rawEvent,
+    brokerNow - 32000), /当前事务不匹配/);
+  assert.throws(() => assertPageReceiverAcknowledgement(
+    {...receiver, run_attempt: 2}, config, rawEvent,
+    {evidenceSha: '2'.repeat(64), archiveSha: '3'.repeat(64)}
+  ), /运行绑定错误/);
+  assert.throws(() => assertPageReceiverAcknowledgement(
+    {...receiver, observed_at: '2026-09-08T00:00:03.000Z'}, config, rawEvent,
+    {evidenceSha: '2'.repeat(64), archiveSha: '3'.repeat(64)}
+  ), /时间未绑定/);
+  assert.throws(() => assertObserverAcknowledgement(
+    {...observer, run_attempt: 2}, config, receiver
+  ), /运行绑定错误/);
+  assert.throws(() => assertBrokerResult(
+    {...broker, event: {...broker.event, binding_file_sha256: '8'.repeat(64)}},
+    config, receiverRecord, observerRecord, rawEvent
+  ), /当前事务不匹配/);
   const receipt = {received_at: '2026-09-08T00:00:01.000Z', freshness_verified: true, maximum_age_seconds: 300};
   const validateReceipt = value => assertPageReceiverAcknowledgement(
     {...receiver, payload: {...receiver.payload, freshness_receipt: value}}, config, rawEvent,
@@ -523,14 +706,23 @@ async function main() {
     throw new Error(`runner源码绑定检查失败：${error && error.message ? error.message : String(error)}`);
   }
   if (checkoutSha !== config.releaseSha) throw new Error('runner checkout HEAD与验收release不一致');
+  const recovered = recoverAcknowledgedStage(config);
+  if (recovered) {
+    const { request } = require('playwright');
+    await revokeRecoveredSession(config, options => request.newContext(options));
+    process.stdout.write('R297_ACK_RECOVERY=PASS\n');
+    process.stdout.write('R297_ACK_RECOVERY_REVOKED=PASS\n');
+    process.stdout.write('R297_LIVE_FRONTEND_RESULT=ACK_RECOVERED_REVOKED\n');
+    process.stdout.write('R297_ACK_RECOVERY_NOTE=ACK恢复不会生成完整验收PASS\n');
+    process.exitCode = 2;
+    return;
+  }
+  // Freshness gates new Owner side effects, but must not block idempotent
+  // revocation of a fully verified ACK transaction after a runner crash.
+  assertFreshIssuedBinding({issued_at: config.bindingIssuedAt});
   const { chromium } = require('playwright');
   if (fs.existsSync(config.outputDir) && fs.readdirSync(config.outputDir).length) {
     throw new Error('验收输出目录必须为空，禁止覆盖或混用旧证据');
-  }
-  for (const acknowledgement of [config.receiverAckPath, config.observerAckPath]) {
-    if (fs.existsSync(acknowledgement) || fs.existsSync(`${acknowledgement}.sha256`)) {
-      throw new Error('服务端回执路径必须为空，禁止复用旧回执');
-    }
   }
   fs.mkdirSync(config.outputDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(config.outputDir, 0o700);
@@ -647,11 +839,11 @@ async function main() {
       'release_sha', 'run_id', 'namespace', 'tenant_id', 'company_id', 'store_id', 'platform',
       'completed_cycle_count', 'interval_seconds', 'next_sync_in_seconds', 'latest_completed_at', 'observed_at'
     ], '验收绑定');
-    assert.deepEqual(
-      [accepted.release_sha, accepted.run_id, accepted.namespace, accepted.tenant_id, accepted.company_id, accepted.store_id, accepted.platform],
-      [config.releaseSha, config.runId, config.namespace, config.tenantId, config.companyId, config.storeId, 'jd'],
-      '验收运行scope不匹配'
-    );
+    const acceptanceMatches = accepted.release_sha === config.releaseSha
+      && accepted.run_id === config.runId && accepted.namespace === config.namespace
+      && accepted.tenant_id === config.tenantId && accepted.company_id === config.companyId
+      && accepted.store_id === config.storeId && accepted.platform === 'jd';
+    if (!acceptanceMatches) throw new Error('验收运行scope不匹配');
 
     const row = page.locator('#stores tr').filter({has: page.locator('td:first-child', {hasText: String(config.storeId)})}).first();
     await bounded('目标店铺行加载', row.waitFor({state: 'visible'}), 15_000);
@@ -673,7 +865,7 @@ async function main() {
     assert.equal(createHttp.status(), 200, '创建会话HTTP状态错误');
     const createBody = await createHttp.json();
     assert.ok(exactKeys(createBody, ['store_id', 'status', 'expires_in']), '创建会话响应字段错误');
-    assert.equal(createBody.store_id, config.storeId);
+    if (createBody.store_id !== config.storeId) throw new Error('创建会话店铺范围错误');
     assert.equal(createBody.status, 'LOGIN_REQUIRED');
     assert.ok(Number.isInteger(createBody.expires_in) && createBody.expires_in > 0 && createBody.expires_in <= 600,
       '创建会话TTL错误');
@@ -732,10 +924,10 @@ async function main() {
     });
     assert.equal(rawEvents.length, 1);
     assert.deepEqual(Object.keys(rawEvents[0]).sort(), RAW_FIELDS);
-    assert.deepEqual(
-      [rawEvents[0].event, rawEvents[0].store_id, rawEvents[0].release_sha],
-      ['web_page_close', config.storeId, config.releaseSha]
-    );
+    if (rawEvents[0].event !== 'web_page_close' || rawEvents[0].store_id !== config.storeId
+        || rawEvents[0].release_sha !== config.releaseSha) {
+      throw new Error('浏览器原始事件绑定错误');
+    }
 
     const evidenceName = `r297-native-pagehide-evidence-${config.releaseSha}.json`;
     const evidencePath = path.join(pagehideDir, evidenceName);
@@ -762,16 +954,17 @@ async function main() {
       if (!fs.existsSync(config.receiverAckPath) || !fs.existsSync(`${config.receiverAckPath}.sha256`)) return null;
       return readDigestBoundJson(config.receiverAckPath);
     }, {timeoutMs: 180_000, signal: runController.signal});
-    await verifySignedAcknowledgement(receiver.content, 'web_page_close', 'page_event_receiver', runController.signal);
     assertPageReceiverAcknowledgement(receiver.event, config, rawEvents[0], artifact);
     const observer = await waitForCondition('独立Observer回执', () => {
       if (!fs.existsSync(config.observerAckPath) || !fs.existsSync(`${config.observerAckPath}.sha256`)) return null;
       return readDigestBoundJson(config.observerAckPath);
     }, {timeoutMs: 180_000, signal: runController.signal});
-    await verifySignedAcknowledgement(
-      observer.content, 'authenticated_observer', 'authenticated_observer', runController.signal
-    );
     assertObserverAcknowledgement(observer.event, config, receiver.event);
+    const broker = await waitForCondition('固定ACK broker验证结果', () => {
+      if (!fs.existsSync(config.brokerResultPath) || !fs.existsSync(`${config.brokerResultPath}.sha256`)) return null;
+      return readProtectedDigestBoundJson(config.brokerResultPath, {immutable: true});
+    }, {timeoutMs: 180_000, signal: runController.signal, pollMs: 250});
+    assertBrokerResult(broker, config, receiver, observer, rawEvents[0]);
 
     const controlPage = await context.newPage();
     await controlPage.goto(`${config.origin}/login.html`, {waitUntil: 'domcontentloaded'});
@@ -789,7 +982,9 @@ async function main() {
     assertLiveViewerForRevocation(revocationViewer);
     const deleted = await browserJson(controlPage, `/api/jd-workbench/stores/${config.storeId}/login-session`, {method: 'DELETE'}, 200);
     const deletedBody = assertResponse(deleted, 200, ['ok', 'store_id', 'status'], '销毁会话');
-    assert.deepEqual(deletedBody, {ok: true, store_id: config.storeId, status: 'REVOKED'});
+    if (deletedBody.ok !== true || deletedBody.store_id !== config.storeId || deletedBody.status !== 'REVOKED') {
+      throw new Error('销毁会话响应绑定错误');
+    }
     sessionRevoked = true;
     await waitForCondition('撤销后既有Viewer WebSocket关闭', () => revocationViewer.websocket.isClosed(), {
       timeoutMs: 20_000, signal: runController.signal
@@ -807,6 +1002,7 @@ async function main() {
       novnc_page: 'PASS', viewer_rfb_ready: 'PASS', websocket_path: viewer.path, ticket_rejections: negative,
       receiver_acknowledgement: {result: 'PASS', sha256: receiver.digest},
       authenticated_observer: {result: 'PASS', sha256: observer.digest},
+      ack_broker_result: {result: 'PASS', sha256: broker.digest},
       delete_and_revoke: 'PASS', existing_socket_revoked: 'PASS', pagehide_raw: 'PASS',
       screenshot: {file: path.basename(screenshotPath), sha256: sha256File(screenshotPath), redacted_selectors: redactSelectors},
       pagehide_artifact: {archive: path.basename(archivePath), archive_sha256: artifact.archiveSha, evidence_sha256: evidenceSha, manifest_sha256: sha256File(artifactManifest)},

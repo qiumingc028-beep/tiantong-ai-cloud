@@ -13,6 +13,7 @@ def test_preflight_lists_missing_controlled_material_without_values(monkeypatch)
         "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH",
         "R297_OBSERVER_DATABASE_URL",
         "R297_EVIDENCE_NONCE_LEDGER",
+        "R297_ACCEPTANCE_BROKER_SOCKET",
         "R297_WINDOWS_CANARY_BACKEND_HTTPS_URL",
         "R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER",
         "R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64",
@@ -29,7 +30,7 @@ def test_preflight_lists_missing_controlled_material_without_values(monkeypatch)
     assert all(result["result"] == "BLOCK" for result in results)
     assert missing >= {
         "PAGE_EVENT_RECEIVER_PRIVATE_KEY", "OBSERVER_PRIVATE_KEY",
-        "WINDOWS_RUNNER_PRIVATE_KEY", "READ_ONLY_DATABASE_URL", "NONCE_LEDGER",
+        "WINDOWS_RUNNER_PRIVATE_KEY", "READ_ONLY_DATABASE_URL", "BROKER_SOCKET",
         "TRUST_MANIFEST", "TRUST_MANIFEST_SIDECAR", "PAGEHIDE_BINDING",
         "PAGEHIDE_BINDING_SIDECAR", "RUN_BINDING", "RUN_BINDING_SIDECAR", "BACKEND_HTTPS_URL",
         "PAIRING_ISSUER_AUTHORIZATION", "BACKEND_CERTIFICATE",

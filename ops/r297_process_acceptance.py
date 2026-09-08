@@ -362,6 +362,8 @@ def recover_published_process_evidence(
     digest = hashlib.sha256(content).hexdigest()
     sidecar = path.with_suffix(path.suffix + ".sha256")
     if sidecar.exists():
+        if sidecar.lstat().st_nlink == 2:
+            write_sha256_bound_file(path, content)
         if metadata.st_nlink != 1 or sidecar.read_text(encoding="ascii").strip().split() != [digest, path.name]:
             raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_SIDECAR_MISMATCH")
     else:
@@ -406,6 +408,36 @@ def prepare_acceptance_transaction(
         {"bundle": bundle, "scope": evidence_scope},
         ensure_ascii=False, separators=(",", ":"), sort_keys=True,
     ).encode()).hexdigest()
+    if os.getenv("APP_ENV", "").strip().lower() in {"acceptance", "production"}:
+        from ops.r297_broker_client import broker_request
+        record = broker_request({"action": "reserve", "scope": evidence_scope, "bundle": bundle})
+        arguments = {"scope": evidence_scope, "transaction_sha256": transaction_sha256,
+                     "source_workflow_run_id": source_workflow_run_id}
+        if record["transaction_sha256"] != transaction_sha256:
+            raise RuntimeError("R297_BROKER_TRANSACTION_MISMATCH")
+        evidence = output / "R297_PROCESS_ACCEPTANCE_EVIDENCE.json"
+        digest = None
+        if record["content_base64"] is not None:
+            content = base64.b64decode(record["content_base64"], validate=True)
+            if hashlib.sha256(content).hexdigest() != record["content_sha256"]:
+                raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_STAGED_DIGEST_MISMATCH")
+            _validate_process_evidence(json.loads(content), evidence, record["verified"], head=head, transaction_sha256=transaction_sha256)
+            if evidence.exists():
+                if evidence.read_bytes() != content:
+                    raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_STAGED_DIGEST_MISMATCH")
+                digest = recover_published_process_evidence(evidence, head=head, transaction_sha256=transaction_sha256, verified_events=record["verified"])
+            else:
+                digest = write_sha256_bound_file(evidence, content)
+            completed = broker_request({"action": "complete", **arguments})
+            if completed["published_sha256"] != digest:
+                raise RuntimeError("R297_BROKER_PUBLICATION_MISMATCH")
+        else:
+            if record["started"] or any(output.iterdir()):
+                raise RuntimeError("R297_PROCESS_RECOVERY_REQUIRES_VERIFIED_RESUME")
+            broker_request({"action": "begin", **arguments})
+        return {"bundle": bundle, "scope": evidence_scope, "source_workflow_run_id": source_workflow_run_id,
+                "transaction_sha256": transaction_sha256, "run_ledger": None,
+                "verified": record["verified"], "published_digest": digest, "broker_arguments": arguments}
     run_ledger_value = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
     if not run_ledger_value:
         raise RuntimeError("R297_ACCEPTANCE_RUN_LEDGER_MISSING")
@@ -480,15 +512,13 @@ def main() -> int:
     session_namespace = f"r297-acceptance-{head[:12]}"
     output = args.output_directory.resolve()
     ledger_value = os.getenv("R297_EVIDENCE_NONCE_LEDGER", "")
-    if not ledger_value:
-        raise RuntimeError("R297_EVIDENCE_NONCE_LEDGER_MISSING")
-    nonce_ledger = Path(ledger_value).resolve()
-    if output in nonce_ledger.parents or nonce_ledger == output:
+    nonce_ledger = Path(ledger_value).resolve() if ledger_value else None
+    if nonce_ledger is not None and (output in nonce_ledger.parents or nonce_ledger == output):
         raise RuntimeError("R297_EVIDENCE_NONCE_LEDGER_NOT_DURABLE")
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Do not overwrite files referenced by an already-published evidence digest.
     # Verified resume must run before canary setup; the current late resume cannot.
-    if any(output.iterdir()):
+    if any(output.iterdir()) and not os.getenv("R297_ACCEPTANCE_BROKER_SOCKET"):
         raise RuntimeError("R297_PROCESS_RECOVERY_REQUIRES_VERIFIED_RESUME")
     acceptance = prepare_acceptance_transaction(
         signed_event_bundle=args.signed_event_bundle, output=output,
@@ -1174,30 +1204,19 @@ def main() -> int:
     if secrets_found or re.search(r"(?i)(?:authorization|cookie|password|token)\s*[=:]\s*\S+", scanned_text):
         raise RuntimeError("SENSITIVE_VALUE_CAPTURED")
     observations["secret_exposure_count"] = 0
-    verify_acceptance_event_bundle(
-        acceptance["bundle"], expected_scope=evidence_scope,
-        now=datetime.now(timezone.utc), nonce_ledger=nonce_ledger,
-        consume_run=False, allow_nonce_recovery=True,
-        reserved_transaction_sha256=transaction_sha256,
-    )
+    from ops.r297_broker_client import broker_request
+    broker_request({"action": "nonce", "scope": evidence_scope, "bundle": acceptance["bundle"]})
     evidence_content = (json.dumps(observations, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
     _validate_process_evidence(
         observations, evidence, acceptance["verified"], head=head,
         transaction_sha256=transaction_sha256,
     )
-    stage_acceptance_output(
-        run_ledger, expected_scope=evidence_scope,
-        source_workflow_run_id=source_workflow_run_id,
-        transaction_sha256=transaction_sha256, content=evidence_content,
-    )
+    broker_request({"action": "stage", **acceptance["broker_arguments"],
+                    "content_base64": base64.b64encode(evidence_content).decode("ascii")})
     digest = write_sha256_bound_file(evidence, evidence_content)
     for path in (sensitive_fixture, raw_log, evidence, sidecar):
         path.chmod(0o600)
-    complete_acceptance_run(
-        run_ledger, expected_scope=evidence_scope,
-        source_workflow_run_id=source_workflow_run_id,
-        transaction_sha256=transaction_sha256, published_path=evidence,
-    )
+    broker_request({"action": "complete", **acceptance["broker_arguments"]})
     print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE={evidence}")
     print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE_SHA256={digest}")
     return 0

@@ -5,6 +5,35 @@ import pytest
 from ops.r297_evidence_storage import provision_acceptance_storage
 
 
+@pytest.mark.parametrize("member,initial", [("runs.json", b'{"schema_version":1,"runs":[]}\n'), ("runs.json.lock", b"")])
+def test_first_ledger_hardlink_publication_recovers_without_deleting_commit(tmp_path, member, initial):
+    root = tmp_path / "protected"
+    root.mkdir(mode=0o700)
+    published = root / member
+    temporary = root / f".{member}.0123456789abcdef"
+    temporary.write_bytes(initial)
+    temporary.chmod(0o600)
+    published.hardlink_to(temporary)
+    inode = published.stat().st_ino
+    provision_acceptance_storage(root / "runs.json", root / "nonces.json")
+    assert published.stat().st_ino == inode and published.stat().st_nlink == 1
+    assert published.read_bytes() == initial and not temporary.exists()
+
+
+def test_initializer_cannot_remove_committed_or_unknown_hardlinks(tmp_path):
+    root = tmp_path / "protected"
+    root.mkdir(mode=0o700)
+    published = root / "runs.json"
+    content = b'{"schema_version":1,"runs":[{"state":"consumed"}]}\n'
+    published.write_bytes(content)
+    published.chmod(0o600)
+    temporary = root / ".runs.json.0123456789abcdef"
+    temporary.hardlink_to(published)
+    with pytest.raises(FileExistsError):
+        provision_acceptance_storage(published, root / "nonces.json")
+    assert published.read_bytes() == content and temporary.exists()
+
+
 def test_provision_is_idempotent_but_never_clears_ledgers(tmp_path):
     run = tmp_path / "protected" / "runs.json"
     nonce = tmp_path / "protected" / "nonces.json"

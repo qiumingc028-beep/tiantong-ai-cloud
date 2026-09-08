@@ -381,6 +381,48 @@ def record_acceptance_event_receipt(
     return _update(ledger, mutate, now=received_at)
 
 
+def acceptance_transaction(
+    ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
+    transaction_sha256: str, begin: bool = False, now: datetime | None = None,
+) -> dict:
+    """Resume or fence business execution using the existing protected run record."""
+    now = now or datetime.now(timezone.utc)
+
+    def mutate(runs):
+        records = [record for record in runs if record.get("run_id") == expected_scope.get("run_id")]
+        if len(records) != 1:
+            raise ValueError("acceptance run missing or consumed")
+        record = records[0]
+        _require_observation_live(record, now)
+        if (set(expected_scope) != _SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}
+            or record.get("source_workflow_run_id") != source_workflow_run_id
+            or record.get("transaction_sha256") != transaction_sha256
+            or record.get("state") not in {"reserved", "consumed"}
+            or any(type(record.get(k)) is not type(v) or record.get(k) != v for k, v in expected_scope.items())):
+            raise ValueError("acceptance transaction binding mismatch")
+        proof = record.get("verified_bundle")
+        if (not isinstance(proof, dict) or not isinstance(proof.get("identity"), dict)
+            or proof["identity"].get("scope") != expected_scope
+            or proof["identity"].get("transaction_sha256") != transaction_sha256):
+            raise ValueError("acceptance verification missing")
+        from ops.r297_evidence_events import _validate_verification
+        _validate_verification(proof, proof["identity"], now)
+        if begin:
+            if record.get("process_started_at") or record.get("pending_output_sha256") or record.get("state") != "reserved":
+                raise RuntimeError("PROCESS_SIDE_EFFECTS_UNKNOWN")
+            record["process_started_at"] = now.isoformat()
+        return {
+            "state": record["state"], "verified": proof["result"],
+            "transaction_sha256": transaction_sha256,
+            "started": bool(record.get("process_started_at")),
+            "content_base64": record.get("pending_output_base64"),
+            "content_sha256": record.get("pending_output_sha256"),
+            "published_sha256": record.get("published_sha256"),
+        }
+
+    return _update(ledger, mutate, now=now)
+
+
 def complete_acceptance_run(
     ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
     transaction_sha256: str, published_path: Path, now: datetime | None = None,
@@ -430,7 +472,7 @@ def complete_acceptance_run(
             raise ValueError("acceptance published output differs from staged output")
         record.update({
             "state": "consumed", "consumed_at": now.isoformat(),
-            "published_sha256": digest, "pending_output_base64": None,
+            "published_sha256": digest,
         })
         return "consumed"
 

@@ -23,6 +23,10 @@ def _protected_file(path: Path, initial: bytes) -> None:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         metadata = os.fstat(descriptor)
         os.close(descriptor)
+        if metadata.st_nlink == 2:
+            from ops.r297_evidence_events import _recover_published_hardlink
+            _recover_published_hardlink(path, initial, metadata)
+            metadata = path.lstat()
         if (
             not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
             or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1
@@ -52,7 +56,7 @@ def _protected_file(path: Path, initial: bytes) -> None:
             validate_existing()
         # Never unlink a published path: another writer may already have
         # replaced it with committed consumption records.
-        temporary.unlink()
+        temporary.unlink(missing_ok=True)
         directory = os.open(path.parent, os.O_RDONLY)
         try:
             os.fsync(directory)
