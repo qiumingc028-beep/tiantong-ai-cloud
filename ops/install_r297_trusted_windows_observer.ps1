@@ -64,6 +64,10 @@ $pythonSignature = Get-AuthenticodeSignature -LiteralPath $sourcePython
 if ($pythonSignature.Status -ne 'Valid') { throw 'R297_PYTHON_SIGNATURE_INVALID' }
 $candidateSid = Assert-LocalNonAdminAccount $CandidateAccount 'CANDIDATE'
 $observerSid = Assert-LocalNonAdminAccount $TrustedObserverAccount 'OBSERVER'
+$existingTask = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -ErrorAction SilentlyContinue
+if ($existingTask -and $existingTask.State -eq 'Running') {
+  throw 'R297_TRUSTED_OBSERVER_TASK_RUNNING'
+}
 $sourceRuntimeManifest = @(
   Get-ChildItem -LiteralPath $sourcePythonRoot -Recurse -Force -File |
     Sort-Object FullName | ForEach-Object {

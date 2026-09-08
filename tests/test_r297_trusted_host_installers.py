@@ -43,6 +43,7 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "S-1-5-32-544" in WINDOWS
     assert "Assert-LocalNonAdminAccount" in WINDOWS
     assert "Test-LocalGroupContains" in WINDOWS
+    assert "R297_TRUSTED_OBSERVER_TASK_RUNNING" in WINDOWS
     assert "git -C $SourceCheckout status --porcelain" in WINDOWS
     assert "fsutil reparsepoint query" in WINDOWS
     assert "/inheritance:r" in WINDOWS
@@ -67,3 +68,8 @@ def test_observer_database_role_is_read_only_and_grants_only_three_tables():
     assert "REVOKE ALL PRIVILEGES ON ALL SEQUENCES" in DATABASE
     assert "actual_grants" in DATABASE
     assert "ALTER ROLE r297_observer PASSWORD" in DATABASE
+    assert "NOINHERIT NOREPLICATION NOBYPASSRLS" in DATABASE
+    assert "pg_auth_members" in DATABASE
+    assert "has_table_privilege" in DATABASE
+    assert "R297_OBSERVER_WRITE_PROBE_UNEXPECTED_SUCCESS" in DATABASE
+    assert "exists == 0 && -e $config" in DATABASE
