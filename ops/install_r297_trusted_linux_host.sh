@@ -81,7 +81,8 @@ printf '%s\n' \
   'WantedBy=multi-user.target' >"$unit"
 
 systemctl daemon-reload
-systemctl enable --now tiantong-r297-evidence-broker.service
+systemctl enable tiantong-r297-evidence-broker.service
+systemctl restart tiantong-r297-evidence-broker.service
 systemctl is-active --quiet tiantong-r297-evidence-broker.service
 test "$(stat -c '%U:%G %a' /var/lib/tiantong-r297/broker)" = 'root:root 700'
 test "$(stat -c '%a' /var/lib/tiantong-r297/broker/runs.json)" = '600'

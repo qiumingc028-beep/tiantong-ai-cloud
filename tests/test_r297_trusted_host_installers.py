@@ -21,6 +21,7 @@ def test_linux_broker_is_keyless_sandboxed_and_owns_both_ledgers():
     assert "r297-observer" in LINUX
     assert "r297-verifier" in LINUX
     assert "r297-windows-relay" in LINUX
+    assert "systemctl restart tiantong-r297-evidence-broker.service" in LINUX
 
 
 def test_windows_installer_separates_candidate_from_fixed_observer():
