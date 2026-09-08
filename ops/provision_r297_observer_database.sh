@@ -28,7 +28,7 @@ if [[ $exists == 0 ]]; then
   [[ ! -e $config ]]
   password=$(openssl rand -hex 32)
   docker exec -e R297_OBSERVER_PASSWORD="$password" "$container" sh -c \
-    'psql -v ON_ERROR_STOP=1 -v password="$R297_OBSERVER_PASSWORD" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE ROLE r297_observer LOGIN PASSWORD :'"'"'password'"'"' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION"' >/dev/null
+    'printf "%s\n" "CREATE ROLE r297_observer LOGIN PASSWORD :'"'"'password'"'"' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;" | psql -v ON_ERROR_STOP=1 -v password="$R297_OBSERVER_PASSWORD" -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null
   install -d -o r297-observer -g r297-observer -m 0700 /etc/tiantong/r297-observer
   temporary=$(mktemp /etc/tiantong/r297-observer/.database.env.XXXXXX)
   printf 'R297_OBSERVER_DATABASE_URL=postgresql://%s:%s@postgres:5432/%s\n' \
