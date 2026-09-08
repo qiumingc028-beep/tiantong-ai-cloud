@@ -14,6 +14,7 @@ import re
 import secrets
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -23,11 +24,13 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 try:
-    from ops.r297_evidence_events import verify_acceptance_event_bundle
+    from ops.r297_evidence_events import verify_acceptance_event_bundle, write_sha256_bound_file
+    from ops.r297_acceptance_run import complete_acceptance_run, reserve_acceptance_run
 except ModuleNotFoundError as exc:
     if exc.name != "ops":
         raise
-    from r297_evidence_events import verify_acceptance_event_bundle
+    from r297_evidence_events import verify_acceptance_event_bundle, write_sha256_bound_file
+    from r297_acceptance_run import complete_acceptance_run, reserve_acceptance_run
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +186,31 @@ def stop_process(process: subprocess.Popen | None) -> None:
         handle.close()
 
 
+def recover_published_process_evidence(path: Path, *, head: str, transaction_sha256: str) -> str | None:
+    """Seal or verify only the exact transaction left by an interrupted run."""
+    if not path.exists():
+        return None
+    metadata = path.lstat()
+    if (
+        path.is_symlink() or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_nlink not in {1, 2}
+    ):
+        raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_METADATA_INVALID")
+    content = path.read_bytes()
+    previous = json.loads(content)
+    if previous.get("commit") != head or previous.get("acceptance_transaction_sha256") != transaction_sha256:
+        raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_BINDING_MISMATCH")
+    digest = hashlib.sha256(content).hexdigest()
+    sidecar = path.with_suffix(path.suffix + ".sha256")
+    if sidecar.exists():
+        if metadata.st_nlink != 1 or sidecar.read_text(encoding="ascii").strip().split() != [digest, path.name]:
+            raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_SIDECAR_MISMATCH")
+    else:
+        write_sha256_bound_file(path, content)
+    return digest
+
+
 def main() -> int:
     trust_environment = os.getenv("APP_ENV", "").strip().lower()
     if trust_environment == "production":
@@ -207,6 +235,10 @@ def main() -> int:
     if output in nonce_ledger.parents or nonce_ledger == output:
         raise RuntimeError("R297_EVIDENCE_NONCE_LEDGER_NOT_DURABLE")
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Do not overwrite files referenced by an already-published evidence digest.
+    # Verified resume must run before canary setup; the current late resume cannot.
+    if any(output.iterdir()):
+        raise RuntimeError("R297_PROCESS_RECOVERY_REQUIRES_VERIFIED_RESUME")
     postgres_name = f"r297-pg-{head[:12]}-{os.getpid()}"
     redis_name = f"r297-redis-{head[:12]}-{os.getpid()}"
     runtime_name = f"r297-runtime-{head[:12]}-{os.getpid()}"
@@ -784,12 +816,47 @@ def main() -> int:
         "run_attempt": int(os.getenv("R297_ACCEPTANCE_RUN_ATTEMPT", "0")),
         "challenge": os.getenv("R297_ACCEPTANCE_CHALLENGE", ""),
     }
+    page_event = next(
+        event for event in bundle.get("events", [])
+        if event.get("event_type") == "web_page_close"
+    )
+    source_workflow_run_id = page_event.get("payload", {}).get("workflow_run_id")
+    transaction_sha256 = hashlib.sha256(json.dumps(
+        {"bundle": bundle, "scope": evidence_scope},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    ).encode()).hexdigest()
+    run_ledger = Path(os.environ["R297_ACCEPTANCE_RUN_LEDGER"])
+    reservation = reserve_acceptance_run(
+        run_ledger, expected_scope=evidence_scope,
+        source_workflow_run_id=source_workflow_run_id,
+        transaction_sha256=transaction_sha256,
+    )
     observations.update(verify_acceptance_event_bundle(
         bundle,
         expected_scope=evidence_scope,
         now=datetime.now(timezone.utc),
         nonce_ledger=nonce_ledger,
+        consume_run=False,
+        allow_nonce_recovery=reservation == "recovering",
+        reserved_transaction_sha256=transaction_sha256,
     ))
+    observations["acceptance_transaction_sha256"] = transaction_sha256
+
+    evidence = output / "R297_PROCESS_ACCEPTANCE_EVIDENCE.json"
+    sidecar = evidence.with_suffix(evidence.suffix + ".sha256")
+    previous_digest = recover_published_process_evidence(
+        evidence, head=head, transaction_sha256=transaction_sha256,
+    ) if reservation == "recovering" else None
+    if previous_digest:
+        complete_acceptance_run(
+            run_ledger, expected_scope=evidence_scope,
+            source_workflow_run_id=source_workflow_run_id,
+            transaction_sha256=transaction_sha256, published_path=evidence,
+        )
+        print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE={evidence}")
+        print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE_SHA256={previous_digest}")
+        print("R297_PROCESS_ACCEPTANCE_RECOVERY=PASS")
+        return 0
 
     raw_log = output / "R297_PROCESS_ACCEPTANCE_RAW.jsonl"
     expected_container_logs = {runtime_name, redis_name, postgres_name}
@@ -812,7 +879,6 @@ def main() -> int:
     observations["raw_log_sha256"] = sha256(raw_log)
     observations["sensitive_fixture_path"] = str(sensitive_fixture)
     observations["sensitive_fixture_sha256"] = sensitive_fixture_sha256
-    evidence = output / "R297_PROCESS_ACCEPTANCE_EVIDENCE.json"
     serialized = json.dumps(observations, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     process_logs = "\n".join(container_logs.values()) + "\n" + "\n".join(
         path.read_text(errors="replace")
@@ -824,12 +890,15 @@ def main() -> int:
     if secrets_found or re.search(r"(?i)(?:authorization|cookie|password|token)\s*[=:]\s*\S+", scanned_text):
         raise RuntimeError("SENSITIVE_VALUE_CAPTURED")
     observations["secret_exposure_count"] = 0
-    evidence.write_text(json.dumps(observations, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    digest = sha256(evidence)
-    sidecar = evidence.with_suffix(evidence.suffix + ".sha256")
-    sidecar.write_text(f"{digest}  {evidence.name}\n", encoding="ascii")
+    evidence_content = (json.dumps(observations, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    digest = write_sha256_bound_file(evidence, evidence_content)
     for path in (sensitive_fixture, raw_log, evidence, sidecar):
         path.chmod(0o600)
+    complete_acceptance_run(
+        run_ledger, expected_scope=evidence_scope,
+        source_workflow_run_id=source_workflow_run_id,
+        transaction_sha256=transaction_sha256, published_path=evidence,
+    )
     print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE={evidence}")
     print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE_SHA256={digest}")
     return 0

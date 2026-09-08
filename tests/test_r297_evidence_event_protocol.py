@@ -202,6 +202,50 @@ def test_bound_file_publish_is_exclusive_under_concurrency(tmp_path):
     digest = hashlib.sha256(content).hexdigest()
     assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
 
+
+def test_bound_file_publish_recovers_sidecar_write_crash(monkeypatch, tmp_path):
+    from ops import r297_evidence_events
+
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    original_replace = r297_evidence_events._replace_file
+    calls = 0
+
+    def crash_before_sidecar(path, value):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("sidecar crash injection")
+        original_replace(path, value)
+
+    monkeypatch.setattr(r297_evidence_events, "_replace_file", crash_before_sidecar)
+    with pytest.raises(OSError, match="sidecar crash injection"):
+        write_sha256_bound_file(output, content)
+    assert output.read_bytes() == content
+    assert not Path(f"{output}.sha256").exists()
+
+    monkeypatch.setattr(r297_evidence_events, "_replace_file", original_replace)
+    digest = write_sha256_bound_file(output, content)
+    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+
+
+def test_bound_file_publish_rejects_hardlinked_body_and_orphan_sidecar(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    output.write_bytes(content)
+    output.chmod(0o600)
+    os.link(output, output.with_name("attacker-hardlink"))
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, content)
+
+    output.with_name("attacker-hardlink").unlink()
+    output.unlink()
+    Path(f"{output}.sha256").write_text(f"{'0' * 64}  {output.name}\n", encoding="ascii")
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, content)
+
 def _integer(value: str) -> int:
     return int.from_bytes(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)), "big")
 
@@ -216,13 +260,13 @@ def _sign(event: dict) -> dict:
     return {**event, "signature": base64.urlsafe_b64encode(signature).rstrip(b"=").decode()}
 
 
-def _bundle(now: datetime) -> dict:
+def _bundle(now: datetime, nonce_suffix: str = "") -> dict:
     common = _scope()
     page = _sign({
         **common,
         "event_type": "web_page_close",
         "issuer": "page_event_receiver",
-        "nonce": "page-close-nonce-0001",
+        "nonce": f"page-close-nonce-0001{nonce_suffix}",
         "observed_at": (now - timedelta(seconds=4)).isoformat(),
         "sequence": 1,
         "payload": {
@@ -238,7 +282,7 @@ def _bundle(now: datetime) -> dict:
         **common,
         "event_type": "authenticated_observer",
         "issuer": "authenticated_observer",
-        "nonce": "page-observer-nonce-01",
+        "nonce": f"page-observer-nonce-01{nonce_suffix}",
         "observed_at": (now - timedelta(seconds=3)).isoformat(),
         "sequence": 2,
         "payload": {
@@ -257,7 +301,7 @@ def _bundle(now: datetime) -> dict:
         **common,
         "event_type": "electron_exit",
         "issuer": "windows_runner",
-        "nonce": "electron-exit-nonce-01",
+        "nonce": f"electron-exit-nonce-01{nonce_suffix}",
         "observed_at": (now - timedelta(seconds=2)).isoformat(),
         "sequence": 3,
         "payload": {"exited": True, "process_id": 4201},
@@ -266,7 +310,7 @@ def _bundle(now: datetime) -> dict:
         **common,
         "event_type": "authenticated_observer",
         "issuer": "authenticated_observer",
-        "nonce": "electron-observer-0001",
+        "nonce": f"electron-observer-0001{nonce_suffix}",
         "observed_at": (now - timedelta(seconds=1)).isoformat(),
         "sequence": 4,
         "payload": {
@@ -311,16 +355,16 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
     assert result["evidence_trust_manifest_id"] == "r297-evidence-trust-test-v1"
     assert result["evidence_trust_manifest_sha256"] == "0eac4b3fc49f913f33762dbedbe41916c3ef50eb1128211d7d93281c78902fed"
     ledger = json.loads(ledger_path.read_text())
-    assert len(ledger) == 4
+    assert len(ledger) == 5
     assert all(set(entry) == {
         "namespace", "tenant_id", "company_id", "store_id", "platform",
         "release_sha", "event_type", "key_id", "nonce",
         "run_id", "run_attempt", "challenge",
     } for entry in ledger)
 
-    with pytest.raises(ValueError, match="replayed evidence nonce"):
+    with pytest.raises(ValueError, match="replayed acceptance run"):
         verify_acceptance_event_bundle(
-            _bundle(now), expected_scope=_scope(), now=now,
+            _bundle(now, "-fresh"), expected_scope=_scope(), now=now,
             nonce_ledger=ledger_path,
         )
 
@@ -369,6 +413,107 @@ def test_bundle_precheck_preserves_run_until_formal_verification(monkeypatch, tm
         verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=ledger)
 
 
+def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path):
+    from ops import r297_evidence_events
+    from ops.r297_acceptance_run import issue_acceptance_run
+    from ops.r297_evidence_bundle import build_bundle
+    from tests.test_r297_acceptance_run import _ledger
+
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    scope = _scope()
+    run_ledger = _ledger(tmp_path)
+    record = issue_acceptance_run(
+        run_ledger,
+        scope={field: value for field, value in scope.items() if field not in {"run_id", "run_attempt", "challenge"}},
+        source_workflow_run_id=33949515935,
+        run_attempt=1,
+        now=now,
+    )
+    scope.update({field: record[field] for field in ("run_id", "run_attempt", "challenge")})
+    monkeypatch.setitem(globals(), "_scope", lambda: scope)
+    trust = load_trust_manifest(environment="test")
+    monkeypatch.setattr(r297_evidence_events, "load_trust_manifest", lambda **_kwargs: trust)
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    monkeypatch.setenv("R297_ACCEPTANCE_RUN_LEDGER", str(run_ledger))
+    bundle = build_bundle(_bundle(now)["events"], expected_scope=scope, now=now)
+    nonce_ledger = _nonce_ledger(tmp_path)
+    original_record_nonces = r297_evidence_events._record_nonces
+    monkeypatch.setattr(
+        r297_evidence_events,
+        "_record_nonces",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("nonce ledger crash injection")),
+    )
+
+    with pytest.raises(OSError, match="nonce ledger crash injection"):
+        verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger)
+
+    monkeypatch.setattr(r297_evidence_events, "_record_nonces", original_record_nonces)
+    result = verify_acceptance_event_bundle(
+        bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger,
+    )
+    assert result["authenticated_observer"]["verified_subject_count"] == 2
+    assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
+    assert len(json.loads(nonce_ledger.read_text())) == 4
+
+
+def test_candidate_bundle_builder_cannot_receive_any_signer_private_key(monkeypatch):
+    from ops.r297_evidence_bundle import build_bundle
+
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    variables = (
+        "R297_PAGE_EVENT_RECEIVER_PRIVATE_KEY_PATH",
+        "R297_OBSERVER_PRIVATE_KEY_PATH",
+        "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH",
+    )
+    for variable in variables:
+        with monkeypatch.context() as isolated:
+            for candidate in variables:
+                isolated.delenv(candidate, raising=False)
+            isolated.setenv(variable, "/must-not-be-readable-by-candidate")
+            with pytest.raises(RuntimeError, match="verifier must not receive signer private keys"):
+                build_bundle(_bundle(now)["events"], expected_scope=_scope(), now=now)
+
+
+def _attempt_events(now, expected_scope, *, splice=False):
+    events = []
+    for index, event in enumerate(_bundle(now)["events"]):
+        unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
+        payload = deepcopy(unsigned["payload"])
+        if unsigned["event_type"] == "authenticated_observer":
+            subject = next(item for item in events if item["nonce"] == payload["subject_nonce"])
+            payload["subject_event_sha256"] = signed_event_sha256(subject)
+        events.append(_sign({
+            **unsigned,
+            "payload": payload,
+            "run_attempt": 1 if splice and index == 2 else expected_scope["run_attempt"],
+            "challenge": "challenge-from-another-run-0001" if splice and index == 2 else expected_scope["challenge"],
+        }))
+    return events
+
+
+def test_signed_chain_binds_run_attempt_and_random_challenge(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    expected_scope = {**_scope(), "run_attempt": 2, "challenge": "challenge-6ea4d915d7f8435880868439"}
+
+    result = verify_acceptance_event_bundle(
+        {"events": _attempt_events(now, expected_scope)},
+        expected_scope=expected_scope, now=now, nonce_ledger=_nonce_ledger(tmp_path),
+    )
+
+    assert result["authenticated_observer"]["run_attempt"] == 2
+    assert result["authenticated_observer"]["challenge"] == expected_scope["challenge"]
+
+
+def test_signed_chain_rejects_cross_attempt_splice(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    expected_scope = {**_scope(), "run_attempt": 2, "challenge": "challenge-6ea4d915d7f8435880868439"}
+    with pytest.raises(ValueError, match="run_attempt mismatch|challenge mismatch"):
+        verify_acceptance_event_bundle(
+            {"events": _attempt_events(now, expected_scope, splice=True)}, expected_scope=expected_scope, now=now,
+            nonce_ledger=_nonce_ledger(tmp_path),
+        )
+
+
 def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
     ledger = _nonce_ledger(tmp_path)
@@ -385,7 +530,42 @@ def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda _: verify(), range(2)))
 
-    assert sorted(results) == ["accepted", "replayed evidence nonce"]
+    assert sorted(results) == ["accepted", "replayed acceptance run"]
+
+
+def test_nonce_commit_exact_recovery_is_bounded_to_explicit_transaction_retry(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    ledger = _nonce_ledger(tmp_path)
+    bundle = _bundle(now)
+
+    verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+        consume_run=False,
+    )
+    recovered = verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+        consume_run=False, allow_nonce_recovery=True,
+    )
+    assert recovered["authenticated_observer"]["verified_subject_count"] == 2
+    with pytest.raises(ValueError, match="replayed acceptance run"):
+        verify_acceptance_event_bundle(
+            bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+            consume_run=False,
+        )
+
+
+def test_acceptance_source_run_is_consumed_once_across_scopes(tmp_path):
+    from ops.r297_evidence_events import _record_nonces
+
+    ledger = _nonce_ledger(tmp_path)
+    first = {
+        **_scope(), "event_type": "acceptance_run",
+        "key_id": "source_pagehide_workflow", "nonce": _scope()["run_id"],
+    }
+    _record_nonces(ledger, [first])
+
+    with pytest.raises(ValueError, match="replayed acceptance run"):
+        _record_nonces(ledger, [{**first, "tenant_id": 999, "store_id": 999}])
 
 
 @pytest.mark.parametrize(

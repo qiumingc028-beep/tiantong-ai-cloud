@@ -2,6 +2,58 @@
 
 Status: BLOCK. This document grants no main merge, production deployment, or release approval.
 
+## 2026-09-08 integration of infrastructure and boundary tests
+
+Base: `5f1faabc20c911e62df975b81ae984cfbc28498d`. Infrastructure source:
+`46ee7c8e1d5e5bc4dbd317aa23d6d87a07c26aca`; test source:
+`1557f3d6304ceab2ee1d2ac2591ac41fd2de98e1`. Effective patches, not whole branch
+history, are integrated. The existing frontend Runner and product fixes are unchanged.
+Role ②'s branch still pointed to the already-accounted-for `7fcbbab` at intake;
+no new Runner repair is claimed received. The later sections below are historical
+handoff records; the following status supersedes their outstanding-source statements.
+
+- Runtime's actual detached docker run now receives APP_ENV=acceptance,
+  R297_CONTROLLED_CANARY=1, the controlled dashboard on host.docker.internal:18787,
+  and the fixed session-authorization path on that same host/port. Each control effect
+  supplies an operation ID; cleanup preserves and queries five causal receipts while
+  requiring profile/session/ticket artifacts to be gone. Diagnostics and private raw
+  log redaction are preserved. This is a controlled container gate, not real JD proof.
+- Windows build remains secretless with exact-SHA upload; formal acceptance remains
+  a separate dispatch-only job and downloads the exact-SHA artifact. All private-key,
+  trust-material and canary-credential references/execution were removed from candidate
+  code's job, while the independent-signer throw remains. SKIPPED is not PASS.
+  Existing build isolation/SHA assertions and still-applicable PowerShell process-exit,
+  scope and signed-event assertions remain; they were not replaced by weaker checks.
+- Source introduces a fixed-checkout trusted Windows Observer, protected build/run
+  bindings, live PID/executable identity and post-exit cycle checks. It is not yet a
+  deployed or approved signer service. Integration additionally closes redirect/proxy
+  credential forwarding using the existing NoCredentialRedirect policy and handles
+  a legitimate null latest_completed_at by waiting, not inventing a completed cycle.
+- Source adds reservation, exact nonce recovery and SHA-bound output completion helpers.
+  Role ③'s original direct-verifier crash test still exposes premature run consumption.
+  Full Process reentry is also not safe: the incoming late recovery would overwrite an
+  old sensitive fixture before returning old evidence. Integration now stops a nonempty
+  output directory before any new canary setup with
+  R297_PROCESS_RECOVERY_REQUIRES_VERIFIED_RESUME, preserving the old files. This safety
+  stop is NOT a completed recovery implementation. Source helper tests are retained.
+
+Unclosed differences for role ③/⑤, with assertions preserved:
+
+1. Role ③ requires a portless controlled dashboard URL; role ⑤ runs its actual HTTP
+   server on 18787. Both exact assertions are kept pending a coordinated contract fix;
+   no duplicate env arguments or inert strings are added to fake their agreement.
+2. Cross-ledger crash retry remains BLOCK. Also reconcile four event nonce records with
+   source's new fifth acceptance-run record; do not remove either replay requirement.
+3. Real Process resume must precede fixture/log/canary mutation, handle completed-ledger
+   retries, and define recovery after the freshness deadline without widening acceptance.
+4. Trusted Observer output/sidecar crash recovery still needs a durable observation result;
+   rerunning after Electron has exited cannot require the old process to be live again.
+5. Independent signer host/IPC and approval, Receiver read-only isolation, long-cycle timing,
+   same-head formal evidence and the new Runner repair are still required. No RC is locked.
+
+The new role ③ tests are now source-accessible and included, unlike the earlier handoff.
+Their assertions are not waived by publishing this explicitly BLOCK review candidate.
+
 ## Windows job separation and frontend Runner integration
 
 The integration following `efa916386365c7791287ac966792c45b16f0e71d` imports only

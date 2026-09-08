@@ -7,6 +7,7 @@ CLIENT = ROOT / "desktop" / "jd-workbench"
 WORKFLOW = ROOT / ".github" / "workflows" / "r291-windows-workbench.yml"
 ACCEPTANCE_SCRIPT = ROOT / "ops" / "r297_windows_acceptance.ps1"
 EVENT_SIGNER = ROOT / "ops" / "r297_windows_event_signer.py"
+TRUSTED_OBSERVER = ROOT / "ops" / "r297_trusted_windows_observer.py"
 
 
 def test_r297_windows_gate_packages_only_the_official_workbench():
@@ -46,7 +47,7 @@ def test_r297_windows_gate_has_complete_trigger_and_artifact_contract():
     assert "Expected one NSIS installer and one portable ZIP" in workflow
     assert "SHA256SUMS.txt" in workflow
     assert "retention-days: 14" in workflow
-    assert "tiantong-ai-jd-workbench-r297-windows" in workflow
+    assert "tiantong-ai-jd-workbench-r297-build-" in workflow
 
 
 def test_r297_windows_acceptance_requires_controlled_https_pairing_secrets():
@@ -59,7 +60,7 @@ def test_r297_windows_acceptance_requires_controlled_https_pairing_secrets():
         "R297_WINDOWS_CANARY_PAIRING_ISSUER_BEARER",
         "R297_WINDOWS_CANARY_SERVER_CERTIFICATE_BASE64",
     ):
-        assert f"secrets.{name}" in workflow
+        assert f"secrets.{name}" not in workflow
         assert name in acceptance
     assert "R297_WINDOWS_CANARY_PAIRING_CODE" not in workflow + acceptance
     assert '"$backendOrigin/api/jd-workbench/pairing-codes"' in acceptance
@@ -88,19 +89,16 @@ def test_r297_windows_acceptance_signs_only_after_real_electron_exit():
     signer = EVENT_SIGNER.read_text(encoding="utf-8")
 
     assert "actions/setup-python@v6" in workflow
-    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH" in workflow
-    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64" in workflow
-    assert "R297_EVIDENCE_TRUST_MANIFEST_BASE64" in workflow
-    assert "R297_EVIDENCE_TRUST_MANIFEST_SHA256" in workflow
-    assert "icacls" in workflow
-    assert "GITHUB_ENV" in workflow
-    assert "Remove-Item" in workflow
+    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH" not in workflow
+    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64" not in workflow
+    assert "R297_EVIDENCE_TRUST_MANIFEST_BASE64" not in workflow
+    assert "R297_EVIDENCE_TRUST_MANIFEST_SHA256" not in workflow
+    assert "secrets." not in workflow
     for name in (
         "R297_EVIDENCE_NAMESPACE", "R297_EVIDENCE_TENANT_ID",
         "R297_EVIDENCE_COMPANY_ID", "R297_EVIDENCE_STORE_ID", "R297_EVIDENCE_PLATFORM",
         "R297_ACCEPTANCE_RUN_ID",
     ):
-        assert name in workflow
         assert name in acceptance
     assert "$process.WaitForExit(10000)" in acceptance
     assert "python -m ops.r297_windows_event_signer" in acceptance
@@ -108,9 +106,11 @@ def test_r297_windows_acceptance_signs_only_after_real_electron_exit():
         "python -m ops.r297_windows_event_signer"
     )
     assert "R297_WINDOWS_ELECTRON_EXIT_EVENT.json" in acceptance
-    assert "R297_WINDOWS_ELECTRON_EXIT_EVENT.json" in workflow
-    assert "R297_WINDOWS_ELECTRON_EXIT_EVENT.json.sha256" in workflow
-    assert "ops.r297_evidence_preflight --role windows_runner" in workflow
+    assert "write_sha256_bound_file" in signer
+    observer = TRUSTED_OBSERVER.read_text(encoding="utf-8")
+    assert "produce_electron_exit_event" in observer
+    assert "Electron process was not live when trusted observation began" in observer
+    assert "post-exit scheduler observation timed out" in observer
     assert "process_is_running(process_id)" in signer
 
 
@@ -119,9 +119,9 @@ def test_candidate_workflow_fails_before_windows_signing_key_is_exposed():
     candidate = workflow.split("  formal-windows-acceptance:", 1)[1]
 
     assert "R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED" in candidate
-    assert candidate.index("R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED") < candidate.index(
-        "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64"
-    )
+    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64" not in candidate
+    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH" not in candidate
+    assert "r297_windows_acceptance.ps1" not in candidate
 
 
 def test_windows_build_is_secretless_and_publishes_before_independent_formal_gate():
@@ -140,5 +140,32 @@ def test_windows_build_is_secretless_and_publishes_before_independent_formal_gat
     assert "actions/download-artifact@v8" in formal
     assert "name: tiantong-ai-jd-workbench-r297-build-${{ github.sha }}" in formal
     assert "ref: ${{ github.sha }}" in formal
-    assert formal.index("R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED") < formal.index("secrets.")
-    assert "./ops/r297_windows_acceptance.ps1" in formal
+    assert "R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED" in formal
+    assert "secrets." not in formal
+    assert "./ops/r297_windows_acceptance.ps1" not in formal
+
+
+def test_trusted_windows_observer_is_fixed_source_and_does_not_execute_candidate():
+    source = TRUSTED_OBSERVER.read_text(encoding="utf-8")
+    assert "R297_TRUSTED_SIGNER_SHA" in source
+    assert '["git", "rev-parse", "HEAD"]' in source
+    assert "Electron process was not live when trusted observation began" in source
+    assert "Electron executable identity mismatch" in source
+    assert "latest_completed_at" in source
+    assert "produce_electron_exit_event" in source
+    assert "Start-Process" not in source
+
+
+def test_r297_windows_acceptance_run_id_is_per_dispatch_not_static_environment_state():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "pagehide_workflow_run_id:" in workflow
+    assert "required: true" in workflow
+    assert "vars.R297_ACCEPTANCE_RUN_ID" not in workflow
+    assert "formal-windows-acceptance:" in workflow
+    assert "name: formal-windows-acceptance" in workflow
+    assert "if: github.event_name == 'workflow_dispatch'" in workflow
+    build, formal = workflow.split("  build-windows:", 1)[1].split("  formal-windows-acceptance:", 1)
+    assert "environment: r297-controlled-canary" not in build
+    assert "actions/setup-node@v7" in formal
+    assert 'node-version: "24"' in formal
+    assert "R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED" in formal

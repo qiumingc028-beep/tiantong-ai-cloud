@@ -44,6 +44,6 @@ wait -n -p exited_pid "${pids[@]}"
 status=$?
 set -e
 exited_component="unknown"
-if [[ -n $exited_pid ]]; then exited_component="${component_by_pid[$exited_pid]:-unknown}"; fi
+if [[ -n ${exited_pid:-} ]]; then exited_component="${component_by_pid[$exited_pid]:-unknown}"; fi
 printf 'RUNTIME_COMPONENT_EXIT=%s STATUS=%s\n' "$exited_component" "$status"
 exit "$status"
