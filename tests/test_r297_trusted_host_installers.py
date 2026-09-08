@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LINUX = (ROOT / "ops" / "install_r297_trusted_linux_host.sh").read_text(encoding="utf-8")
 WINDOWS = (ROOT / "ops" / "install_r297_trusted_windows_observer.ps1").read_text(encoding="utf-8")
+DATABASE = (ROOT / "ops" / "provision_r297_observer_database.sh").read_text(encoding="utf-8")
 
 
 def test_linux_broker_is_keyless_sandboxed_and_owns_both_ledgers():
@@ -44,3 +45,12 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "Register-ScheduledTask" in WINDOWS
     assert "r297_trusted_windows_observer" in WINDOWS
     assert "r297_windows_acceptance.ps1" not in WINDOWS
+
+
+def test_observer_database_role_is_read_only_and_grants_only_three_tables():
+    assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION" in DATABASE
+    assert "default_transaction_read_only = on" in DATABASE
+    assert "REVOKE ALL ON SCHEMA public" in DATABASE
+    assert "public.stores, public.jd_workbench_sync_policies, public.jd_sync_logs" in DATABASE
+    assert "R297_OBSERVER_DATABASE_GRANTS=PENDING_RC_MIGRATION" in DATABASE
+    assert "chmod 0400" in DATABASE
