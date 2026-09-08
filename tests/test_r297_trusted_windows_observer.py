@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 
 import pytest
 
-from ops.r297_trusted_windows_observer import observe_and_sign
+from ops.r297_trusted_windows_observer import observe_and_sign, recover_trusted_output
 
 
 def _request(tmp_path):
@@ -126,4 +127,43 @@ def test_trusted_observer_rejects_unapproved_run_binding(tmp_path):
                 "workbench_executable_sha256": request["executable_sha256"],
             },
             run_binding=approved,
+        )
+
+
+def test_trusted_observer_recovers_exact_published_output(monkeypatch, tmp_path):
+    executable, started, request = _request(tmp_path)
+    output = tmp_path / "trusted-event.json"
+    event = {
+        **{key: request[key] for key in (
+            "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+            "run_id", "run_attempt", "challenge",
+        )},
+        "event_type": "electron_exit", "issuer": "windows_runner",
+        "observed_at": (started + timedelta(seconds=10)).isoformat(),
+        "sequence": 3, "nonce": "trusted-output-recovery-01", "key_id": "windows-key",
+        "payload": {"exited": True, "process_id": 42, "process_started_at": started.isoformat()},
+        "signature": "signature",
+    }
+    content = (json.dumps({"signer_sha": "b" * 40, "event": event}, sort_keys=True) + "\n").encode()
+    output.write_bytes(content)
+    output.chmod(0o600)
+    monkeypatch.setattr("ops.r297_trusted_windows_observer.verify_signed_event", lambda *args, **kwargs: ({}, {}))
+
+    approved = _run_binding(request, started)
+    manifest = {"release_sha": "a" * 40, "workbench_executable_sha256": request["executable_sha256"]}
+    assert recover_trusted_output(
+        output, request=request, signer_sha="b" * 40,
+        artifact_manifest=manifest, run_binding=approved, now=started + timedelta(seconds=10),
+    ) is True
+    assert output.with_name(output.name + ".sha256").is_file()
+    assert recover_trusted_output(
+        output, request=request, signer_sha="b" * 40,
+        artifact_manifest=manifest, run_binding=approved, now=started + timedelta(seconds=10),
+    ) is True
+
+    request["run_attempt"] = 2
+    with pytest.raises(RuntimeError, match="binding mismatch"):
+        recover_trusted_output(
+            output, request=request, signer_sha="b" * 40,
+            artifact_manifest=manifest, run_binding=approved, now=started + timedelta(seconds=10),
         )

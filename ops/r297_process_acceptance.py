@@ -25,12 +25,18 @@ from urllib.error import HTTPError
 
 try:
     from ops.r297_evidence_events import verify_acceptance_event_bundle, write_sha256_bound_file
-    from ops.r297_acceptance_run import complete_acceptance_run, reserve_acceptance_run
+    from ops.r297_acceptance_run import (
+        complete_acceptance_run, recover_staged_acceptance_output,
+        reserve_acceptance_run, stage_acceptance_output,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "ops":
         raise
     from r297_evidence_events import verify_acceptance_event_bundle, write_sha256_bound_file
-    from r297_acceptance_run import complete_acceptance_run, reserve_acceptance_run
+    from r297_acceptance_run import (
+        complete_acceptance_run, recover_staged_acceptance_output,
+        reserve_acceptance_run, stage_acceptance_output,
+    )
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -186,7 +192,113 @@ def stop_process(process: subprocess.Popen | None) -> None:
         handle.close()
 
 
-def recover_published_process_evidence(path: Path, *, head: str, transaction_sha256: str) -> str | None:
+def _validate_process_evidence(
+    previous: dict, path: Path, verified_events: dict, *, head: str,
+    transaction_sha256: str,
+) -> None:
+    result_sections = (
+        "web_page_close", "electron_exit", "worker_restart", "multi_worker",
+        "retry_schedule", "manual_resume", "human_action_detection", "service_restart",
+        "two_cycle", "idempotent_write", "orphan_recovery", "runtime_restart",
+        "explicit_ack",
+    )
+    if (
+        previous.get("commit") != head
+        or previous.get("acceptance_transaction_sha256") != transaction_sha256
+        or previous.get("mode") != "real_process" or previous.get("mock_count") != 0
+        or previous.get("controlled_canary") is not True
+        or previous.get("data_source") != "CONTROLLED_CANARY"
+        or previous.get("real_jd_acceptance") is not False
+        or previous.get("source_code_write_count") != 0
+        or previous.get("production_connection_count") != 0
+        or previous.get("secret_exposure_count") != 0
+        or any(previous.get(key) != value for key, value in verified_events.items())
+    ):
+        raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_BINDING_MISMATCH")
+    raw_log = Path(str(previous.get("raw_log_path", "")))
+    fixture = Path(str(previous.get("sensitive_fixture_path", "")))
+    for subordinate, digest_key in (
+        (raw_log, "raw_log_sha256"), (fixture, "sensitive_fixture_sha256"),
+    ):
+        if (
+            subordinate.parent.resolve() != path.parent.resolve() or not subordinate.is_file()
+            or subordinate.is_symlink() or subordinate.stat().st_nlink != 1
+            or sha256(subordinate) != previous.get(digest_key)
+        ):
+            raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_SUBORDINATE_BINDING_INVALID")
+    events = [json.loads(line) for line in raw_log.read_text(encoding="utf-8").splitlines() if line]
+    commands = [event["command"] for event in events if event.get("event") == "command"]
+    raw_results = {event["gate"]: event["result"] for event in events if event.get("event") == "gate_result"}
+    if (
+        not commands or commands != previous.get("exact_commands")
+        or any("mock" in command.lower() for command in commands)
+        or any(raw_results.get(section) != previous.get(section) for section in result_sections)
+    ):
+        raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_RAW_GATE_INVALID")
+    canaries = json.loads(fixture.read_text(encoding="utf-8"))
+    injections = [event for event in events if event.get("event") == "sensitive_fixture_injected"]
+    if (
+        set(canaries) != {"buyer_name", "phone", "address", "cookie", "token", "password"}
+        or injections != [{
+            "event": "sensitive_fixture_injected",
+            "fixture_sha256": previous["sensitive_fixture_sha256"],
+            "fields": sorted(canaries),
+        }]
+        or any(value and value in raw_log.read_text(encoding="utf-8") for value in canaries.values())
+    ):
+        raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_FIXTURE_INVALID")
+    worker = previous["worker_restart"]
+    multi = previous["multi_worker"]
+    retry = previous["retry_schedule"]
+    manual = previous["manual_resume"]
+    service = previous["service_restart"]
+    cycles = previous.get("two_cycle", [])
+    idempotent = previous.get("idempotent_write", {})
+    orphan = previous.get("orphan_recovery", {})
+    runtime = previous.get("runtime_restart", {})
+    ack = previous.get("explicit_ack", {})
+    if (
+        worker.get("pid_before") == worker.get("pid_after")
+        or worker.get("recovered") is not True
+        or len(set(multi.get("worker_pids", []))) < 2
+        or multi.get("distinct_worker_pids") is not True
+        or multi.get("status") != "success"
+        or multi.get("claim_log_count") != 1
+        or multi.get("database_log_count") != 1
+        or multi.get("postgresql_store_claim_count") != 1
+        or multi.get("same_store_claim_count") != 1
+        or retry.get("expected_seconds") != [30, 120, 300, 900, 1800]
+        or retry.get("observed_seconds") != retry.get("expected_seconds")
+        or manual.get("before_status") != "HUMAN_ACTION_REQUIRED"
+        or manual.get("recovery_probe_status") != "success"
+        or manual.get("automatic_enqueue_count") != 1
+        or manual.get("task_status") != "success"
+        or not manual.get("recovery_probe_task_id") or not manual.get("task_id")
+        or previous["human_action_detection"] != {
+            "detected_status": "HUMAN_ACTION_REQUIRED", "automatic_resume_status": "success",
+        }
+        or service.get("runtime_pid_before") == service.get("runtime_pid_after")
+        or service.get("backend_pid_before") == service.get("backend_pid_after")
+        or service.get("runtime_session_restored") is not True
+        or len(cycles) != 2
+        or len({item.get("task_id") for item in cycles}) != 2
+        or any(item.get("status") != "success" or item.get("database_log_count") != 1 for item in cycles)
+        or idempotent.get("metric_row_count") != len(idempotent.get("rows", []))
+        or idempotent.get("metric_row_count") != 1
+        or orphan.get("processing_observed") is not True
+        or orphan.get("final_status") != "success"
+        or orphan.get("database_log_count") != 1
+        or not orphan.get("task_id") or not isinstance(orphan.get("killed_worker_pid"), int)
+        or runtime.get("pid_before") == runtime.get("pid_after")
+        or runtime.get("session_restored") is not True
+        or ack != {"ready_count": 0, "processing_count": 0, "metadata_count": 0}
+    ):
+        raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_GATE_INVALID")
+
+
+def recover_published_process_evidence(
+    path: Path, *, head: str, transaction_sha256: str, verified_events: dict,
+) -> str | None:
     """Seal or verify only the exact transaction left by an interrupted run."""
     if not path.exists():
         return None
@@ -199,8 +311,10 @@ def recover_published_process_evidence(path: Path, *, head: str, transaction_sha
         raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_METADATA_INVALID")
     content = path.read_bytes()
     previous = json.loads(content)
-    if previous.get("commit") != head or previous.get("acceptance_transaction_sha256") != transaction_sha256:
-        raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_BINDING_MISMATCH")
+    _validate_process_evidence(
+        previous, path, verified_events, head=head,
+        transaction_sha256=transaction_sha256,
+    )
     digest = hashlib.sha256(content).hexdigest()
     sidecar = path.with_suffix(path.suffix + ".sha256")
     if sidecar.exists():
@@ -209,6 +323,94 @@ def recover_published_process_evidence(path: Path, *, head: str, transaction_sha
     else:
         write_sha256_bound_file(path, content)
     return digest
+
+
+def prepare_acceptance_transaction(
+    *, signed_event_bundle: Path, output: Path, head: str, nonce_ledger: Path,
+) -> dict:
+    """Reserve and recover one exact formal operation before starting any process."""
+    def required_integer(name: str) -> int:
+        try:
+            value = int(os.environ[name])
+        except (KeyError, ValueError):
+            raise RuntimeError(f"{name}_MISSING") from None
+        if value <= 0:
+            raise RuntimeError(f"{name}_INVALID")
+        return value
+
+    evidence_scope = {
+        "namespace": os.getenv("R297_EVIDENCE_NAMESPACE", ""),
+        "tenant_id": required_integer("R297_EVIDENCE_TENANT_ID"),
+        "company_id": required_integer("R297_EVIDENCE_COMPANY_ID"),
+        "store_id": required_integer("R297_EVIDENCE_STORE_ID"),
+        "platform": os.getenv("R297_EVIDENCE_PLATFORM", "jd"),
+        "release_sha": head,
+        "run_id": os.getenv("R297_ACCEPTANCE_RUN_ID", ""),
+        "run_attempt": required_integer("R297_ACCEPTANCE_RUN_ATTEMPT"),
+        "challenge": os.getenv("R297_ACCEPTANCE_CHALLENGE", ""),
+    }
+    bundle = json.loads(signed_event_bundle.read_text(encoding="utf-8"))
+    try:
+        page_event = next(
+            event for event in bundle.get("events", [])
+            if event.get("event_type") == "web_page_close"
+        )
+        source_workflow_run_id = page_event["payload"]["workflow_run_id"]
+    except (KeyError, StopIteration, TypeError):
+        raise RuntimeError("R297_SIGNED_EVENT_BUNDLE_INVALID") from None
+    transaction_sha256 = hashlib.sha256(json.dumps(
+        {"bundle": bundle, "scope": evidence_scope},
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+    ).encode()).hexdigest()
+    run_ledger_value = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
+    if not run_ledger_value:
+        raise RuntimeError("R297_ACCEPTANCE_RUN_LEDGER_MISSING")
+    run_ledger = Path(run_ledger_value).resolve()
+    reservation = reserve_acceptance_run(
+        run_ledger, expected_scope=evidence_scope,
+        source_workflow_run_id=source_workflow_run_id,
+        transaction_sha256=transaction_sha256,
+    )
+    verified = verify_acceptance_event_bundle(
+        bundle, expected_scope=evidence_scope, now=datetime.now(timezone.utc),
+        nonce_ledger=nonce_ledger, consume_run=False,
+        allow_nonce_recovery=reservation == "recovering",
+        reserved_transaction_sha256=transaction_sha256,
+    )
+    evidence = output / "R297_PROCESS_ACCEPTANCE_EVIDENCE.json"
+    staged_content = recover_staged_acceptance_output(
+        run_ledger, expected_scope=evidence_scope,
+        source_workflow_run_id=source_workflow_run_id,
+        transaction_sha256=transaction_sha256,
+    ) if reservation == "recovering" else None
+    published_digest = None
+    if staged_content is not None:
+        staged_digest = hashlib.sha256(staged_content).hexdigest()
+        if evidence.exists():
+            published_digest = recover_published_process_evidence(
+                evidence, head=head, transaction_sha256=transaction_sha256,
+                verified_events=verified,
+            )
+            if published_digest != staged_digest:
+                raise RuntimeError("RECOVERED_PROCESS_EVIDENCE_STAGED_DIGEST_MISMATCH")
+        else:
+            previous = json.loads(staged_content)
+            _validate_process_evidence(
+                previous, evidence, verified, head=head,
+                transaction_sha256=transaction_sha256,
+            )
+            published_digest = write_sha256_bound_file(evidence, staged_content)
+    if published_digest:
+        complete_acceptance_run(
+            run_ledger, expected_scope=evidence_scope,
+            source_workflow_run_id=source_workflow_run_id,
+            transaction_sha256=transaction_sha256, published_path=evidence,
+        )
+    return {
+        "bundle": bundle, "scope": evidence_scope, "source_workflow_run_id": source_workflow_run_id,
+        "transaction_sha256": transaction_sha256, "run_ledger": run_ledger,
+        "verified": verified, "published_digest": published_digest,
+    }
 
 
 def main() -> int:
@@ -235,6 +437,16 @@ def main() -> int:
     if output in nonce_ledger.parents or nonce_ledger == output:
         raise RuntimeError("R297_EVIDENCE_NONCE_LEDGER_NOT_DURABLE")
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
+    acceptance = prepare_acceptance_transaction(
+        signed_event_bundle=args.signed_event_bundle, output=output,
+        head=head, nonce_ledger=nonce_ledger,
+    )
+    if acceptance["published_digest"]:
+        evidence = output / "R297_PROCESS_ACCEPTANCE_EVIDENCE.json"
+        print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE={evidence}")
+        print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE_SHA256={acceptance['published_digest']}")
+        print("R297_PROCESS_ACCEPTANCE_RECOVERY=PASS")
+        return 0
     postgres_name = f"r297-pg-{head[:12]}-{os.getpid()}"
     redis_name = f"r297-redis-{head[:12]}-{os.getpid()}"
     runtime_name = f"r297-runtime-{head[:12]}-{os.getpid()}"
@@ -326,7 +538,7 @@ def main() -> int:
         try:
             from backend.database import SessionLocal, get_redis
             from backend.models import JdAccount, JdDailyMetric, JdSyncLog, JdWorkbenchDevice, JdWorkbenchStoreStatus, JdWorkbenchSyncPolicy, Store, User, UserStoreMembership
-            from backend.queue import PROCESSING_METADATA_PREFIX, PROCESSING_QUEUE_NAME, QUEUE_NAME
+            from backend.queue import PROCESSING_METADATA_PREFIX, PROCESSING_QUEUE_NAME, QUEUE_NAME, enqueue_task
             from backend.seed import seed_defaults
             from backend.worker import JD_RETRY_BACKOFF_SECONDS, _finish_jd_workbench_task, run_jd_workbench_scheduler
         finally:
@@ -369,6 +581,8 @@ def main() -> int:
         db.add_all([status_row, policy])
         db.commit()
         scope = {"namespace": session_namespace, "tenant_id": store.tenant_id, "company_id": store.company_id, "store_id": store.id, "platform": store.platform}
+        if any(scope[field] != acceptance["scope"][field] for field in scope):
+            raise RuntimeError("R297_ISOLATED_DATABASE_SCOPE_MISMATCH")
         db.close()
 
         commands.append("start controlled canary HTTP process")
@@ -636,6 +850,46 @@ def main() -> int:
             {"client_version": "2.97.0", "status": "HUMAN_ACTION_REQUIRED", "store_id": scope["store_id"], "reason_code": "RISK_CONTROL"},
             device_token, device_private_key,
         )
+        try:
+            device_post(
+                f"http://{backend_host}:{backend_port}{heartbeat_path}", heartbeat_path,
+                {"client_version": "2.97.0", "status": "IDLE", "store_id": scope["store_id"]},
+                device_token, device_private_key,
+            )
+            raise RuntimeError("HUMAN_ACTION_PRE_PROBE_IDLE_ACCEPTED")
+        except HTTPError as exc:
+            if exc.code != 409:
+                raise
+        # Prove JD recovery through the real Backend -> Runtime -> collector path
+        # while the store is still blocked. The device is not allowed to clear
+        # the human-action state merely by reporting IDLE.
+        recovery_probe_at = schedule_cursor
+        schedule_cursor += timedelta(seconds=300)
+        recovery_probe_task_id = "00000000-0000-4000-8000-000000000998"
+        db = SessionLocal()
+        policy = db.query(JdWorkbenchSyncPolicy).one()
+        policy.active_task_id = recovery_probe_task_id
+        policy.queue_state = "ready"
+        policy.sync_window_started_at = recovery_probe_at
+        policy.visibility_deadline = recovery_probe_at + timedelta(seconds=5)
+        db.commit()
+        db.close()
+        enqueue_task(
+            "sync_jd_smart",
+            {
+                "tenant_id": scope["tenant_id"], "company_id": scope["company_id"],
+                "store_id": scope["store_id"], "source": "cloud_scheduler",
+                "scheduled_at": recovery_probe_at.isoformat(),
+                "sync_window_started_at": recovery_probe_at.isoformat(),
+            },
+            max_retries=5, task_id=recovery_probe_task_id, attempt=0,
+        )
+        recovery_probe_worker = start_python("backend.worker", worker_env, worker_logs[2])
+        processes.append(recovery_probe_worker)
+        recovery_probe_result = wait_sync_log(recovery_probe_task_id, timeout=30)
+        stop_process(recovery_probe_worker)
+        if recovery_probe_result.get("status") != "success":
+            raise RuntimeError("HUMAN_ACTION_RECOVERY_PROBE_FAILED")
         resume_report = device_post(
             f"http://{backend_host}:{backend_port}{heartbeat_path}", heartbeat_path,
             {"client_version": "2.97.0", "status": "IDLE", "store_id": scope["store_id"]},
@@ -767,7 +1021,13 @@ def main() -> int:
                 "pid_after": runtime_pid_after,
                 "session_restored": bool(restored_session.get("restored")),
             },
-            "manual_resume": {"before_status": "HUMAN_ACTION_REQUIRED", "after": manual_after, "automatic_enqueue_count": scheduled, "task_id": manual_task_id, "task_status": manual_task_result["status"]},
+            "manual_resume": {
+                "before_status": "HUMAN_ACTION_REQUIRED", "after": manual_after,
+                "recovery_probe_task_id": recovery_probe_task_id,
+                "recovery_probe_status": recovery_probe_result["status"],
+                "automatic_enqueue_count": scheduled, "task_id": manual_task_id,
+                "task_status": manual_task_result["status"],
+            },
             "human_action_detection": {"detected_status": "HUMAN_ACTION_REQUIRED", "automatic_resume_status": manual_task_result["status"]},
             "retry_schedule": {"expected_seconds": list(JD_RETRY_BACKOFF_SECONDS), "observed_seconds": observed_backoff},
             "source_code_write_count": 0,
@@ -800,60 +1060,14 @@ def main() -> int:
         with contextlib.suppress(Exception):
             run("docker", "volume", "rm", runtime_volume)
 
-    bundle = json.loads(args.signed_event_bundle.read_text(encoding="utf-8"))
-    evidence_scope = {
-        "namespace": f"r297-acceptance-{head[:12]}",
-        "tenant_id": scope["tenant_id"],
-        "company_id": scope["company_id"],
-        "store_id": scope["store_id"],
-        "platform": scope["platform"],
-        "release_sha": head,
-        "run_id": os.getenv("R297_ACCEPTANCE_RUN_ID", ""),
-        "run_attempt": int(os.getenv("R297_ACCEPTANCE_RUN_ATTEMPT", "0")),
-        "challenge": os.getenv("R297_ACCEPTANCE_CHALLENGE", ""),
-    }
-    page_event = next(
-        event for event in bundle.get("events", [])
-        if event.get("event_type") == "web_page_close"
-    )
-    source_workflow_run_id = page_event.get("payload", {}).get("workflow_run_id")
-    transaction_sha256 = hashlib.sha256(json.dumps(
-        {"bundle": bundle, "scope": evidence_scope},
-        ensure_ascii=False, separators=(",", ":"), sort_keys=True,
-    ).encode()).hexdigest()
-    run_ledger = Path(os.environ["R297_ACCEPTANCE_RUN_LEDGER"])
-    reservation = reserve_acceptance_run(
-        run_ledger, expected_scope=evidence_scope,
-        source_workflow_run_id=source_workflow_run_id,
-        transaction_sha256=transaction_sha256,
-    )
-    observations.update(verify_acceptance_event_bundle(
-        bundle,
-        expected_scope=evidence_scope,
-        now=datetime.now(timezone.utc),
-        nonce_ledger=nonce_ledger,
-        consume_run=False,
-        allow_nonce_recovery=reservation == "recovering",
-        reserved_transaction_sha256=transaction_sha256,
-    ))
+    evidence_scope = acceptance["scope"]
+    source_workflow_run_id = acceptance["source_workflow_run_id"]
+    transaction_sha256 = acceptance["transaction_sha256"]
+    run_ledger = acceptance["run_ledger"]
+    observations.update(acceptance["verified"])
     observations["acceptance_transaction_sha256"] = transaction_sha256
-
     evidence = output / "R297_PROCESS_ACCEPTANCE_EVIDENCE.json"
     sidecar = evidence.with_suffix(evidence.suffix + ".sha256")
-    previous_digest = recover_published_process_evidence(
-        evidence, head=head, transaction_sha256=transaction_sha256,
-    ) if reservation == "recovering" else None
-    if previous_digest:
-        complete_acceptance_run(
-            run_ledger, expected_scope=evidence_scope,
-            source_workflow_run_id=source_workflow_run_id,
-            transaction_sha256=transaction_sha256, published_path=evidence,
-        )
-        print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE={evidence}")
-        print(f"R297_PROCESS_ACCEPTANCE_EVIDENCE_SHA256={previous_digest}")
-        print("R297_PROCESS_ACCEPTANCE_RECOVERY=PASS")
-        return 0
-
     raw_log = output / "R297_PROCESS_ACCEPTANCE_RAW.jsonl"
     expected_container_logs = {runtime_name, redis_name, postgres_name}
     if observations and (cleanup_errors or set(container_logs) != expected_container_logs):
@@ -886,7 +1100,22 @@ def main() -> int:
     if secrets_found or re.search(r"(?i)(?:authorization|cookie|password|token)\s*[=:]\s*\S+", scanned_text):
         raise RuntimeError("SENSITIVE_VALUE_CAPTURED")
     observations["secret_exposure_count"] = 0
+    verify_acceptance_event_bundle(
+        acceptance["bundle"], expected_scope=evidence_scope,
+        now=datetime.now(timezone.utc), nonce_ledger=nonce_ledger,
+        consume_run=False, allow_nonce_recovery=True,
+        reserved_transaction_sha256=transaction_sha256,
+    )
     evidence_content = (json.dumps(observations, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    _validate_process_evidence(
+        observations, evidence, acceptance["verified"], head=head,
+        transaction_sha256=transaction_sha256,
+    )
+    stage_acceptance_output(
+        run_ledger, expected_scope=evidence_scope,
+        source_workflow_run_id=source_workflow_run_id,
+        transaction_sha256=transaction_sha256, content=evidence_content,
+    )
     digest = write_sha256_bound_file(evidence, evidence_content)
     for path in (sensitive_fixture, raw_log, evidence, sidecar):
         path.chmod(0o600)

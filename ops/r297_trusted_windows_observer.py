@@ -17,7 +17,7 @@ import time
 from urllib.request import Request, urlopen
 
 from ops.r297_windows_event_signer import produce_electron_exit_event, _process_is_running
-from ops.r297_evidence_events import write_sha256_bound_file
+from ops.r297_evidence_events import verify_signed_event, write_sha256_bound_file
 
 
 _SCOPE_FIELDS = {
@@ -45,25 +45,56 @@ def _read_bound_json(path: Path) -> dict:
     return json.loads(content)
 
 
-def _read_protected_bound_json(path: Path, expected_digest: str, label: str) -> dict:
+def _windows_acl_is_protected(path: Path) -> bool:
+    script = r'''
+$acl = Get-Acl -LiteralPath $args[0]
+$allowed = @('S-1-5-18', 'S-1-5-32-544')
+$owner = $acl.Owner
+try { $owner = ([System.Security.Principal.NTAccount]$owner).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
+if ($allowed -notcontains $owner) { exit 3 }
+$write = [int]([System.Security.AccessControl.FileSystemRights]::Write -bor [System.Security.AccessControl.FileSystemRights]::Modify -bor [System.Security.AccessControl.FileSystemRights]::FullControl)
+foreach ($entry in $acl.Access) {
+  if ($entry.AccessControlType -ne 'Allow') { continue }
+  try { $sid = $entry.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { exit 4 }
+  if (([int]$entry.FileSystemRights -band $write) -ne 0 -and $allowed -notcontains $sid) { exit 5 }
+}
+'''
+    return subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, str(path)],
+        capture_output=True, check=False,
+    ).returncode == 0
+
+
+def _read_protected_bytes(path: Path, label: str) -> bytes:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         metadata = os.fstat(descriptor)
         if (
             not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
-            or stat.S_IMODE(metadata.st_mode) & 0o222
-            or (os.name != "nt" and metadata.st_uid not in {0, os.geteuid()})
+            or (os.name != "nt" and (
+                stat.S_IMODE(metadata.st_mode) & 0o222
+                or metadata.st_uid not in {0, os.geteuid()}
+            ))
+            or (os.name == "nt" and not _windows_acl_is_protected(path))
         ):
             raise RuntimeError(f"{label} permissions invalid")
         with os.fdopen(os.dup(descriptor), "rb") as handle:
-            content = handle.read()
+            return handle.read()
     finally:
         os.close(descriptor)
+
+
+def _read_protected_bound_json(path: Path, expected_digest: str, label: str) -> dict:
+    content = _read_protected_bytes(path, label)
     digest = hashlib.sha256(content).hexdigest()
     if digest != expected_digest:
         raise RuntimeError(f"{label} approval mismatch")
     sidecar = Path(f"{path}.sha256")
-    if sidecar.is_symlink() or sidecar.read_text(encoding="ascii").strip().split() != [digest, path.name]:
+    if (
+        sidecar.is_symlink()
+        or _read_protected_bytes(sidecar, f"{label} sidecar").decode("ascii").strip().split()
+        != [digest, path.name]
+    ):
         raise RuntimeError(f"{label} sidecar mismatch")
     return json.loads(content)
 
@@ -137,35 +168,105 @@ def _backend_reader(url: str, bearer: str, certificate: Path, store_id: int) -> 
         return json.loads(response.read())
 
 
+def _validate_request_approvals(
+    request: dict, *, current: datetime, artifact_manifest: dict, run_binding: dict,
+) -> dict:
+    if set(request) != _REQUEST_FIELDS:
+        raise ValueError("trusted Windows observation request schema invalid")
+    scope = {field: request[field] for field in _SCOPE_FIELDS}
+    expected_run = {**scope, "source_workflow_run_id": request["source_workflow_run_id"]}
+    try:
+        issued_at = datetime.fromisoformat(str(run_binding["issued_at"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError):
+        raise RuntimeError("trusted acceptance run issue time invalid") from None
+    if (
+        {key: value for key, value in run_binding.items() if key != "issued_at"} != expected_run
+        or issued_at.tzinfo is None or issued_at > current + timedelta(seconds=30)
+        or current - issued_at > timedelta(minutes=5)
+    ):
+        raise RuntimeError("trusted acceptance run binding mismatch")
+    if (
+        set(artifact_manifest) != {"release_sha", "workbench_executable_sha256"}
+        or artifact_manifest["release_sha"] != scope["release_sha"]
+        or artifact_manifest["workbench_executable_sha256"] != request["executable_sha256"]
+    ):
+        raise RuntimeError("Electron executable is not in trusted build manifest")
+    return scope
+
+
+def recover_trusted_output(
+    path: Path, *, request: dict, signer_sha: str,
+    artifact_manifest: dict, run_binding: dict, now: datetime | None = None,
+) -> bool:
+    """Recover only an already signed event bound to the current protected inputs."""
+    if not path.exists():
+        return False
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    scope = _validate_request_approvals(
+        request, current=current, artifact_manifest=artifact_manifest, run_binding=run_binding,
+    )
+    metadata = path.lstat()
+    if (
+        path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink not in {1, 2}
+        or (os.name != "nt" and (
+            metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600
+        ))
+    ):
+        raise RuntimeError("trusted Windows output metadata invalid")
+    content = path.read_bytes()
+    wrapper = json.loads(content)
+    if set(wrapper) != {"signer_sha", "event"} or wrapper["signer_sha"] != signer_sha:
+        raise RuntimeError("trusted Windows output binding mismatch")
+    event = wrapper["event"]
+    verify_signed_event(
+        event, event_type="electron_exit", issuer="windows_runner",
+        environment=os.getenv("APP_ENV", "").strip().lower(), now=current,
+    )
+    try:
+        requested_started_at = datetime.fromisoformat(
+            str(request["process_started_at"]).replace("Z", "+00:00")
+        ).astimezone(timezone.utc).isoformat()
+    except (ValueError, AttributeError):
+        raise RuntimeError("trusted Windows output binding mismatch") from None
+    if (
+        any(type(event.get(field)) is not type(value) or event.get(field) != value
+            for field, value in scope.items())
+        or event.get("payload", {}).get("exited") is not True
+        or event.get("payload", {}).get("process_id") != request["process_id"]
+        or event.get("payload", {}).get("process_started_at") != requested_started_at
+    ):
+        raise RuntimeError("trusted Windows output binding mismatch")
+    sidecar = Path(f"{path}.sha256")
+    if sidecar.exists():
+        digest = hashlib.sha256(content).hexdigest()
+        sidecar_metadata = sidecar.lstat()
+        if (
+            metadata.st_nlink != 1 or sidecar.is_symlink()
+            or not stat.S_ISREG(sidecar_metadata.st_mode) or sidecar_metadata.st_nlink != 1
+            or (os.name != "nt" and (
+                sidecar_metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(sidecar_metadata.st_mode) != 0o600
+            ))
+            or sidecar.read_text(encoding="ascii").strip().split() != [digest, path.name]
+        ):
+            raise RuntimeError("trusted Windows output sidecar mismatch")
+    else:
+        write_sha256_bound_file(path, content)
+    return True
+
+
 def observe_and_sign(
     request: dict, *, process_probe=_windows_process_probe,
     process_is_running=_process_is_running, backend_reader=_backend_reader,
     now=lambda: datetime.now(timezone.utc), sleep=time.sleep,
     artifact_manifest=None, run_binding=None, monotonic=time.monotonic,
 ) -> dict:
-    if set(request) != _REQUEST_FIELDS:
-        raise ValueError("trusted Windows observation request schema invalid")
-    scope = {field: request[field] for field in _SCOPE_FIELDS}
     approved_run = run_binding or _trusted_run_binding()
-    expected_run = {**scope, "source_workflow_run_id": request["source_workflow_run_id"]}
-    try:
-        issued_at = datetime.fromisoformat(str(approved_run["issued_at"]).replace("Z", "+00:00"))
-    except (KeyError, ValueError):
-        raise RuntimeError("trusted acceptance run issue time invalid") from None
     current = now().astimezone(timezone.utc)
-    if (
-        {key: value for key, value in approved_run.items() if key != "issued_at"} != expected_run
-        or issued_at.tzinfo is None or issued_at > current + timedelta(seconds=30)
-        or current - issued_at > timedelta(minutes=5)
-    ):
-        raise RuntimeError("trusted acceptance run binding mismatch")
     manifest = artifact_manifest or _trusted_artifact_manifest()
-    if (
-        set(manifest) != {"release_sha", "workbench_executable_sha256"}
-        or manifest["release_sha"] != scope["release_sha"]
-        or manifest["workbench_executable_sha256"] != request["executable_sha256"]
-    ):
-        raise RuntimeError("Electron executable is not in trusted build manifest")
+    scope = _validate_request_approvals(
+        request, current=current, artifact_manifest=manifest, run_binding=approved_run,
+    )
     process_id = request["process_id"]
     if type(process_id) is not int or process_id <= 0 or not process_is_running(process_id):
         raise RuntimeError("Electron process was not live when trusted observation began")
@@ -221,7 +322,19 @@ def main() -> int:
     args = parser.parse_args()
     signer_sha = _fixed_signer_checkout()
     request = _read_bound_json(args.request)
-    event = observe_and_sign(request)
+    artifact_manifest = _trusted_artifact_manifest()
+    run_binding = _trusted_run_binding()
+    if recover_trusted_output(
+        args.output, request=request, signer_sha=signer_sha,
+        artifact_manifest=artifact_manifest, run_binding=run_binding,
+    ):
+        print(f"R297_TRUSTED_WINDOWS_EVENT={args.output}")
+        print(f"R297_TRUSTED_SIGNER_SHA={signer_sha}")
+        print("R297_TRUSTED_WINDOWS_EVENT_RECOVERY=PASS")
+        return 0
+    event = observe_and_sign(
+        request, artifact_manifest=artifact_manifest, run_binding=run_binding,
+    )
     content = (json.dumps({"signer_sha": signer_sha, "event": event}, sort_keys=True) + "\n").encode()
     write_sha256_bound_file(args.output, content)
     print(f"R297_TRUSTED_WINDOWS_EVENT={args.output}")
