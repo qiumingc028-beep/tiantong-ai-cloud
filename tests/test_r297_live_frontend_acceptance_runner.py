@@ -12,11 +12,8 @@ def test_live_frontend_runner_is_public_fail_closed_and_receiver_compatible():
     for required in (
         "R297_WINDOWS_CANARY_BACKEND_HTTPS_URL",
         "R297_OWNER_STORAGE_STATE_PATH",
-        "R297_EVIDENCE_NAMESPACE",
-        "R297_EVIDENCE_TENANT_ID",
-        "R297_EVIDENCE_COMPANY_ID",
-        "R297_EVIDENCE_STORE_ID",
-        "R297_ACCEPTANCE_RUN_ID",
+        "R297_ACCEPTANCE_RUN_BINDING_PATH",
+        "R297_ACK_BROKER_RESULT_PATH",
         "R297_LIVE_OUTPUT_DIR",
         "/api/jd-workbench/stores/${config.storeId}/acceptance-status",
         "/api/jd-workbench/stores/${config.storeId}/login-session",
@@ -34,10 +31,10 @@ def test_live_frontend_runner_is_public_fail_closed_and_receiver_compatible():
         assert required in source
 
     assert "/internal/jd-browser/" not in source
-    assert "scheduler_continues:" not in source
-    assert source.count("scheduler_continues") == 2
     assert "'scheduler_continues'" in source
     assert "event.payload.scheduler_continues" in source
+    browser_init = source.split("await context.addInitScript", 1)[1].split("const page =", 1)[0]
+    assert "scheduler_continues" not in browser_init
     assert "localStorage" not in source
     assert "sessionStorage" not in source
     assert "session_id" not in source
@@ -81,14 +78,10 @@ def test_live_frontend_runner_reports_every_missing_protected_input_without_star
     assert completed.returncode == 1
     for name in (
         "R297_WINDOWS_CANARY_BACKEND_HTTPS_URL",
-        "R297_EXPECTED_RELEASE_SHA",
-        "R297_ACCEPTANCE_RUN_ID",
+        "R297_ACCEPTANCE_RUN_BINDING_PATH",
+        "R297_ACK_BROKER_RESULT_PATH",
         "R297_OWNER_STORAGE_STATE_PATH",
         "R297_LIVE_OUTPUT_DIR",
-        "R297_EVIDENCE_NAMESPACE",
-        "R297_EVIDENCE_TENANT_ID",
-        "R297_EVIDENCE_COMPANY_ID",
-        "R297_EVIDENCE_STORE_ID",
         "R297_EVIDENCE_CROSS_STORE_ID",
         "R297_EVIDENCE_CROSS_TENANT_STORE_ID",
         "R297_PAGE_EVENT_RECEIVER_ACK_PATH",
@@ -104,9 +97,12 @@ def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
     for required in (
         "R297_PAGE_EVENT_RECEIVER_ACK_PATH",
         "R297_AUTHENTICATED_OBSERVER_ACK_PATH",
-        "verifySignedAcknowledgement",
-        "verify_signed_event",
-        "SIGNATURE_RE",
+        "R297_ACCEPTANCE_RUN_BINDING_PATH",
+        "R297_ACK_BROKER_RESULT_PATH",
+        "assertBrokerResult",
+        "recoverAcknowledgedStage",
+        "revokeRecoveredSession",
+        "R297_ACK_RECOVERY=PASS",
         "assertPageReceiverAcknowledgement",
         "assertObserverAcknowledgement",
         "waitForViewerReady",
@@ -116,27 +112,32 @@ def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
     ):
         assert required in source
 
-    assert "required('R297_ACCEPTANCE_RUN_ATTEMPT')" not in source
-    assert "required('R297_ACCEPTANCE_CHALLENGE')" not in source
-    assert "verifier.stdin.end(content)" in source
-    assert "spawnSync('python3'" not in source
-    assert "verify_signed_event(event" in source
+    assert "verify_signed_event" not in source
+    assert "ops.r297_evidence_events" not in source
+    assert "R297_ACCEPTANCE_RUN_ATTEMPT" not in source
+    assert "R297_ACCEPTANCE_CHALLENGE" not in source
     assert "服务端回执必须位于浏览器验收输出目录之外" in source
+    assert "两份ACK彼此一致不代表当前运行" in source
+    assert "ACK恢复不会生成完整验收PASS" in source
+    recovery_branch = source.split("if (recovered) {", 1)[1].split("const { chromium }", 1)[0]
+    assert "await revokeRecoveredSession" in recovery_branch
+    assert recovery_branch.index("await revokeRecoveredSession") < recovery_branch.index("R297_ACK_RECOVERY=PASS")
+    assert "ACK_RECOVERY_REVOKED" in recovery_branch
+    assert "assertFreshIssuedBinding" not in source.split("function loadConfig()", 1)[1].split("function assertFreshIssuedBinding", 1)[0]
+    assert source.index("if (recovered) {") < source.index("assertFreshIssuedBinding({issued_at: config.bindingIssuedAt})")
     assert "if (matches) sessionCleanupRequired = true" in source
     assert source.index("await createSettlement") < source.index("context.request.delete(")
-    assert "verifier.once('close'" in source
-
     assert "popup.waitForEvent('websocket'" in source
     assert "noVNC_connected" in source
-    assert "scheduler_continues: true" not in source
-    assert source.index("const receiver = await") < source.index("const deleted = await")
-    assert source.index("const observer = await") < source.index("const deleted = await")
+    normal_run = source.split("const operations = [];", 1)[1]
+    assert normal_run.index("const receiver = await") < normal_run.index("const deleted = await")
+    assert normal_run.index("const observer = await") < normal_run.index("const deleted = await")
     assert "existing_socket_revoked" in source
-    assert source.index("const deleted = await") < source.index("撤销后既有Viewer WebSocket关闭")
-    assert source.index("撤销后既有Viewer WebSocket关闭") < source.index("const revoked = await")
+    assert normal_run.index("const deleted = await") < normal_run.index("撤销后既有Viewer WebSocket关闭")
+    assert normal_run.index("撤销后既有Viewer WebSocket关闭") < normal_run.index("const revoked = await")
     assert "const [, viewer] = await Promise.all([" in source
-    assert source.index("const revocationReady =") < source.index("const deleted = await")
-    assert source.index("assertLiveViewerForRevocation(revocationViewer)") < source.index("const deleted = await")
+    assert normal_run.index("const revocationReady =") < normal_run.index("const deleted = await")
+    assert normal_run.index("assertLiveViewerForRevocation(revocationViewer)") < normal_run.index("const deleted = await")
     assert "() => revocationViewer.websocket.isClosed()" in source
     assert "R297OwnerLogin.openViewer({" in source
 
