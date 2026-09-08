@@ -385,7 +385,8 @@ def test_formal_entry_recovers_output_before_starting_processes(monkeypatch, tmp
     from ops import r297_process_acceptance as process
 
     bundle = {"events": [{
-        "event_type": "web_page_close", "payload": {"workflow_run_id": 34000000001},
+        "event_type": "web_page_close", "observed_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {"workflow_run_id": 34000000001},
     }]}
     signed = tmp_path / "bundle.json"
     signed.write_text(json.dumps(bundle), encoding="utf-8")

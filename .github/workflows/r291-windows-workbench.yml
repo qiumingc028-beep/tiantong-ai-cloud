@@ -21,6 +21,7 @@ on:
       - ops/r297_windows_event_signer.py
       - ops/r297_evidence_preflight.py
       - ops/r297_evidence_events.py
+      - ops/r297_trusted_windows_observer.py
       - .github/workflows/r291-windows-workbench.yml
   push:
     branches:
@@ -172,6 +173,11 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Download exact-SHA Windows build artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tiantong-ai-jd-workbench-r297-build-${{ github.sha }}
+          path: desktop/jd-workbench/dist
       - name: Require independent trusted Windows signer
         shell: pwsh
         working-directory: .

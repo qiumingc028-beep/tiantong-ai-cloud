@@ -2,6 +2,117 @@
 
 Status: BLOCK. This document grants no main merge, production deployment, or release approval.
 
+## 2026-09-08 evidence recovery and receipt update
+
+This branch now carries the semantic hardening from `911cd698f2d9892cee6eb8fd46d05086bbef2202`
+without replacing the stronger protected-run transaction. In particular, the Backend reader
+still rejects credentialed/redirected/proxied Observer requests and validates an empty cycle.
+
+- The default formal verifier reserves one exact bundle transaction and commits nonce records
+  while holding the protected run-ledger lock. Exact retries recover; different bytes, scope,
+  source run or transaction fail closed.
+- Receiver validation reads a root-owned, read-only SHA-bound run snapshot. It does not open or
+  mutate the orchestrator's writable ledger. The protected receipt writer stamps host receive
+  time and must record each signed event within five minutes of its unchanged fact time.
+- A bundle finalized after five minutes is accepted only from an `observing` run with all four
+  ordered protected receipt digests. Fresh short runs retain the original five-minute path.
+  Receipt retention does not change or re-sign `observed_at`.
+- The live frontend Runner now requires noVNC's connected state and a non-empty Viewer canvas;
+  its pagehide wait is finite and aborts on process signals. These checks are not formal evidence
+  until the real same-RC protected producer chain runs.
+
+Formal Process and Windows evidence remain BLOCK: the fixed-SHA trusted Windows Observer has not
+been installed on an independently permissioned Windows host, and the protected Environment has
+no formal material. `signed-event-bundle` is a program output, not a Secret to be supplied by a
+user.
+
+## 2026-09-08 integration of infrastructure and boundary tests
+
+Base: `5f1faabc20c911e62df975b81ae984cfbc28498d`. Infrastructure source:
+`46ee7c8e1d5e5bc4dbd317aa23d6d87a07c26aca`; test source:
+`1557f3d6304ceab2ee1d2ac2591ac41fd2de98e1`. Effective patches, not whole branch
+history, are integrated. The existing frontend Runner and product fixes are unchanged.
+Role ②'s branch still pointed to the already-accounted-for `7fcbbab` at intake;
+no new Runner repair is claimed received. The later sections below are historical
+handoff records; the following status supersedes their outstanding-source statements.
+
+- Runtime's actual detached docker run now receives APP_ENV=acceptance,
+  R297_CONTROLLED_CANARY=1, the controlled dashboard on host.docker.internal:18787,
+  and the fixed session-authorization path on that same host/port. Each control effect
+  supplies an operation ID; cleanup preserves and queries five causal receipts while
+  requiring profile/session/ticket artifacts to be gone. Diagnostics and private raw
+  log redaction are preserved. This is a controlled container gate, not real JD proof.
+- Windows build remains secretless with exact-SHA upload; formal acceptance remains
+  a separate dispatch-only job and downloads the exact-SHA artifact. All private-key,
+  trust-material and canary-credential references/execution were removed from candidate
+  code's job, while the independent-signer throw remains. SKIPPED is not PASS.
+  Existing build isolation/SHA assertions and still-applicable PowerShell process-exit,
+  scope and signed-event assertions remain; they were not replaced by weaker checks.
+- Source introduces a fixed-checkout trusted Windows Observer, protected build/run
+  bindings, live PID/executable identity and post-exit cycle checks. It is not yet a
+  deployed or approved signer service. Integration additionally closes redirect/proxy
+  credential forwarding using the existing NoCredentialRedirect policy and handles
+  a legitimate null latest_completed_at by waiting, not inventing a completed cycle.
+- Source adds reservation, exact nonce recovery and SHA-bound output completion helpers.
+  Role ③'s original direct-verifier crash test still exposes premature run consumption.
+  Full Process reentry is also not safe: the incoming late recovery would overwrite an
+  old sensitive fixture before returning old evidence. Integration now stops a nonempty
+  output directory before any new canary setup with
+  R297_PROCESS_RECOVERY_REQUIRES_VERIFIED_RESUME, preserving the old files. This safety
+  stop is NOT a completed recovery implementation. Source helper tests are retained.
+
+Unclosed differences for role ③/⑤, with assertions preserved:
+
+1. Role ③ requires a portless controlled dashboard URL; role ⑤ runs its actual HTTP
+   server on 18787. Both exact assertions are kept pending a coordinated contract fix;
+   no duplicate env arguments or inert strings are added to fake their agreement.
+2. Cross-ledger crash retry remains BLOCK. Also reconcile four event nonce records with
+   source's new fifth acceptance-run record; do not remove either replay requirement.
+3. Real Process resume must precede fixture/log/canary mutation, handle completed-ledger
+   retries, and define recovery after the freshness deadline without widening acceptance.
+4. Trusted Observer output/sidecar crash recovery still needs a durable observation result;
+   rerunning after Electron has exited cannot require the old process to be live again.
+5. Independent signer host/IPC and approval, Receiver read-only isolation, long-cycle timing,
+   same-head formal evidence and the new Runner repair are still required. No RC is locked.
+
+The new role ③ tests are now source-accessible and included, unlike the earlier handoff.
+Their assertions are not waived by publishing this explicitly BLOCK review candidate.
+
+## Windows job separation and frontend Runner integration
+
+The integration following `efa916386365c7791287ac966792c45b16f0e71d` imports only
+the two acceptance files from role ② source
+`3c679e28e2f996e6d94096b506a44aab455c8761`; existing pages and product code are unchanged.
+This is source delivery, not approval to publish this Runner's output as formal evidence.
+Review found these open Runner defects for role ② and role ③ to reproduce and repair:
+
+- Direct status/ticket requests do not participate in the current Owner operation/ack
+  protocol and conflict with the page's previously successful operations (HTTP 409).
+- The pagehide timeout does not cancel its inner timer loop, potentially preventing exit.
+- Owner-page WebSocket preflight and popup navigation alone do not establish popup RFB
+  readiness or a real Viewer frame; `novnc_page: PASS` is not reliable acceptance evidence.
+- Expected negative HTTP responses may produce browser console errors; validate this in
+  Chromium and distinguish only those exact negative requests without relaxing other errors.
+
+Role ⑤ source `b5213a5dddaf6ffb52d9be86715d44f92b2a2095` already contains the job
+separation. Its relevant structure is now carried forward by semantic hunks: build-windows
+has no protected Environment/Secrets, publishes the exact-SHA build artifact independently,
+and formal-windows-acceptance downloads that same run's exact-SHA artifact only on manual
+dispatch. The independent-signer throw remains before any private-key materialization.
+A skipped formal job on push/PR is NOT formal acceptance PASS.
+
+The source's older pagehide-ID-derived acceptance run binding is not imported: it does not
+provide the protected run_attempt/challenge protocol already required on mainline. The
+existing Environment run ID is also not sufficient for formal acceptance; role ⑤ must
+replace it with protected orchestration as part of the signer implementation. The hard
+BLOCK remains in place; do not remove it to make candidate code execute with signing keys.
+
+Prior dda5460/e5972bb/b5213a5 patches remain integrated, including protected-run validation,
+non-consuming bundle precheck, independent signer blocking, component-exit diagnostics,
+shared fail-closed redaction and private raw-log files. Patch integration is not inferred
+from ancestry alone. Role ③'s next unpublished tests still require a source path or branch
+handoff; they are not claimed integrated until their exact assertions can be inspected.
+
 ## Integration review of role ⑤ increment
 
 Source `dda5460aae3c7cb3b3c165e8f6b63b4352da8f4d` is applied incrementally to

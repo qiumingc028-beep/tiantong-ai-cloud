@@ -91,6 +91,10 @@ def test_r297_windows_signing_is_outside_candidate_workflow():
     assert "actions/setup-python@v6" in workflow
     assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_BASE64" not in workflow
     assert "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH" not in workflow
+    assert "R297_EVIDENCE_TRUST_MANIFEST_BASE64" not in workflow
+    assert "R297_EVIDENCE_TRUST_MANIFEST_SHA256" not in workflow
+    assert "secrets." not in workflow
+    assert "write_sha256_bound_file" in signer
     assert "produce_electron_exit_event" in observer
     assert "Electron process was not live when trusted observation began" in observer
     assert "post-exit scheduler observation timed out" in observer
@@ -107,9 +111,29 @@ def test_candidate_workflow_fails_before_windows_signing_key_is_exposed():
     assert "r297_windows_acceptance.ps1" not in formal
 
 
+def test_windows_build_is_secretless_and_publishes_before_independent_formal_gate():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    build, formal = workflow.split("  build-windows:", 1)[1].split("  formal-windows-acceptance:", 1)
+    assert "environment:" not in build
+    assert "secrets." not in build
+    assert "R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED" not in build
+    assert "npm run dist:win" in build
+    assert "actions/upload-artifact@v7" in build
+    assert "name: tiantong-ai-jd-workbench-r297-build-${{ github.event.pull_request.head.sha || github.sha }}" in build
+    assert "if-no-files-found: error" in build
+    assert "needs: build-windows" in formal
+    assert "if: github.event_name == 'workflow_dispatch'" in formal
+    assert "environment: r297-controlled-canary" in formal
+    assert "actions/download-artifact@v8" in formal
+    assert "name: tiantong-ai-jd-workbench-r297-build-${{ github.sha }}" in formal
+    assert "ref: ${{ github.sha }}" in formal
+    assert "R297_TRUSTED_SIGNER_BOUNDARY_NOT_CONFIGURED" in formal
+    assert "secrets." not in formal
+    assert "./ops/r297_windows_acceptance.ps1" not in formal
+
+
 def test_trusted_windows_observer_is_fixed_source_and_does_not_execute_candidate():
     source = TRUSTED_OBSERVER.read_text(encoding="utf-8")
-
     assert "R297_TRUSTED_SIGNER_SHA" in source
     assert '["git", "rev-parse", "HEAD"]' in source
     assert "Electron process was not live when trusted observation began" in source
@@ -117,6 +141,8 @@ def test_trusted_windows_observer_is_fixed_source_and_does_not_execute_candidate
     assert "latest_completed_at" in source
     assert "produce_electron_exit_event" in source
     assert "Start-Process" not in source
+
+
 def test_r297_windows_acceptance_run_id_is_per_dispatch_not_static_environment_state():
     workflow = WORKFLOW.read_text(encoding="utf-8")
 

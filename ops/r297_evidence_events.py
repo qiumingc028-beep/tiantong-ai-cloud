@@ -751,6 +751,10 @@ def verify_acceptance_event_bundle(
             reserve_acceptance_run(
                 Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,
                 event_sha256s=[signed_event_sha256(event) for event in events],
+                require_event_receipts=any(
+                    _timestamp(event["observed_at"], "invalid evidence event time")
+                    < now - maximum_age for event in events
+                ),
             )
             consume_acceptance_run(
                 Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,

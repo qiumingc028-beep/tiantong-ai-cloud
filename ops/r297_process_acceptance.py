@@ -366,14 +366,20 @@ def prepare_acceptance_transaction(
     if not run_ledger_value:
         raise RuntimeError("R297_ACCEPTANCE_RUN_LEDGER_MISSING")
     run_ledger = Path(run_ledger_value).resolve()
+    reservation_now = datetime.now(timezone.utc)
     reservation = reserve_acceptance_run(
         run_ledger, expected_scope=evidence_scope,
         source_workflow_run_id=source_workflow_run_id,
         transaction_sha256=transaction_sha256,
         event_sha256s=[signed_event_sha256(event) for event in bundle.get("events", [])],
+        require_event_receipts=any(
+            datetime.fromisoformat(event["observed_at"].replace("Z", "+00:00"))
+            < reservation_now - timedelta(minutes=5) for event in bundle.get("events", [])
+        ),
+        now=reservation_now,
     )
     verified = verify_acceptance_event_bundle(
-        bundle, expected_scope=evidence_scope, now=datetime.now(timezone.utc),
+        bundle, expected_scope=evidence_scope, now=reservation_now,
         nonce_ledger=nonce_ledger, consume_run=False,
         allow_nonce_recovery=reservation == "recovering",
         reserved_transaction_sha256=transaction_sha256,
@@ -412,8 +418,6 @@ def prepare_acceptance_transaction(
         "transaction_sha256": transaction_sha256, "run_ledger": run_ledger,
         "verified": verified, "published_digest": published_digest,
     }
-
-
 def main() -> int:
     trust_environment = os.getenv("APP_ENV", "").strip().lower()
     if trust_environment == "production":

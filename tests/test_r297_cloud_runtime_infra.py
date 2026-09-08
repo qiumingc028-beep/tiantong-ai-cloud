@@ -123,6 +123,15 @@ def test_ci_builds_and_runs_runtime_with_real_health_xvfb_chromium_and_novnc_che
     assert 'grep -F "${missing}_REQUIRED" /tmp/runtime-missing.log' in workflow
     assert "cat /tmp/runtime-empty.log" not in workflow
     assert "cat /tmp/runtime-missing.log" not in workflow
+    runtime_run = workflow.split("docker run --detach", 1)[1].split(
+        '"$S12_JD_RUNTIME_IMAGE" >/dev/null', 1
+    )[0]
+    for controlled_setting in (
+        "--env APP_ENV=acceptance",
+        "--env R297_CONTROLLED_CANARY=1",
+        "--env R297_CONTROLLED_CANARY_DASHBOARD_URL=http://host.docker.internal:18787/r297-controlled-canary.html",
+    ):
+        assert controlled_setting in runtime_run
     for evidence in (
         "RUNTIME_HEALTH_STATUS=200",
         "RUNTIME_XVFB_PID=",

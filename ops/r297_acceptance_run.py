@@ -210,6 +210,7 @@ def reserve_acceptance_run(
     ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
     transaction_sha256: str, now: datetime | None = None,
     event_sha256s: list[str] | None = None,
+    require_event_receipts: bool = False,
 ) -> str:
     """Fence one exact bundle before nonce/output publication; exact retries resume."""
     required = _SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}
@@ -224,6 +225,8 @@ def reserve_acceptance_run(
         record = matches[0]
         if record.get("state") == "consumed":
             raise ValueError("acceptance run missing or consumed")
+        if require_event_receipts and record.get("state") != "observing":
+            raise ValueError("acceptance event receipt chain missing")
         if record.get("state") == "issued":
             _require_live(record, now)
         else:

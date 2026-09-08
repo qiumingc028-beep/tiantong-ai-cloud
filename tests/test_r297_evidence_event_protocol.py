@@ -202,6 +202,50 @@ def test_bound_file_publish_is_exclusive_under_concurrency(tmp_path):
     digest = hashlib.sha256(content).hexdigest()
     assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
 
+
+def test_bound_file_publish_recovers_sidecar_write_crash(monkeypatch, tmp_path):
+    from ops import r297_evidence_events
+
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    original_replace = r297_evidence_events._replace_file
+    calls = 0
+
+    def crash_before_sidecar(path, value):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("sidecar crash injection")
+        original_replace(path, value)
+
+    monkeypatch.setattr(r297_evidence_events, "_replace_file", crash_before_sidecar)
+    with pytest.raises(OSError, match="sidecar crash injection"):
+        write_sha256_bound_file(output, content)
+    assert output.read_bytes() == content
+    assert not Path(f"{output}.sha256").exists()
+
+    monkeypatch.setattr(r297_evidence_events, "_replace_file", original_replace)
+    digest = write_sha256_bound_file(output, content)
+    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+
+
+def test_bound_file_publish_rejects_hardlinked_body_and_orphan_sidecar(tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    output.write_bytes(content)
+    output.chmod(0o600)
+    os.link(output, output.with_name("attacker-hardlink"))
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, content)
+
+    output.with_name("attacker-hardlink").unlink()
+    output.unlink()
+    Path(f"{output}.sha256").write_text(f"{'0' * 64}  {output.name}\n", encoding="ascii")
+    with pytest.raises(FileExistsError):
+        write_sha256_bound_file(output, content)
+
 def _integer(value: str) -> int:
     return int.from_bytes(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)), "big")
 
@@ -539,6 +583,92 @@ def test_long_cycle_consumes_only_the_persisted_signed_receipt_chain(monkeypatch
     )
     assert result["authenticated_observer"]["verified_subject_count"] == 2
     assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
+
+
+def test_long_cycle_rejects_signed_receipts_not_recorded_by_protected_host(monkeypatch, tmp_path):
+    from ops import r297_evidence_events
+    from ops.r297_acceptance_run import issue_acceptance_run
+    from tests.test_r297_acceptance_run import _ledger
+
+    fact_time = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    scope = _scope()
+    run_ledger = _ledger(tmp_path)
+    record = issue_acceptance_run(
+        run_ledger,
+        scope={field: value for field, value in scope.items() if field not in {"run_id", "run_attempt", "challenge"}},
+        source_workflow_run_id=33949515935, run_attempt=1,
+        now=fact_time - timedelta(seconds=5),
+    )
+    scope.update({field: record[field] for field in ("run_id", "run_attempt", "challenge")})
+    monkeypatch.setitem(globals(), "_scope", lambda: scope)
+    trust = load_trust_manifest(environment="test")
+    monkeypatch.setattr(r297_evidence_events, "load_trust_manifest", lambda **_kwargs: trust)
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    monkeypatch.setenv("R297_ACCEPTANCE_RUN_LEDGER", str(run_ledger))
+
+    with pytest.raises(ValueError, match="receipt chain missing"):
+        verify_acceptance_event_bundle(
+            _receipted_bundle(fact_time), expected_scope=scope,
+            now=fact_time + timedelta(minutes=20), nonce_ledger=_nonce_ledger(tmp_path),
+        )
+
+
+def test_candidate_bundle_builder_cannot_receive_any_signer_private_key(monkeypatch):
+    from ops.r297_evidence_bundle import build_bundle
+
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    variables = (
+        "R297_PAGE_EVENT_RECEIVER_PRIVATE_KEY_PATH",
+        "R297_OBSERVER_PRIVATE_KEY_PATH",
+        "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH",
+    )
+    for variable in variables:
+        with monkeypatch.context() as isolated:
+            for candidate in variables:
+                isolated.delenv(candidate, raising=False)
+            isolated.setenv(variable, "/must-not-be-readable-by-candidate")
+            with pytest.raises(RuntimeError, match="verifier must not receive signer private keys"):
+                build_bundle(_bundle(now)["events"], expected_scope=_scope(), now=now)
+
+
+def _attempt_events(now, expected_scope, *, splice=False):
+    events = []
+    for index, event in enumerate(_bundle(now)["events"]):
+        unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
+        payload = deepcopy(unsigned["payload"])
+        if unsigned["event_type"] == "authenticated_observer":
+            subject = next(item for item in events if item["nonce"] == payload["subject_nonce"])
+            payload["subject_event_sha256"] = signed_event_sha256(subject)
+        events.append(_sign({
+            **unsigned,
+            "payload": payload,
+            "run_attempt": 1 if splice and index == 2 else expected_scope["run_attempt"],
+            "challenge": "challenge-from-another-run-0001" if splice and index == 2 else expected_scope["challenge"],
+        }))
+    return events
+
+
+def test_signed_chain_binds_run_attempt_and_random_challenge(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    expected_scope = {**_scope(), "run_attempt": 2, "challenge": "challenge-6ea4d915d7f8435880868439"}
+
+    result = verify_acceptance_event_bundle(
+        {"events": _attempt_events(now, expected_scope)},
+        expected_scope=expected_scope, now=now, nonce_ledger=_nonce_ledger(tmp_path),
+    )
+
+    assert result["authenticated_observer"]["run_attempt"] == 2
+    assert result["authenticated_observer"]["challenge"] == expected_scope["challenge"]
+
+
+def test_signed_chain_rejects_cross_attempt_splice(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    expected_scope = {**_scope(), "run_attempt": 2, "challenge": "challenge-6ea4d915d7f8435880868439"}
+    with pytest.raises(ValueError, match="run_attempt mismatch|challenge mismatch"):
+        verify_acceptance_event_bundle(
+            {"events": _attempt_events(now, expected_scope, splice=True)}, expected_scope=expected_scope, now=now,
+            nonce_ledger=_nonce_ledger(tmp_path),
+        )
 
 
 def test_signed_evidence_events_reject_concurrent_replay(tmp_path):
