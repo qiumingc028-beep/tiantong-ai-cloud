@@ -5,17 +5,27 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 
+const REPOSITORY_ROOT = path.resolve(__dirname, '..');
 const SHA_RE = /^[0-9a-f]{40}$/;
 const RUN_RE = /^[A-Za-z0-9._:-]{16,128}$/;
+const SIGNATURE_RE = /^[A-Za-z0-9_-]{342}$/;
 const RAW_FIELDS = ['event', 'observed_at', 'release_sha', 'store_id'];
 const SESSION_STATUSES = new Set(['ACTIVE', 'LOGIN_REQUIRED', 'REVOKED', 'EXPIRED', 'HUMAN_ACTION_REQUIRED']);
+const SIGNED_EVENT_FIELDS = [
+  'namespace', 'tenant_id', 'company_id', 'store_id', 'platform', 'release_sha',
+  'run_id', 'run_attempt', 'challenge', 'event_type', 'issuer', 'observed_at',
+  'sequence', 'nonce', 'key_id', 'payload', 'signature'
+];
 const REQUIRED_INPUTS = [
   'R297_WINDOWS_CANARY_BACKEND_HTTPS_URL', 'R297_EXPECTED_RELEASE_SHA',
-  'R297_ACCEPTANCE_RUN_ID', 'R297_OWNER_STORAGE_STATE_PATH', 'R297_LIVE_OUTPUT_DIR',
+  'R297_ACCEPTANCE_RUN_ID',
+  'R297_OWNER_STORAGE_STATE_PATH', 'R297_LIVE_OUTPUT_DIR',
   'R297_EVIDENCE_NAMESPACE', 'R297_EVIDENCE_TENANT_ID', 'R297_EVIDENCE_COMPANY_ID',
-  'R297_EVIDENCE_STORE_ID', 'R297_EVIDENCE_CROSS_STORE_ID', 'R297_EVIDENCE_CROSS_TENANT_STORE_ID'
+  'R297_EVIDENCE_STORE_ID', 'R297_EVIDENCE_CROSS_STORE_ID', 'R297_EVIDENCE_CROSS_TENANT_STORE_ID',
+  'R297_PAGE_EVENT_RECEIVER_ACK_PATH', 'R297_AUTHENTICATED_OBSERVER_ACK_PATH'
 ];
 
 function required(name) {
@@ -44,9 +54,18 @@ function loadConfig() {
   if (!RUN_RE.test(runId)) throw new Error('R297_ACCEPTANCE_RUN_ID无效');
   const storageState = path.resolve(required('R297_OWNER_STORAGE_STATE_PATH'));
   const outputDir = path.resolve(required('R297_LIVE_OUTPUT_DIR'));
+  const receiverAckPath = path.resolve(required('R297_PAGE_EVENT_RECEIVER_ACK_PATH'));
+  const observerAckPath = path.resolve(required('R297_AUTHENTICATED_OBSERVER_ACK_PATH'));
   if (!fs.statSync(storageState).isFile()) throw new Error('Owner浏览器会话文件不存在');
+  if (receiverAckPath === observerAckPath) throw new Error('Receiver与Observer回执路径必须分离');
+  const acknowledgementInOutput = [receiverAckPath, observerAckPath].some(candidate => {
+    const relative = path.relative(outputDir, candidate);
+    return relative === '' || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  });
+  if (acknowledgementInOutput) throw new Error('服务端回执必须位于浏览器验收输出目录之外');
   return Object.freeze({
-    origin: originUrl.origin, releaseSha, runId, storageState, outputDir,
+    origin: originUrl.origin, releaseSha, runId,
+    storageState, outputDir, receiverAckPath, observerAckPath,
     namespace: required('R297_EVIDENCE_NAMESPACE'),
     tenantId: positiveInteger('R297_EVIDENCE_TENANT_ID'),
     companyId: positiveInteger('R297_EVIDENCE_COMPANY_ID'),
@@ -63,6 +82,189 @@ function exactKeys(value, keys) {
 
 function sha256File(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function waitForCondition(label, predicate, {timeoutMs, signal, pollMs = 50}) {
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', aborted);
+      error ? reject(error) : resolve(value);
+    };
+    const aborted = () => finish(new Error(`${label}已取消`));
+    const deadline = Date.now() + timeoutMs;
+    const poll = async () => {
+      if (signal?.aborted) return aborted();
+      try {
+        const value = await predicate();
+        if (value) return finish(null, value);
+      } catch (error) { return finish(error); }
+      if (Date.now() >= deadline) return finish(new Error(`${label}超时`));
+      timer = setTimeout(poll, pollMs);
+    };
+    if (signal) signal.addEventListener('abort', aborted, {once: true});
+    void poll();
+  });
+}
+
+function readDigestBoundJson(file) {
+  const sidecar = `${file}.sha256`;
+  for (const candidate of [file, sidecar]) {
+    const metadata = fs.lstatSync(candidate);
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) {
+      throw new Error('服务端回执文件无效');
+    }
+  }
+  const content = fs.readFileSync(file);
+  const digest = crypto.createHash('sha256').update(content).digest('hex');
+  if (fs.readFileSync(sidecar, 'ascii') !== `${digest}  ${path.basename(file)}\n`) {
+    throw new Error('服务端回执摘要无效');
+  }
+  return {event: JSON.parse(content), digest, content};
+}
+
+function verifySignedAcknowledgement(content, eventType, issuer, signal) {
+  const script = [
+    'import json,sys',
+    'from datetime import datetime,timezone',
+    'from ops.r297_evidence_events import verify_signed_event',
+    'event=json.load(sys.stdin)',
+    'verify_signed_event(event,event_type=sys.argv[1],issuer=sys.argv[2],environment="acceptance",now=datetime.now(timezone.utc))',
+  ].join(';');
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error('服务端回执签名验证已取消'));
+    const verifier = spawn('python3', ['-c', script, eventType, issuer], {
+      cwd: REPOSITORY_ROOT, stdio: ['pipe', 'ignore', 'ignore']
+    });
+    let settled = false;
+    let timer = null;
+    let killTimer = null;
+    let stopError = null;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      if (signal) signal.removeEventListener('abort', aborted);
+      if (error) reject(error);
+      else resolve();
+    };
+    const stop = message => {
+      if (stopError) return;
+      stopError = new Error(message);
+      verifier.kill('SIGKILL');
+      killTimer = setTimeout(() => finish(stopError), 2_000);
+    };
+    const aborted = () => stop('服务端回执签名验证已取消');
+    timer = setTimeout(() => stop('服务端回执签名验证超时'), 10_000);
+    if (signal) signal.addEventListener('abort', aborted, {once: true});
+    verifier.stdin.on('error', () => {});
+    verifier.once('error', () => finish(new Error('服务端回执签名验证失败')));
+    verifier.once('close', code => finish(stopError || (code === 0 ? null : new Error('服务端回执签名验证失败'))));
+    verifier.stdin.end(content);
+  });
+}
+
+function assertCommonAcknowledgement(event, config, type, issuer, sequence) {
+  assert.ok(exactKeys(event, SIGNED_EVENT_FIELDS), '服务端回执字段错误');
+  const bindingMatches = event.namespace === config.namespace
+    && event.tenant_id === config.tenantId
+    && event.company_id === config.companyId
+    && event.store_id === config.storeId
+    && event.platform === 'jd'
+    && event.release_sha === config.releaseSha
+    && event.run_id === config.runId;
+  if (!bindingMatches) throw new Error('服务端回执运行绑定错误');
+  assert.deepEqual([event.event_type, event.issuer, event.sequence], [type, issuer, sequence], '服务端回执角色错误');
+  if (!RUN_RE.test(String(event.nonce || ''))
+      || !RUN_RE.test(String(event.key_id || ''))
+      || !SIGNATURE_RE.test(String(event.signature || ''))) {
+    throw new Error('服务端回执认证字段无效');
+  }
+}
+
+function assertPageReceiverAcknowledgement(event, config, rawEvent, artifact) {
+  assertCommonAcknowledgement(event, config, 'web_page_close', 'page_event_receiver', 1);
+  assert.equal(event.observed_at, rawEvent.observed_at, 'Receiver回执时间未绑定原始事件');
+  assert.ok(exactKeys(event.payload, [
+    'closed', 'source', 'artifact_evidence_sha256', 'artifact_archive_sha256',
+    'artifact_id', 'artifact_name', 'workflow_run_id'
+  ]), 'Receiver回执payload字段错误');
+  assert.equal(event.payload.closed, true);
+  assert.equal(event.payload.source, 'browser_pagehide');
+  assert.equal(event.payload.artifact_evidence_sha256, artifact.evidenceSha);
+  assert.equal(event.payload.artifact_archive_sha256, artifact.archiveSha);
+  assert.ok(Number.isInteger(event.payload.artifact_id) && event.payload.artifact_id > 0);
+  assert.match(String(event.payload.artifact_name || ''), /^r297-native-pagehide-[A-Za-z0-9._-]+$/);
+  assert.ok(Number.isInteger(event.payload.workflow_run_id) && event.payload.workflow_run_id > 0);
+}
+
+function assertObserverAcknowledgement(event, config, receiverEvent) {
+  assertCommonAcknowledgement(event, config, 'authenticated_observer', 'authenticated_observer', 2);
+  assert.ok(exactKeys(event.payload, [
+    'subject_nonce', 'subject_event_sha256', 'scheduler_continues', 'observation_source',
+    'database_read_only', 'cloud_cycles_before', 'cloud_cycles_after',
+    'eligible_store_ids', 'collected_store_ids_after'
+  ]), 'Observer回执payload字段错误');
+  const subjectMatches = event.payload.subject_nonce === receiverEvent.nonce
+    && event.payload.subject_event_sha256
+      === crypto.createHash('sha256').update(canonicalJson(receiverEvent)).digest('hex');
+  if (!subjectMatches) throw new Error('Observer回执主题绑定错误');
+  if (event.run_attempt !== receiverEvent.run_attempt || event.challenge !== receiverEvent.challenge) {
+    throw new Error('Observer回执受保护运行绑定错误');
+  }
+  assert.equal(event.payload.scheduler_continues, true, '独立Observer未证明云端继续运行');
+  assert.equal(event.payload.observation_source, 'postgresql_scheduler_state');
+  assert.equal(event.payload.database_read_only, true);
+  assert.ok(event.payload.cloud_cycles_after > event.payload.cloud_cycles_before);
+  assert.deepEqual(event.payload.eligible_store_ids, [config.storeId]);
+  assert.deepEqual(event.payload.collected_store_ids_after, [config.storeId]);
+}
+
+async function waitForViewerReady(popup, storeId, signal) {
+  const websocket = await popup.waitForEvent('websocket', {
+    predicate: socket => {
+      const url = new URL(socket.url());
+      return url.protocol === 'wss:' && !url.search
+        && url.pathname === `/jd-browser/novnc/${storeId}/websockify`;
+    },
+    timeout: 30_000
+  });
+  const frames = {sent: false, received: false};
+  const sent = () => { frames.sent = true; };
+  const received = () => { frames.received = true; };
+  websocket.on('framesent', sent);
+  websocket.on('framereceived', received);
+  try {
+    await Promise.all([
+      waitForCondition('Viewer WebSocket握手', () => frames.sent && frames.received, {
+        timeoutMs: 20_000, signal
+      }),
+    popup.waitForFunction(() => {
+      const canvas = document.querySelector('#noVNC_container canvas');
+      return document.documentElement.classList.contains('noVNC_connected')
+        && canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0
+        && getComputedStyle(canvas).visibility !== 'hidden';
+    }, undefined, {timeout: 30_000})
+    ]);
+  } finally {
+    websocket.off('framesent', sent);
+    websocket.off('framereceived', received);
+  }
+  if (signal?.aborted) throw new Error('Viewer就绪验证已取消');
+  return {websocket, path: new URL(websocket.url()).pathname};
 }
 
 function safeUrl(input) {
@@ -156,18 +358,82 @@ async function ticketNegativeChecks(page, config) {
   }, { storeId: config.storeId, crossStoreId: config.crossStoreId, crossTenantStoreId: config.crossTenantStoreId });
 }
 
+async function selfTest() {
+  assert.equal(SIGNATURE_RE.test('s'.repeat(342)), true);
+  assert.equal(SIGNATURE_RE.test('s'.repeat(128)), false);
+  const controller = new AbortController();
+  let polls = 0;
+  const pending = waitForCondition('自检等待', () => { polls += 1; return false; }, {
+    timeoutMs: 5_000, pollMs: 5, signal: controller.signal
+  });
+  setTimeout(() => controller.abort(), 15);
+  await assert.rejects(pending, /已取消/);
+  const stoppedAt = polls;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(polls, stoppedAt, '取消后仍在轮询');
+  await assert.rejects(waitForCondition('自检超时', () => false, {
+    timeoutMs: 15, pollMs: 5
+  }), /超时/);
+
+  const socket = new EventEmitter();
+  socket.url = () => 'wss://acceptance.invalid/jd-browser/novnc/3/websockify';
+  // noVNC 1.3 creates an unlabelled canvas inside #noVNC_container.
+  class Canvas {}
+  const canvas = Object.assign(new Canvas(), {width: 1024, height: 768});
+  const viewerDocument = {
+    querySelector: selector => selector === '#noVNC_container canvas' ? canvas : null,
+    documentElement: {classList: {contains: name => name === 'noVNC_connected'}}
+  };
+  const popup = {
+    waitForEvent: async () => {
+      setImmediate(() => { socket.emit('framesent'); socket.emit('framereceived'); });
+      return socket;
+    },
+    waitForFunction: async callback => {
+      const evaluate = () => require('node:vm').runInNewContext(`(${callback.toString()})()`, {
+        document: viewerDocument, HTMLCanvasElement: Canvas,
+        getComputedStyle: () => ({visibility: 'visible'})
+      });
+      assert.equal(evaluate(), true, 'noVNC动态canvas未就绪');
+      canvas.width = 0;
+      assert.equal(evaluate(), false, '零尺寸canvas不得通过');
+      canvas.width = 1024;
+    }
+  };
+  const readyViewer = await waitForViewerReady(popup, 3);
+  assert.equal(readyViewer.path, '/jd-browser/novnc/3/websockify');
+  assert.equal(readyViewer.websocket, socket);
+
+  const config = {
+    namespace: 'r297-acceptance-test', tenantId: 1, companyId: 2, storeId: 3,
+    releaseSha: '1'.repeat(40), runId: 'r297-run-test-0001'
+  };
+  const rawEvent = {event: 'web_page_close', observed_at: '2026-09-08T00:00:00.000Z', store_id: 3, release_sha: config.releaseSha};
+  const receiver = {
+    ...{namespace: config.namespace, tenant_id: 1, company_id: 2, store_id: 3, platform: 'jd', release_sha: config.releaseSha,
+    run_id: config.runId, run_attempt: 1, challenge: 'challenge-test-0001'},
+    event_type: 'web_page_close', issuer: 'page_event_receiver', observed_at: rawEvent.observed_at,
+    sequence: 1, nonce: 'receiver-nonce-0001', key_id: 'receiver-key-0001', signature: 's'.repeat(342),
+    payload: {closed: true, source: 'browser_pagehide', artifact_evidence_sha256: '2'.repeat(64),
+      artifact_archive_sha256: '3'.repeat(64), artifact_id: 1,
+      artifact_name: 'r297-native-pagehide-test', workflow_run_id: 2}
+  };
+  assertPageReceiverAcknowledgement(receiver, config, rawEvent, {evidenceSha: '2'.repeat(64), archiveSha: '3'.repeat(64)});
+  process.stdout.write('R297_LIVE_FRONTEND_SELF_TEST=PASS\n');
+}
+
 async function main() {
+  if (process.argv.includes('--self-test')) return selfTest();
   const config = loadConfig();
   if (process.argv.includes('--check-config')) {
     process.stdout.write(`R297_LIVE_FRONTEND_PREFLIGHT=READY\nR297_RELEASE_SHA=${config.releaseSha}\nR297_RUN_ID=${config.runId}\n`);
     return;
   }
-  const repositoryRoot = path.resolve(__dirname, '..');
   let checkoutSha;
   try {
-    checkoutSha = execFileSync('git', ['rev-parse', 'HEAD'], {cwd: repositoryRoot, encoding: 'utf8'}).trim();
+    checkoutSha = execFileSync('git', ['rev-parse', 'HEAD'], {cwd: REPOSITORY_ROOT, encoding: 'utf8'}).trim();
     const trackedChanges = execFileSync(
-      'git', ['status', '--porcelain', '--untracked-files=no'], {cwd: repositoryRoot, encoding: 'utf8'}
+      'git', ['status', '--porcelain', '--untracked-files=no'], {cwd: REPOSITORY_ROOT, encoding: 'utf8'}
     ).trim();
     if (trackedChanges) throw new Error('runner checkout存在已跟踪修改');
   } catch (error) {
@@ -177,6 +443,11 @@ async function main() {
   const { chromium } = require('playwright');
   if (fs.existsSync(config.outputDir) && fs.readdirSync(config.outputDir).length) {
     throw new Error('验收输出目录必须为空，禁止覆盖或混用旧证据');
+  }
+  for (const acknowledgement of [config.receiverAckPath, config.observerAckPath]) {
+    if (fs.existsSync(acknowledgement) || fs.existsSync(`${acknowledgement}.sha256`)) {
+      throw new Error('服务端回执路径必须为空，禁止复用旧回执');
+    }
   }
   fs.mkdirSync(config.outputDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(config.outputDir, 0o700);
@@ -193,33 +464,40 @@ async function main() {
   let context;
   let sessionCleanupRequired = false;
   let sessionRevoked = false;
-  let cleanupDone = false;
+  let createSettlement = Promise.resolve();
+  let cleanupPromise = null;
   let stopping = false;
   let result = 'BLOCK';
   let firstBlocker = '';
+  const runController = new AbortController();
 
   async function cleanup() {
-    if (cleanupDone) return;
-    cleanupDone = true;
-    if (sessionCleanupRequired && !sessionRevoked && context) {
-      try {
-        const response = await context.request.delete(
-          `${config.origin}/api/jd-workbench/stores/${config.storeId}/login-session`,
-          {timeout: 10_000}
-        );
-        if (response.status() !== 200) throw new Error(`HTTP ${response.status()}`);
-        const body = await response.json();
-        if (!exactKeys(body, ['ok', 'store_id', 'status']) || body.ok !== true
-            || body.store_id !== config.storeId || body.status !== 'REVOKED') {
-          throw new Error('响应字段无效');
+    if (cleanupPromise) return cleanupPromise;
+    runController.abort();
+    cleanupPromise = (async () => {
+      if (sessionCleanupRequired && !sessionRevoked && context) {
+        try {
+          await createSettlement;
+          const response = await context.request.delete(
+            `${config.origin}/api/jd-workbench/stores/${config.storeId}/login-session`,
+            {timeout: 10_000}
+          );
+          if (response.status() !== 200) throw new Error(`HTTP ${response.status()}`);
+          const body = await response.json();
+          if (!exactKeys(body, ['ok', 'store_id', 'status']) || body.ok !== true
+              || body.store_id !== config.storeId || body.status !== 'REVOKED') {
+            throw new Error('响应字段无效');
+          }
+          sessionRevoked = true;
+        } catch (error) {
+          const cleanupError = `会话清理失败：${error && error.message ? error.message : String(error)}`;
+          firstBlocker = firstBlocker ? `${firstBlocker}；${cleanupError}` : cleanupError;
         }
-        sessionRevoked = true;
-      } catch (error) {
-        const cleanupError = `会话清理失败：${error && error.message ? error.message : String(error)}`;
-        firstBlocker = firstBlocker ? `${firstBlocker}；${cleanupError}` : cleanupError;
       }
-    }
-    if (browser) await browser.close().catch(() => {});
+      if (browser) await browser.close().catch(() => {});
+    })();
+    try { await cleanupPromise; }
+    finally { cleanupPromise = null; }
   }
 
   async function stopForSignal(signal, code) {
@@ -234,8 +512,11 @@ async function main() {
   process.once('SIGTERM', () => { void stopForSignal('SIGTERM', 143); });
 
   try {
+    if (runController.signal.aborted) throw new Error('执行器已取消');
     browser = await chromium.launch({ headless: true });
+    if (runController.signal.aborted) throw new Error('执行器已取消');
     context = await browser.newContext({ storageState: config.storageState });
+    if (runController.signal.aborted) throw new Error('执行器已取消');
     context.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text().slice(0, 300)); });
     context.on('weberror', webError => {
       const error = webError.error();
@@ -292,13 +573,19 @@ async function main() {
     const row = page.locator('#stores tr').filter({has: page.locator('td:first-child', {hasText: String(config.storeId)})}).first();
     await bounded('目标店铺行加载', row.waitFor({state: 'visible'}), 15_000);
     const createPath = `/api/jd-workbench/stores/${config.storeId}/login-session`;
-    const createRequest = page.waitForRequest(request => request.method() === 'POST'
-      && new URL(request.url()).pathname === createPath);
+    const createRequest = page.waitForRequest(request => {
+      const matches = request.method() === 'POST' && new URL(request.url()).pathname === createPath;
+      if (matches) sessionCleanupRequired = true;
+      return matches;
+    });
     const createResponse = page.waitForResponse(response => response.request().method() === 'POST'
       && new URL(response.url()).pathname === createPath);
+    createSettlement = bounded(
+      '等待创建会话请求终态', createResponse.then(() => undefined, () => undefined), 35_000
+    ).catch(() => undefined);
+    if (runController.signal.aborted) throw new Error('执行器已取消');
     await row.getByRole('button', {name: /京东登录|重新验证/}).click();
     await bounded('创建会话请求', createRequest, 10_000);
-    sessionCleanupRequired = true;
     const createHttp = await bounded('创建会话', createResponse, 35_000);
     assert.equal(createHttp.status(), 200, '创建会话HTTP状态错误');
     const createBody = await createHttp.json();
@@ -315,22 +602,14 @@ async function main() {
       return Boolean(button && !button.disabled);
     }, config.storeId);
 
-    const popupPromise = context.waitForEvent('page');
-    const websocketPromise = page.waitForEvent('websocket', {
-      predicate: socket => {
-        const url = new URL(socket.url());
-        return url.protocol === 'wss:'
-          && url.pathname === `/jd-browser/novnc/${config.storeId}/websockify` && !url.search;
-      },
-      timeout: 20_000
-    });
-    await row.getByRole('button', {name: '打开受控验证窗口'}).click();
-    const [popup, websocket] = await Promise.all([
-      bounded('受控登录窗口打开', popupPromise, 10_000),
-      websocketPromise
+    const popupPromise = page.waitForEvent('popup', {timeout: 10_000});
+    const popup = await bounded('受控登录窗口打开', Promise.all([
+      popupPromise, row.getByRole('button', {name: '打开受控验证窗口'}).click()
+    ]).then(([opened]) => opened), 10_000);
+    const [, viewer] = await Promise.all([
+      popup.waitForURL(`**/jd-browser/novnc/${config.storeId}/vnc.html`, {timeout: 30_000}),
+      waitForViewerReady(popup, config.storeId, runController.signal)
     ]);
-    await popup.waitForURL(`**/jd-browser/novnc/${config.storeId}/vnc.html`, {timeout: 30_000});
-    const websocketPath = new URL(websocket.url()).pathname;
     const viewerCookies = (await context.cookies()).filter(cookie => cookie.name === 'jd_browser_session');
     assert.equal(viewerCookies.length, 1, 'HttpOnly Viewer Cookie缺失');
     assert.equal(viewerCookies[0].httpOnly, true);
@@ -360,9 +639,9 @@ async function main() {
     assert.deepEqual(syntheticRejected, {constructed_event: false, plain_object: false});
     operations.push({operation: 'goto', path: '/login.html', observed_at: new Date().toISOString()});
     await page.goto(`${config.origin}/login.html`, {waitUntil: 'domcontentloaded'});
-    await bounded('原生pagehide事件', (async () => {
-      while (nativeEvents.length < 1 || rawEvents.length < 1) await new Promise(resolve => setTimeout(resolve, 50));
-    })(), 5_000);
+    await waitForCondition('原生pagehide事件', () => nativeEvents.length >= 1 && rawEvents.length >= 1, {
+      timeoutMs: 5_000, signal: runController.signal
+    });
     assert.equal(nativeEvents.length, 1);
     assert.deepEqual(nativeEvents[0], {
       event: 'pagehide', observed_at: nativeEvents[0].observed_at,
@@ -374,18 +653,6 @@ async function main() {
       [rawEvents[0].event, rawEvents[0].store_id, rawEvents[0].release_sha],
       ['web_page_close', config.storeId, config.releaseSha]
     );
-
-    const controlPage = await context.newPage();
-    await controlPage.goto(`${config.origin}/login.html`, {waitUntil: 'domcontentloaded'});
-    const deleted = await browserJson(controlPage, `/api/jd-workbench/stores/${config.storeId}/login-session`, {method: 'DELETE'}, 200);
-    const deletedBody = assertResponse(deleted, 200, ['ok', 'store_id', 'status'], '销毁会话');
-    assert.deepEqual(deletedBody, {ok: true, store_id: config.storeId, status: 'REVOKED'});
-    sessionRevoked = true;
-    const revoked = await browserJson(controlPage, `/jd-browser/novnc/${config.storeId}/vnc.html`, undefined, 401);
-    assert.ok([401, 403].includes(revoked.status), '撤销后Viewer访问未失效');
-    assert.equal(consoleErrors.length, 0, '浏览器控制台存在错误');
-    assert.equal(pageErrors.length, 0, '浏览器存在未处理JavaScript错误');
-    assert.equal(failedRequests.length, 0, '浏览器存在失败网络请求');
 
     const evidenceName = `r297-native-pagehide-evidence-${config.releaseSha}.json`;
     const evidencePath = path.join(pagehideDir, evidenceName);
@@ -407,17 +674,50 @@ async function main() {
     const zip = spawnSync('zip', ['-j', '-X', archivePath, evidencePath, `${evidencePath}.sha256`, artifactManifest], {encoding: 'utf8'});
     if (zip.status !== 0) throw new Error(`pagehide归档失败：${zip.stderr.trim()}`);
     fs.chmodSync(archivePath, 0o444);
+    const artifact = {evidenceSha, archiveSha: sha256File(archivePath)};
+    const receiver = await waitForCondition('Receiver持久接收回执', () => {
+      if (!fs.existsSync(config.receiverAckPath) || !fs.existsSync(`${config.receiverAckPath}.sha256`)) return null;
+      return readDigestBoundJson(config.receiverAckPath);
+    }, {timeoutMs: 180_000, signal: runController.signal});
+    await verifySignedAcknowledgement(receiver.content, 'web_page_close', 'page_event_receiver', runController.signal);
+    assertPageReceiverAcknowledgement(receiver.event, config, rawEvents[0], artifact);
+    const observer = await waitForCondition('独立Observer回执', () => {
+      if (!fs.existsSync(config.observerAckPath) || !fs.existsSync(`${config.observerAckPath}.sha256`)) return null;
+      return readDigestBoundJson(config.observerAckPath);
+    }, {timeoutMs: 180_000, signal: runController.signal});
+    await verifySignedAcknowledgement(
+      observer.content, 'authenticated_observer', 'authenticated_observer', runController.signal
+    );
+    assertObserverAcknowledgement(observer.event, config, receiver.event);
+
+    const controlPage = await context.newPage();
+    await controlPage.goto(`${config.origin}/login.html`, {waitUntil: 'domcontentloaded'});
+    const deleted = await browserJson(controlPage, `/api/jd-workbench/stores/${config.storeId}/login-session`, {method: 'DELETE'}, 200);
+    const deletedBody = assertResponse(deleted, 200, ['ok', 'store_id', 'status'], '销毁会话');
+    assert.deepEqual(deletedBody, {ok: true, store_id: config.storeId, status: 'REVOKED'});
+    sessionRevoked = true;
+    await waitForCondition('撤销后既有Viewer WebSocket关闭', () => viewer.websocket.isClosed(), {
+      timeoutMs: 20_000, signal: runController.signal
+    });
+    const revoked = await browserJson(controlPage, `/jd-browser/novnc/${config.storeId}/vnc.html`, undefined, 401);
+    assert.ok([401, 403].includes(revoked.status), '撤销后Viewer访问未失效');
+    assert.equal(consoleErrors.length, 0, '浏览器控制台存在错误');
+    assert.equal(pageErrors.length, 0, '浏览器存在未处理JavaScript错误');
+    assert.equal(failedRequests.length, 0, '浏览器存在失败网络请求');
+
     const manifest = {
       schema_version: '1.0', result: 'PASS', release_sha: config.releaseSha, run_id: config.runId,
       scope: {namespace: config.namespace, tenant_id: config.tenantId, company_id: config.companyId, store_id: config.storeId, platform: 'jd'},
       session_status: sessionStatus, public_api: 'PASS', http_only_cookie: 'PASS',
-      novnc_page: 'PASS', websocket_path: websocketPath, ticket_rejections: negative,
-      delete_and_revoke: 'PASS', pagehide_raw: 'PASS',
+      novnc_page: 'PASS', viewer_rfb_ready: 'PASS', websocket_path: viewer.path, ticket_rejections: negative,
+      receiver_acknowledgement: {result: 'PASS', sha256: receiver.digest},
+      authenticated_observer: {result: 'PASS', sha256: observer.digest},
+      delete_and_revoke: 'PASS', existing_socket_revoked: 'PASS', pagehide_raw: 'PASS',
       screenshot: {file: path.basename(screenshotPath), sha256: sha256File(screenshotPath), redacted_selectors: redactSelectors},
-      pagehide_artifact: {archive: path.basename(archivePath), archive_sha256: sha256File(archivePath), evidence_sha256: evidenceSha, manifest_sha256: sha256File(artifactManifest)},
+      pagehide_artifact: {archive: path.basename(archivePath), archive_sha256: artifact.archiveSha, evidence_sha256: evidenceSha, manifest_sha256: sha256File(artifactManifest)},
       console_error_count: consoleErrors.length, page_error_count: pageErrors.length,
       failed_request_count: failedRequests.length,
-      observer_handoff: 'R297_AUTHENTICATED_OBSERVER_REQUIRED'
+      observer_handoff: 'ACKNOWLEDGED_BEFORE_SESSION_DELETE'
     };
     fs.writeFileSync(path.join(config.outputDir, 'r297-live-frontend-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, {mode: 0o444});
     result = 'PASS';
@@ -438,7 +738,8 @@ async function main() {
     }
     process.stdout.write(`R297_LIVE_FRONTEND_RESULT=${result}\n`);
     process.stdout.write(`R297_LIVE_FRONTEND_FIRST_BLOCKER=${firstBlocker || 'NONE'}\n`);
-    process.stdout.write('R297_AUTHENTICATED_OBSERVER_REQUIRED=YES\n');
+    process.stdout.write(`R297_AUTHENTICATED_OBSERVER_REQUIRED=${result === 'PASS' ? 'NO' : 'YES'}\n`);
+    process.stdout.write(`R297_AUTHENTICATED_OBSERVER_ACKNOWLEDGED=${result === 'PASS' ? 'YES' : 'NO'}\n`);
   }
 }
 

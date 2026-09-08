@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import base64
 import fcntl
 import hashlib
 import json
@@ -12,12 +13,15 @@ from pathlib import Path
 import re
 import secrets
 import stat
+from collections.abc import Callable
 
 
 _SCOPE_FIELDS = {"namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha"}
 
 
 _RUN_LIFETIME = timedelta(minutes=5)
+_MAX_STAGED_OUTPUT_BYTES = 2 * 1024 * 1024
+_MAX_LEDGER_BYTES = 8 * 1024 * 1024
 
 
 def _validate_parent(path: Path) -> None:
@@ -41,7 +45,7 @@ def _open_protected(path: Path) -> int:
     return descriptor
 
 
-def _update(path: Path, mutate):
+def _update(path: Path, mutate, *, now: datetime | None = None):
     _validate_parent(path)
     lock_descriptor = _open_protected(Path(f"{path}.lock"))
     try:
@@ -54,8 +58,23 @@ def _update(path: Path, mutate):
             os.close(descriptor)
         if not isinstance(ledger, dict) or set(ledger) != {"schema_version", "runs"} or ledger["schema_version"] != 1 or not isinstance(ledger["runs"], list):
             raise ValueError("acceptance run ledger invalid")
+        compact_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        for record in ledger["runs"]:
+            if not isinstance(record, dict) or "pending_output_base64" not in record:
+                continue
+            try:
+                issued_at = datetime.fromisoformat(record["issued_at"])
+                if issued_at.tzinfo is None:
+                    raise ValueError
+                expired = compact_at - issued_at.astimezone(timezone.utc) > _RUN_LIFETIME
+            except (KeyError, TypeError, ValueError):
+                expired = True
+            if expired:
+                record.pop("pending_output_base64", None)
         result = mutate(ledger["runs"])
         content = (json.dumps(ledger, sort_keys=True) + "\n").encode()
+        if len(content) > _MAX_LEDGER_BYTES:
+            raise ValueError("acceptance run ledger size limit exceeded")
         temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
         temporary_descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
@@ -134,21 +153,26 @@ def issue_acceptance_run(
         runs.append(record)
         return record
 
-    return _update(ledger, mutate)
+    return _update(ledger, mutate, now=now)
 
 
 def consume_acceptance_run(
     ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
     now: datetime | None = None,
+    transaction_sha256: str | None = None,
+    commit_nonces: Callable[[], None] | None = None,
 ) -> None:
     required = _SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}
     if set(expected_scope) != required:
         raise ValueError("acceptance run binding invalid")
+    if (transaction_sha256 is None) != (commit_nonces is None):
+        raise ValueError("acceptance transaction binding invalid")
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
 
     def mutate(runs):
         matches = [item for item in runs if isinstance(item, dict) and item.get("run_id") == expected_scope["run_id"]]
-        if len(matches) != 1 or matches[0].get("state") != "issued":
+        expected_state = "reserved" if transaction_sha256 is not None else "issued"
+        if len(matches) != 1 or matches[0].get("state") != expected_state:
             raise ValueError("acceptance run missing or consumed")
         record = matches[0]
         _require_live(record, now)
@@ -157,10 +181,16 @@ def consume_acceptance_run(
         for field in required:
             if type(record.get(field)) is not type(expected_scope[field]) or record.get(field) != expected_scope[field]:
                 raise ValueError("acceptance run scope mismatch")
+        if transaction_sha256 is not None:
+            if record.get("transaction_sha256") != transaction_sha256:
+                raise ValueError("acceptance run reserved by different transaction")
+            # Hold the run lock through nonce commit: concurrent retries cannot
+            # both succeed, and a failed commit leaves this exact reservation live.
+            commit_nonces()
         record["state"] = "consumed"
         record["consumed_at"] = now.isoformat()
 
-    _update(ledger, mutate)
+    _update(ledger, mutate, now=now)
 
 
 def reserve_acceptance_run(
@@ -178,6 +208,8 @@ def reserve_acceptance_run(
         if len(matches) != 1:
             raise ValueError("acceptance run missing or consumed")
         record = matches[0]
+        if record.get("state") == "consumed":
+            raise ValueError("acceptance run missing or consumed")
         _require_live(record, now)
         if record.get("source_workflow_run_id") != source_workflow_run_id:
             raise ValueError("acceptance source workflow mismatch")
@@ -195,7 +227,7 @@ def reserve_acceptance_run(
             return "recovering"
         raise ValueError("acceptance run reserved by different transaction")
 
-    return _update(ledger, mutate)
+    return _update(ledger, mutate, now=now)
 
 
 def complete_acceptance_run(
@@ -234,10 +266,89 @@ def complete_acceptance_run(
             return "recovered"
         if record.get("state") != "reserved":
             raise ValueError("acceptance run missing or consumed")
-        record.update({"state": "consumed", "consumed_at": now.isoformat(), "published_sha256": digest})
+        try:
+            staged = base64.b64decode(record["pending_output_base64"], validate=True)
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("acceptance staged output missing") from None
+        if (
+            record.get("pending_output_sha256") != digest
+            or hashlib.sha256(staged).hexdigest() != digest
+            or staged != content
+        ):
+            raise ValueError("acceptance published output differs from staged output")
+        record.update({
+            "state": "consumed", "consumed_at": now.isoformat(),
+            "published_sha256": digest, "pending_output_base64": None,
+        })
         return "consumed"
 
-    return _update(ledger, mutate)
+    return _update(ledger, mutate, now=now)
+
+
+def stage_acceptance_output(
+    ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
+    transaction_sha256: str, content: bytes, now: datetime | None = None,
+) -> str:
+    """Persist the exact formal output bytes before publishing either output file."""
+    if not content or len(content) > _MAX_STAGED_OUTPUT_BYTES:
+        raise ValueError("acceptance staged output size invalid")
+    digest = hashlib.sha256(content).hexdigest()
+    encoded = base64.b64encode(content).decode("ascii")
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+    def mutate(runs):
+        matches = [item for item in runs if isinstance(item, dict) and item.get("run_id") == expected_scope["run_id"]]
+        if len(matches) != 1:
+            raise ValueError("acceptance run missing or consumed")
+        record = matches[0]
+        _require_live(record, now)
+        if (
+            record.get("state") != "reserved"
+            or record.get("source_workflow_run_id") != source_workflow_run_id
+            or record.get("transaction_sha256") != transaction_sha256
+            or any(record.get(field) != expected_scope[field] for field in (_SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}))
+        ):
+            raise ValueError("acceptance output transaction mismatch")
+        previous = record.get("pending_output_sha256")
+        if previous is not None and (previous != digest or record.get("pending_output_base64") != encoded):
+            raise ValueError("acceptance output changed during recovery")
+        record["pending_output_sha256"] = digest
+        record["pending_output_base64"] = encoded
+        return digest
+
+    return _update(ledger, mutate, now=now)
+
+
+def recover_staged_acceptance_output(
+    ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
+    transaction_sha256: str, now: datetime | None = None,
+) -> bytes | None:
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+    def mutate(runs):
+        matches = [item for item in runs if isinstance(item, dict) and item.get("run_id") == expected_scope["run_id"]]
+        if len(matches) != 1:
+            raise ValueError("acceptance run missing or consumed")
+        record = matches[0]
+        _require_live(record, now)
+        if (
+            record.get("state") != "reserved"
+            or record.get("source_workflow_run_id") != source_workflow_run_id
+            or record.get("transaction_sha256") != transaction_sha256
+        ):
+            raise ValueError("acceptance output transaction mismatch")
+        encoded = record.get("pending_output_base64")
+        if encoded is None:
+            return None
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError):
+            raise ValueError("acceptance staged output invalid") from None
+        if hashlib.sha256(content).hexdigest() != record.get("pending_output_sha256"):
+            raise ValueError("acceptance staged output invalid")
+        return content
+
+    return _update(ledger, mutate, now=now)
 
 
 def validate_acceptance_run(

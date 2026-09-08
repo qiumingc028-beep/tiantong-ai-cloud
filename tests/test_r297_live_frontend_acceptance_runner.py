@@ -23,7 +23,7 @@ def test_live_frontend_runner_is_public_fail_closed_and_receiver_compatible():
         "/api/jd-workbench/stores/${storeId}/login-ticket",
         "/jd-browser/novnc/${id}/exchange",
         "/jd-browser/novnc/${config.storeId}/vnc.html",
-        "/jd-browser/novnc/${config.storeId}/websockify",
+        "/jd-browser/novnc/${storeId}/websockify",
         "event_is_trusted",
         "PageTransitionEvent",
         "synthetic_event_rejected",
@@ -34,7 +34,10 @@ def test_live_frontend_runner_is_public_fail_closed_and_receiver_compatible():
         assert required in source
 
     assert "/internal/jd-browser/" not in source
-    assert "scheduler_continues" not in source
+    assert "scheduler_continues:" not in source
+    assert source.count("scheduler_continues") == 2
+    assert "'scheduler_continues'" in source
+    assert "event.payload.scheduler_continues" in source
     assert "localStorage" not in source
     assert "sessionStorage" not in source
     assert "session_id" not in source
@@ -60,7 +63,7 @@ def test_live_frontend_runner_is_public_fail_closed_and_receiver_compatible():
     assert "sessionCleanupRequired = true" in source
     assert "process.once('SIGINT'" in source
     assert "process.once('SIGTERM'" in source
-    assert "page.waitForEvent('websocket'" in source
+    assert "popup.waitForEvent('websocket'" in source
     assert "验收输出目录必须为空" in source
     assert "runner checkout HEAD与验收release不一致" in source
     assert "git', ['rev-parse', 'HEAD']" in source
@@ -88,6 +91,57 @@ def test_live_frontend_runner_reports_every_missing_protected_input_without_star
         "R297_EVIDENCE_STORE_ID",
         "R297_EVIDENCE_CROSS_STORE_ID",
         "R297_EVIDENCE_CROSS_TENANT_STORE_ID",
+        "R297_PAGE_EVENT_RECEIVER_ACK_PATH",
+        "R297_AUTHENTICATED_OBSERVER_ACK_PATH",
     ):
         assert name in completed.stderr
     assert "Cannot find module 'playwright'" not in completed.stderr
+
+
+def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
+    source = (ROOT / "tests/r297_live_frontend_acceptance.cjs").read_text(encoding="utf-8")
+
+    for required in (
+        "R297_PAGE_EVENT_RECEIVER_ACK_PATH",
+        "R297_AUTHENTICATED_OBSERVER_ACK_PATH",
+        "verifySignedAcknowledgement",
+        "verify_signed_event",
+        "SIGNATURE_RE",
+        "assertPageReceiverAcknowledgement",
+        "assertObserverAcknowledgement",
+        "waitForViewerReady",
+        "viewer_rfb_ready",
+        "receiver_acknowledgement",
+        "authenticated_observer",
+    ):
+        assert required in source
+
+    assert "required('R297_ACCEPTANCE_RUN_ATTEMPT')" not in source
+    assert "required('R297_ACCEPTANCE_CHALLENGE')" not in source
+    assert "verifier.stdin.end(content)" in source
+    assert "spawnSync('python3'" not in source
+    assert "verify_signed_event(event" in source
+    assert "服务端回执必须位于浏览器验收输出目录之外" in source
+    assert "if (matches) sessionCleanupRequired = true" in source
+    assert source.index("await createSettlement") < source.index("context.request.delete(")
+    assert "verifier.once('close'" in source
+
+    assert "popup.waitForEvent('websocket'" in source
+    assert "noVNC_connected" in source
+    assert "scheduler_continues: true" not in source
+    assert source.index("const receiver = await") < source.index("const deleted = await")
+    assert source.index("const observer = await") < source.index("const deleted = await")
+    assert "existing_socket_revoked" in source
+    assert source.index("const deleted = await") < source.index("撤销后既有Viewer WebSocket关闭")
+    assert source.index("撤销后既有Viewer WebSocket关闭") < source.index("const revoked = await")
+    assert "const [, viewer] = await Promise.all([" in source
+
+    completed = subprocess.run(
+        ["node", str(ROOT / "tests/r297_live_frontend_acceptance.cjs"), "--self-test"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "R297_LIVE_FRONTEND_SELF_TEST=PASS" in completed.stdout

@@ -684,32 +684,49 @@ def verify_acceptance_event_bundle(
     page_result = _observer_result(page_observer, page, expected_scope["store_id"])
     electron_result = _observer_result(electron_observer, electron, expected_scope["store_id"])
 
-    replay_bindings.append({
+    run_replay_binding = {
         **{field: expected_scope[field] for field in _SCOPE_FIELDS},
         "event_type": "acceptance_run",
         "key_id": "protected_orchestrator",
         "nonce": expected_scope["run_id"],
-    })
+    }
 
     environment = os.getenv("APP_ENV", "").strip().lower()
     run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
     if environment in {"acceptance", "production"}:
         if not run_ledger:
             raise RuntimeError("acceptance run ledger missing")
-        from ops.r297_acceptance_run import consume_acceptance_run, validate_acceptance_run
+        from ops.r297_acceptance_run import consume_acceptance_run, reserve_acceptance_run, validate_acceptance_run
         page_event = next(event for event in events if event["event_type"] == "web_page_close")
-        run_action = consume_acceptance_run if consume_run else validate_acceptance_run
         run_arguments = {
             "expected_scope": expected_scope,
             "source_workflow_run_id": page_event["payload"]["workflow_run_id"],
             "now": now,
         }
-        if not consume_run:
+        if consume_run:
+            # The protected run ledger fences the run; the nonce ledger stores
+            # only the four event nonces. Other paths retain their run sentinel.
+            transaction_sha256 = hashlib.sha256(json.dumps(
+                {"bundle": bundle, "scope": expected_scope, "purpose": "verify_only"},
+                ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+            ).encode()).hexdigest()
+            reserve_acceptance_run(
+                Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,
+            )
+            consume_acceptance_run(
+                Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,
+                commit_nonces=lambda: _record_nonces(
+                    nonce_ledger, replay_bindings, allow_exact_recovery=True,
+                ),
+            )
+        else:
             run_arguments["transaction_sha256"] = reserved_transaction_sha256
-        run_action(Path(run_ledger), **run_arguments)
-    _record_nonces(
-        nonce_ledger, replay_bindings, allow_exact_recovery=allow_nonce_recovery,
-    )
+            validate_acceptance_run(Path(run_ledger), **run_arguments)
+    if not (environment in {"acceptance", "production"} and consume_run):
+        _record_nonces(
+            nonce_ledger, [*replay_bindings, run_replay_binding],
+            allow_exact_recovery=allow_nonce_recovery,
+        )
 
     return {
         "evidence_trust_manifest_id": manifest["manifest_id"],

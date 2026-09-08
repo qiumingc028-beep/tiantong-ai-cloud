@@ -413,7 +413,8 @@ def test_bundle_precheck_preserves_run_until_formal_verification(monkeypatch, tm
         verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=ledger)
 
 
-def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path):
+@pytest.mark.parametrize("crash_after_nonce_write", [False, True])
+def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path, crash_after_nonce_write):
     from ops import r297_evidence_events
     from ops.r297_acceptance_run import issue_acceptance_run
     from ops.r297_evidence_bundle import build_bundle
@@ -438,22 +439,46 @@ def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path):
     bundle = build_bundle(_bundle(now)["events"], expected_scope=scope, now=now)
     nonce_ledger = _nonce_ledger(tmp_path)
     original_record_nonces = r297_evidence_events._record_nonces
+
+    def crash_record_nonces(*args, **kwargs):
+        if crash_after_nonce_write:
+            original_record_nonces(*args, **kwargs)
+        raise OSError("nonce ledger crash injection")
+
     monkeypatch.setattr(
         r297_evidence_events,
         "_record_nonces",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("nonce ledger crash injection")),
+        crash_record_nonces,
     )
 
     with pytest.raises(OSError, match="nonce ledger crash injection"):
         verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger)
 
     monkeypatch.setattr(r297_evidence_events, "_record_nonces", original_record_nonces)
-    result = verify_acceptance_event_bundle(
-        bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger,
-    )
+    with pytest.raises(ValueError, match="reserved by different transaction"):
+        verify_acceptance_event_bundle(
+            {**bundle, "different_transaction": True}, expected_scope=scope,
+            now=now, nonce_ledger=nonce_ledger,
+        )
+
+    def retry():
+        try:
+            return verify_acceptance_event_bundle(
+                bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger,
+            )
+        except ValueError as exc:
+            assert "missing or consumed" in str(exc)
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: retry(), range(2)))
+    assert sum(value is not None for value in results) == 1
+    result = next(value for value in results if value is not None)
     assert result["authenticated_observer"]["verified_subject_count"] == 2
     assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
     assert len(json.loads(nonce_ledger.read_text())) == 4
+    with pytest.raises(ValueError, match="missing or consumed"):
+        verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger)
 
 
 def test_candidate_bundle_builder_cannot_receive_any_signer_private_key(monkeypatch):
