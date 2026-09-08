@@ -129,7 +129,8 @@ def test_ci_builds_and_runs_runtime_with_real_health_xvfb_chromium_and_novnc_che
     for controlled_setting in (
         "--env APP_ENV=acceptance",
         "--env R297_CONTROLLED_CANARY=1",
-        "--env R297_CONTROLLED_CANARY_DASHBOARD_URL=http://host.docker.internal/r297-controlled-canary.html",
+        "--env R297_CONTROLLED_CANARY_DASHBOARD_URL=http://host.docker.internal:18787/r297-controlled-canary.html",
+        "--env JD_BROWSER_SESSION_AUTH_URL=http://host.docker.internal:18787/api/jd-workbench/internal/browser-session-authorize",
     ):
         assert controlled_setting in runtime_run
     for evidence in (
