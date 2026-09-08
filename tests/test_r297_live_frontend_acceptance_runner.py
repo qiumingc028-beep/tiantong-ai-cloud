@@ -131,6 +131,10 @@ def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
     assert "scheduler_continues: true" not in source
     assert source.index("const receiver = await") < source.index("const deleted = await")
     assert source.index("const observer = await") < source.index("const deleted = await")
+    assert "existing_socket_revoked" in source
+    assert source.index("const deleted = await") < source.index("撤销后既有Viewer WebSocket关闭")
+    assert source.index("撤销后既有Viewer WebSocket关闭") < source.index("const revoked = await")
+    assert "const [, viewer] = await Promise.all([" in source
 
     completed = subprocess.run(
         ["node", str(ROOT / "tests/r297_live_frontend_acceptance.cjs"), "--self-test"],

@@ -264,7 +264,7 @@ async function waitForViewerReady(popup, storeId, signal) {
     websocket.off('framereceived', received);
   }
   if (signal?.aborted) throw new Error('Viewer就绪验证已取消');
-  return new URL(websocket.url()).pathname;
+  return {websocket, path: new URL(websocket.url()).pathname};
 }
 
 function safeUrl(input) {
@@ -384,7 +384,9 @@ async function selfTest() {
     },
     waitForFunction: async callback => assert.match(callback.toString(), /noVNC_connected/)
   };
-  assert.equal(await waitForViewerReady(popup, 3), '/jd-browser/novnc/3/websockify');
+  const readyViewer = await waitForViewerReady(popup, 3);
+  assert.equal(readyViewer.path, '/jd-browser/novnc/3/websockify');
+  assert.equal(readyViewer.websocket, socket);
 
   const config = {
     namespace: 'r297-acceptance-test', tenantId: 1, companyId: 2, storeId: 3,
@@ -585,11 +587,13 @@ async function main() {
     }, config.storeId);
 
     const popupPromise = page.waitForEvent('popup', {timeout: 10_000});
-    await row.getByRole('button', {name: '打开受控验证窗口'}).click();
-    const popup = await bounded('受控登录窗口打开', popupPromise, 10_000);
-    const viewerReady = waitForViewerReady(popup, config.storeId, runController.signal);
-    await popup.waitForURL(`**/jd-browser/novnc/${config.storeId}/vnc.html`, {timeout: 30_000});
-    const websocketPath = await viewerReady;
+    const popup = await bounded('受控登录窗口打开', Promise.all([
+      popupPromise, row.getByRole('button', {name: '打开受控验证窗口'}).click()
+    ]).then(([opened]) => opened), 10_000);
+    const [, viewer] = await Promise.all([
+      popup.waitForURL(`**/jd-browser/novnc/${config.storeId}/vnc.html`, {timeout: 30_000}),
+      waitForViewerReady(popup, config.storeId, runController.signal)
+    ]);
     const viewerCookies = (await context.cookies()).filter(cookie => cookie.name === 'jd_browser_session');
     assert.equal(viewerCookies.length, 1, 'HttpOnly Viewer Cookie缺失');
     assert.equal(viewerCookies[0].httpOnly, true);
@@ -676,6 +680,9 @@ async function main() {
     const deletedBody = assertResponse(deleted, 200, ['ok', 'store_id', 'status'], '销毁会话');
     assert.deepEqual(deletedBody, {ok: true, store_id: config.storeId, status: 'REVOKED'});
     sessionRevoked = true;
+    await waitForCondition('撤销后既有Viewer WebSocket关闭', () => viewer.websocket.isClosed(), {
+      timeoutMs: 20_000, signal: runController.signal
+    });
     const revoked = await browserJson(controlPage, `/jd-browser/novnc/${config.storeId}/vnc.html`, undefined, 401);
     assert.ok([401, 403].includes(revoked.status), '撤销后Viewer访问未失效');
     assert.equal(consoleErrors.length, 0, '浏览器控制台存在错误');
@@ -686,10 +693,10 @@ async function main() {
       schema_version: '1.0', result: 'PASS', release_sha: config.releaseSha, run_id: config.runId,
       scope: {namespace: config.namespace, tenant_id: config.tenantId, company_id: config.companyId, store_id: config.storeId, platform: 'jd'},
       session_status: sessionStatus, public_api: 'PASS', http_only_cookie: 'PASS',
-      novnc_page: 'PASS', viewer_rfb_ready: 'PASS', websocket_path: websocketPath, ticket_rejections: negative,
+      novnc_page: 'PASS', viewer_rfb_ready: 'PASS', websocket_path: viewer.path, ticket_rejections: negative,
       receiver_acknowledgement: {result: 'PASS', sha256: receiver.digest},
       authenticated_observer: {result: 'PASS', sha256: observer.digest},
-      delete_and_revoke: 'PASS', pagehide_raw: 'PASS',
+      delete_and_revoke: 'PASS', existing_socket_revoked: 'PASS', pagehide_raw: 'PASS',
       screenshot: {file: path.basename(screenshotPath), sha256: sha256File(screenshotPath), redacted_selectors: redactSelectors},
       pagehide_artifact: {archive: path.basename(archivePath), archive_sha256: artifact.archiveSha, evidence_sha256: evidenceSha, manifest_sha256: sha256File(artifactManifest)},
       console_error_count: consoleErrors.length, page_error_count: pageErrors.length,
