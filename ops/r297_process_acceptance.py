@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 try:
-    from ops.r297_evidence_events import verify_acceptance_event_bundle, write_sha256_bound_file
+    from ops.r297_evidence_events import signed_event_sha256, verify_acceptance_event_bundle, write_sha256_bound_file
     from ops.r297_acceptance_run import (
         complete_acceptance_run, recover_staged_acceptance_output,
         reserve_acceptance_run, stage_acceptance_output,
@@ -32,7 +32,7 @@ try:
 except ModuleNotFoundError as exc:
     if exc.name != "ops":
         raise
-    from r297_evidence_events import verify_acceptance_event_bundle, write_sha256_bound_file
+    from r297_evidence_events import signed_event_sha256, verify_acceptance_event_bundle, write_sha256_bound_file
     from r297_acceptance_run import (
         complete_acceptance_run, recover_staged_acceptance_output,
         reserve_acceptance_run, stage_acceptance_output,
@@ -192,6 +192,43 @@ def stop_process(process: subprocess.Popen | None) -> None:
         handle.close()
 
 
+def observe_stale_manual_claim(stale_task: dict, worker_id: str, *, probe_generation: int, resumed_generation: int) -> dict:
+    """Observe the real database fence and Redis ACK after manual recovery."""
+    from backend.database import SessionLocal
+    from backend.queue import ack_task
+    from backend.services.jd_collectors import JdCollectorError
+    from backend.worker import _assert_jd_workbench_claim_owned, _finish_jd_workbench_task, reconcile_completed_jd_workbench_tasks
+
+    db = SessionLocal()
+    try:
+        try:
+            _assert_jd_workbench_claim_owned(db, stale_task, worker_id)
+        except JdCollectorError:
+            commit_rejected = True
+        else:
+            commit_rejected = False
+    finally:
+        db.rollback()
+        db.close()
+    finish_rejected = not _finish_jd_workbench_task(stale_task, worker_id, success=True, now=datetime.now(timezone.utc))
+    reconcile_completed_jd_workbench_tasks()
+    ack_rejected = not ack_task(stale_task, worker_id)
+    result = {
+        "stale_claim_generation": stale_task["db_claim_generation"],
+        "probe_claim_generation": probe_generation,
+        "resumed_claim_generation": resumed_generation,
+        "stale_worker_commit_rejected": commit_rejected and finish_rejected,
+        "stale_worker_ack_rejected_after_reconciliation": ack_rejected,
+    }
+    if not (
+        stale_task["db_claim_generation"] <= probe_generation <= resumed_generation
+        and stale_task["db_claim_generation"] < resumed_generation
+        and commit_rejected and finish_rejected and ack_rejected
+    ):
+        raise RuntimeError("HUMAN_ACTION_STALE_WORKER_FENCE_FAILED")
+    return result
+
+
 def _validate_process_evidence(
     previous: dict, path: Path, verified_events: dict, *, head: str,
     transaction_sha256: str,
@@ -273,6 +310,13 @@ def _validate_process_evidence(
         or manual.get("recovery_probe_status") != "success"
         or manual.get("automatic_enqueue_count") != 1
         or manual.get("task_status") != "success"
+        or manual.get("stale_worker_commit_rejected") is not True
+        or manual.get("stale_worker_ack_rejected_after_reconciliation") is not True
+        or not all(type(manual.get(field)) is int for field in (
+            "stale_claim_generation", "probe_claim_generation", "resumed_claim_generation",
+        ))
+        or not manual["stale_claim_generation"] <= manual["probe_claim_generation"] <= manual["resumed_claim_generation"]
+        or manual["stale_claim_generation"] >= manual["resumed_claim_generation"]
         or not manual.get("recovery_probe_task_id") or not manual.get("task_id")
         or previous["human_action_detection"] != {
             "detected_status": "HUMAN_ACTION_REQUIRED", "automatic_resume_status": "success",
@@ -366,13 +410,20 @@ def prepare_acceptance_transaction(
     if not run_ledger_value:
         raise RuntimeError("R297_ACCEPTANCE_RUN_LEDGER_MISSING")
     run_ledger = Path(run_ledger_value).resolve()
+    reservation_now = datetime.now(timezone.utc)
     reservation = reserve_acceptance_run(
         run_ledger, expected_scope=evidence_scope,
         source_workflow_run_id=source_workflow_run_id,
         transaction_sha256=transaction_sha256,
+        event_sha256s=[signed_event_sha256(event) for event in bundle.get("events", [])],
+        require_event_receipts=any(
+            datetime.fromisoformat(event["observed_at"].replace("Z", "+00:00"))
+            < reservation_now - timedelta(minutes=5) for event in bundle.get("events", [])
+        ),
+        now=reservation_now,
     )
     verified = verify_acceptance_event_bundle(
-        bundle, expected_scope=evidence_scope, now=datetime.now(timezone.utc),
+        bundle, expected_scope=evidence_scope, now=reservation_now,
         nonce_ledger=nonce_ledger, consume_run=False,
         allow_nonce_recovery=reservation == "recovering",
         reserved_transaction_sha256=transaction_sha256,
@@ -411,8 +462,6 @@ def prepare_acceptance_transaction(
         "transaction_sha256": transaction_sha256, "run_ledger": run_ledger,
         "verified": verified, "published_digest": published_digest,
     }
-
-
 def main() -> int:
     trust_environment = os.getenv("APP_ENV", "").strip().lower()
     if trust_environment == "production":
@@ -542,9 +591,9 @@ def main() -> int:
         try:
             from backend.database import SessionLocal, get_redis
             from backend.models import JdAccount, JdDailyMetric, JdSyncLog, JdWorkbenchDevice, JdWorkbenchStoreStatus, JdWorkbenchSyncPolicy, Store, User, UserStoreMembership
-            from backend.queue import PROCESSING_METADATA_PREFIX, PROCESSING_QUEUE_NAME, QUEUE_NAME, enqueue_task
+            from backend.queue import PROCESSING_METADATA_PREFIX, PROCESSING_QUEUE_NAME, QUEUE_NAME, claim_task, enqueue_task
             from backend.seed import seed_defaults
-            from backend.worker import JD_RETRY_BACKOFF_SECONDS, _finish_jd_workbench_task, run_jd_workbench_scheduler
+            from backend.worker import JD_RETRY_BACKOFF_SECONDS, _claim_jd_workbench_task, _finish_jd_workbench_task, run_jd_workbench_scheduler
         finally:
             os.environ["APP_ENV"] = trust_environment
 
@@ -843,11 +892,23 @@ def main() -> int:
         status_row.retry_count = 4
         status_row.next_sync_at = datetime.now(timezone.utc) + timedelta(hours=1)
         policy.active_task_id = "00000000-0000-4000-8000-000000000999"
-        policy.queue_state = "processing"
+        policy.queue_state = "ready"
         resumed_at = datetime.now(timezone.utc)
         policy.enabled = True
         db.commit()
         db.close()
+        stale_worker_id = f"acceptance-stale-{os.getpid()}"
+        enqueue_task("sync_jd_smart", {
+            "tenant_id": scope["tenant_id"], "company_id": scope["company_id"],
+            "store_id": scope["store_id"], "source": "cloud_scheduler",
+        }, task_id="00000000-0000-4000-8000-000000000999")
+        stale_manual_task = claim_task(stale_worker_id, timeout=0)
+        if (
+            stale_manual_task is None
+            or stale_manual_task["task_id"] != "00000000-0000-4000-8000-000000000999"
+            or _claim_jd_workbench_task(stale_manual_task, stale_worker_id, datetime.now(timezone.utc)) != "claimed"
+        ):
+            raise RuntimeError("HUMAN_ACTION_STALE_CLAIM_NOT_OBSERVED")
         heartbeat_path = "/api/jd-workbench/heartbeat"
         human_report = device_post(
             f"http://{backend_host}:{backend_port}{heartbeat_path}", heartbeat_path,
@@ -894,6 +955,9 @@ def main() -> int:
         stop_process(recovery_probe_worker)
         if recovery_probe_result.get("status") != "success":
             raise RuntimeError("HUMAN_ACTION_RECOVERY_PROBE_FAILED")
+        db = SessionLocal()
+        probe_generation = db.query(JdWorkbenchSyncPolicy).one().claim_generation
+        db.close()
         resume_report = device_post(
             f"http://{backend_host}:{backend_port}{heartbeat_path}", heartbeat_path,
             {"client_version": "2.97.0", "status": "IDLE", "store_id": scope["store_id"]},
@@ -906,7 +970,12 @@ def main() -> int:
         status_row = db.query(JdWorkbenchStoreStatus).one()
         db.refresh(status_row)
         manual_after = {"status": status_row.status, "reason_code": status_row.reason_code, "retry_count": status_row.retry_count, "next_sync_at": status_row.next_sync_at.isoformat(), "active_task_id": policy.active_task_id}
+        resumed_generation = policy.claim_generation
         db.close()
+        manual_fencing = observe_stale_manual_claim(
+            stale_manual_task, stale_worker_id,
+            probe_generation=probe_generation, resumed_generation=resumed_generation,
+        )
         scheduled = run_jd_workbench_scheduler(schedule_cursor)
         schedule_cursor += timedelta(seconds=300)
         if scheduled != 1:
@@ -1026,6 +1095,7 @@ def main() -> int:
                 "session_restored": bool(restored_session.get("restored")),
             },
             "manual_resume": {
+                **manual_fencing,
                 "before_status": "HUMAN_ACTION_REQUIRED", "after": manual_after,
                 "recovery_probe_task_id": recovery_probe_task_id,
                 "recovery_probe_status": recovery_probe_result["status"],

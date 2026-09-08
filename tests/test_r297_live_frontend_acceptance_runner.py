@@ -149,3 +149,4 @@ def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
     )
     assert completed.returncode == 0, completed.stderr
     assert "R297_LIVE_FRONTEND_SELF_TEST=PASS" in completed.stdout
+    assert "R297_LIVE_RECEIPT_CONTRACT=PASS" in completed.stdout

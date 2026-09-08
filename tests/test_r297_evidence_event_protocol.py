@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 
 import pytest
@@ -138,7 +139,7 @@ def test_bound_file_publish_recovers_body_only_crash(tmp_path):
     assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
 
 
-def test_bound_file_publish_recovers_verified_hardlink_publish_crash(tmp_path):
+def test_bound_file_publish_recovers_verified_hardlink_publish_crash(monkeypatch, tmp_path):
     output = tmp_path / "evidence" / "event.json"
     output.parent.mkdir(mode=0o700)
     content = b'{"event":"signed"}\n'
@@ -146,12 +147,39 @@ def test_bound_file_publish_recovers_verified_hardlink_publish_crash(tmp_path):
     temporary.write_bytes(content)
     temporary.chmod(0o600)
     os.link(temporary, output)
+    published_inode = output.stat().st_ino
+    parent_inode = output.parent.stat().st_ino
+    synced_directory_inodes = []
+    original_fsync = os.fsync
+
+    def record_fsync(descriptor):
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced_directory_inodes.append(metadata.st_ino)
+        return original_fsync(descriptor)
+
+    monkeypatch.setattr("ops.r297_evidence_events.os.fsync", record_fsync)
 
     digest = write_sha256_bound_file(output, content)
 
+    metadata = output.stat()
+    sidecar = Path(f"{output}.sha256")
+    sidecar_metadata = sidecar.stat()
+    assert output.read_bytes() == content
+    assert metadata.st_ino == published_inode
     assert output.stat().st_nlink == 1
+    assert metadata.st_mode & 0o777 == 0o600
+    assert sidecar_metadata.st_mode & 0o777 == 0o600
+    assert output.parent.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert metadata.st_uid == os.geteuid()
+        assert sidecar_metadata.st_uid == os.geteuid()
+        assert output.parent.stat().st_uid == os.geteuid()
     assert not temporary.exists()
-    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+    assert not list(output.parent.glob(f".{output.name}.*"))
+    assert sidecar.read_text(encoding="ascii") == f"{digest}  event.json\n"
+    if os.name != "nt":
+        assert synced_directory_inodes.count(parent_inode) >= 2
 
 
 def test_bound_file_publish_rejects_unknown_second_hardlink(tmp_path):
@@ -210,7 +238,16 @@ def test_bound_file_publish_recovers_sidecar_write_crash(monkeypatch, tmp_path):
     output.parent.mkdir(mode=0o700)
     content = b'{"event":"signed"}\n'
     original_replace = r297_evidence_events._replace_file
+    original_fsync = r297_evidence_events.os.fsync
+    parent_inode = output.parent.stat().st_ino
+    synced_directory_inodes = []
     calls = 0
+
+    def record_fsync(descriptor):
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced_directory_inodes.append(metadata.st_ino)
+        return original_fsync(descriptor)
 
     def crash_before_sidecar(path, value):
         nonlocal calls
@@ -219,15 +256,31 @@ def test_bound_file_publish_recovers_sidecar_write_crash(monkeypatch, tmp_path):
             raise OSError("sidecar crash injection")
         original_replace(path, value)
 
+    monkeypatch.setattr(r297_evidence_events.os, "fsync", record_fsync)
     monkeypatch.setattr(r297_evidence_events, "_replace_file", crash_before_sidecar)
     with pytest.raises(OSError, match="sidecar crash injection"):
         write_sha256_bound_file(output, content)
+    published_inode = output.stat().st_ino
     assert output.read_bytes() == content
+    assert output.stat().st_ino == published_inode
     assert not Path(f"{output}.sha256").exists()
 
     monkeypatch.setattr(r297_evidence_events, "_replace_file", original_replace)
     digest = write_sha256_bound_file(output, content)
-    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+    sidecar = Path(f"{output}.sha256")
+    assert output.read_bytes() == content
+    assert output.stat().st_ino == published_inode
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert sidecar.stat().st_mode & 0o777 == 0o600
+    assert output.parent.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert output.stat().st_uid == os.geteuid()
+        assert sidecar.stat().st_uid == os.geteuid()
+        assert output.parent.stat().st_uid == os.geteuid()
+    assert not list(output.parent.glob(f".{output.name}.*"))
+    assert sidecar.read_text(encoding="ascii") == f"{digest}  event.json\n"
+    if os.name != "nt":
+        assert synced_directory_inodes.count(parent_inode) >= 2
 
 
 def test_bound_file_publish_rejects_hardlinked_body_and_orphan_sidecar(tmp_path):
@@ -355,12 +408,17 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
     assert result["evidence_trust_manifest_id"] == "r297-evidence-trust-test-v1"
     assert result["evidence_trust_manifest_sha256"] == "0eac4b3fc49f913f33762dbedbe41916c3ef50eb1128211d7d93281c78902fed"
     ledger = json.loads(ledger_path.read_text())
-    assert len(ledger) == 5
+    assert len(ledger) == 4
     assert all(set(entry) == {
         "namespace", "tenant_id", "company_id", "store_id", "platform",
         "release_sha", "event_type", "key_id", "nonce",
         "run_id", "run_attempt", "challenge",
+        "event_sha256", "verification",
     } for entry in ledger)
+    assert {entry["event_sha256"] for entry in ledger} == {
+        signed_event_sha256(event) for event in _bundle(now)["events"]
+    }
+    assert all(entry["verification"]["result"] == result for entry in ledger)
 
     with pytest.raises(ValueError, match="replayed acceptance run"):
         verify_acceptance_event_bundle(
@@ -414,7 +472,8 @@ def test_bundle_precheck_preserves_run_until_formal_verification(monkeypatch, tm
 
 
 @pytest.mark.parametrize("crash_after_nonce_write", [False, True])
-def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path, crash_after_nonce_write):
+@pytest.mark.parametrize("outage_minutes", [0, 6])
+def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path, crash_after_nonce_write, outage_minutes):
     from ops import r297_evidence_events
     from ops.r297_acceptance_run import issue_acceptance_run
     from ops.r297_evidence_bundle import build_bundle
@@ -464,7 +523,7 @@ def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path, 
     def retry():
         try:
             return verify_acceptance_event_bundle(
-                bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger,
+                bundle, expected_scope=scope, now=now + timedelta(minutes=outage_minutes), nonce_ledger=nonce_ledger,
             )
         except ValueError as exc:
             assert "missing or consumed" in str(exc)
@@ -479,6 +538,67 @@ def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path, 
     assert len(json.loads(nonce_ledger.read_text())) == 4
     with pytest.raises(ValueError, match="missing or consumed"):
         verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger)
+
+
+def _resign_bundle_after(bundle: dict, elapsed: timedelta) -> dict:
+    resigned = []
+    for event in bundle["events"]:
+        unsigned = {key: deepcopy(value) for key, value in event.items() if key not in {"key_id", "signature"}}
+        unsigned["observed_at"] = (
+            datetime.fromisoformat(unsigned["observed_at"]) + elapsed
+        ).isoformat()
+        if unsigned["event_type"] == "authenticated_observer":
+            subject = next(item for item in resigned if item["nonce"] == unsigned["payload"]["subject_nonce"])
+            unsigned["payload"]["subject_event_sha256"] = signed_event_sha256(subject)
+        resigned.append(_sign(unsigned))
+    return {"events": resigned}
+
+
+def test_exact_preverified_bundle_recovers_after_five_minute_outage(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    bundle = _bundle(now)
+    ledger = _nonce_ledger(tmp_path)
+    initial = verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+    )
+
+    recovered = verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now + timedelta(minutes=6),
+        nonce_ledger=ledger, allow_nonce_recovery=True,
+    )
+
+    assert recovered == initial
+    records = json.loads(ledger.read_text())
+    assert len(records) == 4
+    assert {
+        record["event_sha256"] for record in records if record["event_type"] != "acceptance_run"
+    } == {signed_event_sha256(event) for event in bundle["events"]}
+
+
+def test_expired_never_verified_bundle_cannot_enter_recovery_path(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="expired evidence event"):
+        verify_acceptance_event_bundle(
+            _bundle(now), expected_scope=_scope(), now=now + timedelta(minutes=6),
+            nonce_ledger=_nonce_ledger(tmp_path), allow_nonce_recovery=True,
+        )
+
+
+def test_preverified_bundle_rejects_resigned_timestamp_rewrite(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    bundle = _bundle(now)
+    ledger = _nonce_ledger(tmp_path)
+    verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+    )
+
+    with pytest.raises(ValueError, match="replayed evidence nonce|receipt binding mismatch"):
+        verify_acceptance_event_bundle(
+            _resign_bundle_after(bundle, timedelta(minutes=6)),
+            expected_scope=_scope(), now=now + timedelta(minutes=6),
+            nonce_ledger=ledger, allow_nonce_recovery=True,
+        )
 
 
 def test_candidate_bundle_builder_cannot_receive_any_signer_private_key(monkeypatch):
@@ -591,6 +711,8 @@ def test_acceptance_source_run_is_consumed_once_across_scopes(tmp_path):
 
     with pytest.raises(ValueError, match="replayed acceptance run"):
         _record_nonces(ledger, [{**first, "tenant_id": 999, "store_id": 999}])
+    with pytest.raises(ValueError, match="replayed acceptance run"):
+        _record_nonces(ledger, [first], allow_exact_recovery=True)
 
 
 @pytest.mark.parametrize(
@@ -734,3 +856,178 @@ def test_nonce_ledger_corruption_fails_closed_without_replacement(tmp_path):
 
     assert ledger.read_text(encoding="utf-8") == "not-json\n"
     assert os.stat(ledger).st_ino == original_inode
+
+
+def _receipted_bundle(fact_time: datetime, *, receipt_delay_seconds: int = 1) -> dict:
+    signed = []
+    for event in _bundle(fact_time)["events"]:
+        unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
+        observed = datetime.fromisoformat(unsigned["observed_at"])
+        unsigned["payload"] = {
+            **unsigned["payload"],
+            "freshness_receipt": {
+                "received_at": (observed + timedelta(seconds=receipt_delay_seconds)).isoformat(),
+                "freshness_verified": True,
+                "maximum_age_seconds": 300,
+            },
+        }
+        if unsigned["event_type"] == "authenticated_observer":
+            subject = signed[-1]
+            unsigned["payload"]["subject_event_sha256"] = signed_event_sha256(subject)
+        signed.append(_sign(unsigned))
+    return {"events": signed}
+
+
+def test_long_cycle_bundle_preserves_fact_time_with_signed_freshness_receipts(tmp_path):
+    now = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
+    bundle = _receipted_bundle(now - timedelta(minutes=20))
+    ledger = _nonce_ledger(tmp_path)
+    original = verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now - timedelta(minutes=20), nonce_ledger=ledger,
+    )
+    result = verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger, allow_nonce_recovery=True,
+    )
+    assert result["authenticated_observer"]["verified_subject_count"] == 2
+    assert result == original
+
+
+def test_producer_freshness_claim_cannot_replace_durable_verification(tmp_path):
+    now = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
+    ledger = _nonce_ledger(tmp_path)
+    with pytest.raises(ValueError, match="expired evidence event"):
+        verify_acceptance_event_bundle(
+            _receipted_bundle(now - timedelta(minutes=20)),
+            expected_scope=_scope(), now=now, nonce_ledger=ledger, allow_nonce_recovery=True,
+        )
+    assert json.loads(ledger.read_text()) == []
+
+
+def test_exact_verification_recovery_expires_without_refreshing_proof(tmp_path):
+    now = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
+    ledger = _nonce_ledger(tmp_path)
+    bundle = _bundle(now)
+    verify_acceptance_event_bundle(bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger)
+    original = ledger.read_bytes()
+    with pytest.raises(ValueError, match="recovery period expired"):
+        verify_acceptance_event_bundle(
+            bundle, expected_scope=_scope(), now=now + timedelta(hours=12, seconds=1),
+            nonce_ledger=ledger, allow_nonce_recovery=True,
+        )
+    assert ledger.read_bytes() == original
+
+
+def test_long_cycle_bundle_rejects_receipt_outside_five_minutes(tmp_path):
+    now = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="freshness receipt"):
+        verify_acceptance_event_bundle(
+            _receipted_bundle(now - timedelta(minutes=20), receipt_delay_seconds=301),
+            expected_scope=_scope(), now=now, nonce_ledger=_nonce_ledger(tmp_path),
+        )
+
+
+def test_verified_event_receipt_entry_records_signed_arrival(monkeypatch, tmp_path):
+    from ops.r297_acceptance_run import issue_acceptance_run
+    from ops.r297_event_receipt import record_event
+    from tests.test_r297_acceptance_run import _ledger
+
+    now = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
+    event = _receipted_bundle(now)["events"][0]
+    ledger = _ledger(tmp_path)
+    issue_acceptance_run(
+        ledger,
+        scope={field: event[field] for field in {
+            "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+        }},
+        source_workflow_run_id=event["payload"]["workflow_run_id"],
+        run_attempt=event["run_attempt"], now=now - timedelta(seconds=5),
+    )
+    stored = json.loads(ledger.read_text())
+    stored["runs"][0].update({
+        field: event[field] for field in {"run_id", "run_attempt", "challenge"}
+    })
+    ledger.write_text(json.dumps(stored, sort_keys=True) + "\n")
+    root = tmp_path / "event"
+    root.mkdir(mode=0o700)
+    event_path = root / "page.json"
+    write_sha256_bound_file(
+        event_path, (json.dumps(event, sort_keys=True) + "\n").encode(),
+    )
+
+    assert record_event(
+        ledger, event_path,
+        source_workflow_run_id=event["payload"]["workflow_run_id"], now=now,
+    ) == "recorded"
+
+    late = root / "late.json"
+    write_sha256_bound_file(
+        late, (json.dumps(event, sort_keys=True) + "\n").encode(),
+    )
+    original = ledger.read_bytes()
+    for delay in (timedelta(seconds=1), timedelta(minutes=6)):
+        assert record_event(
+            ledger, late, source_workflow_run_id=event["payload"]["workflow_run_id"], now=now + delay,
+        ) == "recovered"
+        assert ledger.read_bytes() == original
+    with pytest.raises(ValueError, match="expired"):
+        record_event(
+            ledger, late, source_workflow_run_id=event["payload"]["workflow_run_id"], now=now + timedelta(hours=13),
+        )
+    changed = root / "changed.json"
+    rewritten = _resign_bundle_after(_receipted_bundle(now), timedelta(seconds=1))["events"][0]
+    write_sha256_bound_file(changed, (json.dumps(rewritten, sort_keys=True) + "\n").encode())
+    with pytest.raises(ValueError, match="receipt binding mismatch"):
+        record_event(
+            ledger, changed, source_workflow_run_id=event["payload"]["workflow_run_id"], now=now + timedelta(seconds=1),
+        )
+    second = root / "second.json"
+    write_sha256_bound_file(second, (json.dumps(_receipted_bundle(now)["events"][1], sort_keys=True) + "\n").encode())
+    with pytest.raises(ValueError, match="expired evidence event"):
+        record_event(
+            ledger, second, source_workflow_run_id=event["payload"]["workflow_run_id"], now=now + timedelta(minutes=6),
+        )
+    assert ledger.read_bytes() == original
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda delay: record_event(
+            ledger, second, source_workflow_run_id=event["payload"]["workflow_run_id"], now=now + timedelta(seconds=delay),
+        ), (1, 2)))
+    assert sorted(results) == ["recorded", "recovered"]
+    assert len(json.loads(ledger.read_text())["runs"][0]["event_receipts"]) == 2
+
+
+def test_long_cycle_consumes_only_the_persisted_signed_receipt_chain(monkeypatch, tmp_path):
+    from ops import r297_evidence_events
+    from ops.r297_acceptance_run import issue_acceptance_run, record_acceptance_event_receipt
+    from tests.test_r297_acceptance_run import _ledger
+
+    fact_time = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    scope = _scope()
+    run_ledger = _ledger(tmp_path)
+    record = issue_acceptance_run(
+        run_ledger,
+        scope={field: value for field, value in scope.items() if field not in {"run_id", "run_attempt", "challenge"}},
+        source_workflow_run_id=33949515935, run_attempt=1,
+        now=fact_time - timedelta(seconds=5),
+    )
+    scope.update({field: record[field] for field in ("run_id", "run_attempt", "challenge")})
+    monkeypatch.setitem(globals(), "_scope", lambda: scope)
+    trust = load_trust_manifest(environment="test")
+    monkeypatch.setattr(r297_evidence_events, "load_trust_manifest", lambda **_kwargs: trust)
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    monkeypatch.setenv("R297_ACCEPTANCE_RUN_LEDGER", str(run_ledger))
+    bundle = _receipted_bundle(fact_time)
+    for event in bundle["events"]:
+        received_at = datetime.fromisoformat(event["payload"]["freshness_receipt"]["received_at"])
+        record_acceptance_event_receipt(
+            run_ledger, expected_scope=scope, source_workflow_run_id=33949515935,
+            event_type=event["event_type"], sequence=event["sequence"],
+            event_sha256=signed_event_sha256(event),
+            observed_at=datetime.fromisoformat(event["observed_at"]), received_at=received_at,
+        )
+
+    result = verify_acceptance_event_bundle(
+        bundle, expected_scope=scope, now=fact_time + timedelta(minutes=20),
+        nonce_ledger=_nonce_ledger(tmp_path),
+    )
+    assert result["authenticated_observer"]["verified_subject_count"] == 2
+    assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"

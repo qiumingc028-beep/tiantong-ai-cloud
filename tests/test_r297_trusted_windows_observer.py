@@ -201,3 +201,12 @@ def test_backend_observer_never_forwards_bearer_on_redirect(monkeypatch, tmp_pat
     assert rejected.value.code == 302
     assert calls == [("https://trusted.example/api/jd-workbench/stores/3/acceptance-status",
                       "Bearer fixture-bearer")]
+@pytest.mark.parametrize("url", [
+    "http://trusted.example", "https://user:pass@trusted.example",
+    "https://trusted.example/base", "https://trusted.example?next=evil",
+])
+def test_backend_observer_rejects_noncanonical_destination(url, tmp_path):
+    with pytest.raises(RuntimeError, match="destination invalid"):
+        __import__("ops.r297_trusted_windows_observer", fromlist=["_backend_reader"])._backend_reader(
+            url, "fixture-bearer", tmp_path / "ca", 3,
+        )

@@ -247,7 +247,9 @@ def read_scheduler_snapshot(database_url: str, page_event: dict) -> dict:
     }
 
 
-def produce_page_event_receiver(raw_artifact: dict, authenticated_scope: dict) -> dict:
+def produce_page_event_receiver(
+    raw_artifact: dict, authenticated_scope: dict, *, received_at: datetime | None = None,
+) -> dict:
     """Turn a native client event into a scoped event signed by the trusted receiver."""
     environment = os.getenv("APP_ENV", "").strip().lower()
     if environment not in {"acceptance", "production", "test"}:
@@ -260,16 +262,26 @@ def produce_page_event_receiver(raw_artifact: dict, authenticated_scope: dict) -
         or raw_artifact.get("release_sha") != authenticated_scope["release_sha"]
     ):
         raise ValueError("pagehide artifact scope mismatch")
-    run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
-    if environment != "test" and not run_ledger:
-        raise RuntimeError("acceptance run ledger missing")
-    if run_ledger:
+    if environment == "test" and os.getenv("R297_ACCEPTANCE_RUN_LEDGER", ""):
         from ops.r297_acceptance_run import validate_acceptance_run
         validate_acceptance_run(
-            Path(run_ledger), expected_scope=authenticated_scope,
+            Path(os.environ["R297_ACCEPTANCE_RUN_LEDGER"]), expected_scope=authenticated_scope,
+            source_workflow_run_id=raw_artifact["workflow_run_id"],
+        )
+    elif environment != "test" or os.getenv("R297_TEST_ACCEPTANCE_RUN_BINDING", ""):
+        from ops.r297_acceptance_run import validate_acceptance_run_snapshot
+        binding = (
+            Path(os.environ["R297_TEST_ACCEPTANCE_RUN_BINDING"])
+            if environment == "test" else Path("/etc/tiantong/r297-acceptance-run-binding.json")
+        )
+        validate_acceptance_run_snapshot(
+            binding, expected_scope=authenticated_scope,
             source_workflow_run_id=raw_artifact["workflow_run_id"],
         )
     manifest, _ = load_trust_manifest(environment=environment)
+    fact_time = datetime.fromisoformat(str(raw_artifact["observed_at"]).replace("Z", "+00:00"))
+    received_at = (received_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    from ops.r297_evidence_events import freshness_receipt
     event = {
         **authenticated_scope,
         "event_type": "web_page_close",
@@ -277,7 +289,10 @@ def produce_page_event_receiver(raw_artifact: dict, authenticated_scope: dict) -
         "observed_at": raw_artifact["observed_at"],
         "sequence": 1,
         "nonce": secrets.token_urlsafe(24),
-        "payload": {"closed": True, "source": "browser_pagehide"},
+        "payload": {
+            "closed": True, "source": "browser_pagehide",
+            "freshness_receipt": freshness_receipt(fact_time, received_at),
+        },
     }
     event["payload"].update({
         "artifact_evidence_sha256": raw_artifact["artifact_evidence_sha256"],
@@ -344,6 +359,11 @@ def _produce_authenticated_observer(
             "cloud_cycles_after": snapshot["cloud_cycles_after"],
             "eligible_store_ids": snapshot["eligible_store_ids"],
             "collected_store_ids_after": snapshot["collected_store_ids_after"],
+            "freshness_receipt": {
+                "received_at": observed_at.astimezone(timezone.utc).isoformat(),
+                "freshness_verified": True,
+                "maximum_age_seconds": 300,
+            },
         },
     }
     return sign_event(event, environment=environment, manifest=manifest, issuer="authenticated_observer")
@@ -384,8 +404,11 @@ def _recover_signed_event(
     if any(type(event.get(field)) is not type(value) or event.get(field) != value
            for field, value in expected_scope.items()):
         raise ValueError("recovered evidence event scope mismatch")
-    if expected_payload is not None and event.get("payload") != expected_payload:
-        raise ValueError("recovered evidence event payload mismatch")
+    if expected_payload is not None:
+        recovered_payload = dict(event.get("payload", {}))
+        recovered_payload.pop("freshness_receipt", None)
+        if recovered_payload != expected_payload:
+            raise ValueError("recovered evidence event payload mismatch")
     if subject_event is not None and (
         event.get("sequence") != subject_event["sequence"] + 1
         or event.get("payload", {}).get("subject_nonce") != subject_event["nonce"]

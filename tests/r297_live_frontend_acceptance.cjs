@@ -195,13 +195,27 @@ function assertCommonAcknowledgement(event, config, type, issuer, sequence) {
   }
 }
 
+function assertAcknowledgementPayload(event, fields, label) {
+  const hasReceipt = Object.hasOwn(event.payload || {}, 'freshness_receipt');
+  assert.ok(exactKeys(event.payload, hasReceipt ? [...fields, 'freshness_receipt'] : fields), `${label}回执payload字段错误`);
+  if (!hasReceipt) return;
+  const receipt = event.payload.freshness_receipt;
+  assert.ok(exactKeys(receipt, ['received_at', 'freshness_verified', 'maximum_age_seconds']), '验鲜回执字段错误');
+  assert.equal(receipt.freshness_verified, true);
+  assert.equal(receipt.maximum_age_seconds, 300);
+  assert.match(String(receipt.received_at), /(?:Z|[+-]\d{2}:\d{2})$/);
+  const delay = Date.parse(receipt.received_at) - Date.parse(event.observed_at);
+  assert.ok(Number.isFinite(delay) && delay >= 0 && delay <= 300_000, '验鲜回执时间错误');
+  // This signed producer field is not proof of durable orchestrator verification.
+}
+
 function assertPageReceiverAcknowledgement(event, config, rawEvent, artifact) {
   assertCommonAcknowledgement(event, config, 'web_page_close', 'page_event_receiver', 1);
   assert.equal(event.observed_at, rawEvent.observed_at, 'Receiver回执时间未绑定原始事件');
-  assert.ok(exactKeys(event.payload, [
+  assertAcknowledgementPayload(event, [
     'closed', 'source', 'artifact_evidence_sha256', 'artifact_archive_sha256',
     'artifact_id', 'artifact_name', 'workflow_run_id'
-  ]), 'Receiver回执payload字段错误');
+  ], 'Receiver');
   assert.equal(event.payload.closed, true);
   assert.equal(event.payload.source, 'browser_pagehide');
   assert.equal(event.payload.artifact_evidence_sha256, artifact.evidenceSha);
@@ -213,11 +227,11 @@ function assertPageReceiverAcknowledgement(event, config, rawEvent, artifact) {
 
 function assertObserverAcknowledgement(event, config, receiverEvent) {
   assertCommonAcknowledgement(event, config, 'authenticated_observer', 'authenticated_observer', 2);
-  assert.ok(exactKeys(event.payload, [
+  assertAcknowledgementPayload(event, [
     'subject_nonce', 'subject_event_sha256', 'scheduler_continues', 'observation_source',
     'database_read_only', 'cloud_cycles_before', 'cloud_cycles_after',
     'eligible_store_ids', 'collected_store_ids_after'
-  ]), 'Observer回执payload字段错误');
+  ], 'Observer');
   const subjectMatches = event.payload.subject_nonce === receiverEvent.nonce
     && event.payload.subject_event_sha256
       === crypto.createHash('sha256').update(canonicalJson(receiverEvent)).digest('hex');
@@ -475,6 +489,19 @@ async function selfTest() {
       artifact_name: 'r297-native-pagehide-test', workflow_run_id: 2}
   };
   assertPageReceiverAcknowledgement(receiver, config, rawEvent, {evidenceSha: '2'.repeat(64), archiveSha: '3'.repeat(64)});
+  const receipt = {received_at: '2026-09-08T00:00:01.000Z', freshness_verified: true, maximum_age_seconds: 300};
+  const validateReceipt = value => assertPageReceiverAcknowledgement(
+    {...receiver, payload: {...receiver.payload, freshness_receipt: value}}, config, rawEvent,
+    {evidenceSha: '2'.repeat(64), archiveSha: '3'.repeat(64)}
+  );
+  validateReceipt(receipt);
+  for (const invalid of [
+    null, {...receipt, extra: true}, {...receipt, freshness_verified: false},
+    {...receipt, maximum_age_seconds: '300'}, {...receipt, received_at: 'invalid'},
+    {...receipt, received_at: '2026-09-08T00:05:01.000Z'},
+    {...receipt, received_at: '2026-09-07T23:59:59.000Z'}
+  ]) assert.throws(() => validateReceipt(invalid));
+  process.stdout.write('R297_LIVE_RECEIPT_CONTRACT=PASS\n');
   process.stdout.write('R297_LIVE_FRONTEND_SELF_TEST=PASS\n');
 }
 
