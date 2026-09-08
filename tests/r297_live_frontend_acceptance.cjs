@@ -29,7 +29,8 @@ const REQUIRED_INPUTS = [
 ];
 const RUN_BINDING_FIELDS = [
   'namespace', 'tenant_id', 'company_id', 'store_id', 'platform', 'release_sha',
-  'source_workflow_run_id', 'run_id', 'run_attempt', 'challenge', 'issued_at', 'consumed_at', 'state'
+  'source_workflow_run_id', 'run_id', 'run_attempt', 'challenge', 'issued_at', 'consumed_at', 'state',
+  'event_receipts'
 ];
 const BROKER_RESULT_FIELDS = [
   'schema_version', 'verifier_id', 'result', 'verified_at', 'binding_file_sha256',
@@ -81,6 +82,7 @@ function loadConfig() {
       || !Number.isInteger(binding.company_id) || binding.company_id <= 0
       || !Number.isInteger(binding.store_id) || binding.store_id <= 0
       || binding.state !== 'issued' || binding.consumed_at !== null
+      || !Array.isArray(binding.event_receipts) || binding.event_receipts.length !== 0
       || Number.isNaN(Date.parse(binding.issued_at))) {
     throw new Error('受保护run binding无效');
   }
@@ -208,13 +210,27 @@ function assertCommonAcknowledgement(event, config, type, issuer, sequence) {
   }
 }
 
+function assertAcknowledgementPayload(event, fields, label) {
+  const hasReceipt = Object.hasOwn(event.payload || {}, 'freshness_receipt');
+  assert.ok(exactKeys(event.payload, hasReceipt ? [...fields, 'freshness_receipt'] : fields), `${label}回执payload字段错误`);
+  if (!hasReceipt) return;
+  const receipt = event.payload.freshness_receipt;
+  assert.ok(exactKeys(receipt, ['received_at', 'freshness_verified', 'maximum_age_seconds']), '验鲜回执字段错误');
+  assert.equal(receipt.freshness_verified, true);
+  assert.equal(receipt.maximum_age_seconds, 300);
+  assert.match(String(receipt.received_at), /(?:Z|[+-]\d{2}:\d{2})$/);
+  const delay = Date.parse(receipt.received_at) - Date.parse(event.observed_at);
+  assert.ok(Number.isFinite(delay) && delay >= 0 && delay <= 300_000, '验鲜回执时间错误');
+  // This signed producer field is not proof of durable orchestrator verification.
+}
+
 function assertPageReceiverAcknowledgement(event, config, rawEvent, artifact) {
   assertCommonAcknowledgement(event, config, 'web_page_close', 'page_event_receiver', 1);
   assert.equal(event.observed_at, rawEvent.observed_at, 'Receiver回执时间未绑定原始事件');
-  assert.ok(exactKeys(event.payload, [
+  assertAcknowledgementPayload(event, [
     'closed', 'source', 'artifact_evidence_sha256', 'artifact_archive_sha256',
     'artifact_id', 'artifact_name', 'workflow_run_id'
-  ]), 'Receiver回执payload字段错误');
+  ], 'Receiver');
   assert.equal(event.payload.closed, true);
   assert.equal(event.payload.source, 'browser_pagehide');
   assert.equal(event.payload.artifact_evidence_sha256, artifact.evidenceSha);
@@ -226,11 +242,11 @@ function assertPageReceiverAcknowledgement(event, config, rawEvent, artifact) {
 
 function assertObserverAcknowledgement(event, config, receiverEvent) {
   assertCommonAcknowledgement(event, config, 'authenticated_observer', 'authenticated_observer', 2);
-  assert.ok(exactKeys(event.payload, [
+  assertAcknowledgementPayload(event, [
     'subject_nonce', 'subject_event_sha256', 'scheduler_continues', 'observation_source',
     'database_read_only', 'cloud_cycles_before', 'cloud_cycles_after',
     'eligible_store_ids', 'collected_store_ids_after'
-  ]), 'Observer回执payload字段错误');
+  ], 'Observer');
   const subjectMatches = event.payload.subject_nonce === receiverEvent.nonce
     && event.payload.subject_event_sha256
       === crypto.createHash('sha256').update(canonicalJson(receiverEvent)).digest('hex');
@@ -339,6 +355,22 @@ async function revokeRecoveredSession(config, requestFactory) {
     if (![401, 403].includes(revoked.status())) throw new Error('ACK恢复后Viewer访问未失效');
   } finally {
     await api.dispose();
+  }
+}
+
+async function revokeRecoveredSessionWithSignals(config, requestFactory, signals = process) {
+  let interruptedExitCode = 0;
+  const interrupted = code => { if (!interruptedExitCode) interruptedExitCode = code; };
+  const onSigint = () => interrupted(130);
+  const onSigterm = () => interrupted(143);
+  signals.on('SIGINT', onSigint);
+  signals.on('SIGTERM', onSigterm);
+  try {
+    await revokeRecoveredSession(config, requestFactory);
+    return interruptedExitCode;
+  } finally {
+    signals.removeListener('SIGINT', onSigint);
+    signals.removeListener('SIGTERM', onSigterm);
   }
 }
 
@@ -513,6 +545,23 @@ async function selfTest() {
     ['DELETE', '/api/jd-workbench/stores/3/login-session', 10_000],
     ['GET', '/jd-browser/novnc/3/vnc.html', 10_000, 0], ['DISPOSE']
   ]);
+  const recoverySignals = new EventEmitter();
+  let finishRecovery;
+  const recoveryDelete = new Promise(resolve => { finishRecovery = resolve; });
+  const interruptedRecovery = revokeRecoveredSessionWithSignals(
+    {origin: 'https://acceptance.invalid', storageState: {}, storeId: 3},
+    async () => ({
+      delete: async () => {
+        await recoveryDelete;
+        return {status: () => 200, json: async () => ({ok: true, store_id: 3, status: 'REVOKED'})};
+      },
+      get: async () => ({status: () => 403}),
+      dispose: async () => {}
+    }), recoverySignals
+  );
+  recoverySignals.emit('SIGTERM');
+  finishRecovery();
+  assert.equal(await interruptedRecovery, 143, '恢复撤销必须在SIGTERM后收敛并保留退出码');
   assert.equal(acknowledgementRecoveryState(['a', 'b'], () => false), 'NONE');
   assert.equal(acknowledgementRecoveryState(['a', 'b'], () => true), 'COMPLETE');
   assert.throws(() => acknowledgementRecoveryState(['a', 'b'], value => value === 'a'), /文件不完整/);
@@ -645,6 +694,19 @@ async function selfTest() {
     {...broker, event: {...broker.event, binding_file_sha256: '8'.repeat(64)}},
     config, receiverRecord, observerRecord, rawEvent
   ), /当前事务不匹配/);
+  const receipt = {received_at: '2026-09-08T00:00:01.000Z', freshness_verified: true, maximum_age_seconds: 300};
+  const validateReceipt = value => assertPageReceiverAcknowledgement(
+    {...receiver, payload: {...receiver.payload, freshness_receipt: value}}, config, rawEvent,
+    {evidenceSha: '2'.repeat(64), archiveSha: '3'.repeat(64)}
+  );
+  validateReceipt(receipt);
+  for (const invalid of [
+    null, {...receipt, extra: true}, {...receipt, freshness_verified: false},
+    {...receipt, maximum_age_seconds: '300'}, {...receipt, received_at: 'invalid'},
+    {...receipt, received_at: '2026-09-08T00:05:01.000Z'},
+    {...receipt, received_at: '2026-09-07T23:59:59.000Z'}
+  ]) assert.throws(() => validateReceipt(invalid));
+  process.stdout.write('R297_LIVE_RECEIPT_CONTRACT=PASS\n');
   process.stdout.write('R297_LIVE_FRONTEND_SELF_TEST=PASS\n');
 }
 
@@ -669,12 +731,14 @@ async function main() {
   const recovered = recoverAcknowledgedStage(config);
   if (recovered) {
     const { request } = require('playwright');
-    await revokeRecoveredSession(config, options => request.newContext(options));
+    const interruptedExitCode = await revokeRecoveredSessionWithSignals(
+      config, options => request.newContext(options)
+    );
     process.stdout.write('R297_ACK_RECOVERY=PASS\n');
     process.stdout.write('R297_ACK_RECOVERY_REVOKED=PASS\n');
     process.stdout.write('R297_LIVE_FRONTEND_RESULT=ACK_RECOVERED_REVOKED\n');
     process.stdout.write('R297_ACK_RECOVERY_NOTE=ACK恢复不会生成完整验收PASS\n');
-    process.exitCode = 2;
+    process.exitCode = interruptedExitCode || 2;
     return;
   }
   // Freshness gates new Owner side effects, but must not block idempotent

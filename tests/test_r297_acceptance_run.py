@@ -2,13 +2,15 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from ops.r297_acceptance_run import (
     complete_acceptance_run, consume_acceptance_run, issue_acceptance_run, main,
+    record_acceptance_event_receipt,
     recover_staged_acceptance_output, reserve_acceptance_run, stage_acceptance_output,
-    validate_acceptance_run,
+    validate_acceptance_run, validate_acceptance_run_snapshot,
 )
 
 
@@ -49,6 +51,52 @@ def test_protected_orchestrator_issues_and_consumes_one_run(tmp_path):
     with pytest.raises(ValueError, match="missing or consumed"):
         consume_acceptance_run(
             ledger, expected_scope=expected, source_workflow_run_id=34000000001, now=now,
+        )
+
+
+def test_receiver_validates_immutable_snapshot_without_writer_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_ENV", "test")
+    root = tmp_path / "receiver-snapshot"
+    root.mkdir(mode=0o755)
+    now = datetime(2026, 9, 8, 2, 0, tzinfo=timezone.utc)
+    record = {
+        **_scope(), "source_workflow_run_id": 34000000001,
+        "run_id": "r297-snapshot-run-0001", "run_attempt": 1,
+        "challenge": "snapshot-challenge-00000001", "issued_at": now.isoformat(),
+        "consumed_at": None, "state": "issued",
+    }
+    binding = root / "r297-acceptance-run-binding.json"
+    content = (json.dumps(record, sort_keys=True) + "\n").encode()
+    binding.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    sidecar = Path(f"{binding}.sha256")
+    sidecar.write_text(f"{digest}  {binding.name}\n", encoding="ascii")
+    binding.chmod(0o444)
+    sidecar.chmod(0o444)
+
+    validate_acceptance_run_snapshot(
+        binding,
+        expected_scope={key: record[key] for key in set(_scope()) | {"run_id", "run_attempt", "challenge"}},
+        source_workflow_run_id=34000000001,
+        now=now,
+    )
+
+    binding.chmod(0o644)
+    with pytest.raises(RuntimeError, match="snapshot permissions invalid"):
+        validate_acceptance_run_snapshot(
+            binding,
+            expected_scope={key: record[key] for key in set(_scope()) | {"run_id", "run_attempt", "challenge"}},
+            source_workflow_run_id=34000000001,
+            now=now,
+        )
+    binding.chmod(0o444)
+    sidecar.chmod(0o644)
+    with pytest.raises(RuntimeError, match="snapshot permissions invalid"):
+        validate_acceptance_run_snapshot(
+            binding,
+            expected_scope={key: record[key] for key in set(_scope()) | {"run_id", "run_attempt", "challenge"}},
+            source_workflow_run_id=34000000001,
+            now=now,
         )
 
 
@@ -109,6 +157,33 @@ def test_run_challenge_expires_after_five_minutes(tmp_path):
             ledger, expected_scope=expected, source_workflow_run_id=34000000001,
             now=issued_at + timedelta(minutes=6),
         )
+
+
+def test_verified_event_receipts_extend_only_the_same_run_transaction(tmp_path):
+    ledger = _ledger(tmp_path)
+    issued_at = datetime(2026, 9, 7, tzinfo=timezone.utc)
+    record = issue_acceptance_run(
+        ledger, scope=_scope(), source_workflow_run_id=34000000001,
+        run_attempt=1, now=issued_at,
+    )
+    expected = {field: record[field] for field in {*_scope(), "run_id", "run_attempt", "challenge"}}
+    digests = []
+    event_types = ("web_page_close", "authenticated_observer", "electron_exit", "authenticated_observer")
+    for sequence, event_type in enumerate(event_types, 1):
+        digest = f"{sequence}" * 64
+        digests.append(digest)
+        observed_at = issued_at + timedelta(minutes=sequence * 2)
+        assert record_acceptance_event_receipt(
+            ledger, expected_scope=expected, source_workflow_run_id=34000000001,
+            event_type=event_type, sequence=sequence, event_sha256=digest,
+            observed_at=observed_at, received_at=observed_at + timedelta(seconds=1),
+        ) == "recorded"
+
+    assert reserve_acceptance_run(
+        ledger, expected_scope=expected, source_workflow_run_id=34000000001,
+        transaction_sha256="a" * 64, event_sha256s=digests,
+        now=issued_at + timedelta(minutes=20),
+    ) == "reserved"
 
 
 def test_run_rejects_different_pagehide_workflow(tmp_path):
@@ -239,7 +314,7 @@ def test_staged_output_is_bounded_and_expired_bytes_are_compacted(tmp_path):
 
     issue_acceptance_run(
         ledger, scope=_scope(), source_workflow_run_id=34000000002,
-        run_attempt=2, now=now + timedelta(minutes=6),
+        run_attempt=2, now=now + timedelta(hours=13),
     )
     expired = json.loads(ledger.read_text())["runs"][0]
     assert expired["pending_output_sha256"] == digest
@@ -247,7 +322,7 @@ def test_staged_output_is_bounded_and_expired_bytes_are_compacted(tmp_path):
     with pytest.raises(ValueError, match="expired"):
         recover_staged_acceptance_output(
             ledger, expected_scope=expected, source_workflow_run_id=34000000001,
-            transaction_sha256=transaction, now=now + timedelta(minutes=6),
+            transaction_sha256=transaction, now=now + timedelta(hours=13),
         )
 
 
@@ -310,7 +385,8 @@ def test_formal_entry_recovers_output_before_starting_processes(monkeypatch, tmp
     from ops import r297_process_acceptance as process
 
     bundle = {"events": [{
-        "event_type": "web_page_close", "payload": {"workflow_run_id": 34000000001},
+        "event_type": "web_page_close", "observed_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {"workflow_run_id": 34000000001},
     }]}
     signed = tmp_path / "bundle.json"
     signed.write_text(json.dumps(bundle), encoding="utf-8")
@@ -342,7 +418,8 @@ def test_formal_entry_recovers_output_before_starting_processes(monkeypatch, tmp
     assert calls == ["reserve", "nonce", "staged", "validate", "output", "complete"]
 
 
-def test_process_evidence_recovers_body_only_and_completed_publication(tmp_path):
+@pytest.mark.parametrize("invalid_fence", [None, "missing_commit", "ack_accepted", "same_generation"])
+def test_process_evidence_recovers_body_only_and_completed_publication(tmp_path, invalid_fence):
     from ops.r297_process_acceptance import recover_published_process_evidence
 
     root = tmp_path / "output"
@@ -362,7 +439,7 @@ def test_process_evidence_recovers_body_only_and_completed_publication(tmp_path)
         "worker_restart": {"pid_before": 1, "pid_after": 2, "recovered": True},
         "multi_worker": {"worker_pids": [2, 3], "distinct_worker_pids": True, "status": "success", "claim_log_count": 1, "database_log_count": 1, "postgresql_store_claim_count": 1, "same_store_claim_count": 1},
         "retry_schedule": {"expected_seconds": [30, 120, 300, 900, 1800], "observed_seconds": [30, 120, 300, 900, 1800]},
-        "manual_resume": {"before_status": "HUMAN_ACTION_REQUIRED", "recovery_probe_status": "success", "automatic_enqueue_count": 1, "task_status": "success", "recovery_probe_task_id": "probe-1", "task_id": "task-1"},
+        "manual_resume": {"before_status": "HUMAN_ACTION_REQUIRED", "recovery_probe_status": "success", "automatic_enqueue_count": 1, "task_status": "success", "recovery_probe_task_id": "probe-1", "task_id": "task-1", "stale_claim_generation": 1, "probe_claim_generation": 2, "resumed_claim_generation": 2, "stale_worker_commit_rejected": True, "stale_worker_ack_rejected_after_reconciliation": True},
         "human_action_detection": {"detected_status": "HUMAN_ACTION_REQUIRED", "automatic_resume_status": "success"},
         "service_restart": {"runtime_pid_before": 3, "runtime_pid_after": 4, "runtime_session_restored": True, "backend_pid_before": 5, "backend_pid_after": 6},
         "two_cycle": [{"task_id": "cycle-1", "status": "success", "database_log_count": 1}, {"task_id": "cycle-2", "status": "success", "database_log_count": 1}],
@@ -371,6 +448,12 @@ def test_process_evidence_recovers_body_only_and_completed_publication(tmp_path)
         "runtime_restart": {"pid_before": 3, "pid_after": 4, "session_restored": True},
         "explicit_ack": {"ready_count": 0, "processing_count": 0, "metadata_count": 0},
     }
+    if invalid_fence == "missing_commit":
+        sections["manual_resume"].pop("stale_worker_commit_rejected")
+    elif invalid_fence == "ack_accepted":
+        sections["manual_resume"]["stale_worker_ack_rejected_after_reconciliation"] = False
+    elif invalid_fence == "same_generation":
+        sections["manual_resume"].update(probe_claim_generation=1, resumed_claim_generation=1)
     gate_sections = {**verified, **sections}
     raw_events = [{"event": "command", "command": "run real acceptance"}, {
         "event": "sensitive_fixture_injected",
@@ -394,6 +477,15 @@ def test_process_evidence_recovers_body_only_and_completed_publication(tmp_path)
     }, sort_keys=True) + "\n").encode()
     evidence.write_bytes(content)
     evidence.chmod(0o600)
+
+    if invalid_fence is not None:
+        with pytest.raises(RuntimeError, match="GATE_INVALID"):
+            recover_published_process_evidence(
+                evidence, head="a" * 40, transaction_sha256=transaction, verified_events=verified,
+            )
+        assert evidence.read_bytes() == content
+        assert not evidence.with_name(f"{evidence.name}.sha256").exists()
+        return
 
     digest = recover_published_process_evidence(
         evidence, head="a" * 40, transaction_sha256=transaction, verified_events=verified,

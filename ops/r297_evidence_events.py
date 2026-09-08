@@ -34,6 +34,7 @@ _TEST_KEY_FINGERPRINTS = {
     "f49dbfbcf14774d5449ba88417fd32b04a028f9911008abeea6d8adf7533c599",
     "fc974bd3604d0c416b49c03639f9c80e6f0d98b1f6edb9519d9ecd3cf6157ce6",
 }
+_RECEIPT_RETENTION = timedelta(hours=12)
 _EVENT_ORDER = (
     ("web_page_close", "page_event_receiver"),
     ("authenticated_observer", "authenticated_observer"),
@@ -177,14 +178,45 @@ def _replace_file(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _validate_freshness_receipt(event: dict, *, now: datetime, maximum_age: timedelta) -> None:
+    receipt = event.get("payload", {}).get("freshness_receipt")
+    if not isinstance(receipt, dict) or set(receipt) != {
+        "received_at", "freshness_verified", "maximum_age_seconds",
+    }:
+        raise ValueError("expired evidence event")
+    occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
+    received_at = _timestamp(receipt.get("received_at"), "invalid evidence receipt time")
+    if (
+        receipt.get("freshness_verified") is not True
+        or receipt.get("maximum_age_seconds") != int(maximum_age.total_seconds())
+        or received_at < occurred_at
+        or received_at - occurred_at > maximum_age
+        or received_at > now + timedelta(seconds=30)
+        or now - received_at > _RECEIPT_RETENTION
+    ):
+        raise ValueError("invalid evidence freshness receipt")
+
+
+def freshness_receipt(observed_at: datetime, received_at: datetime) -> dict:
+    observed_at = observed_at.astimezone(timezone.utc)
+    received_at = received_at.astimezone(timezone.utc)
+    if received_at < observed_at or received_at - observed_at > timedelta(minutes=5):
+        raise ValueError("evidence fact was not received within five minutes")
+    return {
+        "received_at": received_at.isoformat(),
+        "freshness_verified": True,
+        "maximum_age_seconds": 300,
+    }
+
+
 def validate_page_event_payload(payload: object) -> None:
-    fields = {
+    required = {
         "closed", "source", "artifact_evidence_sha256", "artifact_archive_sha256",
         "artifact_id", "artifact_name", "workflow_run_id",
     }
     if (
         not isinstance(payload, dict)
-        or set(payload) != fields
+        or frozenset(payload) not in {frozenset(required), frozenset(required | {"freshness_receipt"})}
         or payload.get("closed") is not True
         or payload.get("source") != "browser_pagehide"
         or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("artifact_evidence_sha256", "")))
@@ -427,8 +459,6 @@ def verify_signed_event(
         raise ValueError("invalid evidence event scope")
     occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
     now = now.astimezone(timezone.utc)
-    if occurred_at < now - maximum_age:
-        raise ValueError("expired evidence event")
     if occurred_at > now + timedelta(seconds=30):
         raise ValueError("future evidence event")
     manifest, _ = load_trust_manifest(environment=environment)
@@ -444,6 +474,10 @@ def verify_signed_event(
         raise ValueError("evidence issuer key missing")
     if event_type in {"web_page_close", "electron_exit"} and "scheduler_continues" in event["payload"]:
         raise ValueError("client scheduler claim forbidden")
+    if "freshness_receipt" in event["payload"]:
+        _validate_freshness_receipt(event, now=now, maximum_age=maximum_age)
+    if occurred_at < now - maximum_age:
+        raise ValueError("expired evidence event")
     _verify_signature(event, key)
     return manifest, key
 
@@ -520,6 +554,57 @@ def validate_nonce_ledger(nonce_ledger: Path) -> None:
         os.close(descriptor)
 
 
+def _load_nonce_bindings(nonce_ledger: Path) -> list[dict]:
+    descriptor = _nonce_ledger_descriptor(nonce_ledger, os.O_RDONLY)
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        try:
+            loaded = json.load(handle)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("evidence nonce ledger invalid") from exc
+    legacy_fields = _SCOPE_FIELDS | {"event_type", "key_id", "nonce"}
+    verified_fields = legacy_fields | {"event_sha256", "verification"}
+    if not isinstance(loaded, list) or not all(
+        isinstance(value, dict) and set(value) in (legacy_fields, verified_fields)
+        for value in loaded
+    ):
+        raise ValueError("evidence nonce ledger invalid")
+    return loaded
+
+
+def _nonce_verification(nonce_ledger: Path, events: list[dict], identity: dict, now: datetime) -> dict | None:
+    validate_nonce_ledger(nonce_ledger)
+    descriptor = _nonce_ledger_descriptor(Path(f"{nonce_ledger}.lock"), os.O_RDWR)
+    with os.fdopen(descriptor, "r+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+        loaded = _load_nonce_bindings(nonce_ledger)
+    matching = [item for item in loaded if (item["key_id"], item["nonce"]) in {
+        (event.get("key_id"), event.get("nonce")) for event in events
+    }]
+    if not matching:
+        return None
+    proof = matching[0].get("verification")
+    event_digests = {(event.get("key_id"), event.get("nonce")): signed_event_sha256(event) for event in events}
+    if len(matching) != len(events) or not isinstance(proof, dict) or any(
+        item.get("verification") != proof
+        or item.get("event_sha256") != event_digests[(item["key_id"], item["nonce"])] for item in matching
+    ):
+        raise ValueError("evidence receipt binding mismatch")
+    _validate_verification(proof, identity, now)
+    return proof
+
+
+def _validate_verification(proof: dict, identity: dict, now: datetime) -> None:
+    if not isinstance(proof, dict) or proof.get("identity") != identity or (
+        signed_event_sha256(proof.get("result")) != proof.get("result_sha256")
+    ) or (
+        not isinstance(proof.get("event_verified_at"), list) or len(proof["event_verified_at"]) != len(_EVENT_ORDER)
+    ):
+        raise ValueError("evidence receipt binding mismatch")
+    verified_at = _timestamp(proof.get("verified_at"), "invalid verification receipt time")
+    if verified_at > now + timedelta(seconds=30) or now - verified_at > _RECEIPT_RETENTION:
+        raise ValueError("evidence recovery period expired")
+
+
 def _record_nonces(
     nonce_ledger: Path, bindings: list[dict], *, allow_exact_recovery: bool = False,
 ) -> None:
@@ -531,44 +616,34 @@ def _record_nonces(
     with os.fdopen(lock_descriptor, "r+", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         ledger_values: set[str] = set()
-        ledger_descriptor = _nonce_ledger_descriptor(nonce_ledger, os.O_RDONLY)
-        try:
-            with os.fdopen(ledger_descriptor, "r", encoding="utf-8") as ledger_handle:
-                try:
-                    loaded = json.load(ledger_handle)
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ValueError("evidence nonce ledger invalid") from exc
-        except Exception:
-            raise
-        required_fields = _SCOPE_FIELDS | {"event_type", "key_id", "nonce"}
-        if (
-            not isinstance(loaded, list)
-            or not all(isinstance(value, dict) and set(value) == required_fields for value in loaded)
-        ):
-            raise ValueError("evidence nonce ledger invalid")
+        loaded = _load_nonce_bindings(nonce_ledger)
         ledger_values.update(json.dumps(value, separators=(",", ":"), sort_keys=True) for value in loaded)
         canonical_bindings = {
             json.dumps(value, separators=(",", ":"), sort_keys=True) for value in bindings
         }
-        if allow_exact_recovery and canonical_bindings and canonical_bindings.issubset(ledger_values):
+        if (
+            allow_exact_recovery and canonical_bindings and canonical_bindings.issubset(ledger_values)
+            and all("event_sha256" in value and "verification" in value for value in bindings)
+        ):
             return
-        consumed_runs = {
-            value["nonce"] for value in loaded if value["event_type"] == "acceptance_run"
-        }
-        requested_runs = {
-            value["nonce"] for value in bindings if value["event_type"] == "acceptance_run"
-        }
+        consumed_runs = {value["run_id"] for value in loaded}
+        requested_runs = {value["run_id"] for value in bindings}
         if consumed_runs.intersection(requested_runs):
             raise ValueError("replayed acceptance run")
-        if ledger_values.intersection(canonical_bindings):
+        if {(item["key_id"], item["nonce"]) for item in loaded}.intersection(
+            (item["key_id"], item["nonce"]) for item in bindings
+        ):
             raise ValueError("replayed evidence nonce")
         temporary = nonce_ledger.with_name(f".{nonce_ledger.name}.{secrets.token_hex(8)}")
         updated = [json.loads(value) for value in sorted(ledger_values.union(canonical_bindings))]
+        content = (json.dumps(updated, sort_keys=True) + "\n").encode()
+        # Retain replay tombstones; capacity exhaustion must never enable reuse.
+        if len(content) > 8 * 1024 * 1024:
+            raise ValueError("evidence nonce ledger size limit exceeded")
         temporary_descriptor = os.open(
             temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600,
         )
         try:
-            content = (json.dumps(updated, sort_keys=True) + "\n").encode()
             remaining = memoryview(content)
             while remaining:
                 written = os.write(temporary_descriptor, remaining)
@@ -627,6 +702,37 @@ def verify_acceptance_event_bundle(
     )
     public_keys = {key["issuer"]: key for key in manifest["keys"]}
     now = now.astimezone(timezone.utc)
+    if not all(isinstance(event, dict) for event in events):
+        raise ValueError("evidence event schema mismatch")
+    environment = os.getenv("APP_ENV", "").strip().lower()
+    run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
+    formal = environment in {"acceptance", "production"}
+    transaction_sha256 = reserved_transaction_sha256 or signed_event_sha256(
+        {"bundle": bundle, "scope": expected_scope, "purpose": "verify_only"}
+    )
+    identity = {
+        "bundle_sha256": signed_event_sha256(bundle), "scope": expected_scope,
+        "event_sha256s": [signed_event_sha256(event) for event in events],
+        "transaction_sha256": transaction_sha256, "manifest_sha256": manifest_digest,
+    }
+    verification = None
+    receipts = []
+    if formal:
+        if not run_ledger:
+            raise RuntimeError("acceptance run ledger missing")
+        if Path(run_ledger).resolve() == nonce_ledger.resolve():
+            raise ValueError("acceptance run and nonce ledgers must differ")
+        from ops.r297_acceptance_run import read_acceptance_verification
+        context = read_acceptance_verification(
+            Path(run_ledger), expected_scope=expected_scope,
+            source_workflow_run_id=events[0].get("payload", {}).get("workflow_run_id"),
+            transaction_sha256=transaction_sha256, event_sha256s=identity["event_sha256s"], now=now,
+        )
+        verification, receipts = context["verified_bundle"], context["event_receipts"]
+    if verification is None and allow_nonce_recovery:
+        verification = _nonce_verification(nonce_ledger, events, identity, now)
+    if verification is not None:
+        _validate_verification(verification, identity, now)
     replay_bindings: list[dict] = []
     bundle_nonces: set[str] = set()
     previous_time = None
@@ -653,8 +759,6 @@ def verify_acceptance_event_bundle(
             raise ValueError("replayed evidence nonce")
         replay_bindings.append(replay_binding)
         occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
-        if occurred_at < now - maximum_age:
-            raise ValueError("expired evidence event")
         if occurred_at > now + timedelta(seconds=30):
             raise ValueError("future evidence event")
         if previous_time is not None and occurred_at <= previous_time:
@@ -674,6 +778,15 @@ def verify_acceptance_event_bundle(
             ))
         ):
             raise ValueError("evidence issuer key missing")
+        verification_time = now
+        if verification is not None:
+            verification_time = _timestamp(verification["event_verified_at"][sequence - 1], "invalid verification receipt time")
+        elif receipts:
+            verification_time = _timestamp(receipts[sequence - 1]["received_at"], "invalid verification receipt time")
+        if "freshness_receipt" in event["payload"]:
+            _validate_freshness_receipt(event, now=verification_time, maximum_age=maximum_age)
+        if occurred_at < verification_time - maximum_age:
+            raise ValueError("expired evidence event")
         _verify_signature(event, key)
 
     page, page_observer, electron, electron_observer = events
@@ -684,18 +797,30 @@ def verify_acceptance_event_bundle(
     page_result = _observer_result(page_observer, page, expected_scope["store_id"])
     electron_result = _observer_result(electron_observer, electron, expected_scope["store_id"])
 
-    run_replay_binding = {
-        **{field: expected_scope[field] for field in _SCOPE_FIELDS},
-        "event_type": "acceptance_run",
-        "key_id": "protected_orchestrator",
-        "nonce": expected_scope["run_id"],
+    result = {
+        "evidence_trust_manifest_id": manifest["manifest_id"],
+        "evidence_trust_manifest_sha256": manifest_digest,
+        "web_page_close": {"closed": True, **page_result},
+        "electron_exit": {"exited": True, "process_id": process_id, **electron_result},
+        "authenticated_observer": {
+            "issuer": "authenticated_observer", **expected_scope,
+            "verified_subject_count": 2,
+            "subject_nonces": [page["nonce"], electron["nonce"]],
+        },
     }
-
-    environment = os.getenv("APP_ENV", "").strip().lower()
-    run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
-    if environment in {"acceptance", "production"}:
-        if not run_ledger:
-            raise RuntimeError("acceptance run ledger missing")
+    if verification is None:
+        verification = {
+            "identity": identity, "verified_at": now.isoformat(),
+            "event_verified_at": [item["received_at"] for item in receipts] if receipts else [now.isoformat()] * len(events),
+            "result": result, "result_sha256": signed_event_sha256(result),
+        }
+    elif verification["result"] != result:
+        raise ValueError("evidence verification result changed")
+    replay_bindings = [
+        {**binding, "event_sha256": digest, "verification": verification}
+        for binding, digest in zip(replay_bindings, identity["event_sha256s"])
+    ]
+    if formal:
         from ops.r297_acceptance_run import consume_acceptance_run, reserve_acceptance_run, validate_acceptance_run
         page_event = next(event for event in events if event["event_type"] == "web_page_close")
         run_arguments = {
@@ -703,16 +828,17 @@ def verify_acceptance_event_bundle(
             "source_workflow_run_id": page_event["payload"]["workflow_run_id"],
             "now": now,
         }
-        if consume_run:
-            # The protected run ledger fences the run; the nonce ledger stores
-            # only the four event nonces. Other paths retain their run sentinel.
-            transaction_sha256 = hashlib.sha256(json.dumps(
-                {"bundle": bundle, "scope": expected_scope, "purpose": "verify_only"},
-                ensure_ascii=False, separators=(",", ":"), sort_keys=True,
-            ).encode()).hexdigest()
+        if consume_run or reserved_transaction_sha256 is not None:
             reserve_acceptance_run(
                 Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,
+                event_sha256s=[signed_event_sha256(event) for event in events],
+                require_event_receipts=any(
+                    _timestamp(event["observed_at"], "invalid evidence event time")
+                    < now - maximum_age for event in events
+                ),
+                verified_bundle=verification,
             )
+        if consume_run:
             consume_acceptance_run(
                 Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,
                 commit_nonces=lambda: _record_nonces(
@@ -722,21 +848,10 @@ def verify_acceptance_event_bundle(
         else:
             run_arguments["transaction_sha256"] = reserved_transaction_sha256
             validate_acceptance_run(Path(run_ledger), **run_arguments)
-    if not (environment in {"acceptance", "production"} and consume_run):
+    if not (formal and consume_run):
         _record_nonces(
-            nonce_ledger, [*replay_bindings, run_replay_binding],
+            nonce_ledger, replay_bindings,
             allow_exact_recovery=allow_nonce_recovery,
         )
 
-    return {
-        "evidence_trust_manifest_id": manifest["manifest_id"],
-        "evidence_trust_manifest_sha256": manifest_digest,
-        "web_page_close": {"closed": True, **page_result},
-        "electron_exit": {"exited": True, "process_id": process_id, **electron_result},
-        "authenticated_observer": {
-            "issuer": "authenticated_observer",
-            **expected_scope,
-            "verified_subject_count": 2,
-            "subject_nonces": [page["nonce"], electron["nonce"]],
-        },
-    }
+    return verification["result"]

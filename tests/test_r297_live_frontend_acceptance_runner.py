@@ -102,6 +102,7 @@ def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
         "assertBrokerResult",
         "recoverAcknowledgedStage",
         "revokeRecoveredSession",
+        "revokeRecoveredSessionWithSignals",
         "R297_ACK_RECOVERY=PASS",
         "assertPageReceiverAcknowledgement",
         "assertObserverAcknowledgement",
@@ -118,11 +119,13 @@ def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
     assert "R297_ACCEPTANCE_CHALLENGE" not in source
     assert "服务端回执必须位于浏览器验收输出目录之外" in source
     assert "两份ACK彼此一致不代表当前运行" in source
+    assert "!Array.isArray(binding.event_receipts) || binding.event_receipts.length !== 0" in source
     assert "ACK恢复不会生成完整验收PASS" in source
     recovery_branch = source.split("if (recovered) {", 1)[1].split("const { chromium }", 1)[0]
     assert "await revokeRecoveredSession" in recovery_branch
     assert recovery_branch.index("await revokeRecoveredSession") < recovery_branch.index("R297_ACK_RECOVERY=PASS")
     assert "ACK_RECOVERY_REVOKED" in recovery_branch
+    assert "interruptedExitCode || 2" in recovery_branch
     assert "assertFreshIssuedBinding" not in source.split("function loadConfig()", 1)[1].split("function assertFreshIssuedBinding", 1)[0]
     assert source.index("if (recovered) {") < source.index("assertFreshIssuedBinding({issued_at: config.bindingIssuedAt})")
     assert "if (matches) sessionCleanupRequired = true" in source
@@ -150,3 +153,4 @@ def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
     )
     assert completed.returncode == 0, completed.stderr
     assert "R297_LIVE_FRONTEND_SELF_TEST=PASS" in completed.stdout
+    assert "R297_LIVE_RECEIPT_CONTRACT=PASS" in completed.stdout

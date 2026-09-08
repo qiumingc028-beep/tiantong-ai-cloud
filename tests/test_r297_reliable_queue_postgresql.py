@@ -175,9 +175,11 @@ def test_manual_resume_fences_the_active_claim_generation(postgres_database_fact
     redis_client = redis_module.Redis.from_url(redis_url, decode_responses=True)
     namespace = f"tiantong:test:r297-manual-resume:{uuid.uuid4()}"
     queue_keys = {
+        "QUEUE_NAME": f"{namespace}:ready",
         "PROCESSING_QUEUE_NAME": f"{namespace}:processing",
         "PROCESSING_METADATA_PREFIX": f"{namespace}:processing:",
         "PROCESSING_DEADLINES_KEY": f"{namespace}:processing:deadlines",
+        "PROCESSING_GENERATION_PREFIX": f"{namespace}:generation:",
     }
     from backend import queue
     for name, value in queue_keys.items():
@@ -186,13 +188,26 @@ def test_manual_resume_fences_the_active_claim_generation(postgres_database_fact
     monkeypatch.setattr(queue, "get_redis", lambda: redis_client)
     monkeypatch.setattr(worker, "get_redis", lambda: redis_client)
     monkeypatch.setattr(worker, "discard_processing_task", queue.discard_processing_task)
-    raw = json.dumps({**stale_task, "claim_generation": 7})
-    redis_client.rpush(queue.PROCESSING_QUEUE_NAME, raw)
+    from backend import database
+    from ops.r297_process_acceptance import observe_stale_manual_claim
+    monkeypatch.setattr(database, "SessionLocal", sessions)
+    redis_client.rpush(queue.QUEUE_NAME, json.dumps(stale_task))
+    stale_task = queue.claim_task("worker-old", timeout=0)
+    assert stale_task is not None
+    assert redis_client.hget(queue._metadata_key(stale_task), "claimed_by") == "worker-old"
     try:
         assert worker.reconcile_completed_jd_workbench_tasks() == 1
         assert redis_client.llen(queue.PROCESSING_QUEUE_NAME) == 0
+        result = observe_stale_manual_claim(stale_task, "worker-old", probe_generation=7, resumed_generation=8)
+        assert result == {
+            "stale_claim_generation": 7, "probe_claim_generation": 7, "resumed_claim_generation": 8,
+            "stale_worker_commit_rejected": True,
+            "stale_worker_ack_rejected_after_reconciliation": True,
+        }
     finally:
-        redis_client.delete(*queue_keys.values())
+        keys = list(redis_client.scan_iter(f"{namespace}:*"))
+        if keys:
+            redis_client.delete(*keys)
     engine.dispose()
 
 
