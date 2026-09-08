@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 
 import pytest
@@ -138,7 +139,7 @@ def test_bound_file_publish_recovers_body_only_crash(tmp_path):
     assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
 
 
-def test_bound_file_publish_recovers_verified_hardlink_publish_crash(tmp_path):
+def test_bound_file_publish_recovers_verified_hardlink_publish_crash(monkeypatch, tmp_path):
     output = tmp_path / "evidence" / "event.json"
     output.parent.mkdir(mode=0o700)
     content = b'{"event":"signed"}\n'
@@ -146,12 +147,39 @@ def test_bound_file_publish_recovers_verified_hardlink_publish_crash(tmp_path):
     temporary.write_bytes(content)
     temporary.chmod(0o600)
     os.link(temporary, output)
+    published_inode = output.stat().st_ino
+    parent_inode = output.parent.stat().st_ino
+    synced_directory_inodes = []
+    original_fsync = os.fsync
+
+    def record_fsync(descriptor):
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced_directory_inodes.append(metadata.st_ino)
+        return original_fsync(descriptor)
+
+    monkeypatch.setattr("ops.r297_evidence_events.os.fsync", record_fsync)
 
     digest = write_sha256_bound_file(output, content)
 
+    metadata = output.stat()
+    sidecar = Path(f"{output}.sha256")
+    sidecar_metadata = sidecar.stat()
+    assert output.read_bytes() == content
+    assert metadata.st_ino == published_inode
     assert output.stat().st_nlink == 1
+    assert metadata.st_mode & 0o777 == 0o600
+    assert sidecar_metadata.st_mode & 0o777 == 0o600
+    assert output.parent.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert metadata.st_uid == os.geteuid()
+        assert sidecar_metadata.st_uid == os.geteuid()
+        assert output.parent.stat().st_uid == os.geteuid()
     assert not temporary.exists()
-    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+    assert not list(output.parent.glob(f".{output.name}.*"))
+    assert sidecar.read_text(encoding="ascii") == f"{digest}  event.json\n"
+    if os.name != "nt":
+        assert synced_directory_inodes.count(parent_inode) >= 2
 
 
 def test_bound_file_publish_rejects_unknown_second_hardlink(tmp_path):
@@ -210,7 +238,16 @@ def test_bound_file_publish_recovers_sidecar_write_crash(monkeypatch, tmp_path):
     output.parent.mkdir(mode=0o700)
     content = b'{"event":"signed"}\n'
     original_replace = r297_evidence_events._replace_file
+    original_fsync = r297_evidence_events.os.fsync
+    parent_inode = output.parent.stat().st_ino
+    synced_directory_inodes = []
     calls = 0
+
+    def record_fsync(descriptor):
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced_directory_inodes.append(metadata.st_ino)
+        return original_fsync(descriptor)
 
     def crash_before_sidecar(path, value):
         nonlocal calls
@@ -219,15 +256,31 @@ def test_bound_file_publish_recovers_sidecar_write_crash(monkeypatch, tmp_path):
             raise OSError("sidecar crash injection")
         original_replace(path, value)
 
+    monkeypatch.setattr(r297_evidence_events.os, "fsync", record_fsync)
     monkeypatch.setattr(r297_evidence_events, "_replace_file", crash_before_sidecar)
     with pytest.raises(OSError, match="sidecar crash injection"):
         write_sha256_bound_file(output, content)
+    published_inode = output.stat().st_ino
     assert output.read_bytes() == content
+    assert output.stat().st_ino == published_inode
     assert not Path(f"{output}.sha256").exists()
 
     monkeypatch.setattr(r297_evidence_events, "_replace_file", original_replace)
     digest = write_sha256_bound_file(output, content)
-    assert Path(f"{output}.sha256").read_text(encoding="ascii") == f"{digest}  event.json\n"
+    sidecar = Path(f"{output}.sha256")
+    assert output.read_bytes() == content
+    assert output.stat().st_ino == published_inode
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert sidecar.stat().st_mode & 0o777 == 0o600
+    assert output.parent.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert output.stat().st_uid == os.geteuid()
+        assert sidecar.stat().st_uid == os.geteuid()
+        assert output.parent.stat().st_uid == os.geteuid()
+    assert not list(output.parent.glob(f".{output.name}.*"))
+    assert sidecar.read_text(encoding="ascii") == f"{digest}  event.json\n"
+    if os.name != "nt":
+        assert synced_directory_inodes.count(parent_inode) >= 2
 
 
 def test_bound_file_publish_rejects_hardlinked_body_and_orphan_sidecar(tmp_path):
@@ -454,6 +507,67 @@ def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path):
     assert result["authenticated_observer"]["verified_subject_count"] == 2
     assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
     assert len(json.loads(nonce_ledger.read_text())) == 4
+
+
+def _resign_bundle_after(bundle: dict, elapsed: timedelta) -> dict:
+    resigned = []
+    for event in bundle["events"]:
+        unsigned = {key: deepcopy(value) for key, value in event.items() if key not in {"key_id", "signature"}}
+        unsigned["observed_at"] = (
+            datetime.fromisoformat(unsigned["observed_at"]) + elapsed
+        ).isoformat()
+        if unsigned["event_type"] == "authenticated_observer":
+            subject = next(item for item in resigned if item["nonce"] == unsigned["payload"]["subject_nonce"])
+            unsigned["payload"]["subject_event_sha256"] = signed_event_sha256(subject)
+        resigned.append(_sign(unsigned))
+    return {"events": resigned}
+
+
+def test_exact_preverified_bundle_recovers_after_five_minute_outage(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    bundle = _bundle(now)
+    ledger = _nonce_ledger(tmp_path)
+    initial = verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+    )
+
+    recovered = verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now + timedelta(minutes=6),
+        nonce_ledger=ledger, allow_nonce_recovery=True,
+    )
+
+    assert recovered == initial
+    records = json.loads(ledger.read_text())
+    assert len(records) == 4
+    assert {
+        record["event_sha256"] for record in records if record["event_type"] != "acceptance_run"
+    } == {signed_event_sha256(event) for event in bundle["events"]}
+
+
+def test_expired_never_verified_bundle_cannot_enter_recovery_path(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ValueError, match="expired evidence event"):
+        verify_acceptance_event_bundle(
+            _bundle(now), expected_scope=_scope(), now=now + timedelta(minutes=6),
+            nonce_ledger=_nonce_ledger(tmp_path), allow_nonce_recovery=True,
+        )
+
+
+def test_preverified_bundle_rejects_resigned_timestamp_rewrite(tmp_path):
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    bundle = _bundle(now)
+    ledger = _nonce_ledger(tmp_path)
+    verify_acceptance_event_bundle(
+        bundle, expected_scope=_scope(), now=now, nonce_ledger=ledger,
+    )
+
+    with pytest.raises(ValueError, match="replayed evidence nonce|receipt binding mismatch"):
+        verify_acceptance_event_bundle(
+            _resign_bundle_after(bundle, timedelta(minutes=6)),
+            expected_scope=_scope(), now=now + timedelta(minutes=6),
+            nonce_ledger=ledger, allow_nonce_recovery=True,
+        )
 
 
 def test_candidate_bundle_builder_cannot_receive_any_signer_private_key(monkeypatch):
