@@ -316,7 +316,7 @@ def test_page_event_receiver_signs_raw_artifact_with_separate_test_key(monkeypat
         "artifact_evidence_sha256": "1" * 64, "artifact_archive_sha256": "2" * 64,
         "artifact_id": 9965082823, "artifact_name": "r297-native-pagehide-test",
         "workflow_run_id": 33949515935,
-    }, scope)
+        }, scope, received_at=datetime(2026, 9, 5, 7, 12, 7, tzinfo=timezone.utc))
 
     assert event["payload"]["artifact_id"] == 9965082823
     assert event["issuer"] == "page_event_receiver"

@@ -2,13 +2,15 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from ops.r297_acceptance_run import (
     complete_acceptance_run, consume_acceptance_run, issue_acceptance_run, main,
+    record_acceptance_event_receipt,
     recover_staged_acceptance_output, reserve_acceptance_run, stage_acceptance_output,
-    validate_acceptance_run,
+    validate_acceptance_run, validate_acceptance_run_snapshot,
 )
 
 
@@ -49,6 +51,52 @@ def test_protected_orchestrator_issues_and_consumes_one_run(tmp_path):
     with pytest.raises(ValueError, match="missing or consumed"):
         consume_acceptance_run(
             ledger, expected_scope=expected, source_workflow_run_id=34000000001, now=now,
+        )
+
+
+def test_receiver_validates_immutable_snapshot_without_writer_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_ENV", "test")
+    root = tmp_path / "receiver-snapshot"
+    root.mkdir(mode=0o755)
+    now = datetime(2026, 9, 8, 2, 0, tzinfo=timezone.utc)
+    record = {
+        **_scope(), "source_workflow_run_id": 34000000001,
+        "run_id": "r297-snapshot-run-0001", "run_attempt": 1,
+        "challenge": "snapshot-challenge-00000001", "issued_at": now.isoformat(),
+        "consumed_at": None, "state": "issued",
+    }
+    binding = root / "r297-acceptance-run-binding.json"
+    content = (json.dumps(record, sort_keys=True) + "\n").encode()
+    binding.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    sidecar = Path(f"{binding}.sha256")
+    sidecar.write_text(f"{digest}  {binding.name}\n", encoding="ascii")
+    binding.chmod(0o444)
+    sidecar.chmod(0o444)
+
+    validate_acceptance_run_snapshot(
+        binding,
+        expected_scope={key: record[key] for key in set(_scope()) | {"run_id", "run_attempt", "challenge"}},
+        source_workflow_run_id=34000000001,
+        now=now,
+    )
+
+    binding.chmod(0o644)
+    with pytest.raises(RuntimeError, match="snapshot permissions invalid"):
+        validate_acceptance_run_snapshot(
+            binding,
+            expected_scope={key: record[key] for key in set(_scope()) | {"run_id", "run_attempt", "challenge"}},
+            source_workflow_run_id=34000000001,
+            now=now,
+        )
+    binding.chmod(0o444)
+    sidecar.chmod(0o644)
+    with pytest.raises(RuntimeError, match="snapshot permissions invalid"):
+        validate_acceptance_run_snapshot(
+            binding,
+            expected_scope={key: record[key] for key in set(_scope()) | {"run_id", "run_attempt", "challenge"}},
+            source_workflow_run_id=34000000001,
+            now=now,
         )
 
 
@@ -109,6 +157,33 @@ def test_run_challenge_expires_after_five_minutes(tmp_path):
             ledger, expected_scope=expected, source_workflow_run_id=34000000001,
             now=issued_at + timedelta(minutes=6),
         )
+
+
+def test_verified_event_receipts_extend_only_the_same_run_transaction(tmp_path):
+    ledger = _ledger(tmp_path)
+    issued_at = datetime(2026, 9, 7, tzinfo=timezone.utc)
+    record = issue_acceptance_run(
+        ledger, scope=_scope(), source_workflow_run_id=34000000001,
+        run_attempt=1, now=issued_at,
+    )
+    expected = {field: record[field] for field in {*_scope(), "run_id", "run_attempt", "challenge"}}
+    digests = []
+    event_types = ("web_page_close", "authenticated_observer", "electron_exit", "authenticated_observer")
+    for sequence, event_type in enumerate(event_types, 1):
+        digest = f"{sequence}" * 64
+        digests.append(digest)
+        observed_at = issued_at + timedelta(minutes=sequence * 2)
+        assert record_acceptance_event_receipt(
+            ledger, expected_scope=expected, source_workflow_run_id=34000000001,
+            event_type=event_type, sequence=sequence, event_sha256=digest,
+            observed_at=observed_at, received_at=observed_at + timedelta(seconds=1),
+        ) == "recorded"
+
+    assert reserve_acceptance_run(
+        ledger, expected_scope=expected, source_workflow_run_id=34000000001,
+        transaction_sha256="a" * 64, event_sha256s=digests,
+        now=issued_at + timedelta(minutes=20),
+    ) == "reserved"
 
 
 def test_run_rejects_different_pagehide_workflow(tmp_path):
@@ -239,7 +314,7 @@ def test_staged_output_is_bounded_and_expired_bytes_are_compacted(tmp_path):
 
     issue_acceptance_run(
         ledger, scope=_scope(), source_workflow_run_id=34000000002,
-        run_attempt=2, now=now + timedelta(minutes=6),
+        run_attempt=2, now=now + timedelta(hours=13),
     )
     expired = json.loads(ledger.read_text())["runs"][0]
     assert expired["pending_output_sha256"] == digest
@@ -247,7 +322,7 @@ def test_staged_output_is_bounded_and_expired_bytes_are_compacted(tmp_path):
     with pytest.raises(ValueError, match="expired"):
         recover_staged_acceptance_output(
             ledger, expected_scope=expected, source_workflow_run_id=34000000001,
-            transaction_sha256=transaction, now=now + timedelta(minutes=6),
+            transaction_sha256=transaction, now=now + timedelta(hours=13),
         )
 
 

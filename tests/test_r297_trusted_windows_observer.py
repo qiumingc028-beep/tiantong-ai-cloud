@@ -52,11 +52,12 @@ def test_trusted_observer_checks_real_exit_and_post_exit_cycle(monkeypatch, tmp_
         "ops.r297_trusted_windows_observer.produce_electron_exit_event",
         lambda **kwargs: {"event_type": "electron_exit", "payload": {"exited": True}, **kwargs["scope"]},
     )
+    snapshots = iter([{**status, "latest_completed_at": None}, status])
     event = observe_and_sign(
         request,
         process_probe=lambda _pid: {"path": str(executable), "started_at": started.isoformat()},
         process_is_running=lambda _pid: next(running),
-        backend_reader=lambda *_args: status,
+        backend_reader=lambda *_args: next(snapshots),
         now=lambda: exited,
         sleep=lambda _seconds: None,
         artifact_manifest={
@@ -67,6 +68,49 @@ def test_trusted_observer_checks_real_exit_and_post_exit_cycle(monkeypatch, tmp_
     )
     assert event["release_sha"] == "a" * 40
     assert event["payload"]["exited"] is True
+
+
+def test_backend_observer_never_forwards_bearer_on_redirect(monkeypatch, tmp_path):
+    from email.message import Message
+    from io import BytesIO
+    from urllib.error import HTTPError
+    from urllib.request import HTTPSHandler
+    from urllib.response import addinfourl
+    from ops import r297_trusted_windows_observer as observer
+
+    calls = []
+
+    class Transport(HTTPSHandler):
+        def https_open(self, request):
+            calls.append((request.full_url, request.get_header("Authorization")))
+            headers = Message()
+            headers["Location"] = "https://untrusted.example/stolen"
+            response = addinfourl(
+                BytesIO(b"{}"), headers, request.full_url, 302 if len(calls) == 1 else 200,
+            )
+            response.msg = "Found" if len(calls) == 1 else "OK"
+            return response
+
+    monkeypatch.setattr(observer.ssl, "create_default_context", lambda **_kwargs: None)
+    monkeypatch.setattr(observer, "HTTPSHandler", Transport)
+    with pytest.raises(HTTPError) as rejected:
+        observer._backend_reader("https://trusted.example", "fixture-bearer", tmp_path / "ca", 3)
+    assert rejected.value.code == 302
+    assert calls == [(
+        "https://trusted.example/api/jd-workbench/stores/3/acceptance-status",
+        "Bearer fixture-bearer",
+    )]
+
+
+@pytest.mark.parametrize("url", [
+    "http://trusted.example", "https://user:pass@trusted.example",
+    "https://trusted.example/base", "https://trusted.example?next=evil",
+])
+def test_backend_observer_rejects_noncanonical_destination(url, tmp_path):
+    with pytest.raises(RuntimeError, match="destination invalid"):
+        __import__("ops.r297_trusted_windows_observer", fromlist=["_backend_reader"])._backend_reader(
+            url, "fixture-bearer", tmp_path / "ca", 3,
+        )
 
 
 def test_trusted_observer_rejects_substituted_executable(monkeypatch, tmp_path):

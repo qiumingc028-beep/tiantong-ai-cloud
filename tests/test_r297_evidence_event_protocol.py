@@ -284,6 +284,26 @@ def _bundle(now: datetime, nonce_suffix: str = "") -> dict:
     return {"events": [page, page_observer, electron, electron_observer]}
 
 
+def _receipted_bundle(fact_time: datetime, *, receipt_delay_seconds: int = 1) -> dict:
+    signed = []
+    for event in _bundle(fact_time)["events"]:
+        unsigned = {key: value for key, value in event.items() if key not in {"key_id", "signature"}}
+        observed = datetime.fromisoformat(unsigned["observed_at"])
+        unsigned["payload"] = {
+            **unsigned["payload"],
+            "freshness_receipt": {
+                "received_at": (observed + timedelta(seconds=receipt_delay_seconds)).isoformat(),
+                "freshness_verified": True,
+                "maximum_age_seconds": 300,
+            },
+        }
+        if unsigned["event_type"] == "authenticated_observer":
+            subject = signed[-1]
+            unsigned["payload"]["subject_event_sha256"] = signed_event_sha256(subject)
+        signed.append(_sign(unsigned))
+    return {"events": signed}
+
+
 def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_path):
     now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
     ledger_path = _nonce_ledger(tmp_path)
@@ -322,6 +342,68 @@ def test_signed_evidence_events_bind_release_store_time_order_and_observer(tmp_p
         verify_acceptance_event_bundle(
             _bundle(now, "-fresh"), expected_scope=_scope(), now=now,
             nonce_ledger=ledger_path,
+        )
+
+
+def test_long_cycle_bundle_preserves_fact_time_with_signed_freshness_receipts(tmp_path):
+    now = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
+    result = verify_acceptance_event_bundle(
+        _receipted_bundle(now - timedelta(minutes=20)),
+        expected_scope=_scope(), now=now, nonce_ledger=_nonce_ledger(tmp_path),
+    )
+    assert result["authenticated_observer"]["verified_subject_count"] == 2
+
+
+def test_long_cycle_bundle_rejects_receipt_outside_five_minutes(tmp_path):
+    now = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="freshness receipt"):
+        verify_acceptance_event_bundle(
+            _receipted_bundle(now - timedelta(minutes=20), receipt_delay_seconds=301),
+            expected_scope=_scope(), now=now, nonce_ledger=_nonce_ledger(tmp_path),
+        )
+
+
+def test_verified_event_receipt_entry_records_signed_arrival(monkeypatch, tmp_path):
+    from ops.r297_acceptance_run import issue_acceptance_run
+    from ops.r297_event_receipt import record_event
+    from tests.test_r297_acceptance_run import _ledger
+
+    now = datetime(2026, 9, 5, 4, 0, tzinfo=timezone.utc)
+    event = _receipted_bundle(now)["events"][0]
+    ledger = _ledger(tmp_path)
+    issue_acceptance_run(
+        ledger,
+        scope={field: event[field] for field in {
+            "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+        }},
+        source_workflow_run_id=event["payload"]["workflow_run_id"],
+        run_attempt=event["run_attempt"], now=now - timedelta(seconds=5),
+    )
+    stored = json.loads(ledger.read_text())
+    stored["runs"][0].update({
+        field: event[field] for field in {"run_id", "run_attempt", "challenge"}
+    })
+    ledger.write_text(json.dumps(stored, sort_keys=True) + "\n")
+    root = tmp_path / "event"
+    root.mkdir(mode=0o700)
+    event_path = root / "page.json"
+    write_sha256_bound_file(
+        event_path, (json.dumps(event, sort_keys=True) + "\n").encode(),
+    )
+
+    assert record_event(
+        ledger, event_path,
+        source_workflow_run_id=event["payload"]["workflow_run_id"], now=now,
+    ) == "recorded"
+
+    late = root / "late.json"
+    write_sha256_bound_file(
+        late, (json.dumps(event, sort_keys=True) + "\n").encode(),
+    )
+    with pytest.raises(ValueError, match="receipt time invalid"):
+        record_event(
+            ledger, late, source_workflow_run_id=event["payload"]["workflow_run_id"],
+            now=now + timedelta(minutes=6),
         )
 
 
@@ -367,6 +449,96 @@ def test_bundle_precheck_preserves_run_until_formal_verification(monkeypatch, tm
     assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
     with pytest.raises(ValueError, match="missing or consumed"):
         verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=ledger)
+
+
+@pytest.mark.parametrize("crash_after_nonce_write", [False, True])
+def test_bundle_verification_recovers_cross_ledger_crash(monkeypatch, tmp_path, crash_after_nonce_write):
+    from ops import r297_evidence_events
+    from ops.r297_acceptance_run import issue_acceptance_run
+    from ops.r297_evidence_bundle import build_bundle
+    from tests.test_r297_acceptance_run import _ledger
+
+    now = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    scope = _scope()
+    run_ledger = _ledger(tmp_path)
+    record = issue_acceptance_run(
+        run_ledger,
+        scope={field: value for field, value in scope.items() if field not in {"run_id", "run_attempt", "challenge"}},
+        source_workflow_run_id=33949515935,
+        run_attempt=1,
+        now=now,
+    )
+    scope.update({field: record[field] for field in ("run_id", "run_attempt", "challenge")})
+    monkeypatch.setitem(globals(), "_scope", lambda: scope)
+    trust = load_trust_manifest(environment="test")
+    monkeypatch.setattr(r297_evidence_events, "load_trust_manifest", lambda **_kwargs: trust)
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    monkeypatch.setenv("R297_ACCEPTANCE_RUN_LEDGER", str(run_ledger))
+    bundle = build_bundle(_bundle(now)["events"], expected_scope=scope, now=now)
+    nonce_ledger = _nonce_ledger(tmp_path)
+    original_record_nonces = r297_evidence_events._record_nonces
+
+    def crash_record_nonces(*args, **kwargs):
+        if crash_after_nonce_write:
+            original_record_nonces(*args, **kwargs)
+        raise OSError("nonce ledger crash injection")
+
+    monkeypatch.setattr(
+        r297_evidence_events,
+        "_record_nonces",
+        crash_record_nonces,
+    )
+
+    with pytest.raises(OSError, match="nonce ledger crash injection"):
+        verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger)
+
+    monkeypatch.setattr(r297_evidence_events, "_record_nonces", original_record_nonces)
+    result = verify_acceptance_event_bundle(
+        bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger,
+    )
+    assert result["authenticated_observer"]["verified_subject_count"] == 2
+    assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
+    assert len(json.loads(nonce_ledger.read_text())) == 4
+    with pytest.raises(ValueError, match="missing or consumed"):
+        verify_acceptance_event_bundle(bundle, expected_scope=scope, now=now, nonce_ledger=nonce_ledger)
+
+
+def test_long_cycle_consumes_only_the_persisted_signed_receipt_chain(monkeypatch, tmp_path):
+    from ops import r297_evidence_events
+    from ops.r297_acceptance_run import issue_acceptance_run, record_acceptance_event_receipt
+    from tests.test_r297_acceptance_run import _ledger
+
+    fact_time = datetime(2026, 9, 5, 2, 0, tzinfo=timezone.utc)
+    scope = _scope()
+    run_ledger = _ledger(tmp_path)
+    record = issue_acceptance_run(
+        run_ledger,
+        scope={field: value for field, value in scope.items() if field not in {"run_id", "run_attempt", "challenge"}},
+        source_workflow_run_id=33949515935, run_attempt=1,
+        now=fact_time - timedelta(seconds=5),
+    )
+    scope.update({field: record[field] for field in ("run_id", "run_attempt", "challenge")})
+    monkeypatch.setitem(globals(), "_scope", lambda: scope)
+    trust = load_trust_manifest(environment="test")
+    monkeypatch.setattr(r297_evidence_events, "load_trust_manifest", lambda **_kwargs: trust)
+    monkeypatch.setenv("APP_ENV", "acceptance")
+    monkeypatch.setenv("R297_ACCEPTANCE_RUN_LEDGER", str(run_ledger))
+    bundle = _receipted_bundle(fact_time)
+    for event in bundle["events"]:
+        received_at = datetime.fromisoformat(event["payload"]["freshness_receipt"]["received_at"])
+        record_acceptance_event_receipt(
+            run_ledger, expected_scope=scope, source_workflow_run_id=33949515935,
+            event_type=event["event_type"], sequence=event["sequence"],
+            event_sha256=signed_event_sha256(event),
+            observed_at=datetime.fromisoformat(event["observed_at"]), received_at=received_at,
+        )
+
+    result = verify_acceptance_event_bundle(
+        bundle, expected_scope=scope, now=fact_time + timedelta(minutes=20),
+        nonce_ledger=_nonce_ledger(tmp_path),
+    )
+    assert result["authenticated_observer"]["verified_subject_count"] == 2
+    assert json.loads(run_ledger.read_text())["runs"][0]["state"] == "consumed"
 
 
 def test_signed_evidence_events_reject_concurrent_replay(tmp_path):

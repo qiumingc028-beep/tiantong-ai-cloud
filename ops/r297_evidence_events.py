@@ -34,6 +34,7 @@ _TEST_KEY_FINGERPRINTS = {
     "f49dbfbcf14774d5449ba88417fd32b04a028f9911008abeea6d8adf7533c599",
     "fc974bd3604d0c416b49c03639f9c80e6f0d98b1f6edb9519d9ecd3cf6157ce6",
 }
+_RECEIPT_RETENTION = timedelta(hours=12)
 _EVENT_ORDER = (
     ("web_page_close", "page_event_receiver"),
     ("authenticated_observer", "authenticated_observer"),
@@ -177,14 +178,45 @@ def _replace_file(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _validate_freshness_receipt(event: dict, *, now: datetime, maximum_age: timedelta) -> None:
+    receipt = event.get("payload", {}).get("freshness_receipt")
+    if not isinstance(receipt, dict) or set(receipt) != {
+        "received_at", "freshness_verified", "maximum_age_seconds",
+    }:
+        raise ValueError("expired evidence event")
+    occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
+    received_at = _timestamp(receipt.get("received_at"), "invalid evidence receipt time")
+    if (
+        receipt.get("freshness_verified") is not True
+        or receipt.get("maximum_age_seconds") != int(maximum_age.total_seconds())
+        or received_at < occurred_at
+        or received_at - occurred_at > maximum_age
+        or received_at > now + timedelta(seconds=30)
+        or now - received_at > _RECEIPT_RETENTION
+    ):
+        raise ValueError("invalid evidence freshness receipt")
+
+
+def freshness_receipt(observed_at: datetime, received_at: datetime) -> dict:
+    observed_at = observed_at.astimezone(timezone.utc)
+    received_at = received_at.astimezone(timezone.utc)
+    if received_at < observed_at or received_at - observed_at > timedelta(minutes=5):
+        raise ValueError("evidence fact was not received within five minutes")
+    return {
+        "received_at": received_at.isoformat(),
+        "freshness_verified": True,
+        "maximum_age_seconds": 300,
+    }
+
+
 def validate_page_event_payload(payload: object) -> None:
-    fields = {
+    required = {
         "closed", "source", "artifact_evidence_sha256", "artifact_archive_sha256",
         "artifact_id", "artifact_name", "workflow_run_id",
     }
     if (
         not isinstance(payload, dict)
-        or set(payload) != fields
+        or frozenset(payload) not in {frozenset(required), frozenset(required | {"freshness_receipt"})}
         or payload.get("closed") is not True
         or payload.get("source") != "browser_pagehide"
         or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("artifact_evidence_sha256", "")))
@@ -427,8 +459,6 @@ def verify_signed_event(
         raise ValueError("invalid evidence event scope")
     occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
     now = now.astimezone(timezone.utc)
-    if occurred_at < now - maximum_age:
-        raise ValueError("expired evidence event")
     if occurred_at > now + timedelta(seconds=30):
         raise ValueError("future evidence event")
     manifest, _ = load_trust_manifest(environment=environment)
@@ -444,7 +474,13 @@ def verify_signed_event(
         raise ValueError("evidence issuer key missing")
     if event_type in {"web_page_close", "electron_exit"} and "scheduler_continues" in event["payload"]:
         raise ValueError("client scheduler claim forbidden")
+    if occurred_at < now - maximum_age and "freshness_receipt" not in event["payload"]:
+        raise ValueError("expired evidence event")
     _verify_signature(event, key)
+    if occurred_at < now - maximum_age:
+        _validate_freshness_receipt(event, now=now, maximum_age=maximum_age)
+    elif "freshness_receipt" in event["payload"]:
+        _validate_freshness_receipt(event, now=now, maximum_age=maximum_age)
     return manifest, key
 
 
@@ -653,8 +689,6 @@ def verify_acceptance_event_bundle(
             raise ValueError("replayed evidence nonce")
         replay_bindings.append(replay_binding)
         occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
-        if occurred_at < now - maximum_age:
-            raise ValueError("expired evidence event")
         if occurred_at > now + timedelta(seconds=30):
             raise ValueError("future evidence event")
         if previous_time is not None and occurred_at <= previous_time:
@@ -674,7 +708,13 @@ def verify_acceptance_event_bundle(
             ))
         ):
             raise ValueError("evidence issuer key missing")
+        if occurred_at < now - maximum_age and "freshness_receipt" not in event["payload"]:
+            raise ValueError("expired evidence event")
         _verify_signature(event, key)
+        if occurred_at < now - maximum_age:
+            _validate_freshness_receipt(event, now=now, maximum_age=maximum_age)
+        elif "freshness_receipt" in event["payload"]:
+            _validate_freshness_receipt(event, now=now, maximum_age=maximum_age)
 
     page, page_observer, electron, electron_observer = events
     validate_page_event_payload(page["payload"])
@@ -684,32 +724,48 @@ def verify_acceptance_event_bundle(
     page_result = _observer_result(page_observer, page, expected_scope["store_id"])
     electron_result = _observer_result(electron_observer, electron, expected_scope["store_id"])
 
-    replay_bindings.append({
+    run_replay_binding = {
         **{field: expected_scope[field] for field in _SCOPE_FIELDS},
         "event_type": "acceptance_run",
         "key_id": "protected_orchestrator",
         "nonce": expected_scope["run_id"],
-    })
+    }
 
     environment = os.getenv("APP_ENV", "").strip().lower()
     run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
     if environment in {"acceptance", "production"}:
         if not run_ledger:
             raise RuntimeError("acceptance run ledger missing")
-        from ops.r297_acceptance_run import consume_acceptance_run, validate_acceptance_run
+        from ops.r297_acceptance_run import consume_acceptance_run, reserve_acceptance_run, validate_acceptance_run
         page_event = next(event for event in events if event["event_type"] == "web_page_close")
-        run_action = consume_acceptance_run if consume_run else validate_acceptance_run
         run_arguments = {
             "expected_scope": expected_scope,
             "source_workflow_run_id": page_event["payload"]["workflow_run_id"],
             "now": now,
         }
-        if not consume_run:
+        if consume_run:
+            transaction_sha256 = hashlib.sha256(json.dumps(
+                {"bundle": bundle, "scope": expected_scope, "purpose": "verify_only"},
+                ensure_ascii=False, separators=(",", ":"), sort_keys=True,
+            ).encode()).hexdigest()
+            reserve_acceptance_run(
+                Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,
+                event_sha256s=[signed_event_sha256(event) for event in events],
+            )
+            consume_acceptance_run(
+                Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,
+                commit_nonces=lambda: _record_nonces(
+                    nonce_ledger, replay_bindings, allow_exact_recovery=True,
+                ),
+            )
+        else:
             run_arguments["transaction_sha256"] = reserved_transaction_sha256
-        run_action(Path(run_ledger), **run_arguments)
-    _record_nonces(
-        nonce_ledger, replay_bindings, allow_exact_recovery=allow_nonce_recovery,
-    )
+            validate_acceptance_run(Path(run_ledger), **run_arguments)
+    if not (environment in {"acceptance", "production"} and consume_run):
+        _record_nonces(
+            nonce_ledger, [*replay_bindings, run_replay_binding],
+            allow_exact_recovery=allow_nonce_recovery,
+        )
 
     return {
         "evidence_trust_manifest_id": manifest["manifest_id"],

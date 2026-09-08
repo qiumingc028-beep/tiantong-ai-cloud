@@ -20,6 +20,7 @@ _KEYS = {
     "WINDOWS_RUNNER_PRIVATE_KEY": "R297_WINDOWS_RUNNER_PRIVATE_KEY_PATH",
 }
 _PAGEHIDE_BINDING = Path("/etc/tiantong/r297-pagehide-artifact-binding.json")
+_RUN_BINDING = Path("/etc/tiantong/r297-acceptance-run-binding.json")
 
 
 def _private_key_status(path_value: str, *, windows: bool = os.name == "nt") -> str | None:
@@ -82,6 +83,8 @@ def inspect_controlled_material(*, environment: str, role: str) -> dict:
         fixed_files.update({
             "PAGEHIDE_BINDING": _PAGEHIDE_BINDING,
             "PAGEHIDE_BINDING_SIDECAR": Path(f"{_PAGEHIDE_BINDING}.sha256"),
+            "RUN_BINDING": _RUN_BINDING,
+            "RUN_BINDING_SIDECAR": Path(f"{_RUN_BINDING}.sha256"),
         })
     for label, path in fixed_files.items():
         if not path.is_file():

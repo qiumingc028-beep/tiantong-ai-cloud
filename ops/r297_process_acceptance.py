@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
 try:
-    from ops.r297_evidence_events import verify_acceptance_event_bundle, write_sha256_bound_file
+    from ops.r297_evidence_events import signed_event_sha256, verify_acceptance_event_bundle, write_sha256_bound_file
     from ops.r297_acceptance_run import (
         complete_acceptance_run, recover_staged_acceptance_output,
         reserve_acceptance_run, stage_acceptance_output,
@@ -32,7 +32,7 @@ try:
 except ModuleNotFoundError as exc:
     if exc.name != "ops":
         raise
-    from r297_evidence_events import verify_acceptance_event_bundle, write_sha256_bound_file
+    from r297_evidence_events import signed_event_sha256, verify_acceptance_event_bundle, write_sha256_bound_file
     from r297_acceptance_run import (
         complete_acceptance_run, recover_staged_acceptance_output,
         reserve_acceptance_run, stage_acceptance_output,
@@ -370,6 +370,7 @@ def prepare_acceptance_transaction(
         run_ledger, expected_scope=evidence_scope,
         source_workflow_run_id=source_workflow_run_id,
         transaction_sha256=transaction_sha256,
+        event_sha256s=[signed_event_sha256(event) for event in bundle.get("events", [])],
     )
     verified = verify_acceptance_event_bundle(
         bundle, expected_scope=evidence_scope, now=datetime.now(timezone.utc),

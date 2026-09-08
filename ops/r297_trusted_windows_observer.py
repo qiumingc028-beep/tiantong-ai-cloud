@@ -14,7 +14,10 @@ import ssl
 import stat
 import subprocess
 import time
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
+
+from backend.services.jd_runtime_contract import NoCredentialRedirect
 
 from ops.r297_windows_event_signer import produce_electron_exit_event, _process_is_running
 from ops.r297_evidence_events import verify_signed_event, write_sha256_bound_file
@@ -157,12 +160,20 @@ def _windows_process_probe(process_id: int) -> dict:
 
 
 def _backend_reader(url: str, bearer: str, certificate: Path, store_id: int) -> dict:
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+        or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+        or type(store_id) is not int or store_id <= 0
+    ):
+        raise RuntimeError("trusted Backend observer destination invalid")
     context = ssl.create_default_context(cafile=str(certificate))
     request = Request(
         f"{url.rstrip('/')}/api/jd-workbench/stores/{store_id}/acceptance-status",
         headers={"authorization": f"Bearer {bearer}"},
     )
-    with urlopen(request, context=context, timeout=10) as response:
+    opener = build_opener(ProxyHandler({}), NoCredentialRedirect, HTTPSHandler(context=context))
+    with opener.open(request, timeout=10) as response:
         if response.status != 200:
             raise RuntimeError("trusted Backend observation rejected")
         return json.loads(response.read())
@@ -297,13 +308,17 @@ def observe_and_sign(
         raise RuntimeError("trusted Backend observer configuration missing")
     while True:
         status = backend_reader(backend_url, bearer, certificate, scope["store_id"])
-        completed = datetime.fromisoformat(str(status.get("latest_completed_at", "")).replace("Z", "+00:00"))
+        completed_value = status.get("latest_completed_at")
+        completed = (
+            datetime.fromisoformat(str(completed_value).replace("Z", "+00:00"))
+            if completed_value is not None else None
+        )
         if (
             status.get("release_sha") == scope["release_sha"]
             and all(status.get(field) == scope[field] for field in (
                 "namespace", "tenant_id", "company_id", "store_id", "platform", "run_id",
             ))
-            and completed.tzinfo is not None and completed > exited_at
+            and completed is not None and completed.tzinfo is not None and completed > exited_at
         ):
             break
         if monotonic() >= deadline:

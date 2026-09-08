@@ -104,6 +104,11 @@ def produce_electron_exit_event(
             "exited": True,
             "process_id": process_id,
             "process_started_at": process_started_at.isoformat(),
+            "freshness_receipt": {
+                "received_at": observed_at.isoformat(),
+                "freshness_verified": True,
+                "maximum_age_seconds": 300,
+            },
         },
     }
     signed = sign_event(event, environment=environment, manifest=manifest, issuer="windows_runner")

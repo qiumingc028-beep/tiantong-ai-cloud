@@ -59,6 +59,11 @@ def test_windows_signer_binds_real_exit_scope_and_independent_key(monkeypatch, t
         "exited": True,
         "process_id": 4201,
         "process_started_at": started.isoformat(),
+        "freshness_receipt": {
+            "received_at": exited.isoformat(),
+            "freshness_verified": True,
+            "maximum_age_seconds": 300,
+        },
     }
     manifest, _ = load_trust_manifest(environment="test")
     key = next(key for key in manifest["keys"] if key["issuer"] == "windows_runner")

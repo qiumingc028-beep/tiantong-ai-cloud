@@ -13,12 +13,15 @@ from pathlib import Path
 import re
 import secrets
 import stat
+from collections.abc import Callable
 
 
 _SCOPE_FIELDS = {"namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha"}
 
 
 _RUN_LIFETIME = timedelta(minutes=5)
+_OBSERVATION_LIFETIME = timedelta(hours=12)
+_EVENT_ORDER = ("web_page_close", "authenticated_observer", "electron_exit", "authenticated_observer")
 _MAX_STAGED_OUTPUT_BYTES = 2 * 1024 * 1024
 _MAX_LEDGER_BYTES = 8 * 1024 * 1024
 
@@ -65,7 +68,7 @@ def _update(path: Path, mutate, *, now: datetime | None = None):
                 issued_at = datetime.fromisoformat(record["issued_at"])
                 if issued_at.tzinfo is None:
                     raise ValueError
-                expired = compact_at - issued_at.astimezone(timezone.utc) > _RUN_LIFETIME
+                expired = compact_at - issued_at.astimezone(timezone.utc) > _OBSERVATION_LIFETIME
             except (KeyError, TypeError, ValueError):
                 expired = True
             if expired:
@@ -114,6 +117,15 @@ def _require_live(record: dict, now: datetime) -> None:
         raise ValueError("acceptance run expired")
 
 
+def _require_observation_live(record: dict, now: datetime) -> None:
+    try:
+        issued_at = datetime.fromisoformat(record["issued_at"]).astimezone(timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("acceptance run issue time invalid") from None
+    if issued_at > now + timedelta(seconds=30) or now - issued_at > _OBSERVATION_LIFETIME:
+        raise ValueError("acceptance observation expired")
+
+
 def issue_acceptance_run(
     ledger: Path, *, scope: dict, source_workflow_run_id: int,
     run_attempt: int, now: datetime | None = None,
@@ -131,6 +143,7 @@ def issue_acceptance_run(
         **scope, "source_workflow_run_id": source_workflow_run_id,
         "run_id": run_id, "run_attempt": run_attempt, "challenge": challenge,
         "issued_at": now.isoformat(), "consumed_at": None, "state": "issued",
+        "event_receipts": [],
     }
 
     def mutate(runs):
@@ -158,23 +171,35 @@ def issue_acceptance_run(
 def consume_acceptance_run(
     ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
     now: datetime | None = None,
+    transaction_sha256: str | None = None,
+    commit_nonces: Callable[[], None] | None = None,
 ) -> None:
     required = _SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}
     if set(expected_scope) != required:
         raise ValueError("acceptance run binding invalid")
+    if (transaction_sha256 is None) != (commit_nonces is None):
+        raise ValueError("acceptance transaction binding invalid")
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
 
     def mutate(runs):
         matches = [item for item in runs if isinstance(item, dict) and item.get("run_id") == expected_scope["run_id"]]
-        if len(matches) != 1 or matches[0].get("state") != "issued":
+        expected_state = "reserved" if transaction_sha256 is not None else "issued"
+        if len(matches) != 1 or matches[0].get("state") != expected_state:
             raise ValueError("acceptance run missing or consumed")
         record = matches[0]
-        _require_live(record, now)
+        if transaction_sha256 is None:
+            _require_live(record, now)
+        else:
+            _require_observation_live(record, now)
         if record.get("source_workflow_run_id") != source_workflow_run_id:
             raise ValueError("acceptance source workflow mismatch")
         for field in required:
             if type(record.get(field)) is not type(expected_scope[field]) or record.get(field) != expected_scope[field]:
                 raise ValueError("acceptance run scope mismatch")
+        if transaction_sha256 is not None:
+            if record.get("transaction_sha256") != transaction_sha256:
+                raise ValueError("acceptance run reserved by different transaction")
+            commit_nonces()
         record["state"] = "consumed"
         record["consumed_at"] = now.isoformat()
 
@@ -184,6 +209,7 @@ def consume_acceptance_run(
 def reserve_acceptance_run(
     ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
     transaction_sha256: str, now: datetime | None = None,
+    event_sha256s: list[str] | None = None,
 ) -> str:
     """Fence one exact bundle before nonce/output publication; exact retries resume."""
     required = _SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}
@@ -196,14 +222,27 @@ def reserve_acceptance_run(
         if len(matches) != 1:
             raise ValueError("acceptance run missing or consumed")
         record = matches[0]
-        _require_live(record, now)
+        if record.get("state") == "consumed":
+            raise ValueError("acceptance run missing or consumed")
+        if record.get("state") == "issued":
+            _require_live(record, now)
+        else:
+            _require_observation_live(record, now)
         if record.get("source_workflow_run_id") != source_workflow_run_id:
             raise ValueError("acceptance source workflow mismatch")
         for field in required:
             if type(record.get(field)) is not type(expected_scope[field]) or record.get(field) != expected_scope[field]:
                 raise ValueError("acceptance run scope mismatch")
-        if record.get("state") == "issued":
-            _require_live(record, now)
+        if record.get("state") in {"issued", "observing"}:
+            if record.get("state") == "observing":
+                receipts = record.get("event_receipts")
+                if (
+                    not isinstance(event_sha256s, list)
+                    or not isinstance(receipts, list)
+                    or [item.get("event_sha256") for item in receipts] != event_sha256s
+                    or len(receipts) != len(_EVENT_ORDER)
+                ):
+                    raise ValueError("acceptance event receipt chain mismatch")
             record.update({
                 "state": "reserved", "transaction_sha256": transaction_sha256,
                 "reserved_at": now.isoformat(), "published_sha256": None,
@@ -214,6 +253,60 @@ def reserve_acceptance_run(
         raise ValueError("acceptance run reserved by different transaction")
 
     return _update(ledger, mutate, now=now)
+
+
+def record_acceptance_event_receipt(
+    ledger: Path, *, expected_scope: dict, source_workflow_run_id: int,
+    event_type: str, sequence: int, event_sha256: str,
+    observed_at: datetime, received_at: datetime,
+) -> str:
+    """Persist one already verified event arrival without exposing ledger writes to the producer."""
+    required = _SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}
+    if (
+        set(expected_scope) != required or sequence not in range(1, len(_EVENT_ORDER) + 1)
+        or event_type != _EVENT_ORDER[sequence - 1]
+        or not re.fullmatch(r"[0-9a-f]{64}", event_sha256)
+    ):
+        raise ValueError("acceptance event receipt invalid")
+    observed_at = observed_at.astimezone(timezone.utc)
+    received_at = received_at.astimezone(timezone.utc)
+    if (
+        received_at < observed_at or received_at - observed_at > _RUN_LIFETIME
+        or received_at > datetime.now(timezone.utc) + timedelta(seconds=30)
+    ):
+        raise ValueError("acceptance event receipt time invalid")
+
+    def mutate(runs):
+        matches = [item for item in runs if isinstance(item, dict) and item.get("run_id") == expected_scope["run_id"]]
+        if len(matches) != 1 or matches[0].get("state") not in {"issued", "observing"}:
+            raise ValueError("acceptance run missing or consumed")
+        record = matches[0]
+        if record.get("state") == "issued":
+            _require_live(record, received_at)
+        else:
+            _require_observation_live(record, received_at)
+        if record.get("source_workflow_run_id") != source_workflow_run_id or any(
+            type(record.get(field)) is not type(expected_scope[field])
+            or record.get(field) != expected_scope[field] for field in required
+        ):
+            raise ValueError("acceptance run scope mismatch")
+        receipts = record.setdefault("event_receipts", [])
+        receipt = {
+            "event_type": event_type, "sequence": sequence,
+            "event_sha256": event_sha256,
+            "observed_at": observed_at.isoformat(), "received_at": received_at.isoformat(),
+        }
+        if len(receipts) >= sequence:
+            if receipts[sequence - 1] == receipt:
+                return "recovered"
+            raise ValueError("acceptance event receipt replay")
+        if len(receipts) != sequence - 1:
+            raise ValueError("acceptance event receipt order invalid")
+        receipts.append(receipt)
+        record["state"] = "observing"
+        return "recorded"
+
+    return _update(ledger, mutate, now=received_at)
 
 
 def complete_acceptance_run(
@@ -287,7 +380,7 @@ def stage_acceptance_output(
         if len(matches) != 1:
             raise ValueError("acceptance run missing or consumed")
         record = matches[0]
-        _require_live(record, now)
+        _require_observation_live(record, now)
         if (
             record.get("state") != "reserved"
             or record.get("source_workflow_run_id") != source_workflow_run_id
@@ -316,7 +409,7 @@ def recover_staged_acceptance_output(
         if len(matches) != 1:
             raise ValueError("acceptance run missing or consumed")
         record = matches[0]
-        _require_live(record, now)
+        _require_observation_live(record, now)
         if (
             record.get("state") != "reserved"
             or record.get("source_workflow_run_id") != source_workflow_run_id
@@ -363,9 +456,12 @@ def validate_acceptance_run(
             raise ValueError("acceptance run ledger invalid")
         runs = payload["runs"]
         matches = [item for item in runs or [] if isinstance(item, dict) and item.get("run_id") == expected_scope["run_id"]]
-        if len(matches) != 1 or matches[0].get("state") not in {"issued", "reserved"}:
+        if len(matches) != 1 or matches[0].get("state") not in {"issued", "observing", "reserved"}:
             raise ValueError("acceptance run missing or consumed")
-        _require_live(matches[0], now)
+        if matches[0].get("state") == "issued":
+            _require_live(matches[0], now)
+        else:
+            _require_observation_live(matches[0], now)
         if matches[0].get("state") == "reserved" and (
             not re.fullmatch(r"[0-9a-f]{64}", transaction_sha256 or "")
             or matches[0].get("transaction_sha256") != transaction_sha256
@@ -379,6 +475,54 @@ def validate_acceptance_run(
     finally:
         fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
         os.close(lock_descriptor)
+
+
+def validate_acceptance_run_snapshot(
+    binding: Path, *, expected_scope: dict, source_workflow_run_id: int,
+    now: datetime | None = None,
+) -> None:
+    """Validate the orchestrator's immutable read-only run snapshot."""
+    required = _SCOPE_FIELDS | {"run_id", "run_attempt", "challenge"}
+    if set(expected_scope) != required:
+        raise ValueError("acceptance run binding invalid")
+    parent = binding.parent.lstat()
+    if binding.parent.is_symlink() or not stat.S_ISDIR(parent.st_mode) or stat.S_IMODE(parent.st_mode) & 0o022:
+        raise RuntimeError("acceptance run snapshot directory permissions invalid")
+
+    trusted_owner = os.geteuid() if os.getenv("APP_ENV", "").strip().lower() == "test" else 0
+
+    def read_protected(path: Path) -> bytes:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                or metadata.st_uid != trusted_owner or stat.S_IMODE(metadata.st_mode) & 0o222
+            ):
+                raise RuntimeError("acceptance run snapshot permissions invalid")
+            with os.fdopen(os.dup(descriptor), "rb") as handle:
+                return handle.read()
+        finally:
+            os.close(descriptor)
+
+    content = read_protected(binding)
+    digest = hashlib.sha256(content).hexdigest()
+    sidecar = read_protected(Path(f"{binding}.sha256")).decode("ascii").strip().split()
+    if sidecar != [digest, binding.name]:
+        raise RuntimeError("acceptance run snapshot binding invalid")
+    try:
+        record = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("acceptance run snapshot invalid") from exc
+    if not isinstance(record, dict) or record.get("state") != "issued":
+        raise ValueError("acceptance run snapshot invalid")
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    _require_live(record, now)
+    if record.get("source_workflow_run_id") != source_workflow_run_id:
+        raise ValueError("acceptance source workflow mismatch")
+    for field in required:
+        if type(record.get(field)) is not type(expected_scope[field]) or record.get(field) != expected_scope[field]:
+            raise ValueError("acceptance run scope mismatch")
 
 
 def main() -> int:
