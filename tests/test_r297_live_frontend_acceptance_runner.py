@@ -135,6 +135,10 @@ def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
     assert source.index("const deleted = await") < source.index("撤销后既有Viewer WebSocket关闭")
     assert source.index("撤销后既有Viewer WebSocket关闭") < source.index("const revoked = await")
     assert "const [, viewer] = await Promise.all([" in source
+    assert source.index("const revocationReady =") < source.index("const deleted = await")
+    assert source.index("assertLiveViewerForRevocation(revocationViewer)") < source.index("const deleted = await")
+    assert "() => revocationViewer.websocket.isClosed()" in source
+    assert "R297OwnerLogin.openViewer({" in source
 
     completed = subprocess.run(
         ["node", str(ROOT / "tests/r297_live_frontend_acceptance.cjs"), "--self-test"],

@@ -272,6 +272,31 @@ function safeUrl(input) {
   catch (_error) { return 'invalid-url'; }
 }
 
+function assertLiveViewerForRevocation(viewer) {
+  assert.equal(viewer.websocket.isClosed(), false, 'DELETE前Viewer必须仍存活');
+}
+
+async function openRevocationViewer(storeId) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const request = (url, options) => fetch(url, options);
+    const client = R297OwnerLogin.createClient(request);
+    const open = () => R297OwnerLogin.openViewer({
+      client, request, storeId, signal: controller.signal,
+      isActive: () => !controller.signal.aborted
+    });
+    try { return await open(); }
+    catch (error) {
+      // The same client has recorded the acknowledged, completed intent.
+      // Never create a replacement operation for PENDING/UNKNOWN or transport errors.
+      if (error.status !== 409 || error.operation?.status !== 'SUCCESS'
+          || !/^[0-9a-f]{32}$/.test(error.operation.operation_id || '')) throw error;
+      return await open();
+    }
+  } finally { clearTimeout(timer); }
+}
+
 function bounded(label, promise, milliseconds) {
   let timer;
   return Promise.race([
@@ -403,6 +428,37 @@ async function selfTest() {
   const readyViewer = await waitForViewerReady(popup, 3);
   assert.equal(readyViewer.path, '/jd-browser/novnc/3/websockify');
   assert.equal(readyViewer.websocket, socket);
+  assert.throws(() => assertLiveViewerForRevocation({
+    websocket: {isClosed: () => true}
+  }), /DELETE前Viewer必须仍存活/);
+  assertLiveViewerForRevocation({websocket: {isClosed: () => false}});
+  for (const status of ['SUCCESS', 'PENDING', 'UNKNOWN']) {
+    let calls = 0;
+    const ownerClient = require('../frontend/r297-owner-login.js');
+    const pendingOpen = require('node:vm').runInNewContext(`(${openRevocationViewer.toString()})(3)`, {
+      R297OwnerLogin: ownerClient, AbortController, setTimeout, clearTimeout,
+      fetch: async (url, options) => {
+        calls += 1;
+        if (calls === 1) return {status: 409, json: async () => ({detail: {
+          operation_id: 'a'.repeat(32), status, message: 'controlled operation receipt'
+        }})};
+        assert.equal(status, 'SUCCESS', '未知操作不能重试出票');
+        if (calls === 2) {
+          assert.equal(options.headers['x-owner-ack-operation-id'], 'a'.repeat(32));
+          return {status: 200, json: async () => ({ticket: 'controlled-fixture', expires_in: 60})};
+        }
+        assert.equal(url, '/jd-browser/novnc/3/exchange');
+        return {status: 204};
+      }
+    });
+    if (status === 'SUCCESS') {
+      assert.equal(await pendingOpen, '/jd-browser/novnc/3/vnc.html');
+      assert.equal(calls, 3);
+    } else {
+      await assert.rejects(pendingOpen, error => error.operation.status === status);
+      assert.equal(calls, 1);
+    }
+  }
 
   const config = {
     namespace: 'r297-acceptance-test', tenantId: 1, companyId: 2, storeId: 3,
@@ -692,11 +748,23 @@ async function main() {
 
     const controlPage = await context.newPage();
     await controlPage.goto(`${config.origin}/login.html`, {waitUntil: 'domcontentloaded'});
+    // pagehide closed the original UI-owned popup. Establish a fresh Viewer
+    // through the existing public client so its closure can be bound to DELETE.
+    await controlPage.addScriptTag({url: `${config.origin}/r297-owner-login.js`});
+    const revocationPath = await bounded('撤销前建立独立Viewer',
+      controlPage.evaluate(openRevocationViewer, config.storeId), 12_000);
+    assert.equal(revocationPath, `/jd-browser/novnc/${config.storeId}/vnc.html`);
+    const revocationPage = await context.newPage();
+    const revocationReady = waitForViewerReady(revocationPage, config.storeId, runController.signal);
+    const [revocationViewer] = await Promise.all([
+      revocationReady, revocationPage.goto(`${config.origin}${revocationPath}`, {waitUntil: 'domcontentloaded'})
+    ]);
+    assertLiveViewerForRevocation(revocationViewer);
     const deleted = await browserJson(controlPage, `/api/jd-workbench/stores/${config.storeId}/login-session`, {method: 'DELETE'}, 200);
     const deletedBody = assertResponse(deleted, 200, ['ok', 'store_id', 'status'], '销毁会话');
     assert.deepEqual(deletedBody, {ok: true, store_id: config.storeId, status: 'REVOKED'});
     sessionRevoked = true;
-    await waitForCondition('撤销后既有Viewer WebSocket关闭', () => viewer.websocket.isClosed(), {
+    await waitForCondition('撤销后既有Viewer WebSocket关闭', () => revocationViewer.websocket.isClosed(), {
       timeoutMs: 20_000, signal: runController.signal
     });
     const revoked = await browserJson(controlPage, `/jd-browser/novnc/${config.storeId}/vnc.html`, undefined, 401);
