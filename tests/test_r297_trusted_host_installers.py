@@ -53,6 +53,8 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "Disable-ScheduledTask" in WINDOWS
     assert "Unregister-ScheduledTask" in WINDOWS
     assert WINDOWS.index("Unregister-ScheduledTask") < WINDOWS.index("Copy-Item -Path")
+    assert WINDOWS.rindex("Register-ScheduledTask") > WINDOWS.index("R297_UNAUTHORIZED_WRITE_ACE")
+    assert "} catch {" in WINDOWS
     assert "git -C $SourceCheckout archive" in WINDOWS
     assert "Join-Path $codeStage $relative" in WINDOWS
     assert "git -C $SourceCheckout status --porcelain" in WINDOWS

@@ -210,19 +210,6 @@ foreach ($path in @($installRoot, $dataRoot)) {
 & icacls $installRoot /deny "$CandidateAccount`:(OI)(CI)F" | Out-Null
 & icacls $dataRoot /deny "$CandidateAccount`:(OI)(CI)F" | Out-Null
 
-$entry = "import sys;sys.path.insert(0,r'$codeRoot');from ops.r297_trusted_windows_observer import main;raise SystemExit(main())"
-$action = New-ScheduledTaskAction -Execute $pythonPath -Argument (
-  "-I -c `"$entry`" `"$inbox\request.json`" `"$outbox\electron-exit.json`""
-) -WorkingDirectory $codeRoot
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -RestartCount 0
-$principalTask = New-ScheduledTaskPrincipal -UserId $TrustedObserverAccount -LogonType ServiceAccount -RunLevel Limited
-Register-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -Action $action `
-  -Settings $settings -Principal $principalTask -Force | Out-Null
-
-$task = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver'
-if ($task.Actions.Execute -cne $pythonPath -or $task.Actions.Arguments -notmatch 'r297_trusted_windows_observer') {
-  throw 'R297_TRUSTED_OBSERVER_IMAGEPATH_INVALID'
-}
 foreach ($path in @($installRoot, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $outbox, $protected) + @(
   Get-ChildItem -LiteralPath $codeRoot -Recurse -Force | ForEach-Object FullName
 ) + @(
@@ -254,6 +241,25 @@ foreach ($path in @($installRoot, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $o
       throw "R297_UNAUTHORIZED_WRITE_ACE:$path"
     }
   }
+}
+
+$entry = "import sys;sys.path.insert(0,r'$codeRoot');from ops.r297_trusted_windows_observer import main;raise SystemExit(main())"
+$action = New-ScheduledTaskAction -Execute $pythonPath -Argument (
+  "-I -c `"$entry`" `"$inbox\request.json`" `"$outbox\electron-exit.json`""
+) -WorkingDirectory $codeRoot
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -RestartCount 0
+$principalTask = New-ScheduledTaskPrincipal -UserId $TrustedObserverAccount -LogonType ServiceAccount -RunLevel Limited
+try {
+  Register-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -Action $action `
+    -Settings $settings -Principal $principalTask -Force | Out-Null
+  $task = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver'
+  if ($task.Actions.Execute -cne $pythonPath -or $task.Actions.Arguments -notmatch 'r297_trusted_windows_observer') {
+    throw 'R297_TRUSTED_OBSERVER_IMAGEPATH_INVALID'
+  }
+} catch {
+  Unregister-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -Confirm:$false `
+    -ErrorAction SilentlyContinue
+  throw
 }
 
 Write-Output "R297_TRUSTED_WINDOWS_INSTALL=READY"
