@@ -30,12 +30,18 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "PythonRuntimeRoot" in WINDOWS
     assert "PythonExeRelativePath" in WINDOWS
     assert "PythonSha256" in WINDOWS
+    assert "R297_PYTHON_RELATIVE_PATH_INVALID" in WINDOWS
+    assert "R297_PROTECTED_PYTHON_PATH_ESCAPE" in WINDOWS
+    assert "PYTHON_RUNTIME_MANIFEST.json" in WINDOWS
+    assert "R297_PROTECTED_PYTHON_RUNTIME_MISMATCH" in WINDOWS
     assert "Get-AuthenticodeSignature" in WINDOWS
     assert "python-runtime" in WINDOWS
     assert "/setowner '*S-1-5-32-544' /T /C" in WINDOWS
     assert "R297_UNAUTHORIZED_WRITE_ACE" in WINDOWS
     assert "R297_UNTRUSTED_OWNER" in WINDOWS
     assert "S-1-5-32-544" in WINDOWS
+    assert "Assert-LocalNonAdminAccount" in WINDOWS
+    assert "Test-LocalGroupContains" in WINDOWS
     assert "git -C $SourceCheckout status --porcelain" in WINDOWS
     assert "fsutil reparsepoint query" in WINDOWS
     assert "/inheritance:r" in WINDOWS
@@ -54,3 +60,9 @@ def test_observer_database_role_is_read_only_and_grants_only_three_tables():
     assert "public.stores, public.jd_workbench_sync_policies, public.jd_sync_logs" in DATABASE
     assert "R297_OBSERVER_DATABASE_GRANTS=PENDING_RC_MIGRATION" in DATABASE
     assert "chmod 0400" in DATABASE
+    assert "docker exec -i" in DATABASE
+    assert "docker exec -e R297_OBSERVER_PASSWORD" not in DATABASE
+    assert "REVOKE ALL PRIVILEGES ON ALL TABLES" in DATABASE
+    assert "REVOKE ALL PRIVILEGES ON ALL SEQUENCES" in DATABASE
+    assert "actual_grants" in DATABASE
+    assert "ALTER ROLE r297_observer PASSWORD" in DATABASE

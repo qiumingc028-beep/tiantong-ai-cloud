@@ -85,11 +85,13 @@ class EvidenceBroker:
             ):
                 raise RuntimeError("acceptance run snapshot directory changed") from None
         snapshot = run_root / "acceptance-run-binding.json"
+        sidecar = Path(f"{snapshot}.sha256")
         content = (json.dumps(record, sort_keys=True) + "\n").encode()
-        if snapshot.exists():
-            sidecar = Path(f"{snapshot}.sha256")
+        if sidecar.exists():
             digest = __import__("hashlib").sha256(content).hexdigest()
             if (
+                not snapshot.exists()
+                or
                 snapshot.read_bytes() != content
                 or sidecar.read_text(encoding="ascii").strip().split() != [digest, snapshot.name]
             ):

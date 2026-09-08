@@ -14,13 +14,43 @@ $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
   throw 'R297_WINDOWS_ADMIN_REQUIRED'
 }
+function Assert-LocalNonAdminAccount([string]$Account, [string]$Role) {
+  $sid = ([Security.Principal.NTAccount]$Account).Translate(
+    [Security.Principal.SecurityIdentifier]
+  ).Value
+  $name = ($Account -split '\\')[-1]
+  $local = Get-LocalUser -Name $name -ErrorAction Stop
+  if ($local.SID.Value -cne $sid) { throw "R297_${Role}_LOCAL_ACCOUNT_REQUIRED" }
+  function Test-LocalGroupContains([string]$GroupSid, [string]$TargetSid, [hashtable]$Seen) {
+    if ($Seen[$GroupSid]) { return $false }
+    $Seen[$GroupSid] = $true
+    foreach ($member in @(Get-LocalGroupMember -SID $GroupSid)) {
+      if ($member.SID.Value -ceq $TargetSid) { return $true }
+      if ($member.ObjectClass -eq 'Group' -and $member.PrincipalSource -eq 'Local') {
+        if (Test-LocalGroupContains $member.SID.Value $TargetSid $Seen) { return $true }
+      }
+    }
+    return $false
+  }
+  if (Test-LocalGroupContains 'S-1-5-32-544' $sid @{}) {
+    throw "R297_${Role}_MUST_NOT_BE_ADMIN"
+  }
+  return $sid
+}
 if ((git -C $SourceCheckout rev-parse HEAD).Trim() -cne $SignerSha) { throw 'R297_SIGNER_SHA_MISMATCH' }
 if (-not [string]::IsNullOrWhiteSpace((git -C $SourceCheckout status --porcelain))) {
   throw 'R297_SIGNER_CHECKOUT_DIRTY'
 }
 
 $sourcePythonRoot = (Resolve-Path -LiteralPath $PythonRuntimeRoot).Path
+if ([IO.Path]::IsPathRooted($PythonExeRelativePath) -or
+    ($PythonExeRelativePath -split '[\\/]' | Where-Object { $_ -eq '..' })) {
+  throw 'R297_PYTHON_RELATIVE_PATH_INVALID'
+}
 $sourcePython = (Resolve-Path -LiteralPath (Join-Path $sourcePythonRoot $PythonExeRelativePath)).Path
+if (-not $sourcePython.StartsWith(
+  $sourcePythonRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase
+)) { throw 'R297_PYTHON_PATH_ESCAPE' }
 foreach ($path in @($sourcePythonRoot, $sourcePython) + @(
   Get-ChildItem -LiteralPath $sourcePythonRoot -Recurse -Force | ForEach-Object FullName
 )) {
@@ -32,17 +62,17 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $sourcePython).Hash -cne $Pytho
 }
 $pythonSignature = Get-AuthenticodeSignature -LiteralPath $sourcePython
 if ($pythonSignature.Status -ne 'Valid') { throw 'R297_PYTHON_SIGNATURE_INVALID' }
-$candidateSid = ([Security.Principal.NTAccount]$CandidateAccount).Translate(
-  [Security.Principal.SecurityIdentifier]
-).Value
-$observerSid = ([Security.Principal.NTAccount]$TrustedObserverAccount).Translate(
-  [Security.Principal.SecurityIdentifier]
-).Value
-$administratorSids = @(Get-LocalGroupMember -SID 'S-1-5-32-544' | ForEach-Object {
-  try { $_.SID.Value } catch { $null }
-})
-if ($administratorSids -contains $candidateSid) { throw 'R297_CANDIDATE_MUST_NOT_BE_ADMIN' }
-if ($administratorSids -contains $observerSid) { throw 'R297_OBSERVER_MUST_NOT_BE_ADMIN' }
+$candidateSid = Assert-LocalNonAdminAccount $CandidateAccount 'CANDIDATE'
+$observerSid = Assert-LocalNonAdminAccount $TrustedObserverAccount 'OBSERVER'
+$sourceRuntimeManifest = @(
+  Get-ChildItem -LiteralPath $sourcePythonRoot -Recurse -Force -File |
+    Sort-Object FullName | ForEach-Object {
+      [pscustomobject]@{
+        path = $_.FullName.Substring($sourcePythonRoot.TrimEnd('\').Length + 1)
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+      }
+    }
+)
 
 $installRoot = Join-Path $env:ProgramFiles "TiantongAI\R297TrustedWindowsObserver\$SignerSha"
 $dataRoot = Join-Path $env:ProgramData 'TiantongAI\R297TrustedWindowsObserver'
@@ -58,10 +88,26 @@ foreach ($path in @($installRoot, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $o
 }
 Copy-Item -Path (Join-Path $sourcePythonRoot '*') -Destination $runtimeRoot -Recurse -Force
 $pythonPath = (Resolve-Path -LiteralPath (Join-Path $runtimeRoot $PythonExeRelativePath)).Path
+if (-not $pythonPath.StartsWith(
+  $runtimeRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase
+)) { throw 'R297_PROTECTED_PYTHON_PATH_ESCAPE' }
 if (
   (Get-FileHash -Algorithm SHA256 -LiteralPath $pythonPath).Hash -cne $PythonSha256 -or
   (Get-AuthenticodeSignature -LiteralPath $pythonPath).Status -ne 'Valid'
 ) { throw 'R297_PROTECTED_PYTHON_VALIDATION_FAILED' }
+$protectedRuntimeManifest = @(
+  Get-ChildItem -LiteralPath $runtimeRoot -Recurse -Force -File |
+    Sort-Object FullName | ForEach-Object {
+      [pscustomobject]@{
+        path = $_.FullName.Substring($runtimeRoot.TrimEnd('\').Length + 1)
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+      }
+    }
+)
+if (($sourceRuntimeManifest | ConvertTo-Json -Compress) -cne
+    ($protectedRuntimeManifest | ConvertTo-Json -Compress)) {
+  throw 'R297_PROTECTED_PYTHON_RUNTIME_MISMATCH'
+}
 
 $files = @(
   'ops\__init__.py',
@@ -79,6 +125,11 @@ foreach ($relative in $files) {
   Copy-Item -LiteralPath (Join-Path $SourceCheckout $relative) -Destination $destination -Force
 }
 [IO.File]::WriteAllText((Join-Path $installRoot 'SIGNER_SHA'), "$SignerSha`n", [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText(
+  (Join-Path $installRoot 'PYTHON_RUNTIME_MANIFEST.json'),
+  (($protectedRuntimeManifest | ConvertTo-Json -Compress) + "`n"),
+  [Text.UTF8Encoding]::new($false)
+)
 
 foreach ($path in @($installRoot, $dataRoot)) {
   & icacls $path /inheritance:r | Out-Null

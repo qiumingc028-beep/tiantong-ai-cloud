@@ -130,3 +130,36 @@ def test_issue_recovers_directory_only_crash(tmp_path):
     }, peer_uid=100)
     assert Path(result["snapshot"]).stat().st_mode & 0o777 == 0o444
     assert run_root.stat().st_mode & 0o777 == 0o755
+
+
+@pytest.mark.parametrize("hardlink_crash", [False, True])
+def test_issue_recovers_snapshot_body_only_crash(tmp_path, hardlink_crash):
+    snapshot_root = tmp_path / "snapshots"
+    run_root = snapshot_root / "r297-run-000000000001"
+    run_root.mkdir(parents=True, mode=0o700)
+    record = {
+        **_scope(), "source_workflow_run_id": 8, "run_id": run_root.name,
+        "run_attempt": 1, "challenge": "challenge-value-00000001",
+        "issued_at": "2026-09-08T00:00:00+00:00", "consumed_at": None,
+        "state": "issued", "event_receipts": [],
+    }
+    content = (json.dumps(record, sort_keys=True) + "\n").encode()
+    snapshot = run_root / "acceptance-run-binding.json"
+    snapshot.write_bytes(content)
+    snapshot.chmod(0o600)
+    temporary = run_root / ".acceptance-run-binding.json.0123456789abcdef"
+    if hardlink_crash:
+        temporary.hardlink_to(snapshot)
+    broker = EvidenceBroker(
+        run_ledger=tmp_path / "runs.json", nonce_ledger=tmp_path / "nonces.json",
+        snapshot_root=snapshot_root,
+        role_uids={"verifier": 100, "page_event_receiver": 101, "authenticated_observer": 102,
+                   "windows_relay": 103},
+        issue_run=lambda *_args, **_kwargs: record,
+    )
+    result = broker.dispatch({
+        "action": "issue", "scope": _scope(), "source_workflow_run_id": 8, "run_attempt": 1,
+    }, peer_uid=100)
+    assert Path(result["snapshot"]).stat().st_mode & 0o777 == 0o444
+    assert Path(f'{result["snapshot"]}.sha256').is_file()
+    assert not temporary.exists()
