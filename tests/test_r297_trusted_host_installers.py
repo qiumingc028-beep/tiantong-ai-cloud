@@ -26,8 +26,14 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "R297TrustedWindowsObserver" in WINDOWS
     assert "CandidateAccount" in WINDOWS
     assert "R297_TRUSTED_SIGNER_SHA" in WINDOWS
+    assert "PythonRuntimeRoot" in WINDOWS
+    assert "PythonExeRelativePath" in WINDOWS
     assert "PythonSha256" in WINDOWS
     assert "Get-AuthenticodeSignature" in WINDOWS
+    assert "python-runtime" in WINDOWS
+    assert "/setowner '*S-1-5-32-544' /T /C" in WINDOWS
+    assert "R297_UNAUTHORIZED_WRITE_ACE" in WINDOWS
+    assert "R297_UNTRUSTED_OWNER" in WINDOWS
     assert "S-1-5-32-544" in WINDOWS
     assert "git -C $SourceCheckout status --porcelain" in WINDOWS
     assert "fsutil reparsepoint query" in WINDOWS

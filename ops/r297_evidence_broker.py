@@ -81,7 +81,7 @@ class EvidenceBroker:
             if (
                 run_root.is_symlink() or not stat.S_ISDIR(metadata.st_mode)
                 or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) != 0o755
+                or stat.S_IMODE(metadata.st_mode) not in {0o700, 0o755}
             ):
                 raise RuntimeError("acceptance run snapshot directory changed") from None
         snapshot = run_root / "acceptance-run-binding.json"

@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory=$true)][string]$SourceCheckout,
   [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{40}$')][string]$SignerSha,
-  [Parameter(Mandatory=$true)][string]$PythonExe,
+  [Parameter(Mandatory=$true)][string]$PythonRuntimeRoot,
+  [Parameter(Mandatory=$true)][string]$PythonExeRelativePath,
   [Parameter(Mandatory=$true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$PythonSha256,
   [Parameter(Mandatory=$true)][string]$TrustedObserverAccount,
   [Parameter(Mandatory=$true)][string]$CandidateAccount
@@ -18,13 +19,18 @@ if (-not [string]::IsNullOrWhiteSpace((git -C $SourceCheckout status --porcelain
   throw 'R297_SIGNER_CHECKOUT_DIRTY'
 }
 
-$pythonPath = (Resolve-Path -LiteralPath $PythonExe).Path
-& fsutil reparsepoint query $pythonPath *> $null
-if ($LASTEXITCODE -eq 0) { throw 'R297_PYTHON_REPARSE_POINT_REJECTED' }
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $pythonPath).Hash -cne $PythonSha256) {
+$sourcePythonRoot = (Resolve-Path -LiteralPath $PythonRuntimeRoot).Path
+$sourcePython = (Resolve-Path -LiteralPath (Join-Path $sourcePythonRoot $PythonExeRelativePath)).Path
+foreach ($path in @($sourcePythonRoot, $sourcePython) + @(
+  Get-ChildItem -LiteralPath $sourcePythonRoot -Recurse -Force | ForEach-Object FullName
+)) {
+  & fsutil reparsepoint query $path *> $null
+  if ($LASTEXITCODE -eq 0) { throw "R297_PYTHON_REPARSE_POINT_REJECTED:$path" }
+}
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $sourcePython).Hash -cne $PythonSha256) {
   throw 'R297_PYTHON_SHA256_MISMATCH'
 }
-$pythonSignature = Get-AuthenticodeSignature -LiteralPath $pythonPath
+$pythonSignature = Get-AuthenticodeSignature -LiteralPath $sourcePython
 if ($pythonSignature.Status -ne 'Valid') { throw 'R297_PYTHON_SIGNATURE_INVALID' }
 $candidateSid = ([Security.Principal.NTAccount]$CandidateAccount).Translate(
   [Security.Principal.SecurityIdentifier]
@@ -41,14 +47,21 @@ if ($administratorSids -contains $observerSid) { throw 'R297_OBSERVER_MUST_NOT_B
 $installRoot = Join-Path $env:ProgramFiles "TiantongAI\R297TrustedWindowsObserver\$SignerSha"
 $dataRoot = Join-Path $env:ProgramData 'TiantongAI\R297TrustedWindowsObserver'
 $codeRoot = Join-Path $installRoot 'code'
+$runtimeRoot = Join-Path $installRoot 'python-runtime'
 $inbox = Join-Path $dataRoot 'inbox'
 $outbox = Join-Path $dataRoot 'outbox'
 $protected = Join-Path $dataRoot 'protected'
-foreach ($path in @($installRoot, $codeRoot, $dataRoot, $inbox, $outbox, $protected)) {
+foreach ($path in @($installRoot, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $outbox, $protected)) {
   New-Item -ItemType Directory -Force -Path $path | Out-Null
   & fsutil reparsepoint query $path *> $null
   if ($LASTEXITCODE -eq 0) { throw "R297_REPARSE_POINT_REJECTED:$path" }
 }
+Copy-Item -Path (Join-Path $sourcePythonRoot '*') -Destination $runtimeRoot -Recurse -Force
+$pythonPath = (Resolve-Path -LiteralPath (Join-Path $runtimeRoot $PythonExeRelativePath)).Path
+if (
+  (Get-FileHash -Algorithm SHA256 -LiteralPath $pythonPath).Hash -cne $PythonSha256 -or
+  (Get-AuthenticodeSignature -LiteralPath $pythonPath).Status -ne 'Valid'
+) { throw 'R297_PROTECTED_PYTHON_VALIDATION_FAILED' }
 
 $files = @(
   'ops\__init__.py',
@@ -70,8 +83,13 @@ foreach ($relative in $files) {
 foreach ($path in @($installRoot, $dataRoot)) {
   & icacls $path /inheritance:r | Out-Null
   & icacls $path /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+  & icacls $path /setowner '*S-1-5-32-544' /T /C | Out-Null
 }
+& icacls $installRoot /inheritance:r /T /C | Out-Null
+& icacls $installRoot /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
 & icacls $installRoot /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
+& icacls $dataRoot /inheritance:r /T /C | Out-Null
+& icacls $dataRoot /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
 & icacls $inbox /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
 & icacls $outbox /grant "$TrustedObserverAccount`:(OI)(CI)M" | Out-Null
 & icacls $protected /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
@@ -91,15 +109,35 @@ $task = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver'
 if ($task.Actions.Execute -cne $pythonPath -or $task.Actions.Arguments -notmatch 'r297_trusted_windows_observer') {
   throw 'R297_TRUSTED_OBSERVER_IMAGEPATH_INVALID'
 }
-foreach ($path in @($installRoot, $codeRoot, $dataRoot, $inbox, $outbox, $protected) + @(
+foreach ($path in @($installRoot, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $outbox, $protected) + @(
   Get-ChildItem -LiteralPath $codeRoot -Recurse -Force | ForEach-Object FullName
+) + @(
+  Get-ChildItem -LiteralPath $runtimeRoot -Recurse -Force | ForEach-Object FullName
 )) {
   & fsutil reparsepoint query $path *> $null
   if ($LASTEXITCODE -eq 0) { throw "R297_REPARSE_POINT_REJECTED:$path" }
   $acl = Get-Acl -LiteralPath $path
+  $allowedWriters = @('S-1-5-18', 'S-1-5-32-544')
+  if ($path.StartsWith($outbox, [StringComparison]::OrdinalIgnoreCase)) {
+    $allowedWriters += $observerSid
+  }
+  $owner = $acl.Owner
+  try { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+  if (@('S-1-5-18', 'S-1-5-32-544') -notcontains $owner) {
+    throw "R297_UNTRUSTED_OWNER:$path"
+  }
   foreach ($entry in $acl.Access) {
-    if ($entry.IdentityReference -like "*$CandidateAccount*" -and $entry.AccessControlType -eq 'Allow') {
-      throw "R297_CANDIDATE_ACL_LEAK:$path"
+    if ($entry.AccessControlType -ne 'Allow') { continue }
+    try {
+      $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+    } catch { throw "R297_UNRESOLVED_ACL_IDENTITY:$path" }
+    $writeRights = [int]([Security.AccessControl.FileSystemRights]::Write -bor
+      [Security.AccessControl.FileSystemRights]::Modify -bor
+      [Security.AccessControl.FileSystemRights]::FullControl -bor
+      [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+      [Security.AccessControl.FileSystemRights]::TakeOwnership)
+    if (([int]$entry.FileSystemRights -band $writeRights) -ne 0 -and $allowedWriters -notcontains $sid) {
+      throw "R297_UNAUTHORIZED_WRITE_ACE:$path"
     }
   }
 }
