@@ -22,7 +22,6 @@ done
 install_root="/opt/tiantong-v2-s12/r297-evidence/code/$source_sha"
 install -d -o root -g root -m 0755 "$install_root/ops"
 for path in \
-  ops/__init__.py \
   ops/r297_acceptance_run.py \
   ops/r297_evidence_broker.py \
   ops/r297_evidence_events.py \
