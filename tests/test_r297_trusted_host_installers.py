@@ -50,6 +50,9 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "Assert-LocalNonAdminAccount" in WINDOWS
     assert "Test-LocalGroupContains" in WINDOWS
     assert "R297_TRUSTED_OBSERVER_TASK_RUNNING" in WINDOWS
+    assert "Disable-ScheduledTask" in WINDOWS
+    assert "Unregister-ScheduledTask" in WINDOWS
+    assert WINDOWS.index("Unregister-ScheduledTask") < WINDOWS.index("Copy-Item -Path")
     assert "git -C $SourceCheckout archive" in WINDOWS
     assert "Join-Path $codeStage $relative" in WINDOWS
     assert "git -C $SourceCheckout status --porcelain" in WINDOWS

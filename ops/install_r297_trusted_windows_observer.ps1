@@ -103,6 +103,15 @@ $existingTask = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -ErrorA
 if ($existingTask -and $existingTask.State -eq 'Running') {
   throw 'R297_TRUSTED_OBSERVER_TASK_RUNNING'
 }
+if ($existingTask) {
+  Disable-ScheduledTask -TaskName 'R297TrustedWindowsObserver' | Out-Null
+  $existingTask = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver'
+  if ($existingTask.State -eq 'Running') { throw 'R297_TRUSTED_OBSERVER_TASK_RUNNING' }
+  Unregister-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -Confirm:$false
+  if (Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -ErrorAction SilentlyContinue) {
+    throw 'R297_TRUSTED_OBSERVER_TASK_DISABLE_FAILED'
+  }
+}
 $sourceRuntimeManifest = @(
   Get-ChildItem -LiteralPath $sourcePythonRoot -Recurse -Force -File |
     Sort-Object FullName | ForEach-Object {
