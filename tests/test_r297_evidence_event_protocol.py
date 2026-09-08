@@ -283,6 +283,51 @@ def test_bound_file_publish_recovers_sidecar_write_crash(monkeypatch, tmp_path):
         assert synced_directory_inodes.count(parent_inode) >= 2
 
 
+def test_bound_file_publish_recovers_verified_sidecar_hardlink_crash(monkeypatch, tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    output.write_bytes(content)
+    output.chmod(0o600)
+    digest = hashlib.sha256(content).hexdigest()
+    sidecar = Path(f"{output}.sha256")
+    sidecar_content = f"{digest}  {output.name}\n".encode("ascii")
+    temporary = sidecar.with_name(f".{sidecar.name}.0123456789abcdef")
+    temporary.write_bytes(sidecar_content)
+    temporary.chmod(0o600)
+    os.link(temporary, sidecar)
+    published_inode = sidecar.stat().st_ino
+    parent_inode = output.parent.stat().st_ino
+    synced_directory_inodes = []
+    original_fsync = os.fsync
+
+    def record_fsync(descriptor):
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced_directory_inodes.append(metadata.st_ino)
+        return original_fsync(descriptor)
+
+    monkeypatch.setattr("ops.r297_evidence_events.os.fsync", record_fsync)
+
+    assert write_sha256_bound_file(output, content) == digest
+
+    metadata = sidecar.stat()
+    assert sidecar.read_bytes() == sidecar_content
+    assert metadata.st_ino == published_inode
+    assert metadata.st_nlink == 1
+    assert metadata.st_mode & 0o777 == 0o600
+    assert output.read_bytes() == content
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert output.parent.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert metadata.st_uid == os.geteuid()
+        assert output.stat().st_uid == os.geteuid()
+        assert output.parent.stat().st_uid == os.geteuid()
+        assert synced_directory_inodes.count(parent_inode) >= 1
+    assert not temporary.exists()
+    assert not list(output.parent.glob(f".{sidecar.name}.*"))
+
+
 def test_bound_file_publish_rejects_hardlinked_body_and_orphan_sidecar(tmp_path):
     output = tmp_path / "evidence" / "event.json"
     output.parent.mkdir(mode=0o700)
