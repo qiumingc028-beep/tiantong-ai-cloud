@@ -24,6 +24,10 @@ database=$(docker exec "$container" sh -c 'printf %s "$POSTGRES_DB"')
 
 exists=$(docker exec "$container" sh -c \
   'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from pg_roles where rolname='"'"'r297_observer'"'"'"')
+if [[ -L $config || (-e $config && ! -f $config) ]]; then
+  echo "R297_OBSERVER_DATABASE_CONFIG_INVALID" >&2
+  exit 1
+fi
 if [[ $exists != 0 && $exists != 1 ]]; then
   echo "R297_OBSERVER_ROLE_CONFIG_DRIFT" >&2
   exit 1
@@ -42,12 +46,12 @@ if [[ $exists == 0 || ! -f $config ]]; then
   printf "\\set password '%s'\n%s\n" "$password" "$role_sql" \
     | docker exec -i "$container" sh -c \
       'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null
-  install -d -o r297-observer -g r297-observer -m 0700 /etc/tiantong/r297-observer
+  install -d -o root -g r297-observer -m 0750 /etc/tiantong/r297-observer
   temporary=$(mktemp /etc/tiantong/r297-observer/.database.env.XXXXXX)
   printf 'R297_OBSERVER_DATABASE_URL=postgresql://%s:%s@postgres:5432/%s\n' \
     "$role" "$password" "$database" >"$temporary"
-  chown r297-observer:r297-observer "$temporary"
-  chmod 0400 "$temporary"
+  chown root:r297-observer "$temporary"
+  chmod 0440 "$temporary"
   if [[ -e $config ]]; then
     echo "R297_OBSERVER_ROLE_CONFIG_DRIFT" >&2
     exit 1
@@ -83,10 +87,14 @@ unauthorized=$(docker exec "$container" sh -c \
   'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from pg_class item join pg_namespace namespace on namespace.oid=item.relnamespace where namespace.nspname='"'"'public'"'"' and item.relkind in ('"'"'r'"'"','"'"'p'"'"') and (has_table_privilege('"'"'r297_observer'"'"',item.oid,'"'"'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'"'"') or (has_table_privilege('"'"'r297_observer'"'"',item.oid,'"'"'SELECT'"'"') and item.relname not in ('"'"'stores'"'"','"'"'jd_workbench_sync_policies'"'"','"'"'jd_sync_logs'"'"')))"')
 [[ $unauthorized == 0 ]]
 
-source "$config"
-observer_url=$R297_OBSERVER_DATABASE_URL
-observer_password=${observer_url#postgresql://*:}
-observer_password=${observer_password%@*}
+config_line=$(<"$config")
+if [[ $config_line =~ ^R297_OBSERVER_DATABASE_URL=postgresql://r297_observer:([0-9a-f]{64})@postgres:5432/([A-Za-z0-9_]+)$ ]]; then
+  observer_password=${BASH_REMATCH[1]}
+  [[ ${BASH_REMATCH[2]} == "$database" ]]
+else
+  echo 'R297_OBSERVER_DATABASE_CONFIG_INVALID' >&2
+  exit 1
+fi
 observer_psql() {
   { printf '%s\n' "$observer_password"; printf '%s\n' "$1"; } | docker exec -i "$container" sh -c '
     set -eu
@@ -106,9 +114,12 @@ if observer_psql 'update public.stores set id=id where false;' >/dev/null 2>&1; 
   echo 'R297_OBSERVER_WRITE_PROBE_UNEXPECTED_SUCCESS' >&2
   exit 1
 fi
-unset observer_password R297_OBSERVER_DATABASE_URL
+unset observer_password config_line
 
-test "$(stat -c '%U:%G %a' "$config")" = 'r297-observer:r297-observer 400'
+chown root:r297-observer /etc/tiantong/r297-observer "$config"
+chmod 0750 /etc/tiantong/r297-observer
+chmod 0440 "$config"
+test "$(stat -c '%U:%G %a' "$config")" = 'root:r297-observer 440'
 docker exec "$container" sh -c \
   'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select rolsuper,rolcreatedb,rolcreaterole,rolinherit,rolreplication,rolbypassrls from pg_roles where rolname='"'"'r297_observer'"'"'"' | grep -qx 'f|f|f|f|f|f'
 echo "R297_OBSERVER_DATABASE_ROLE=READY"

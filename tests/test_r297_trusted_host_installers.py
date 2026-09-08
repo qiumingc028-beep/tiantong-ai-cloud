@@ -31,6 +31,10 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "PythonRuntimeRoot" in WINDOWS
     assert "PythonExeRelativePath" in WINDOWS
     assert "PythonSha256" in WINDOWS
+    assert "PythonRuntimeManifestSha256" in WINDOWS
+    assert "R297_PYTHON_MANIFEST_SHA256_MISMATCH" in WINDOWS
+    assert "R297_SOURCE_PYTHON_RUNTIME_MISMATCH" in WINDOWS
+    assert "R297_WINDOWS_IDENTITY_COLLISION" in WINDOWS
     assert "R297_PYTHON_RELATIVE_PATH_INVALID" in WINDOWS
     assert "R297_PROTECTED_PYTHON_PATH_ESCAPE" in WINDOWS
     assert "PYTHON_RUNTIME_MANIFEST.json" in WINDOWS
@@ -61,7 +65,10 @@ def test_observer_database_role_is_read_only_and_grants_only_three_tables():
     assert "REVOKE ALL ON SCHEMA public" in DATABASE
     assert "public.stores, public.jd_workbench_sync_policies, public.jd_sync_logs" in DATABASE
     assert "R297_OBSERVER_DATABASE_GRANTS=PENDING_RC_MIGRATION" in DATABASE
-    assert "chmod 0400" in DATABASE
+    assert "chmod 0440" in DATABASE
+    assert "root:r297-observer 440" in DATABASE
+    assert 'source "$config"' not in DATABASE
+    assert "R297_OBSERVER_DATABASE_CONFIG_INVALID" in DATABASE
     assert "docker exec -i" in DATABASE
     assert "docker exec -e R297_OBSERVER_PASSWORD" not in DATABASE
     assert "REVOKE ALL PRIVILEGES ON ALL TABLES" in DATABASE

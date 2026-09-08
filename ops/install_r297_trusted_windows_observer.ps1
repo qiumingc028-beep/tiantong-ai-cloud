@@ -4,6 +4,8 @@ param(
   [Parameter(Mandatory=$true)][string]$PythonRuntimeRoot,
   [Parameter(Mandatory=$true)][string]$PythonExeRelativePath,
   [Parameter(Mandatory=$true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$PythonSha256,
+  [Parameter(Mandatory=$true)][string]$PythonRuntimeManifestPath,
+  [Parameter(Mandatory=$true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$PythonRuntimeManifestSha256,
   [Parameter(Mandatory=$true)][string]$TrustedObserverAccount,
   [Parameter(Mandatory=$true)][string]$CandidateAccount
 )
@@ -43,6 +45,38 @@ if (-not [string]::IsNullOrWhiteSpace((git -C $SourceCheckout status --porcelain
 }
 
 $sourcePythonRoot = (Resolve-Path -LiteralPath $PythonRuntimeRoot).Path
+$runtimeManifestPath = (Resolve-Path -LiteralPath $PythonRuntimeManifestPath).Path
+& fsutil reparsepoint query $runtimeManifestPath *> $null
+if ($LASTEXITCODE -eq 0) { throw 'R297_PYTHON_MANIFEST_REPARSE_POINT_REJECTED' }
+$runtimeManifestBytes = [IO.File]::ReadAllBytes($runtimeManifestPath)
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+  $runtimeManifestDigest = ([BitConverter]::ToString(
+    $sha256.ComputeHash($runtimeManifestBytes)
+  )).Replace('-', '').ToLowerInvariant()
+} finally { $sha256.Dispose() }
+if ($runtimeManifestDigest -cne $PythonRuntimeManifestSha256.ToLowerInvariant()) {
+  throw 'R297_PYTHON_MANIFEST_SHA256_MISMATCH'
+}
+$trustedRuntimeManifest = @(
+  [Text.Encoding]::UTF8.GetString($runtimeManifestBytes) | ConvertFrom-Json
+)
+$trustedPaths = @{}
+foreach ($item in $trustedRuntimeManifest) {
+  if ($null -eq $item) { throw 'R297_PYTHON_MANIFEST_SCHEMA_INVALID' }
+  $names = @($item.psobject.Properties.Name | Sort-Object)
+  if ($names.Count -ne 2 -or
+      $names[0] -cne 'path' -or $names[1] -cne 'sha256') {
+    throw 'R297_PYTHON_MANIFEST_SCHEMA_INVALID'
+  }
+  if ([IO.Path]::IsPathRooted($item.path) -or
+      ($item.path -split '[\\/]' | Where-Object { $_ -eq '..' }) -or
+      $item.sha256 -notmatch '^[0-9a-f]{64}$' -or $trustedPaths[$item.path.ToLowerInvariant()]) {
+    throw 'R297_PYTHON_MANIFEST_SCHEMA_INVALID'
+  }
+  $trustedPaths[$item.path.ToLowerInvariant()] = $true
+}
+$trustedRuntimeManifest = @($trustedRuntimeManifest | Sort-Object path)
 if ([IO.Path]::IsPathRooted($PythonExeRelativePath) -or
     ($PythonExeRelativePath -split '[\\/]' | Where-Object { $_ -eq '..' })) {
   throw 'R297_PYTHON_RELATIVE_PATH_INVALID'
@@ -64,6 +98,7 @@ $pythonSignature = Get-AuthenticodeSignature -LiteralPath $sourcePython
 if ($pythonSignature.Status -ne 'Valid') { throw 'R297_PYTHON_SIGNATURE_INVALID' }
 $candidateSid = Assert-LocalNonAdminAccount $CandidateAccount 'CANDIDATE'
 $observerSid = Assert-LocalNonAdminAccount $TrustedObserverAccount 'OBSERVER'
+if ($candidateSid -ceq $observerSid) { throw 'R297_WINDOWS_IDENTITY_COLLISION' }
 $existingTask = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -ErrorAction SilentlyContinue
 if ($existingTask -and $existingTask.State -eq 'Running') {
   throw 'R297_TRUSTED_OBSERVER_TASK_RUNNING'
@@ -77,6 +112,10 @@ $sourceRuntimeManifest = @(
       }
     }
 )
+if (($trustedRuntimeManifest | ConvertTo-Json -Compress) -cne
+    ($sourceRuntimeManifest | ConvertTo-Json -Compress)) {
+  throw 'R297_SOURCE_PYTHON_RUNTIME_MISMATCH'
+}
 
 $installRoot = Join-Path $env:ProgramFiles "TiantongAI\R297TrustedWindowsObserver\$SignerSha"
 $dataRoot = Join-Path $env:ProgramData 'TiantongAI\R297TrustedWindowsObserver'
@@ -131,7 +170,7 @@ foreach ($relative in $files) {
 [IO.File]::WriteAllText((Join-Path $installRoot 'SIGNER_SHA'), "$SignerSha`n", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText(
   (Join-Path $installRoot 'PYTHON_RUNTIME_MANIFEST.json'),
-  (($protectedRuntimeManifest | ConvertTo-Json -Compress) + "`n"),
+  (($trustedRuntimeManifest | ConvertTo-Json -Compress) + "`n"),
   [Text.UTF8Encoding]::new($false)
 )
 
