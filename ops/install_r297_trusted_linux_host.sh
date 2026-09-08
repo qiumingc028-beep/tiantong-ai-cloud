@@ -48,7 +48,7 @@ printf '%s\n' \
   '[Service]' \
   'Type=simple' \
   'User=root' \
-  'Group=root' \
+  'Group=r297-evidence-producers' \
   "WorkingDirectory=$install_root" \
   'Environment=APP_ENV=acceptance' \
   "Environment=PYTHONPATH=$install_root" \
@@ -93,4 +93,3 @@ for account in r297-page-receiver r297-observer r297-verifier r297-windows-relay
 done
 echo "R297_BROKER_INSTALL=READY"
 echo "R297_BROKER_SOURCE_SHA=$source_sha"
-

@@ -58,6 +58,12 @@ def test_broker_is_the_only_ledger_writer_and_publishes_read_only_snapshot(tmp_p
     assert snapshot.stat().st_mode & 0o777 == 0o444
     assert Path(f"{snapshot}.sha256").stat().st_mode & 0o777 == 0o444
     assert json.loads(snapshot.read_text())["challenge"] == "challenge-value-00000001"
+    recovered = broker.dispatch({
+        "action": "issue", "scope": _scope(),
+        "source_workflow_run_id": 34123456789, "run_attempt": 1,
+    }, peer_uid=100)
+    assert recovered["snapshot"] == str(snapshot)
+    assert calls == [(run_ledger, _scope(), 34123456789, 1)] * 2
     with pytest.raises(PermissionError, match="broker action denied"):
         broker.dispatch({
             "action": "issue", "scope": _scope(),

@@ -74,7 +74,16 @@ class EvidenceBroker:
     def _publish_snapshot(self, record: dict) -> Path:
         self.snapshot_root.mkdir(parents=True, exist_ok=True, mode=0o755)
         run_root = self.snapshot_root / record["run_id"]
-        run_root.mkdir(mode=0o700)
+        try:
+            run_root.mkdir(mode=0o700)
+        except FileExistsError:
+            metadata = run_root.lstat()
+            if (
+                run_root.is_symlink() or not stat.S_ISDIR(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o755
+            ):
+                raise RuntimeError("acceptance run snapshot directory changed") from None
         snapshot = run_root / "acceptance-run-binding.json"
         content = (json.dumps(record, sort_keys=True) + "\n").encode()
         if snapshot.exists():

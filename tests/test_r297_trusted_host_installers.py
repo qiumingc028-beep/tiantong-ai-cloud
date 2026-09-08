@@ -9,6 +9,7 @@ WINDOWS = (ROOT / "ops" / "install_r297_trusted_windows_observer.ps1").read_text
 def test_linux_broker_is_keyless_sandboxed_and_owns_both_ledgers():
     assert "RestrictAddressFamilies=AF_UNIX" in LINUX
     assert "CapabilityBoundingSet=" in LINUX
+    assert "Group=r297-evidence-producers" in LINUX
     assert "NoNewPrivileges=true" in LINUX
     assert "R297_PAGE_EVENT_RECEIVER_PRIVATE_KEY" not in LINUX
     assert "R297_OBSERVER_PRIVATE_KEY" not in LINUX
@@ -25,6 +26,9 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "R297TrustedWindowsObserver" in WINDOWS
     assert "CandidateAccount" in WINDOWS
     assert "R297_TRUSTED_SIGNER_SHA" in WINDOWS
+    assert "PythonSha256" in WINDOWS
+    assert "Get-AuthenticodeSignature" in WINDOWS
+    assert "S-1-5-32-544" in WINDOWS
     assert "git -C $SourceCheckout status --porcelain" in WINDOWS
     assert "fsutil reparsepoint query" in WINDOWS
     assert "/inheritance:r" in WINDOWS
