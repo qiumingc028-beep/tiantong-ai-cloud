@@ -162,10 +162,21 @@ $files = @(
   'backend\services\__init__.py',
   'backend\services\jd_runtime_contract.py'
 )
-foreach ($relative in $files) {
-  $destination = Join-Path $codeRoot $relative
-  New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
-  Copy-Item -LiteralPath (Join-Path $SourceCheckout $relative) -Destination $destination -Force
+$sourceArchive = Join-Path $env:TEMP ("r297-trusted-source-{0}.zip" -f [guid]::NewGuid())
+$codeStage = Join-Path $env:TEMP ("r297-trusted-source-{0}" -f [guid]::NewGuid())
+try {
+  $gitFiles = @($files | ForEach-Object { $_.Replace('\', '/') })
+  & git -C $SourceCheckout archive --format=zip --output=$sourceArchive $SignerSha -- @gitFiles
+  if ($LASTEXITCODE -ne 0) { throw 'R297_SIGNER_ARCHIVE_FAILED' }
+  Expand-Archive -LiteralPath $sourceArchive -DestinationPath $codeStage
+  foreach ($relative in $files) {
+    $destination = Join-Path $codeRoot $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $codeStage $relative) -Destination $destination -Force
+  }
+} finally {
+  Remove-Item -LiteralPath $sourceArchive -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $codeStage -Recurse -Force -ErrorAction SilentlyContinue
 }
 [IO.File]::WriteAllText((Join-Path $installRoot 'SIGNER_SHA'), "$SignerSha`n", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText(

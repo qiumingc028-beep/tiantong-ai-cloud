@@ -19,6 +19,20 @@ cleanup() {
   [[ -z $temporary ]] || rm -f -- "$temporary"
 }
 trap cleanup EXIT
+install -d -o root -g root -m 0755 /etc/tiantong
+if [[ -L /etc/tiantong/r297-observer ]]; then
+  echo "R297_OBSERVER_DATABASE_CONFIG_INVALID" >&2
+  exit 1
+fi
+install -d -o root -g r297-observer -m 0750 /etc/tiantong/r297-observer
+if [[ -e $config ]]; then
+  if [[ -L $config || ! -f $config ]]; then
+    echo "R297_OBSERVER_DATABASE_CONFIG_INVALID" >&2
+    exit 1
+  fi
+  chown -h root:r297-observer "$config"
+  chmod 0440 "$config"
+fi
 database=$(docker exec "$container" sh -c 'printf %s "$POSTGRES_DB"')
 [[ $database =~ ^[A-Za-z0-9_]+$ ]]
 
@@ -46,7 +60,6 @@ if [[ $exists == 0 || ! -f $config ]]; then
   printf "\\set password '%s'\n%s\n" "$password" "$role_sql" \
     | docker exec -i "$container" sh -c \
       'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null
-  install -d -o root -g r297-observer -m 0750 /etc/tiantong/r297-observer
   temporary=$(mktemp /etc/tiantong/r297-observer/.database.env.XXXXXX)
   printf 'R297_OBSERVER_DATABASE_URL=postgresql://%s:%s@postgres:5432/%s\n' \
     "$role" "$password" "$database" >"$temporary"

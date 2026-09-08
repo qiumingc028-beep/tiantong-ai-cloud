@@ -22,6 +22,8 @@ def test_linux_broker_is_keyless_sandboxed_and_owns_both_ledgers():
     assert "r297-verifier" in LINUX
     assert "r297-windows-relay" in LINUX
     assert "systemctl restart tiantong-r297-evidence-broker.service" in LINUX
+    assert 'git -C "$source_root" archive "$source_sha"' in LINUX
+    assert '"$staging/$path"' in LINUX
 
 
 def test_windows_installer_separates_candidate_from_fixed_observer():
@@ -48,6 +50,8 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "Assert-LocalNonAdminAccount" in WINDOWS
     assert "Test-LocalGroupContains" in WINDOWS
     assert "R297_TRUSTED_OBSERVER_TASK_RUNNING" in WINDOWS
+    assert "git -C $SourceCheckout archive" in WINDOWS
+    assert "Join-Path $codeStage $relative" in WINDOWS
     assert "git -C $SourceCheckout status --porcelain" in WINDOWS
     assert "fsutil reparsepoint query" in WINDOWS
     assert "/inheritance:r" in WINDOWS
@@ -69,6 +73,7 @@ def test_observer_database_role_is_read_only_and_grants_only_three_tables():
     assert "root:r297-observer 440" in DATABASE
     assert 'source "$config"' not in DATABASE
     assert "R297_OBSERVER_DATABASE_CONFIG_INVALID" in DATABASE
+    assert "chown -h root:r297-observer" in DATABASE
     assert "docker exec -i" in DATABASE
     assert "docker exec -e R297_OBSERVER_PASSWORD" not in DATABASE
     assert "REVOKE ALL PRIVILEGES ON ALL TABLES" in DATABASE

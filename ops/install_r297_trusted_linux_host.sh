@@ -8,9 +8,17 @@ fi
 
 source_root=$(realpath "$1")
 source_sha=$2
+staging=$(mktemp -d /tmp/r297-broker-source.XXXXXX)
+cleanup() { rm -rf -- "$staging"; }
+trap cleanup EXIT
 [[ $source_sha =~ ^[0-9a-f]{40}$ ]]
 [[ $(git -C "$source_root" rev-parse HEAD) == "$source_sha" ]]
 [[ -z $(git -C "$source_root" status --porcelain=v1 --untracked-files=all) ]]
+git -C "$source_root" archive "$source_sha" -- \
+  ops/r297_acceptance_run.py \
+  ops/r297_evidence_broker.py \
+  ops/r297_evidence_events.py \
+  ops/r297_evidence_storage.py | tar -x -C "$staging"
 
 producer_group=r297-evidence-producers
 getent group "$producer_group" >/dev/null || groupadd --system "$producer_group"
@@ -26,7 +34,7 @@ for path in \
   ops/r297_evidence_broker.py \
   ops/r297_evidence_events.py \
   ops/r297_evidence_storage.py; do
-  install -o root -g root -m 0444 "$source_root/$path" "$install_root/$path"
+  install -o root -g root -m 0444 "$staging/$path" "$install_root/$path"
 done
 printf '%s\n' "$source_sha" >"$install_root/SOURCE_SHA"
 chmod 0444 "$install_root/SOURCE_SHA"
