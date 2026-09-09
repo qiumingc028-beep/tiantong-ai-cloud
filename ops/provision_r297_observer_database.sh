@@ -8,6 +8,12 @@ fi
 
 container=$1
 mode=${2:-}
+observer_host=${R297_OBSERVER_POSTGRES_HOST:-127.0.0.1}
+observer_port=${R297_OBSERVER_POSTGRES_PORT:-15432}
+if [[ $observer_host != 127.0.0.1 || ! $observer_port =~ ^[1-9][0-9]{1,4}$ || $observer_port -gt 65535 ]]; then
+  echo "R297_OBSERVER_DATABASE_ENDPOINT_INVALID" >&2
+  exit 1
+fi
 if [[ -n $mode && $mode != --grant-after-rc-migration ]]; then
   echo "invalid mode" >&2
   exit 2
@@ -35,6 +41,11 @@ if [[ -e $config ]]; then
 fi
 database=$(docker exec "$container" sh -c 'printf %s "$POSTGRES_DB"')
 [[ $database =~ ^[A-Za-z0-9_]+$ ]]
+published=$(docker port "$container" 5432/tcp 2>/dev/null || true)
+if [[ $published != "127.0.0.1:$observer_port" ]]; then
+  echo "R297_OBSERVER_DATABASE_LOOPBACK_BINDING_MISSING" >&2
+  exit 1
+fi
 
 exists=$(docker exec "$container" sh -c \
   'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from pg_roles where rolname='"'"'r297_observer'"'"'"')
@@ -50,7 +61,9 @@ if [[ $exists == 0 && -e $config ]]; then
   echo "R297_OBSERVER_ROLE_CONFIG_DRIFT" >&2
   exit 1
 fi
-if [[ $exists == 0 || ! -f $config ]]; then
+migrate_endpoint=0
+if [[ -f $config ]] && grep -q '@postgres:5432/' "$config"; then migrate_endpoint=1; fi
+if [[ $exists == 0 || ! -f $config || $migrate_endpoint == 1 ]]; then
   password=$(openssl rand -hex 32)
   if [[ $exists == 0 ]]; then
     role_sql="CREATE ROLE r297_observer LOGIN PASSWORD :'password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;"
@@ -61,15 +74,15 @@ if [[ $exists == 0 || ! -f $config ]]; then
     | docker exec -i "$container" sh -c \
       'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null
   temporary=$(mktemp /etc/tiantong/r297-observer/.database.env.XXXXXX)
-  printf 'R297_OBSERVER_DATABASE_URL=postgresql://%s:%s@postgres:5432/%s\n' \
-    "$role" "$password" "$database" >"$temporary"
+  printf 'R297_OBSERVER_DATABASE_URL=postgresql://%s:%s@%s:%s/%s\n' \
+    "$role" "$password" "$observer_host" "$observer_port" "$database" >"$temporary"
   chown root:r297-observer "$temporary"
   chmod 0440 "$temporary"
-  if [[ -e $config ]]; then
+  if [[ -e $config && $migrate_endpoint != 1 ]]; then
     echo "R297_OBSERVER_ROLE_CONFIG_DRIFT" >&2
     exit 1
   fi
-  mv "$temporary" "$config"
+  mv -f "$temporary" "$config"
   temporary=
   unset password
 fi
@@ -101,9 +114,9 @@ unauthorized=$(docker exec "$container" sh -c \
 [[ $unauthorized == 0 ]]
 
 config_line=$(<"$config")
-if [[ $config_line =~ ^R297_OBSERVER_DATABASE_URL=postgresql://r297_observer:([0-9a-f]{64})@postgres:5432/([A-Za-z0-9_]+)$ ]]; then
+if [[ $config_line =~ ^R297_OBSERVER_DATABASE_URL=postgresql://r297_observer:([0-9a-f]{64})@127\.0\.0\.1:([1-9][0-9]{1,4})/([A-Za-z0-9_]+)$ ]]; then
   observer_password=${BASH_REMATCH[1]}
-  [[ ${BASH_REMATCH[2]} == "$database" ]]
+  [[ ${BASH_REMATCH[2]} == "$observer_port" && ${BASH_REMATCH[3]} == "$database" ]]
 else
   echo 'R297_OBSERVER_DATABASE_CONFIG_INVALID' >&2
   exit 1
@@ -127,6 +140,18 @@ if observer_psql 'update public.stores set id=id where false;' >/dev/null 2>&1; 
   echo 'R297_OBSERVER_WRITE_PROBE_UNEXPECTED_SUCCESS' >&2
   exit 1
 fi
+printf '%s\n' "${config_line#R297_OBSERVER_DATABASE_URL=}" | /usr/bin/python3 -c '
+import sys, psycopg2
+url = sys.stdin.readline().strip()
+connection = psycopg2.connect(url, connect_timeout=5)
+try:
+    connection.set_session(readonly=True)
+    with connection.cursor() as cursor:
+        cursor.execute("show transaction_read_only")
+        assert cursor.fetchone()[0] == "on"
+finally:
+    connection.close()
+' >/dev/null
 unset observer_password config_line
 
 chown root:r297-observer /etc/tiantong/r297-observer "$config"

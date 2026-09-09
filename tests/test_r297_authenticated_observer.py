@@ -421,7 +421,10 @@ def test_observer_cli_rejects_bad_signature_before_database_connect(monkeypatch,
     page_path.write_text(json.dumps(page))
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("R297_OBSERVER_DATABASE_URL", "postgresql://must-not-connect")
-    monkeypatch.setattr(sys, "argv", ["observer", "observe", str(page_path), str(tmp_path / "out")])
+    monkeypatch.setattr(sys, "argv", [
+        "observer", "observe", str(page_path), str(tmp_path / "out"),
+        "--source-workflow-run-id", "33949515935",
+    ])
     monkeypatch.setattr(
         r297_authenticated_observer.psycopg2, "connect",
         lambda *_args, **_kwargs: pytest.fail("database was queried before signature validation"),

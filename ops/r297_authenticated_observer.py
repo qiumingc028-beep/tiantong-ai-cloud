@@ -249,6 +249,7 @@ def read_scheduler_snapshot(database_url: str, page_event: dict) -> dict:
 
 def produce_page_event_receiver(
     raw_artifact: dict, authenticated_scope: dict, *, received_at: datetime | None = None,
+    run_binding_path: Path | None = None,
 ) -> dict:
     """Turn a native client event into a scoped event signed by the trusted receiver."""
     environment = os.getenv("APP_ENV", "").strip().lower()
@@ -270,7 +271,7 @@ def produce_page_event_receiver(
         )
     elif environment != "test" or os.getenv("R297_TEST_ACCEPTANCE_RUN_BINDING", ""):
         from ops.r297_acceptance_run import validate_acceptance_run_snapshot
-        binding = (
+        binding = run_binding_path or (
             Path(os.environ["R297_TEST_ACCEPTANCE_RUN_BINDING"])
             if environment == "test" else Path("/etc/tiantong/r297-acceptance-run-binding.json")
         )
@@ -389,6 +390,17 @@ def _write_signed_event(path: Path, event: dict) -> None:
     write_sha256_bound_file(path, content)
 
 
+def _record_receipt(path: Path, event: dict, source_workflow_run_id: int) -> None:
+    """Commit the exact published bytes through the role-fenced Broker."""
+    from ops.r297_event_receipt import record_event
+    result = record_event(
+        Path("/broker-owned/run-ledger"), path,
+        source_workflow_run_id=source_workflow_run_id,
+    )
+    if result not in {"recorded", "recovered"}:
+        raise RuntimeError("evidence receipt result invalid")
+
+
 def _recover_signed_event(
     path: Path, *, environment: str, event_type: str, issuer: str,
     expected_scope: dict, subject_event: dict | None = None, expected_payload: dict | None = None,
@@ -438,6 +450,7 @@ def main() -> int:
     observe = subparsers.add_parser("observe")
     observe.add_argument("page_event", type=Path)
     observe.add_argument("output", type=Path)
+    observe.add_argument("--source-workflow-run-id", type=int, required=True)
     args = parser.parse_args()
     if args.command == "receive":
         scope = {field: getattr(args, field) for field in _SCOPE_FIELDS}
@@ -458,9 +471,11 @@ def main() -> int:
             args.output, environment=environment, event_type="web_page_close",
             issuer="page_event_receiver", expected_scope=scope, expected_payload=payload,
         ):
+            _record_receipt(args.output, json.loads(args.output.read_text()), raw["workflow_run_id"])
             return 0
         event = produce_page_event_receiver(raw, scope)
         _write_signed_event(args.output, event)
+        _record_receipt(args.output, event, raw["workflow_run_id"])
         return 0
     database_url = os.getenv("R297_OBSERVER_DATABASE_URL", "")
     if not database_url:
@@ -474,6 +489,7 @@ def main() -> int:
         args.output, environment=environment, event_type="authenticated_observer",
         issuer="authenticated_observer", expected_scope=scope, subject_event=page_event,
     ):
+        _record_receipt(args.output, json.loads(args.output.read_text()), args.source_workflow_run_id)
         return 0
     snapshot = read_scheduler_snapshot(database_url, page_event)
     event = _produce_authenticated_observer(
@@ -481,6 +497,7 @@ def main() -> int:
         environment=environment, manifest=manifest,
     )
     _write_signed_event(args.output, event)
+    _record_receipt(args.output, event, args.source_workflow_run_id)
     return 0
 
 

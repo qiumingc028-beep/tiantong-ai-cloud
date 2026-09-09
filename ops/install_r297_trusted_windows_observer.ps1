@@ -103,14 +103,21 @@ $existingTask = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -ErrorA
 if ($existingTask -and $existingTask.State -eq 'Running') {
   throw 'R297_TRUSTED_OBSERVER_TASK_RUNNING'
 }
+$previousTaskXml = $null
 if ($existingTask) {
-  Disable-ScheduledTask -TaskName 'R297TrustedWindowsObserver' | Out-Null
-  $existingTask = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver'
-  if ($existingTask.State -eq 'Running') { throw 'R297_TRUSTED_OBSERVER_TASK_RUNNING' }
-  Unregister-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -Confirm:$false
-  if (Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -ErrorAction SilentlyContinue) {
-    throw 'R297_TRUSTED_OBSERVER_TASK_DISABLE_FAILED'
+  $previousExecute = [IO.Path]::GetFullPath([string]$existingTask.Actions.Execute)
+  $trustedBase = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'TiantongAI\R297TrustedWindowsObserver'))
+  if (-not $previousExecute.StartsWith($trustedBase.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'R297_PREVIOUS_TASK_NOT_TRUSTED'
   }
+  $previousRoot = Split-Path (Split-Path $previousExecute -Parent) -Parent
+  $previousShaPath = Join-Path $previousRoot 'SIGNER_SHA'
+  $previousManifestPath = Join-Path $previousRoot 'CODE_MANIFEST.json'
+  if (-not (Test-Path -LiteralPath $previousShaPath -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $previousManifestPath -PathType Leaf)) {
+    throw 'R297_PREVIOUS_TASK_NOT_TRUSTED'
+  }
+  $previousTaskXml = Export-ScheduledTask -TaskName 'R297TrustedWindowsObserver'
 }
 $sourceRuntimeManifest = @(
   Get-ChildItem -LiteralPath $sourcePythonRoot -Recurse -Force -File |
@@ -126,14 +133,53 @@ if (($trustedRuntimeManifest | ConvertTo-Json -Compress) -cne
   throw 'R297_SOURCE_PYTHON_RUNTIME_MISMATCH'
 }
 
-$installRoot = Join-Path $env:ProgramFiles "TiantongAI\R297TrustedWindowsObserver\$SignerSha"
+$versionBase = Join-Path $env:ProgramFiles 'TiantongAI\R297TrustedWindowsObserver'
+$installRoot = Join-Path $versionBase $SignerSha
+$installStage = Join-Path $versionBase (".stage-{0}" -f [guid]::NewGuid())
 $dataRoot = Join-Path $env:ProgramData 'TiantongAI\R297TrustedWindowsObserver'
-$codeRoot = Join-Path $installRoot 'code'
-$runtimeRoot = Join-Path $installRoot 'python-runtime'
+$codeRoot = Join-Path $installStage 'code'
+$runtimeRoot = Join-Path $installStage 'python-runtime'
 $inbox = Join-Path $dataRoot 'inbox'
 $outbox = Join-Path $dataRoot 'outbox'
 $protected = Join-Path $dataRoot 'protected'
-foreach ($path in @($installRoot, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $outbox, $protected)) {
+$dataRootExisted = Test-Path -LiteralPath $dataRoot
+$dataAclBackup = @{}
+if ($dataRootExisted) {
+  foreach ($item in @($dataRoot) + @(Get-ChildItem -LiteralPath $dataRoot -Recurse -Force | ForEach-Object FullName)) {
+    $dataAclBackup[$item] = Get-Acl -LiteralPath $item
+  }
+}
+$publishedNewVersion = $false
+$newDataPaths = @()
+trap {
+  if (Test-Path -LiteralPath $installStage) {
+    Remove-Item -LiteralPath $installStage -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $installStage) { throw 'R297_STAGE_ROLLBACK_FAILED' }
+  }
+  if ($publishedNewVersion -and (Test-Path -LiteralPath $installRoot)) {
+    Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $installRoot) { throw 'R297_VERSION_ROLLBACK_FAILED' }
+  }
+  if ($dataRootExisted) {
+    foreach ($item in $dataAclBackup.Keys) {
+      if (Test-Path -LiteralPath $item) {
+        Set-Acl -LiteralPath $item -AclObject $dataAclBackup[$item]
+        if ((Get-Acl -LiteralPath $item).Sddl -cne $dataAclBackup[$item].Sddl) { throw 'R297_DATA_ACL_ROLLBACK_FAILED' }
+      }
+    }
+    foreach ($item in @($newDataPaths | Sort-Object Length -Descending)) {
+      if (Test-Path -LiteralPath $item) { Remove-Item -LiteralPath $item -Recurse -Force }
+    }
+  } elseif (Test-Path -LiteralPath $dataRoot) {
+    Remove-Item -LiteralPath $dataRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  throw
+}
+if (Test-Path -LiteralPath $installRoot) { throw 'R297_TRUSTED_VERSION_ALREADY_INSTALLED' }
+foreach ($path in @($versionBase, $installStage, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $outbox, $protected)) {
+  if ($path.StartsWith($dataRoot, [StringComparison]::OrdinalIgnoreCase) -and -not (Test-Path -LiteralPath $path)) {
+    $newDataPaths += $path
+  }
   New-Item -ItemType Directory -Force -Path $path | Out-Null
   & fsutil reparsepoint query $path *> $null
   if ($LASTEXITCODE -eq 0) { throw "R297_REPARSE_POINT_REJECTED:$path" }
@@ -187,39 +233,55 @@ try {
   Remove-Item -LiteralPath $sourceArchive -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $codeStage -Recurse -Force -ErrorAction SilentlyContinue
 }
-[IO.File]::WriteAllText((Join-Path $installRoot 'SIGNER_SHA'), "$SignerSha`n", [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $installStage 'SIGNER_SHA'), "$SignerSha`n", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText(
-  (Join-Path $installRoot 'PYTHON_RUNTIME_MANIFEST.json'),
+  (Join-Path $installStage 'PYTHON_RUNTIME_MANIFEST.json'),
   (($trustedRuntimeManifest | ConvertTo-Json -Compress) + "`n"),
   [Text.UTF8Encoding]::new($false)
 )
+$codeManifest = @(
+  Get-ChildItem -LiteralPath $codeRoot -Recurse -Force -File |
+    Sort-Object FullName | ForEach-Object {
+      [pscustomobject]@{
+        path = $_.FullName.Substring($codeRoot.TrimEnd('\').Length + 1).Replace('\', '/')
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+      }
+    }
+)
+[IO.File]::WriteAllText(
+  (Join-Path $installStage 'CODE_MANIFEST.json'),
+  (($codeManifest | ConvertTo-Json -Compress) + "`n"),
+  [Text.UTF8Encoding]::new($false)
+)
 
-foreach ($path in @($installRoot, $dataRoot)) {
+foreach ($path in @($installStage, $dataRoot)) {
   & icacls $path /inheritance:r | Out-Null
   & icacls $path /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
   & icacls $path /setowner '*S-1-5-32-544' /T /C | Out-Null
 }
-& icacls $installRoot /inheritance:r /T /C | Out-Null
-& icacls $installRoot /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
-& icacls $installRoot /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
+& icacls $installStage /inheritance:r /T /C | Out-Null
+& icacls $installStage /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
+& icacls $installStage /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
 & icacls $dataRoot /inheritance:r /T /C | Out-Null
 & icacls $dataRoot /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
 & icacls $inbox /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
 & icacls $outbox /grant "$TrustedObserverAccount`:(OI)(CI)M" | Out-Null
 & icacls $protected /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
-& icacls $installRoot /deny "$CandidateAccount`:(OI)(CI)F" | Out-Null
+& icacls $installStage /deny "$CandidateAccount`:(OI)(CI)F" | Out-Null
 & icacls $dataRoot /deny "$CandidateAccount`:(OI)(CI)F" | Out-Null
 
-foreach ($path in @($installRoot, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $outbox, $protected) + @(
+foreach ($path in @($installStage, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $outbox, $protected) + @(
   Get-ChildItem -LiteralPath $codeRoot -Recurse -Force | ForEach-Object FullName
 ) + @(
   Get-ChildItem -LiteralPath $runtimeRoot -Recurse -Force | ForEach-Object FullName
+) + @(
+  Get-ChildItem -LiteralPath $dataRoot -Recurse -Force | ForEach-Object FullName
 )) {
   & fsutil reparsepoint query $path *> $null
   if ($LASTEXITCODE -eq 0) { throw "R297_REPARSE_POINT_REJECTED:$path" }
   $acl = Get-Acl -LiteralPath $path
   $allowedWriters = @('S-1-5-18', 'S-1-5-32-544')
-  if ($path.StartsWith($outbox, [StringComparison]::OrdinalIgnoreCase)) {
+  if ($path -ceq $outbox -or $path.StartsWith($outbox.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
     $allowedWriters += $observerSid
   }
   $owner = $acl.Owner
@@ -232,9 +294,12 @@ foreach ($path in @($installRoot, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $o
     try {
       $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
     } catch { throw "R297_UNRESOLVED_ACL_IDENTITY:$path" }
-    $writeRights = [int]([Security.AccessControl.FileSystemRights]::Write -bor
-      [Security.AccessControl.FileSystemRights]::Modify -bor
-      [Security.AccessControl.FileSystemRights]::FullControl -bor
+    $writeRights = [int]([Security.AccessControl.FileSystemRights]::WriteData -bor
+      [Security.AccessControl.FileSystemRights]::AppendData -bor
+      [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+      [Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+      [Security.AccessControl.FileSystemRights]::Delete -bor
+      [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
       [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
       [Security.AccessControl.FileSystemRights]::TakeOwnership)
     if (([int]$entry.FileSystemRights -band $writeRights) -ne 0 -and $allowedWriters -notcontains $sid) {
@@ -243,6 +308,13 @@ foreach ($path in @($installRoot, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $o
   }
 }
 
+Write-Output 'R297_NEW_INSTALL_VALIDATED=PASS'
+Move-Item -LiteralPath $installStage -Destination $installRoot
+$publishedNewVersion = $true
+$codeRoot = Join-Path $installRoot 'code'
+$runtimeRoot = Join-Path $installRoot 'python-runtime'
+$pythonPath = (Resolve-Path -LiteralPath (Join-Path $runtimeRoot $PythonExeRelativePath)).Path
+
 $entry = "import sys;sys.path.insert(0,r'$codeRoot');from ops.r297_trusted_windows_observer import main;raise SystemExit(main())"
 $action = New-ScheduledTaskAction -Execute $pythonPath -Argument (
   "-I -c `"$entry`" `"$inbox\request.json`" `"$outbox\electron-exit.json`""
@@ -250,6 +322,13 @@ $action = New-ScheduledTaskAction -Execute $pythonPath -Argument (
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -RestartCount 0
 $principalTask = New-ScheduledTaskPrincipal -UserId $TrustedObserverAccount -LogonType ServiceAccount -RunLevel Limited
 try {
+  if ($existingTask) {
+    Disable-ScheduledTask -TaskName 'R297TrustedWindowsObserver' | Out-Null
+    if ((Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver').State -eq 'Running') {
+      throw 'R297_TRUSTED_OBSERVER_TASK_RUNNING'
+    }
+    Unregister-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -Confirm:$false
+  }
   Register-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -Action $action `
     -Settings $settings -Principal $principalTask -Force | Out-Null
   $task = Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver'
@@ -259,6 +338,18 @@ try {
 } catch {
   Unregister-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -Confirm:$false `
     -ErrorAction SilentlyContinue
+  if ($previousTaskXml) {
+    Register-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -Xml $previousTaskXml -Force | Out-Null
+    if (-not (Get-ScheduledTask -TaskName 'R297TrustedWindowsObserver' -ErrorAction SilentlyContinue)) {
+      throw 'R297_TASK_ROLLBACK_FAILED'
+    }
+    Write-Output 'R297_TRUSTED_INSTALL_ROLLBACK=PASS'
+  }
+  if (Test-Path -LiteralPath $installRoot) {
+    Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $installRoot) { throw 'R297_VERSION_ROLLBACK_FAILED' }
+    $publishedNewVersion = $false
+  }
   throw
 }
 
