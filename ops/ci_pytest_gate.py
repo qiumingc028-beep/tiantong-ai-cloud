@@ -14,11 +14,11 @@ from ops.r297_ci_redact import _redact_text, redact
 
 _OUTCOMES: dict[str, str] = {}
 _OUTCOME_PRIORITY = {"passed": 0, "skipped": 1, "failed": 2}
+_PROGRESS_ROOT: Path | None = None
 
 
 def _progress_path(name: str) -> Path | None:
-    root = os.getenv("CI_PYTEST_PROGRESS_DIRECTORY")
-    return Path(root) / name if root else None
+    return _PROGRESS_ROOT / name if _PROGRESS_ROOT is not None else None
 
 
 def _write_status(**updates) -> None:
@@ -52,6 +52,9 @@ def _append_progress(value: dict) -> None:
 
 
 def pytest_sessionstart(session):
+    global _PROGRESS_ROOT
+    root = os.getenv("CI_PYTEST_PROGRESS_DIRECTORY")
+    _PROGRESS_ROOT = Path(root) if root else None
     _OUTCOMES.clear()
     _write_status(result="INCOMPLETE", phase="executing", last_completed_test=None)
 
