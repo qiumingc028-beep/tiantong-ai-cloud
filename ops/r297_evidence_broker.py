@@ -108,7 +108,7 @@ class EvidenceBroker:
                 run_attempt=request["run_attempt"],
             )
             return {"result": "issued", "record": record, "snapshot": str(self._publish_snapshot(record))}
-        if action == "receipt" and set(request) == {
+        if action in {"receipt", "recover_receipt"} and set(request) == {
             "action", "event", "source_workflow_run_id",
         }:
             sequence = request["event"].get("sequence") if isinstance(request["event"], dict) else None
@@ -117,6 +117,10 @@ class EvidenceBroker:
             role = _ORDER[sequence - 1][1]
             if peer_uid != self.role_uids[role]:
                 raise PermissionError("receipt role denied")
+            if action == "recover_receipt":
+                result = record_event_value(self.run_ledger, request["event"],
+                    source_workflow_run_id=request["source_workflow_run_id"], require_existing=True)
+                return {"result": result, "event_sha256": signed_event_sha256(request["event"])}
             result = self.record_event(
                 self.run_ledger, request["event"], request["source_workflow_run_id"],
             )
@@ -209,13 +213,16 @@ class EvidenceBroker:
 
     def _ack(self, request: dict) -> dict:
         required = {"action", "scope", "source_workflow_run_id", "raw_event", "receiver_content_base64", "observer_content_base64"}
-        if set(request) != required or set(request["scope"]) != set(_SCOPE_FIELDS):
+        if (set(request) != required or not isinstance(request["scope"], dict)
+            or set(request["scope"]) != set(_SCOPE_FIELDS)
+            or type(request["source_workflow_run_id"]) is not int or request["source_workflow_run_id"] <= 0):
             raise ValueError("broker request invalid")
         scope, raw = request["scope"], request["raw_event"]
         contents = [base64.b64decode(request[name], validate=True) for name in ("receiver_content_base64", "observer_content_base64")]
         events = [json.loads(content) for content in contents]
         page, observer = events
         if (not isinstance(raw, dict) or set(raw) != {"event", "observed_at", "release_sha", "store_id"}
+            or type(raw["store_id"]) is not int
             or raw != {"event": "web_page_close", "observed_at": page["observed_at"], "release_sha": scope["release_sha"], "store_id": scope["store_id"]}):
             raise ValueError("raw event binding mismatch")
         now = datetime.now(timezone.utc)
@@ -307,6 +314,8 @@ class _Handler(socketserver.StreamRequestHandler):
                 code = "PERMISSION_DENIED"
             elif "PROCESS_SIDE_EFFECTS_UNKNOWN" in str(exc):
                 code = "PROCESS_SIDE_EFFECTS_UNKNOWN"
+            elif str(exc) == "RECEIPT_NOT_VERIFIED":
+                code = "RECEIPT_NOT_VERIFIED"
             elif "expired" in str(exc):
                 code = "RECOVERY_EXPIRED"
             elif isinstance(exc, OSError):

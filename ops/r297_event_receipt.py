@@ -46,7 +46,12 @@ def record_event(
     return record_event_value(ledger, event, source_workflow_run_id=source_workflow_run_id, now=now)
 
 
-def record_event_value(ledger: Path, event: dict, *, source_workflow_run_id: int, now: datetime | None = None) -> str:
+def record_event_value(
+    ledger: Path, event: dict, *, source_workflow_run_id: int,
+    now: datetime | None = None, require_existing: bool = False,
+) -> str:
+    if type(source_workflow_run_id) is not int or source_workflow_run_id <= 0:
+        raise ValueError("source workflow binding invalid")
     sequence = event.get("sequence")
     if type(sequence) is not int or sequence not in range(1, len(_ORDER) + 1):
         raise ValueError("evidence event sequence invalid")
@@ -58,6 +63,8 @@ def record_event_value(ledger: Path, event: dict, *, source_workflow_run_id: int
         ledger, expected_scope=scope, source_workflow_run_id=source_workflow_run_id,
         sequence=sequence, event_sha256=digest, now=received_at,
     )
+    if require_existing and original_received_at is None:
+        raise ValueError("RECEIPT_NOT_VERIFIED")
     verify_signed_event(
         event, event_type=event_type, issuer=issuer,
         environment=os.getenv("APP_ENV", "").strip().lower(),

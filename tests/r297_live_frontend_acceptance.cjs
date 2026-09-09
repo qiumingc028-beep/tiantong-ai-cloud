@@ -362,6 +362,22 @@ async function revokeRecoveredSession(config, requestFactory) {
   }
 }
 
+async function revokeRecoveredSessionWithSignals(config, requestFactory, signals = process) {
+  let interruptedExitCode = 0;
+  const interrupted = code => { if (!interruptedExitCode) interruptedExitCode = code; };
+  const onSigint = () => interrupted(130);
+  const onSigterm = () => interrupted(143);
+  signals.on('SIGINT', onSigint);
+  signals.on('SIGTERM', onSigterm);
+  try {
+    await revokeRecoveredSession(config, requestFactory);
+    return interruptedExitCode;
+  } finally {
+    signals.removeListener('SIGINT', onSigint);
+    signals.removeListener('SIGTERM', onSigterm);
+  }
+}
+
 async function waitForViewerReady(popup, storeId, signal) {
   const websocket = await popup.waitForEvent('websocket', {
     predicate: socket => {
@@ -536,6 +552,23 @@ async function selfTest() {
     ['GET', '/jd-browser/novnc/3/vnc.html', 10_000, 0], ['DISPOSE']
   ]);
   assert.equal(acknowledgementRecoveryState(['a', 'b'], () => false), 'NONE');
+  const recoverySignals = new EventEmitter();
+  let finishRecovery;
+  const recoveryDelete = new Promise(resolve => { finishRecovery = resolve; });
+  const interruptedRecovery = revokeRecoveredSessionWithSignals(
+    {origin: 'https://acceptance.invalid', storageState: {}, storeId: 3},
+    async () => ({
+      delete: async () => {
+        await recoveryDelete;
+        return {status: () => 200, json: async () => ({ok: true, store_id: 3, status: 'REVOKED'})};
+      },
+      get: async () => ({status: () => 403}),
+      dispose: async () => {}
+    }), recoverySignals
+  );
+  recoverySignals.emit('SIGTERM');
+  finishRecovery();
+  assert.equal(await interruptedRecovery, 143, '恢复撤销必须在SIGTERM后收敛并保留退出码');
   assert.equal(acknowledgementRecoveryState(['a', 'b'], () => true), 'COMPLETE');
   assert.throws(() => acknowledgementRecoveryState(['a', 'b'], value => value === 'a'), /文件不完整/);
   const controller = new AbortController();
@@ -709,12 +742,14 @@ async function main() {
   const recovered = recoverAcknowledgedStage(config);
   if (recovered) {
     const { request } = require('playwright');
-    await revokeRecoveredSession(config, options => request.newContext(options));
+    const interruptedExitCode = await revokeRecoveredSessionWithSignals(
+      config, options => request.newContext(options)
+    );
     process.stdout.write('R297_ACK_RECOVERY=PASS\n');
     process.stdout.write('R297_ACK_RECOVERY_REVOKED=PASS\n');
     process.stdout.write('R297_LIVE_FRONTEND_RESULT=ACK_RECOVERED_REVOKED\n');
     process.stdout.write('R297_ACK_RECOVERY_NOTE=ACK恢复不会生成完整验收PASS\n');
-    process.exitCode = 2;
+    process.exitCode = interruptedExitCode || 2;
     return;
   }
   // Freshness gates new Owner side effects, but must not block idempotent
