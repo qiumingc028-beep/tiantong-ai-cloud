@@ -1,0 +1,108 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+LINUX = (ROOT / "ops" / "install_r297_trusted_linux_host.sh").read_text(encoding="utf-8")
+WINDOWS = (ROOT / "ops" / "install_r297_trusted_windows_observer.ps1").read_text(encoding="utf-8")
+DATABASE = (ROOT / "ops" / "provision_r297_observer_database.sh").read_text(encoding="utf-8")
+
+
+def test_linux_fixed_sha_install_has_complete_import_closure(tmp_path):
+    import re
+    import shutil
+    import subprocess
+    import sys
+    files = re.search(r"broker_files=\((.*?)\)", LINUX, re.S).group(1).split()
+    assert '"${broker_files[@]}"' in LINUX
+    (tmp_path / "ops").mkdir()
+    for name in files:
+        shutil.copy2(ROOT / name, tmp_path / name)
+    result = subprocess.run([sys.executable, "-I", "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); from ops.r297_evidence_broker import EvidenceBroker; from ops.r297_broker_client import peer_uid", str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_linux_broker_is_keyless_sandboxed_and_owns_both_ledgers():
+    assert "RestrictAddressFamilies=AF_UNIX" in LINUX
+    assert "CapabilityBoundingSet=" in LINUX
+    assert "Group=r297-evidence-producers" in LINUX
+    assert "NoNewPrivileges=true" in LINUX
+    assert "R297_PAGE_EVENT_RECEIVER_PRIVATE_KEY" not in LINUX
+    assert "R297_OBSERVER_PRIVATE_KEY" not in LINUX
+    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY" not in LINUX
+    assert "--run-ledger /var/lib/tiantong-r297/broker/runs.json" in LINUX
+    assert "--nonce-ledger /var/lib/tiantong-r297/broker/nonces.json" in LINUX
+    assert "r297-page-receiver" in LINUX
+    assert "r297-observer" in LINUX
+    assert "r297-verifier" in LINUX
+    assert "r297-windows-relay" in LINUX
+    assert "systemctl restart tiantong-r297-evidence-broker.service" in LINUX
+    assert 'git -C "$source_root" archive "$source_sha"' in LINUX
+    assert '"$staging/$path"' in LINUX
+
+
+def test_windows_installer_separates_candidate_from_fixed_observer():
+    assert "R297TrustedWindowsObserver" in WINDOWS
+    assert "CandidateAccount" in WINDOWS
+    assert "R297_TRUSTED_SIGNER_SHA" in WINDOWS
+    assert "PythonRuntimeRoot" in WINDOWS
+    assert "PythonExeRelativePath" in WINDOWS
+    assert "PythonSha256" in WINDOWS
+    assert "PythonRuntimeManifestSha256" in WINDOWS
+    assert "R297_PYTHON_MANIFEST_SHA256_MISMATCH" in WINDOWS
+    assert "R297_SOURCE_PYTHON_RUNTIME_MISMATCH" in WINDOWS
+    assert "R297_WINDOWS_IDENTITY_COLLISION" in WINDOWS
+    assert "R297_PYTHON_RELATIVE_PATH_INVALID" in WINDOWS
+    assert "R297_PROTECTED_PYTHON_PATH_ESCAPE" in WINDOWS
+    assert "PYTHON_RUNTIME_MANIFEST.json" in WINDOWS
+    assert "R297_PROTECTED_PYTHON_RUNTIME_MISMATCH" in WINDOWS
+    assert "Get-AuthenticodeSignature" in WINDOWS
+    assert "python-runtime" in WINDOWS
+    assert "/setowner '*S-1-5-32-544' /T /C" in WINDOWS
+    assert "R297_UNAUTHORIZED_WRITE_ACE" in WINDOWS
+    assert "R297_UNTRUSTED_OWNER" in WINDOWS
+    assert "S-1-5-32-544" in WINDOWS
+    assert "Assert-LocalNonAdminAccount" in WINDOWS
+    assert "Test-LocalGroupContains" in WINDOWS
+    assert "R297_TRUSTED_OBSERVER_TASK_RUNNING" in WINDOWS
+    assert "Disable-ScheduledTask" in WINDOWS
+    assert "Unregister-ScheduledTask" in WINDOWS
+    assert WINDOWS.index("Unregister-ScheduledTask") < WINDOWS.index("Copy-Item -Path")
+    assert WINDOWS.rindex("Register-ScheduledTask") > WINDOWS.index("R297_UNAUTHORIZED_WRITE_ACE")
+    assert "} catch {" in WINDOWS
+    assert "git -C $SourceCheckout archive" in WINDOWS
+    assert "Join-Path $codeStage $relative" in WINDOWS
+    assert "git -C $SourceCheckout status --porcelain" in WINDOWS
+    assert "fsutil reparsepoint query" in WINDOWS
+    assert "/inheritance:r" in WINDOWS
+    assert "(OI)(CI)RX" in WINDOWS
+    assert "(OI)(CI)F" in WINDOWS
+    assert "New-Service" not in WINDOWS  # Python is invoked by the trusted scheduled task, not as a fake service binary.
+    assert "Register-ScheduledTask" in WINDOWS
+    assert "r297_trusted_windows_observer" in WINDOWS
+    assert "r297_windows_acceptance.ps1" not in WINDOWS
+
+
+def test_observer_database_role_is_read_only_and_grants_only_three_tables():
+    assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION" in DATABASE
+    assert "default_transaction_read_only = on" in DATABASE
+    assert "REVOKE ALL ON SCHEMA public" in DATABASE
+    assert "public.stores, public.jd_workbench_sync_policies, public.jd_sync_logs" in DATABASE
+    assert "R297_OBSERVER_DATABASE_GRANTS=PENDING_RC_MIGRATION" in DATABASE
+    assert "chmod 0440" in DATABASE
+    assert "root:r297-observer 440" in DATABASE
+    assert 'source "$config"' not in DATABASE
+    assert "R297_OBSERVER_DATABASE_CONFIG_INVALID" in DATABASE
+    assert "chown -h root:r297-observer" in DATABASE
+    assert "docker exec -i" in DATABASE
+    assert "docker exec -e R297_OBSERVER_PASSWORD" not in DATABASE
+    assert "REVOKE ALL PRIVILEGES ON ALL TABLES" in DATABASE
+    assert "REVOKE ALL PRIVILEGES ON ALL SEQUENCES" in DATABASE
+    assert "actual_grants" in DATABASE
+    assert "ALTER ROLE r297_observer PASSWORD" in DATABASE
+    assert "NOINHERIT NOREPLICATION NOBYPASSRLS" in DATABASE
+    assert "pg_auth_members" in DATABASE
+    assert "has_table_privilege" in DATABASE
+    assert "R297_OBSERVER_WRITE_PROBE_UNEXPECTED_SUCCESS" in DATABASE
+    assert "exists == 0 && -e $config" in DATABASE

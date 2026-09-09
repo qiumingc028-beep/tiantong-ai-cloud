@@ -14,7 +14,7 @@ import sys
 import pytest
 
 from ops.r297_evidence_events import (
-    load_trust_manifest, signed_event_sha256, verify_acceptance_event_bundle,
+    load_trust_manifest, signed_event_sha256, _verify_acceptance_event_bundle_local as verify_acceptance_event_bundle,
     write_sha256_bound_file,
 )
 from tests.test_r291_jd_workbench_cloud import TEST_RSA_D, TEST_RSA_N_B64
@@ -34,6 +34,9 @@ _PRIVATE_KEYS = {
 @pytest.fixture(autouse=True)
 def _use_test_trust_manifest(monkeypatch):
     monkeypatch.setenv("APP_ENV", "test")
+    # These tests exercise the protected Broker implementation, not a non-root client.
+    from ops import r297_evidence_bundle
+    monkeypatch.setattr(r297_evidence_bundle, "verify_acceptance_event_bundle", verify_acceptance_event_bundle)
 
 
 def test_embedded_test_trust_manifest_is_versioned_and_role_scoped():
@@ -281,6 +284,72 @@ def test_bound_file_publish_recovers_sidecar_write_crash(monkeypatch, tmp_path):
     assert sidecar.read_text(encoding="ascii") == f"{digest}  event.json\n"
     if os.name != "nt":
         assert synced_directory_inodes.count(parent_inode) >= 2
+
+
+def test_bound_file_publish_recovers_verified_sidecar_hardlink_crash(monkeypatch, tmp_path):
+    output = tmp_path / "evidence" / "event.json"
+    output.parent.mkdir(mode=0o700)
+    content = b'{"event":"signed"}\n'
+    output.write_bytes(content)
+    output.chmod(0o600)
+    digest = hashlib.sha256(content).hexdigest()
+    sidecar = Path(f"{output}.sha256")
+    sidecar_content = f"{digest}  {output.name}\n".encode("ascii")
+    temporary = sidecar.with_name(f".{sidecar.name}.0123456789abcdef")
+    temporary.write_bytes(sidecar_content)
+    temporary.chmod(0o600)
+    os.link(temporary, sidecar)
+    published_inode = sidecar.stat().st_ino
+    parent_inode = output.parent.stat().st_ino
+    synced_directory_inodes = []
+    original_fsync = os.fsync
+
+    def record_fsync(descriptor):
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced_directory_inodes.append(metadata.st_ino)
+        return original_fsync(descriptor)
+
+    monkeypatch.setattr("ops.r297_evidence_events.os.fsync", record_fsync)
+
+    assert write_sha256_bound_file(output, content) == digest
+
+    metadata = sidecar.stat()
+    assert sidecar.read_bytes() == sidecar_content
+    assert metadata.st_ino == published_inode
+    assert metadata.st_nlink == 1
+    assert metadata.st_mode & 0o777 == 0o600
+    assert output.read_bytes() == content
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert output.parent.stat().st_mode & 0o777 == 0o700
+    if os.name != "nt":
+        assert metadata.st_uid == os.geteuid()
+        assert output.stat().st_uid == os.geteuid()
+        assert output.parent.stat().st_uid == os.geteuid()
+        assert synced_directory_inodes.count(parent_inode) >= 1
+    assert not temporary.exists()
+    assert not list(output.parent.glob(f".{sidecar.name}.*"))
+
+
+@pytest.mark.parametrize("invalid", ["content", "foreign_link", "mode", "third_link"])
+def test_sidecar_b_rejects_untrusted_residue_without_deleting_it(tmp_path, invalid):
+    output = tmp_path / "event.json"
+    content = b'{"event":"signed"}\n'
+    output.write_bytes(content)
+    output.chmod(0o600)
+    sidecar = Path(f"{output}.sha256")
+    temporary = sidecar.with_name(f".{sidecar.name}.0123456789abcdef" if invalid != "foreign_link" else "foreign-link")
+    temporary.write_text(f"{hashlib.sha256(content).hexdigest()}  {output.name}\n" if invalid != "content" else "changed")
+    temporary.chmod(0o600 if invalid != "mode" else 0o644)
+    os.link(temporary, sidecar)
+    if invalid == "third_link":
+        os.link(sidecar, tmp_path / "third-link")
+    before = sidecar.read_bytes()
+    with pytest.raises((ValueError, FileExistsError)):
+        write_sha256_bound_file(output, content)
+    assert sidecar.read_bytes() == before
+    assert temporary.exists()
+    assert output.read_bytes() == content
 
 
 def test_bound_file_publish_rejects_hardlinked_body_and_orphan_sidecar(tmp_path):

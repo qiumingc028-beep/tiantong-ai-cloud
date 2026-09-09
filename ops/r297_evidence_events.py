@@ -96,6 +96,21 @@ def write_sha256_bound_file(path: Path, content: bytes) -> str:
     sidecar = Path(f"{path}.sha256")
     digest = hashlib.sha256(content).hexdigest()
     if sidecar.exists():
+        # A committed pair remains exclusive; only our unfinished sidecar link
+        # can resume, after the body and both link identities have been checked.
+        if not path.exists():
+            raise FileExistsError(sidecar)
+        body = path.lstat()
+        metadata = sidecar.lstat()
+        if metadata.st_nlink == 2 and os.name == "nt":
+            raise RuntimeError("R297_WINDOWS_HARDLINK_RECOVERY_REQUIRES_TRUSTED_ACL")
+        if (
+            metadata.st_nlink == 2 and stat.S_ISREG(body.st_mode)
+            and body.st_nlink == 1 and stat.S_IMODE(body.st_mode) == 0o600
+            and body.st_uid == os.geteuid() and path.read_bytes() == content
+        ):
+            _recover_published_hardlink(sidecar, f"{digest}  {path.name}\n".encode("ascii"), metadata)
+            return digest
         raise FileExistsError(sidecar)
     if path.exists():
         metadata = path.lstat()
@@ -121,6 +136,14 @@ def write_sha256_bound_file(path: Path, content: bytes) -> str:
 
 def _recover_published_hardlink(path: Path, content: bytes, metadata: os.stat_result) -> None:
     """Remove only the verified temporary link left by our exclusive publisher."""
+    if os.name == "nt":
+        raise RuntimeError("R297_WINDOWS_HARDLINK_RECOVERY_REQUIRES_TRUSTED_ACL")
+    if (
+        not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 2
+        or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600
+        or path.lstat() != metadata or path.read_bytes() != content
+    ):
+        raise FileExistsError(path)
     candidates = []
     pattern = re.compile(rf"\.{re.escape(path.name)}\.[0-9a-f]{{16}}")
     for candidate in path.parent.iterdir():
@@ -665,6 +688,26 @@ def _record_nonces(
 
 
 def verify_acceptance_event_bundle(
+    bundle: dict, *, expected_scope: dict, now: datetime, nonce_ledger: Path,
+    maximum_age: timedelta = timedelta(minutes=5), consume_run: bool = True,
+    allow_nonce_recovery: bool = False, reserved_transaction_sha256: str | None = None,
+) -> dict:
+    if os.getenv("APP_ENV", "").strip().lower() in {"acceptance", "production"}:
+        from ops.r297_broker_client import broker_request
+        return broker_request({
+            "action": "verify" if consume_run or reserved_transaction_sha256 else "validate",
+            "bundle": bundle, "scope": expected_scope, "consume_run": consume_run,
+            "allow_nonce_recovery": allow_nonce_recovery,
+            "transaction_sha256": reserved_transaction_sha256,
+        })["verified"]
+    return _verify_acceptance_event_bundle_local(
+        bundle, expected_scope=expected_scope, now=now, nonce_ledger=nonce_ledger,
+        maximum_age=maximum_age, consume_run=consume_run,
+        allow_nonce_recovery=allow_nonce_recovery, reserved_transaction_sha256=reserved_transaction_sha256,
+    )
+
+
+def _verify_acceptance_event_bundle_local(
     bundle: dict,
     *,
     expected_scope: dict,
@@ -674,6 +717,8 @@ def verify_acceptance_event_bundle(
     consume_run: bool = True,
     allow_nonce_recovery: bool = False,
     reserved_transaction_sha256: str | None = None,
+    _run_ledger: Path | None = None,
+    _preview: bool = False,
 ) -> dict:
     """Return acceptance sections only after all four independently signed events verify."""
     events = bundle.get("events") if isinstance(bundle, dict) else None
@@ -705,8 +750,8 @@ def verify_acceptance_event_bundle(
     if not all(isinstance(event, dict) for event in events):
         raise ValueError("evidence event schema mismatch")
     environment = os.getenv("APP_ENV", "").strip().lower()
-    run_ledger = os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
-    formal = environment in {"acceptance", "production"}
+    run_ledger = str(_run_ledger) if _run_ledger is not None else os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
+    formal = _run_ledger is not None or environment in {"acceptance", "production"}
     transaction_sha256 = reserved_transaction_sha256 or signed_event_sha256(
         {"bundle": bundle, "scope": expected_scope, "purpose": "verify_only"}
     )
@@ -820,6 +865,8 @@ def verify_acceptance_event_bundle(
         {**binding, "event_sha256": digest, "verification": verification}
         for binding, digest in zip(replay_bindings, identity["event_sha256s"])
     ]
+    if _preview:
+        return verification["result"]
     if formal:
         from ops.r297_acceptance_run import consume_acceptance_run, reserve_acceptance_run, validate_acceptance_run
         page_event = next(event for event in events if event["event_type"] == "web_page_close")

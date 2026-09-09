@@ -11,6 +11,7 @@ const { EventEmitter } = require('node:events');
 const REPOSITORY_ROOT = path.resolve(__dirname, '..');
 const SHA_RE = /^[0-9a-f]{40}$/;
 const RUN_RE = /^[A-Za-z0-9._:-]{16,128}$/;
+const SIGNATURE_RE = /^[A-Za-z0-9_-]{342}$/;
 const RUN_BINDING_TTL_MS = 5 * 60 * 1000;
 const RUN_BINDING_FUTURE_SKEW_MS = 30 * 1000;
 const RAW_FIELDS = ['event', 'observed_at', 'release_sha', 'store_id'];
@@ -74,6 +75,8 @@ function loadConfig() {
   const protectedBinding = readProtectedDigestBoundJson(bindingPath, {immutable: true});
   const binding = protectedBinding.event;
   if (!exactKeys(binding, RUN_BINDING_FIELDS)
+      || !/^[a-z][a-z0-9_-]{7,79}$/.test(String(binding.namespace || ''))
+      || ['default', 'development', 'production', 'acceptance', 'namespace', 'changeme'].includes(binding.namespace)
       || binding.platform !== 'jd' || !SHA_RE.test(String(binding.release_sha || ''))
       || !RUN_RE.test(String(binding.run_id || '')) || !RUN_RE.test(String(binding.challenge || ''))
       || !Number.isInteger(binding.run_attempt) || binding.run_attempt <= 0
@@ -205,7 +208,7 @@ function assertCommonAcknowledgement(event, config, type, issuer, sequence) {
   if (!bindingMatches) throw new Error('服务端回执运行绑定错误');
   assert.deepEqual([event.event_type, event.issuer, event.sequence], [type, issuer, sequence], '服务端回执角色错误');
   if (!RUN_RE.test(String(event.nonce || '')) || !RUN_RE.test(String(event.key_id || ''))
-      || typeof event.signature !== 'string' || !event.signature) {
+      || !SIGNATURE_RE.test(String(event.signature || ''))) {
     throw new Error('服务端回执认证字段无效');
   }
 }
@@ -267,12 +270,14 @@ function assertObserverAcknowledgement(event, config, receiverEvent) {
   if (!storeScopeMatches) throw new Error('Observer回执店铺范围错误');
 }
 
-function assertBrokerResult(broker, config, receiver, observer, rawEvent) {
+function assertBrokerResult(broker, config, receiver, observer, rawEvent, now = Date.now()) {
   if (!exactKeys(broker.event, BROKER_RESULT_FIELDS)
       || broker.event.schema_version !== 1
       || broker.event.verifier_id !== 'tiantong-r297-ack-broker-v1'
       || broker.event.result !== 'VERIFIED'
       || Number.isNaN(Date.parse(broker.event.verified_at))
+      || Date.parse(broker.event.verified_at) > now + 30000
+      || now - Date.parse(broker.event.verified_at) > 12 * 60 * 60 * 1000
       || broker.event.binding_file_sha256 !== config.bindingDigest
       || broker.event.receiver_ack_file_sha256 !== receiver.digest
       || broker.event.observer_ack_file_sha256 !== observer.digest
@@ -341,7 +346,7 @@ async function revokeRecoveredSession(config, requestFactory) {
   const api = await requestFactory({baseURL: config.origin, storageState: config.storageState});
   try {
     const deleted = await api.delete(
-      `/api/jd-workbench/stores/${config.storeId}/login-session`, {timeout: 10_000}
+      `/api/jd-workbench/stores/${config.storeId}/login-session`, {timeout: 10_000, maxRedirects: 0}
     );
     if (deleted.status() !== 200) throw new Error('ACK恢复会话撤销HTTP状态错误');
     const body = await deleted.json();
@@ -374,12 +379,11 @@ async function revokeRecoveredSessionWithSignals(config, requestFactory, signals
   }
 }
 
-async function waitForViewerReady(popup, storeId, signal) {
+async function waitForViewerReady(popup, storeId, signal, approvedOrigin) {
   const websocket = await popup.waitForEvent('websocket', {
     predicate: socket => {
-      const url = new URL(socket.url());
-      return url.protocol === 'wss:' && !url.search
-        && url.pathname === `/jd-browser/novnc/${storeId}/websockify`;
+      try { approvedWebSocket(socket.url(), approvedOrigin, storeId); return true; }
+      catch (_error) { return false; }
     },
     timeout: 30_000
   });
@@ -413,6 +417,53 @@ function safeUrl(input) {
   catch (_error) { return 'invalid-url'; }
 }
 
+function approvedUrl(input, origin) {
+  const target = new URL(input, origin);
+  if (target.protocol !== 'https:' || target.origin !== origin) throw new Error('请求越出批准origin');
+  return target;
+}
+
+async function enforceApprovedOrigin(route, origin) {
+  const target = new URL(route.request().url());
+  if ((target.protocol === 'http:' || target.protocol === 'https:') && target.origin !== origin) {
+    await route.abort('blockedbyclient');
+    return;
+  }
+  await route.continue();
+}
+
+function approvedWebSocket(input, origin, storeId) {
+  const target = new URL(input);
+  const approved = new URL(origin);
+  if (target.protocol !== 'wss:' || target.hostname !== approved.hostname
+      || target.port !== approved.port || target.pathname !== `/jd-browser/novnc/${storeId}/websockify`
+      || target.search || target.hash) throw new Error('WebSocket越出批准边界');
+  return target;
+}
+
+function enforceApprovedWebSocket(route, origin, storeId, failures) {
+  try {
+    approvedWebSocket(route.url(), origin, storeId);
+    return route.connectToServer();
+  } catch (_error) {
+    failures.push(safeUrl(route.url()));
+    return route.close({code: 1008, reason: 'blockedbyclient'});
+  }
+}
+
+async function gotoApproved(page, origin, pathname, options = {}) {
+  const target = approvedUrl(pathname, origin);
+  const response = await page.goto(target.href, options);
+  if (!response) throw new Error('页面导航无响应');
+  if ((response.status() >= 300 && response.status() < 400)
+      || response.request?.().redirectedFrom?.()) throw new Error('页面导航发生重定向');
+  const finalResponse = approvedUrl(response.url(), origin);
+  const finalPage = approvedUrl(page.url(), origin);
+  if (finalResponse.pathname !== target.pathname || finalPage.pathname !== target.pathname
+      || finalResponse.search || finalPage.search) throw new Error('页面导航离开批准路径');
+  return response;
+}
+
 function assertLiveViewerForRevocation(viewer) {
   assert.equal(viewer.websocket.isClosed(), false, 'DELETE前Viewer必须仍存活');
 }
@@ -421,7 +472,17 @@ async function openRevocationViewer(storeId) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const request = (url, options) => fetch(url, options);
+    const request = async (url, options) => {
+      const target = new URL(url, location.origin);
+      if (target.origin !== location.origin) throw new Error('请求越出批准origin');
+      const response = await fetch(`${target.pathname}${target.search}`, {
+        ...options, redirect: 'error', referrerPolicy: 'no-referrer'
+      });
+      if (response.redirected || new URL(response.url).origin !== location.origin) {
+        throw new Error('请求发生重定向');
+      }
+      return response;
+    };
     const client = R297OwnerLogin.createClient(request);
     const open = () => R297OwnerLogin.openViewer({
       client, request, storeId, signal: controller.signal,
@@ -446,21 +507,33 @@ function bounded(label, promise, milliseconds) {
   ]).finally(() => clearTimeout(timer));
 }
 
-async function browserJson(page, url, options, expectedStatus) {
-  return bounded(`请求${url}`, page.evaluate(async ({ url, options, expectedStatus }) => {
+async function browserJson(page, origin, url, options, expectedStatus) {
+  const target = approvedUrl(url, origin);
+  const result = await bounded(`请求${url}`, page.evaluate(async ({ path, origin, options }) => {
+    if (location.origin !== origin) throw new Error('页面不在批准origin');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
-      const response = await fetch(url, {
-        credentials: 'include', cache: 'no-store', ...options, signal: controller.signal
+      const response = await fetch(path, {
+        credentials: 'include', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer',
+        ...options, signal: controller.signal
       });
       let body = null;
       try { body = await response.json(); } catch (_error) {}
-      return { status: response.status, body, expectedStatus };
+      return {status: response.status, body, redirected: response.redirected, final_url: response.url};
     } finally {
       clearTimeout(timer);
     }
-  }, { url, options, expectedStatus }), 12_000);
+  }, {path: `${target.pathname}${target.search}`, origin, options}), 12_000);
+  const finalUrl = approvedUrl(result.final_url, origin);
+  if (result.redirected || finalUrl.pathname !== target.pathname || finalUrl.search !== target.search) {
+    throw new Error('鉴权API发生重定向');
+  }
+  const expected = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
+  if (result.status >= 300 && result.status < 400 || !expected.includes(result.status)) {
+    throw new Error(`请求${url} HTTP状态错误`);
+  }
+  return result;
 }
 
 function assertResponse(result, status, keys, label) {
@@ -472,7 +545,7 @@ function assertResponse(result, status, keys, label) {
 async function waitForSession(page, config) {
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
-    const result = await browserJson(page, `/api/jd-workbench/stores/${config.storeId}/login-session`, undefined, 200);
+    const result = await browserJson(page, config.origin, `/api/jd-workbench/stores/${config.storeId}/login-session`, undefined, 200);
     const body = assertResponse(result, 200, ['store_id', 'status'], '查询会话');
     assert.equal(body.store_id, config.storeId);
     assert.ok(SESSION_STATUSES.has(body.status), '登录状态不属于正式枚举');
@@ -485,9 +558,19 @@ async function waitForSession(page, config) {
 async function ticketNegativeChecks(page, config) {
   return page.evaluate(async ({ storeId, crossStoreId, crossTenantStoreId }) => {
     const timedFetch = async (url, options) => {
+      const target = new URL(url, location.origin);
+      if (target.origin !== location.origin) throw new Error('请求越出批准origin');
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10_000);
-      try { return await fetch(url, {...options, signal: controller.signal}); }
+      try {
+        const response = await fetch(`${target.pathname}${target.search}`, {
+          ...options, redirect: 'error', referrerPolicy: 'no-referrer', signal: controller.signal
+        });
+        if (response.redirected || new URL(response.url).origin !== location.origin) {
+          throw new Error('请求发生重定向');
+        }
+        return response;
+      }
       finally { clearTimeout(timer); }
     };
     const issue = async () => {
@@ -525,6 +608,44 @@ async function ticketNegativeChecks(page, config) {
 }
 
 async function selfTest() {
+  const approvedOrigin = 'https://acceptance.invalid';
+  assert.equal(approvedUrl('/api/health', approvedOrigin).href, `${approvedOrigin}/api/health`);
+  assert.throws(() => approvedUrl('https://outside.invalid/api/health', approvedOrigin), /越出批准origin/);
+  const routeActions = [];
+  await enforceApprovedOrigin({
+    request: () => ({url: () => 'https://outside.invalid/asset.js'}),
+    abort: async reason => routeActions.push(['abort', reason]),
+    continue: async () => routeActions.push(['continue'])
+  }, approvedOrigin);
+  assert.deepEqual(routeActions, [['abort', 'blockedbyclient']]);
+  const socketActions = [], socketFailures = [];
+  enforceApprovedWebSocket({
+    url: () => 'wss://outside.invalid/socket',
+    connectToServer: () => socketActions.push('connect'),
+    close: options => socketActions.push(['close', options.code])
+  }, approvedOrigin, 3, socketFailures);
+  assert.deepEqual(socketActions, [['close', 1008]]);
+  assert.deepEqual(socketFailures, ['wss://outside.invalid/socket']);
+  socketActions.length = 0;
+  enforceApprovedWebSocket({
+    url: () => 'wss://acceptance.invalid/jd-browser/novnc/3/websockify',
+    connectToServer: () => socketActions.push('connect'),
+    close: () => socketActions.push('close')
+  }, approvedOrigin, 3, socketFailures);
+  assert.deepEqual(socketActions, ['connect']);
+  await assert.rejects(gotoApproved({
+    goto: async () => ({status: () => 302, url: () => `${approvedOrigin}/redirect`}),
+    url: () => `${approvedOrigin}/redirect`
+  }, approvedOrigin, '/stores.html'), /重定向/);
+  await assert.rejects(gotoApproved({
+    goto: async () => ({status: () => 200, url: () => 'https://outside.invalid/stores.html'}),
+    url: () => 'https://outside.invalid/stores.html'
+  }, approvedOrigin, '/stores.html'), /越出批准origin/);
+  await assert.rejects(browserJson({evaluate: async () => ({
+    status: 302, body: null, redirected: false, final_url: `${approvedOrigin}/api/health`
+  })}, approvedOrigin, '/api/health', undefined, 200), /HTTP状态错误/);
+  assert.equal(SIGNATURE_RE.test('s'.repeat(342)), true);
+  assert.equal(SIGNATURE_RE.test('s'.repeat(128)), false);
   const now = Date.parse('2026-09-08T00:05:00.000Z');
   assert.doesNotThrow(() => assertFreshIssuedBinding({issued_at: '2026-09-08T00:00:00.000Z'}, now));
   assert.throws(() => assertFreshIssuedBinding({issued_at: '2026-09-07T23:59:59.999Z'}, now), /已过期/);
@@ -532,7 +653,7 @@ async function selfTest() {
   const recoveryCalls = [];
   await revokeRecoveredSession({origin: 'https://acceptance.invalid', storageState: {}, storeId: 3}, async () => ({
     delete: async (url, options) => {
-      recoveryCalls.push(['DELETE', url, options.timeout]);
+      recoveryCalls.push(['DELETE', url, options.timeout, options.maxRedirects]);
       return {status: () => 200, json: async () => ({ok: true, store_id: 3, status: 'REVOKED'})};
     },
     get: async (url, options) => {
@@ -542,7 +663,7 @@ async function selfTest() {
     dispose: async () => recoveryCalls.push(['DISPOSE'])
   }));
   assert.deepEqual(recoveryCalls, [
-    ['DELETE', '/api/jd-workbench/stores/3/login-session', 10_000],
+    ['DELETE', '/api/jd-workbench/stores/3/login-session', 10_000, 0],
     ['GET', '/jd-browser/novnc/3/vnc.html', 10_000, 0], ['DISPOSE']
   ]);
   const recoverySignals = new EventEmitter();
@@ -604,7 +725,7 @@ async function selfTest() {
       canvas.width = 1024;
     }
   };
-  const readyViewer = await waitForViewerReady(popup, 3);
+  const readyViewer = await waitForViewerReady(popup, 3, undefined, approvedOrigin);
   assert.equal(readyViewer.path, '/jd-browser/novnc/3/websockify');
   assert.equal(readyViewer.websocket, socket);
   assert.throws(() => assertLiveViewerForRevocation({
@@ -615,19 +736,21 @@ async function selfTest() {
     let calls = 0;
     const ownerClient = require('../frontend/r297-owner-login.js');
     const pendingOpen = require('node:vm').runInNewContext(`(${openRevocationViewer.toString()})(3)`, {
-      R297OwnerLogin: ownerClient, AbortController, setTimeout, clearTimeout,
+      R297OwnerLogin: ownerClient, AbortController, URL, setTimeout, clearTimeout,
+      crypto: require('node:crypto').webcrypto,
+      location: {origin: approvedOrigin},
       fetch: async (url, options) => {
         calls += 1;
-        if (calls === 1) return {status: 409, json: async () => ({detail: {
+        if (calls === 1) return {ok: false, status: 409, redirected: false, url: `${approvedOrigin}${url}`, json: async () => ({detail: {
           operation_id: 'a'.repeat(32), status, message: 'controlled operation receipt'
         }})};
         assert.equal(status, 'SUCCESS', '未知操作不能重试出票');
         if (calls === 2) {
           assert.equal(options.headers['x-owner-ack-operation-id'], 'a'.repeat(32));
-          return {status: 200, json: async () => ({ticket: 'controlled-fixture', expires_in: 60})};
+          return {ok: true, status: 200, redirected: false, url: `${approvedOrigin}${url}`, json: async () => ({ticket: 'controlled-fixture', expires_in: 60})};
         }
         assert.equal(url, '/jd-browser/novnc/3/exchange');
-        return {status: 204};
+        return {ok: true, status: 204, redirected: false, url: `${approvedOrigin}${url}`};
       }
     });
     if (status === 'SUCCESS') {
@@ -658,7 +781,7 @@ async function selfTest() {
     ...{namespace: config.namespace, tenant_id: 1, company_id: 2, store_id: 3, platform: 'jd', release_sha: config.releaseSha,
       run_id: config.runId, run_attempt: 1, challenge: config.challenge},
     event_type: 'authenticated_observer', issuer: 'authenticated_observer', observed_at: '2026-09-08T00:00:01.000Z',
-    sequence: 2, nonce: 'observer-nonce-000001', key_id: 'observer-key-000001', signature: 'observer-signature',
+    sequence: 2, nonce: 'observer-nonce-000001', key_id: 'observer-key-000001', signature: 's'.repeat(342),
     payload: {
       subject_nonce: receiver.nonce,
       subject_event_sha256: crypto.createHash('sha256').update(canonicalJson(receiver)).digest('hex'),
@@ -678,7 +801,12 @@ async function selfTest() {
   }};
   assertPageReceiverAcknowledgement(receiver, config, rawEvent, {evidenceSha: '2'.repeat(64), archiveSha: '3'.repeat(64)});
   assertObserverAcknowledgement(observer, config, receiver);
-  assertBrokerResult(broker, config, receiverRecord, observerRecord, rawEvent);
+  const brokerNow = Date.parse('2026-09-08T00:00:03.000Z');
+  assertBrokerResult(broker, config, receiverRecord, observerRecord, rawEvent, brokerNow);
+  assert.throws(() => assertBrokerResult(broker, config, receiverRecord, observerRecord, rawEvent,
+    brokerNow + 12 * 60 * 60 * 1000), /当前事务不匹配/);
+  assert.throws(() => assertBrokerResult(broker, config, receiverRecord, observerRecord, rawEvent,
+    brokerNow - 32000), /当前事务不匹配/);
   assert.throws(() => assertPageReceiverAcknowledgement(
     {...receiver, run_attempt: 2}, config, rawEvent,
     {evidenceSha: '2'.repeat(64), archiveSha: '3'.repeat(64)}
@@ -758,6 +886,7 @@ async function main() {
   const consoleErrors = [];
   const pageErrors = [];
   const failedRequests = [];
+  const socketBoundaryFailures = [];
   let syntheticRejected;
   let browser;
   let context;
@@ -779,7 +908,7 @@ async function main() {
           await createSettlement;
           const response = await context.request.delete(
             `${config.origin}/api/jd-workbench/stores/${config.storeId}/login-session`,
-            {timeout: 10_000}
+            {timeout: 10_000, maxRedirects: 0}
           );
           if (response.status() !== 200) throw new Error(`HTTP ${response.status()}`);
           const body = await response.json();
@@ -815,6 +944,10 @@ async function main() {
     browser = await chromium.launch({ headless: true });
     if (runController.signal.aborted) throw new Error('执行器已取消');
     context = await browser.newContext({ storageState: config.storageState });
+    await context.route('**/*', route => enforceApprovedOrigin(route, config.origin));
+    await context.routeWebSocket('**/*', route => enforceApprovedWebSocket(
+      route, config.origin, config.storeId, socketBoundaryFailures
+    ));
     if (runController.signal.aborted) throw new Error('执行器已取消');
     context.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text().slice(0, 300)); });
     context.on('weberror', webError => {
@@ -839,9 +972,9 @@ async function main() {
     const page = await context.newPage();
     ownerPage = page;
     operations.push({operation: 'goto', path: '/stores.html', observed_at: new Date().toISOString()});
-    await bounded('店铺页面加载', page.goto(`${config.origin}/stores.html`, {waitUntil: 'networkidle'}), 30_000);
+    await bounded('店铺页面加载', gotoApproved(page, config.origin, '/stores.html', {waitUntil: 'networkidle'}), 30_000);
 
-    const health = await browserJson(page, '/api/health', undefined, 200);
+    const health = await browserJson(page, config.origin, '/api/health', undefined, 200);
     assert.equal(health.status, 200, 'Backend health HTTP状态错误');
     assert.equal(health.body?.release?.commit, config.releaseSha, '运行环境release与候选不一致');
     assert.equal(health.body?.status, 'running');
@@ -849,16 +982,16 @@ async function main() {
     assert.equal(health.body?.redis, true);
     assert.equal(health.body?.worker, true);
 
-    const me = await browserJson(page, '/api/me', undefined, 200);
+    const me = await browserJson(page, config.origin, '/api/me', undefined, 200);
     assert.equal(me.status, 200);
     assert.equal(me.body?.role_code, 'owner', '当前浏览器不是Owner身份');
-    const stores = await browserJson(page, '/api/stores', undefined, 200);
+    const stores = await browserJson(page, config.origin, '/api/stores', undefined, 200);
     assert.equal(stores.status, 200);
     assert.ok(Array.isArray(stores.body));
     const store = stores.body.find(item => item?.id === config.storeId);
     assert.ok(store && store.platform === 'jd' && store.active === true, 'Owner没有目标京东店铺权限');
 
-    const acceptance = await browserJson(page, `/api/jd-workbench/stores/${config.storeId}/acceptance-status`, undefined, 200);
+    const acceptance = await browserJson(page, config.origin, `/api/jd-workbench/stores/${config.storeId}/acceptance-status`, undefined, 200);
     const accepted = assertResponse(acceptance, 200, [
       'release_sha', 'run_id', 'namespace', 'tenant_id', 'company_id', 'store_id', 'platform',
       'completed_cycle_count', 'interval_seconds', 'next_sync_in_seconds', 'latest_completed_at', 'observed_at'
@@ -906,8 +1039,14 @@ async function main() {
       popupPromise, row.getByRole('button', {name: '打开受控验证窗口'}).click()
     ]).then(([opened]) => opened), 10_000);
     const [, viewer] = await Promise.all([
-      popup.waitForURL(`**/jd-browser/novnc/${config.storeId}/vnc.html`, {timeout: 30_000}),
-      waitForViewerReady(popup, config.storeId, runController.signal)
+      popup.waitForURL(url => {
+        try {
+          const target = approvedUrl(url, config.origin);
+          return target.pathname === `/jd-browser/novnc/${config.storeId}/vnc.html`
+            && !target.search && !target.hash;
+        } catch (_error) { return false; }
+      }, {timeout: 30_000}),
+      waitForViewerReady(popup, config.storeId, runController.signal, config.origin)
     ]);
     const viewerCookies = (await context.cookies()).filter(cookie => cookie.name === 'jd_browser_session');
     assert.equal(viewerCookies.length, 1, 'HttpOnly Viewer Cookie缺失');
@@ -937,7 +1076,7 @@ async function main() {
     }, config.storeId);
     assert.deepEqual(syntheticRejected, {constructed_event: false, plain_object: false});
     operations.push({operation: 'goto', path: '/login.html', observed_at: new Date().toISOString()});
-    await page.goto(`${config.origin}/login.html`, {waitUntil: 'domcontentloaded'});
+    await gotoApproved(page, config.origin, '/login.html', {waitUntil: 'domcontentloaded'});
     await waitForCondition('原生pagehide事件', () => nativeEvents.length >= 1 && rawEvents.length >= 1, {
       timeoutMs: 5_000, signal: runController.signal
     });
@@ -991,7 +1130,7 @@ async function main() {
     assertBrokerResult(broker, config, receiver, observer, rawEvents[0]);
 
     const controlPage = await context.newPage();
-    await controlPage.goto(`${config.origin}/login.html`, {waitUntil: 'domcontentloaded'});
+    await gotoApproved(controlPage, config.origin, '/login.html', {waitUntil: 'domcontentloaded'});
     // pagehide closed the original UI-owned popup. Establish a fresh Viewer
     // through the existing public client so its closure can be bound to DELETE.
     await controlPage.addScriptTag({url: `${config.origin}/r297-owner-login.js`});
@@ -999,12 +1138,12 @@ async function main() {
       controlPage.evaluate(openRevocationViewer, config.storeId), 12_000);
     assert.equal(revocationPath, `/jd-browser/novnc/${config.storeId}/vnc.html`);
     const revocationPage = await context.newPage();
-    const revocationReady = waitForViewerReady(revocationPage, config.storeId, runController.signal);
+    const revocationReady = waitForViewerReady(revocationPage, config.storeId, runController.signal, config.origin);
     const [revocationViewer] = await Promise.all([
-      revocationReady, revocationPage.goto(`${config.origin}${revocationPath}`, {waitUntil: 'domcontentloaded'})
+      revocationReady, gotoApproved(revocationPage, config.origin, revocationPath, {waitUntil: 'domcontentloaded'})
     ]);
     assertLiveViewerForRevocation(revocationViewer);
-    const deleted = await browserJson(controlPage, `/api/jd-workbench/stores/${config.storeId}/login-session`, {method: 'DELETE'}, 200);
+    const deleted = await browserJson(controlPage, config.origin, `/api/jd-workbench/stores/${config.storeId}/login-session`, {method: 'DELETE'}, 200);
     const deletedBody = assertResponse(deleted, 200, ['ok', 'store_id', 'status'], '销毁会话');
     if (deletedBody.ok !== true || deletedBody.store_id !== config.storeId || deletedBody.status !== 'REVOKED') {
       throw new Error('销毁会话响应绑定错误');
@@ -1013,11 +1152,12 @@ async function main() {
     await waitForCondition('撤销后既有Viewer WebSocket关闭', () => revocationViewer.websocket.isClosed(), {
       timeoutMs: 20_000, signal: runController.signal
     });
-    const revoked = await browserJson(controlPage, `/jd-browser/novnc/${config.storeId}/vnc.html`, undefined, 401);
+    const revoked = await browserJson(controlPage, config.origin, `/jd-browser/novnc/${config.storeId}/vnc.html`, undefined, [401, 403]);
     assert.ok([401, 403].includes(revoked.status), '撤销后Viewer访问未失效');
     assert.equal(consoleErrors.length, 0, '浏览器控制台存在错误');
     assert.equal(pageErrors.length, 0, '浏览器存在未处理JavaScript错误');
     assert.equal(failedRequests.length, 0, '浏览器存在失败网络请求');
+    assert.equal(socketBoundaryFailures.length, 0, '浏览器尝试连接未批准WebSocket');
 
     const manifest = {
       schema_version: '1.0', result: 'PASS', release_sha: config.releaseSha, run_id: config.runId,
