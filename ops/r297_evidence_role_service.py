@@ -25,7 +25,7 @@ from ops.r297_authenticated_observer import (
 )
 from ops.r297_broker_client import peer_uid
 from ops.r297_event_receipt import _read_bound_event
-from ops.r297_evidence_events import signed_event_sha256, verify_signed_event
+from ops.r297_evidence_events import signed_event_sha256
 
 _MAX = 64 * 1024
 
@@ -71,7 +71,8 @@ class RoleService:
                 "artifact_name", "workflow_run_id",
             )},
         }
-        if output.exists():
+        recovered = output.exists()
+        if recovered:
             event = self._recover_event(
                 output, "web_page_close", "page_event_receiver", scope,
                 expected_payload=expected_payload,
@@ -79,7 +80,7 @@ class RoleService:
         else:
             event = produce_page_event_receiver(raw, scope, run_binding_path=binding)
             _write_signed_event(output, event)
-        _record_receipt(output, event, raw["workflow_run_id"])
+        _record_receipt(output, event, raw["workflow_run_id"], recover=recovered)
         return {"result": "recorded", "event": event, "source_workflow_run_id": raw["workflow_run_id"]}
 
     def _observe(self, request: dict) -> dict:
@@ -91,24 +92,25 @@ class RoleService:
         subject = request["subject"]
         if not isinstance(subject, dict):
             raise ValueError("observer subject invalid")
-        now = datetime.now(timezone.utc)
-        environment = os.environ.get("APP_ENV", "")
-        manifest = _validate_subject_event(subject, environment, now=now)
-        database_url = os.environ.get("R297_OBSERVER_DATABASE_URL", "")
-        if not database_url:
-            raise RuntimeError("observer database URL missing")
         output = self._output(subject["run_id"], f"{subject['sequence'] + 1:02d}-observer.json")
-        if output.exists():
+        recovered = output.exists()
+        if recovered:
             event = self._recover_event(output, "authenticated_observer", "authenticated_observer", {
                 field: subject[field] for field in _SCOPE_FIELDS
             }, subject=subject)
         else:
+            now = datetime.now(timezone.utc)
+            environment = os.environ.get("APP_ENV", "")
+            manifest = _validate_subject_event(subject, environment, now=now)
+            database_url = os.environ.get("R297_OBSERVER_DATABASE_URL", "")
+            if not database_url:
+                raise RuntimeError("observer database URL missing")
             event = _produce_authenticated_observer(
                 subject, read_scheduler_snapshot(database_url, subject),
                 observed_at=now, environment=environment, manifest=manifest,
             )
             _write_signed_event(output, event)
-        _record_receipt(output, event, source)
+        _record_receipt(output, event, source, recover=recovered)
         return {"result": "recorded", "event": event}
 
     def _relay(self, request: dict) -> dict:
@@ -117,9 +119,9 @@ class RoleService:
         event, source = request["event"], request["source_workflow_run_id"]
         if not isinstance(event, dict) or type(source) is not int or source <= 0:
             raise ValueError("Windows relay request invalid")
-        _validate_subject_event(event, os.environ.get("APP_ENV", ""), now=datetime.now(timezone.utc))
         output = self._output(event["run_id"], "03-electron-exit.json")
-        if output.exists():
+        recovered_existing = output.exists()
+        if recovered_existing:
             recovered = self._recover_event(output, "electron_exit", "windows_runner", {
                 field: event[field] for field in _SCOPE_FIELDS
             })
@@ -127,8 +129,9 @@ class RoleService:
                 raise ValueError("Windows relay event changed")
             event = recovered
         else:
+            _validate_subject_event(event, os.environ.get("APP_ENV", ""), now=datetime.now(timezone.utc))
             _write_signed_event(output, event)
-        _record_receipt(output, event, source)
+        _record_receipt(output, event, source, recover=recovered_existing)
         return {"result": "recorded", "event": event}
 
     def _output(self, run_id: str, name: str) -> Path:
@@ -149,8 +152,6 @@ class RoleService:
             from ops.r297_evidence_events import write_sha256_bound_file
             write_sha256_bound_file(path, content)
         event = _read_bound_event(path)
-        verify_signed_event(event, event_type=event_type, issuer=issuer,
-                            environment=os.environ.get("APP_ENV", ""), now=datetime.now(timezone.utc))
         if any(type(event.get(field)) is not type(value) or event.get(field) != value for field, value in scope.items()):
             raise ValueError("role event recovery scope mismatch")
         if subject is not None and (

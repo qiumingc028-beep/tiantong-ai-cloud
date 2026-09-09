@@ -60,3 +60,56 @@ def test_cli_never_publishes_raw_failures_or_relabels_failure_as_pass(tmp_path, 
         import xml.etree.ElementTree as ET
         root = ET.parse(output / "junit.xml").getroot()
         assert root.attrib["failures"] == "1"
+
+
+def test_progress_survives_an_incomplete_run_and_identifies_last_test(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_PROGRESS_DIRECTORY", str(tmp_path))
+    gate.pytest_sessionstart(None)
+    gate.pytest_collection_finish(SimpleNamespace(items=[
+        SimpleNamespace(nodeid="tests/test_one.py::test_one"),
+        SimpleNamespace(nodeid="tests/test_two.py::test_two"),
+    ]))
+    gate.pytest_runtest_logstart("tests/test_one.py::test_one", None)
+    gate.pytest_runtest_logreport(SimpleNamespace(
+        when="call", failed=False, skipped=False, nodeid="tests/test_one.py::test_one",
+        outcome="passed", duration=1.25,
+    ))
+    gate.pytest_runtest_teardown(SimpleNamespace(nodeid="tests/test_one.py::test_one"), None)
+    gate.pytest_runtest_logreport(SimpleNamespace(
+        when="teardown", failed=False, skipped=False, nodeid="tests/test_one.py::test_one",
+        outcome="passed", duration=0.25,
+    ))
+    gate.pytest_runtest_logstart("tests/test_two.py::test_two", None)
+    gate.pytest_runtest_teardown(SimpleNamespace(nodeid="tests/test_two.py::test_two"), None)
+
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status["result"] == "INCOMPLETE"
+    assert status["last_completed_test"] == "tests/test_one.py::test_one"
+    assert status["current_test"] == "tests/test_two.py::test_two"
+    assert status["current_phase"] == "teardown"
+    assert json.loads((tmp_path / "progress.jsonl").read_text().splitlines()[-1])["phase"] == "teardown"
+
+
+def test_session_finish_marks_progress_complete(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_PROGRESS_DIRECTORY", str(tmp_path))
+    gate.pytest_sessionstart(None)
+    gate.pytest_sessionfinish(None, 1)
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status["result"] == "COMPLETE" and status["exitstatus"] == 1
+
+
+def test_passing_teardown_does_not_relabel_failed_test(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_PROGRESS_DIRECTORY", str(tmp_path))
+    gate.pytest_sessionstart(None)
+    for phase, outcome in (("setup", "passed"), ("call", "failed"), ("teardown", "passed")):
+        gate.pytest_runtest_logreport(SimpleNamespace(
+            when=phase, failed=outcome == "failed", skipped=False,
+            nodeid="tests/test_failure.py::test_failure", outcome=outcome, duration=0.1,
+        ))
+    assert json.loads((tmp_path / "status.json").read_text())["last_outcome"] == "failed"

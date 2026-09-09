@@ -717,7 +717,7 @@ jobs:
           python -m ops.ci_pytest_gate /tmp/r297-pytest
 
       - name: Upload complete pytest execution report
-        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: r297-pytest-${{ github.event.pull_request.head.sha || github.sha }}
