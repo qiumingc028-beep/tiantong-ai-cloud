@@ -55,6 +55,10 @@ assert result['result'] == sys.argv[4]
                     if role != "verifier":
                         requests += [({"action": action, "peer_uid": roles["verifier"]}, "", False)
                                      for action in ("validate", "verify", "reserve", "nonce", "begin", "stage", "complete", "recover", "ack")]
+                    requests += [({"action": "recover_receipt", "event": {"sequence": sequence},
+                                   "source_workflow_run_id": 33949515935}, "", False)
+                                 for sequence, owner_uid in ((1, 61001), (2, 61002), (3, 61003), (4, 61002))
+                                 if uid != owner_uid]
                     for request, expected, allowed in requests:
                         result = subprocess.run([sys.executable, "-c", client, str(address), str(ledger), json.dumps(request), expected],
                             preexec_fn=identity, capture_output=True, text=True)

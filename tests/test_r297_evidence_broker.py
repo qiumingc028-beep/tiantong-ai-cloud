@@ -24,6 +24,68 @@ def transaction_broker(tmp_path, monkeypatch):
     return broker, bundle, scope
 
 
+@pytest.mark.parametrize("index,uid", [(1, 102), (2, 103)])
+def test_producer_recovers_only_own_preverified_fact_after_five_minutes(transaction_broker, monkeypatch, index, uid):
+    from datetime import datetime, timedelta, timezone
+    from ops import r297_event_receipt
+    from ops.r297_evidence_events import signed_event_sha256
+    broker, bundle, scope = transaction_broker
+    for event, role_uid in zip(bundle["events"][:index + 1], (101, 102, 103)):
+        assert broker.dispatch({"action": "receipt", "event": event, "source_workflow_run_id": 33949515935}, peer_uid=role_uid)["result"] == "recorded"
+    original_ledger = broker.run_ledger.read_bytes()
+    original_nonce = broker.nonce_ledger.read_bytes()
+    later = datetime.now(timezone.utc) + timedelta(minutes=6)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return later
+    monkeypatch.setattr(r297_event_receipt, "datetime", Clock)
+    request = {"action": "recover_receipt", "event": bundle["events"][index], "source_workflow_run_id": 33949515935}
+    result = broker.dispatch(request, peer_uid=uid)
+    assert result == {"result": "recovered", "event_sha256": signed_event_sha256(request["event"])}
+    assert broker.dispatch(request, peer_uid=uid) == result
+    for other_uid in (100, 101, 102, 103, 999):
+        if other_uid != uid:
+            with pytest.raises(PermissionError):
+                broker.dispatch(request, peer_uid=other_uid)
+    for field, changed in (("run_id", "another-run-00000001"), ("run_attempt", 2), ("challenge", "another-challenge-00000001"), ("store_id", 99)):
+        with pytest.raises(ValueError):
+            broker.dispatch({**request, "event": {**request["event"], field: changed}}, peer_uid=uid)
+    from tests.test_r297_evidence_event_protocol import _sign
+    rewritten = _sign({**request["event"], "observed_at": later.isoformat()})
+    with pytest.raises(ValueError):
+        broker.dispatch({**request, "event": rewritten}, peer_uid=uid)
+    with pytest.raises(ValueError):
+        broker.dispatch({**request, "now": later.isoformat()}, peer_uid=uid)
+    later += timedelta(hours=12)
+    with pytest.raises(ValueError, match="expired"):
+        broker.dispatch(request, peer_uid=uid)
+    assert broker.run_ledger.read_bytes() == original_ledger
+    assert broker.nonce_ledger.read_bytes() == original_nonce
+
+
+@pytest.mark.parametrize("index,uid", [(1, 102), (2, 103)])
+def test_expired_unverified_producer_fact_cannot_create_recovery_receipt(transaction_broker, monkeypatch, index, uid):
+    from datetime import datetime, timedelta, timezone
+    from ops import r297_event_receipt
+    broker, bundle, _ = transaction_broker
+    for event, role_uid in zip(bundle["events"][:index], (101, 102)):
+        broker.dispatch({"action": "receipt", "event": event, "source_workflow_run_id": 33949515935}, peer_uid=role_uid)
+    original = broker.run_ledger.read_bytes()
+    later = datetime.now(timezone.utc) + timedelta(minutes=6)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return later
+    monkeypatch.setattr(r297_event_receipt, "datetime", Clock)
+    request = {"action": "recover_receipt", "event": bundle["events"][index], "source_workflow_run_id": 33949515935}
+    with pytest.raises(ValueError, match="RECEIPT_NOT_VERIFIED"):
+        broker.dispatch(request, peer_uid=uid)
+    with pytest.raises(ValueError):
+        broker.dispatch({**request, "action": "receipt"}, peer_uid=uid)
+    assert broker.run_ledger.read_bytes() == original
+
+
 def test_broker_reserve_crash_recovers_original_transaction_and_fences_producers(transaction_broker):
     broker, bundle, scope = transaction_broker
     request = {"action": "reserve", "scope": scope, "bundle": bundle}
@@ -344,6 +406,14 @@ def test_ack_and_receipt_response_loss_recover_exact_original_proof(transaction_
     request = {"action": "ack", "scope": scope, "source_workflow_run_id": 33949515935, "raw_event": raw,
         "receiver_content_base64": base64.b64encode(json.dumps(bundle["events"][0]).encode()).decode(),
         "observer_content_base64": base64.b64encode(json.dumps(bundle["events"][1]).encode()).decode()}
+    for invalid in (
+        {**request, "source_workflow_run_id": 33949515935.0},
+        {**request, "raw_event": {**raw, "store_id": float(scope["store_id"])}},
+    ):
+        before = broker.run_ledger.read_bytes()
+        with pytest.raises(ValueError):
+            broker.dispatch(invalid, peer_uid=100)
+        assert broker.run_ledger.read_bytes() == before
     publish = broker._publish_readonly
     monkeypatch.setattr(broker, "_publish_readonly", lambda *a: (_ for _ in ()).throw(OSError("publication interrupted")))
     with pytest.raises(OSError):
