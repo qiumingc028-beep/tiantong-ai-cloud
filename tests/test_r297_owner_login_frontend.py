@@ -13,6 +13,35 @@ def test_owner_login_client_uses_only_store_scoped_backend_routes():
 const assert = require('node:assert/strict');
 const login = require('./frontend/r297-owner-login.js');
 
+for (const status of [307, 308]) {
+  let calls = 0;
+  const request = login.createSameOriginRequest(async (path, options) => {
+    calls += 1;
+    assert.equal(path, '/api/jd-workbench/stores/7/login-ticket');
+    assert.equal(options.redirect, 'error');
+    assert.equal(options.referrerPolicy, 'no-referrer');
+    return {status, redirected: false, url: 'https://internal.example/api/jd-workbench/stores/7/login-ticket'};
+  }, {origin: 'https://internal.example'});
+  await assert.rejects(request('/api/jd-workbench/stores/7/login-ticket', {
+    method: 'POST', credentials: 'include', body: JSON.stringify({ticket: 'secret'})
+  }), /重定向/);
+  assert.equal(calls, 1, `${status}不得转发ticket请求`);
+}
+let crossOriginCalls = 0;
+const sameOriginRequest = login.createSameOriginRequest(async (path, options) => {
+  crossOriginCalls += 1;
+  return {status: 200, redirected: false, url: `https://internal.example${path}`, options};
+}, {origin: 'https://internal.example'});
+await assert.rejects(sameOriginRequest('https://outside.example/api/me', {
+  credentials: 'include', headers: {Authorization: 'secret'}
+}), /跨域/);
+assert.equal(crossOriginCalls, 0, '跨域鉴权请求不得发出');
+assert.equal((await sameOriginRequest('/api/me', {credentials: 'include'})).status, 200);
+const redirectedClient = login.createClient(login.createSameOriginRequest(async path => ({
+  status: 307, redirected: false, url: `https://internal.example${path}`
+}), {origin: 'https://internal.example'}));
+await assert.rejects(redirectedClient.ticket(7), /重定向.*保护登录信息/);
+
 const calls = [];
 const responses = [
   [200, {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600}],
@@ -418,6 +447,11 @@ def test_store_page_exposes_owner_only_controls_without_secret_persistence():
     assert "if(!store.active)return" in page
     assert "['ACTIVE','HUMAN_ACTION_REQUIRED'].includes(status.code)" in page
     assert "R297OwnerLogin.openViewer(" in page
+    assert "secureRequest=R297OwnerLogin.createSameOriginRequest(fetch,location)" in page
+    assert "R297OwnerLogin.createClient(secureRequest)" in page
+    assert "request:secureRequest" in page
+    assert "request:fetch" not in page
+    assert "await fetch('/api" not in page
     assert "R297OwnerLogin.runPreflight(" in page
     assert "R297OwnerLogin.verifyNoVncWebSocket(" in page
     assert "secureContext:isSecureContext" in page
