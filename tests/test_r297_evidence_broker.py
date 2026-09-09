@@ -422,6 +422,14 @@ def test_ack_and_receipt_response_loss_recover_exact_original_proof(transaction_
     monkeypatch.setattr(broker, "_publish_readonly", publish)
     result = broker.dispatch(request, peer_uid=100)
     assert json.loads(Path(result["path"]).read_text()) == persisted
+    for field, request_field in (("receiver_path", "receiver_content_base64"), ("observer_path", "observer_content_base64")):
+        published = Path(result[field])
+        assert published.read_bytes() == base64.b64decode(request[request_field])
+        assert published.stat().st_mode & 0o777 == 0o444
+        assert published.stat().st_nlink == 1
+    assert Path(result["binding_path"]).read_bytes() == (broker.snapshot_root / scope["run_id"] / "acceptance-run-binding.json").read_bytes()
+    with pytest.raises(ValueError, match="ACK verification binding mismatch"):
+        broker.dispatch({**request, "receiver_content_base64": base64.b64encode(base64.b64decode(request["receiver_content_base64"]) + b"\n").decode()}, peer_uid=100)
     assert persisted["raw_event_sha256"] == signed_event_sha256(raw)
     assert broker.dispatch(request, peer_uid=100) == result
     for uid in (101, 102, 103):

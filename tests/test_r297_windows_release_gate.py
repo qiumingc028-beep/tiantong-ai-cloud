@@ -148,7 +148,9 @@ def test_windows_build_is_secretless_and_publishes_before_independent_formal_gat
 def test_trusted_windows_observer_is_fixed_source_and_does_not_execute_candidate():
     source = TRUSTED_OBSERVER.read_text(encoding="utf-8")
     assert "R297_TRUSTED_SIGNER_SHA" in source
-    assert '["git", "rev-parse", "HEAD"]' in source
+    assert "SIGNER_SHA" in source
+    assert "CODE_MANIFEST.json" in source
+    assert '["git", "rev-parse", "HEAD"]' not in source
     assert "Electron process was not live when trusted observation began" in source
     assert "Electron executable identity mismatch" in source
     assert "latest_completed_at" in source

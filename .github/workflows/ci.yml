@@ -10,6 +10,7 @@ on:
       - "codex/r291-*"
       - codex/r297-cloud-integration
       - codex/r297-takeover-infra-evidence-r2
+      - codex/r297-takeover-infra-evidence-r3
   pull_request:
     branches:
       - main
@@ -652,6 +653,15 @@ jobs:
             tests/test_r297_windows_event_signer.py \
             tests/test_r297_evidence_preflight.py
 
+      - name: Verify Runner redirects never reach an unapproved target
+        timeout-minutes: 3
+        run: |
+          docker run --rm --network none \
+            --entrypoint node \
+            --env NODE_PATH=/app/services/jd-cloud-browser-runtime/node_modules \
+            --mount type=bind,source="$PWD",target=/workspace,readonly \
+            "$S12_JD_RUNTIME_IMAGE" /workspace/tests/r297_runner_redirect_probe.cjs
+
       - name: Generate R297 native pagehide evidence
         timeout-minutes: 5
         if: ${{ !cancelled() }}
@@ -684,6 +694,11 @@ jobs:
         env:
           APP_ENV: acceptance
           R297_SIGNED_EVENT_BUNDLE: /tmp/r297-signed-event-bundle.json
+          R297_EVIDENCE_NAMESPACE: ${{ vars.R297_EVIDENCE_NAMESPACE }}
+          R297_EVIDENCE_TENANT_ID: ${{ vars.R297_EVIDENCE_TENANT_ID }}
+          R297_EVIDENCE_COMPANY_ID: ${{ vars.R297_EVIDENCE_COMPANY_ID }}
+          R297_EVIDENCE_STORE_ID: ${{ vars.R297_EVIDENCE_STORE_ID }}
+          R297_EVIDENCE_PLATFORM: jd
         run: |
           PYTHONPATH=. python ops/r297_process_acceptance.py /tmp/r297-process-acceptance \
             --runtime-image "$S12_JD_RUNTIME_IMAGE" \

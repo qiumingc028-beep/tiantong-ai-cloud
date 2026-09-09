@@ -429,7 +429,14 @@ async function enforceApprovedOrigin(route, origin) {
     await route.abort('blockedbyclient');
     return;
   }
-  await route.continue();
+  const response = await route.fetch({maxRedirects: 0});
+  if (response.status() >= 300 && response.status() < 400) {
+    await response.dispose();
+    await route.abort('blockedbyclient');
+    return;
+  }
+  await route.fulfill({response});
+  await response.dispose();
 }
 
 function approvedWebSocket(input, origin, storeId) {
@@ -616,6 +623,14 @@ async function selfTest() {
     request: () => ({url: () => 'https://outside.invalid/asset.js'}),
     abort: async reason => routeActions.push(['abort', reason]),
     continue: async () => routeActions.push(['continue'])
+  }, approvedOrigin);
+  assert.deepEqual(routeActions, [['abort', 'blockedbyclient']]);
+  routeActions.length = 0;
+  await enforceApprovedOrigin({
+    request: () => ({url: () => `${approvedOrigin}/redirect`}),
+    fetch: async options => { assert.equal(options.maxRedirects, 0); return {status: () => 307, dispose: async () => {}}; },
+    abort: async reason => routeActions.push(['abort', reason]),
+    fulfill: async () => assert.fail('redirect response must not reach browser')
   }, approvedOrigin);
   assert.deepEqual(routeActions, [['abort', 'blockedbyclient']]);
   const socketActions = [], socketFailures = [];
@@ -943,7 +958,7 @@ async function main() {
     if (runController.signal.aborted) throw new Error('执行器已取消');
     browser = await chromium.launch({ headless: true });
     if (runController.signal.aborted) throw new Error('执行器已取消');
-    context = await browser.newContext({ storageState: config.storageState });
+    context = await browser.newContext({ storageState: config.storageState, serviceWorkers: 'block' });
     await context.route('**/*', route => enforceApprovedOrigin(route, config.origin));
     await context.routeWebSocket('**/*', route => enforceApprovedWebSocket(
       route, config.origin, config.storeId, socketBoundaryFailures

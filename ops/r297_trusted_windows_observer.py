@@ -55,7 +55,14 @@ $allowed = @('S-1-5-18', 'S-1-5-32-544')
 $owner = $acl.Owner
 try { $owner = ([System.Security.Principal.NTAccount]$owner).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
 if ($allowed -notcontains $owner) { exit 3 }
-$write = [int]([System.Security.AccessControl.FileSystemRights]::Write -bor [System.Security.AccessControl.FileSystemRights]::Modify -bor [System.Security.AccessControl.FileSystemRights]::FullControl)
+$write = [int]([System.Security.AccessControl.FileSystemRights]::WriteData -bor
+  [System.Security.AccessControl.FileSystemRights]::AppendData -bor
+  [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+  [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+  [System.Security.AccessControl.FileSystemRights]::Delete -bor
+  [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+  [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+  [System.Security.AccessControl.FileSystemRights]::TakeOwnership)
 foreach ($entry in $acl.Access) {
   if ($entry.AccessControlType -ne 'Allow') { continue }
   try { $sid = $entry.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { exit 4 }
@@ -106,18 +113,43 @@ def _fixed_signer_checkout() -> str:
     expected = os.getenv("R297_TRUSTED_SIGNER_SHA", "")
     if not re.fullmatch(r"[0-9a-f]{40}", expected):
         raise RuntimeError("trusted signer SHA missing")
-    actual = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[1],
-        text=True, capture_output=True, check=True,
-    ).stdout.strip()
+    code_root = (
+        Path(os.environ["R297_TEST_TRUSTED_CODE_ROOT"])
+        if os.getenv("APP_ENV") == "test" and os.getenv("R297_TEST_TRUSTED_CODE_ROOT")
+        else Path(__file__).resolve().parents[1]
+    )
+    install_root = code_root.parent
+    read = (lambda path, label: path.read_bytes()) if os.getenv("APP_ENV") == "test" else _read_protected_bytes
+    try:
+        actual = read(install_root / "SIGNER_SHA", "trusted signer identity").decode("ascii").strip()
+        manifest_bytes = read(install_root / "CODE_MANIFEST.json", "trusted signer manifest")
+        manifest = json.loads(manifest_bytes)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("trusted signer manifest invalid") from exc
     if actual != expected:
         raise RuntimeError("trusted signer checkout mismatch")
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-        cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, check=True,
-    ).stdout
-    if dirty:
-        raise RuntimeError("trusted signer checkout is not immutable")
+    if not isinstance(manifest, list) or not manifest:
+        raise RuntimeError("trusted signer manifest invalid")
+    approved = {}
+    for item in manifest:
+        if (
+            not isinstance(item, dict) or set(item) != {"path", "sha256"}
+            or not isinstance(item["path"], str) or not re.fullmatch(r"[0-9a-f]{64}", str(item["sha256"]))
+        ):
+            raise RuntimeError("trusted signer manifest invalid")
+        relative = Path(item["path"])
+        if relative.is_absolute() or ".." in relative.parts or relative.as_posix() in approved:
+            raise RuntimeError("trusted signer manifest invalid")
+        approved[relative.as_posix()] = item["sha256"]
+    actual_files = {
+        path.relative_to(code_root).as_posix(): path
+        for path in code_root.rglob("*") if path.is_file() and "__pycache__" not in path.parts
+    }
+    if set(actual_files) != set(approved):
+        raise RuntimeError("trusted signer manifest mismatch")
+    for relative, path in actual_files.items():
+        if path.is_symlink() or hashlib.sha256(read(path, f"trusted signer code {relative}")).hexdigest() != approved[relative]:
+            raise RuntimeError("trusted signer manifest mismatch")
     return actual
 
 
@@ -141,6 +173,15 @@ def _trusted_run_binding() -> dict:
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise RuntimeError("trusted acceptance run approval mismatch")
     return _read_protected_bound_json(path, expected, "trusted acceptance run")
+
+
+def _trusted_page_observer_ack() -> dict:
+    default = Path(r"C:\ProgramData\TiantongAI\R297TrustedWindowsObserver\protected\page-observer-ack.json")
+    path = Path(os.getenv("R297_TEST_PAGE_OBSERVER_ACK", "")) if os.getenv("APP_ENV") == "test" else default
+    expected = os.getenv("R297_TRUSTED_PAGE_OBSERVER_ACK_SHA256", "")
+    if not path.is_file() or path.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise RuntimeError("trusted page Observer ACK missing")
+    return _read_protected_bound_json(path, expected, "trusted page Observer ACK")
 
 
 def _windows_process_probe(process_id: int) -> dict:
@@ -179,6 +220,7 @@ def _backend_reader(url: str, bearer: str, certificate: Path, store_id: int) -> 
 
 def _validate_request_approvals(
     request: dict, *, current: datetime, artifact_manifest: dict, run_binding: dict,
+    page_observer_ack: dict | None = None,
 ) -> dict:
     if set(request) != _REQUEST_FIELDS:
         raise ValueError("trusted Windows observation request schema invalid")
@@ -188,12 +230,36 @@ def _validate_request_approvals(
         issued_at = datetime.fromisoformat(str(run_binding["issued_at"]).replace("Z", "+00:00"))
     except (KeyError, ValueError):
         raise RuntimeError("trusted acceptance run issue time invalid") from None
-    if (
-        {key: value for key, value in run_binding.items() if key != "issued_at"} != expected_run
+    binding_matches = (
+        set(run_binding) != set(expected_run) | {"issued_at", "state", "consumed_at", "event_receipts"}
+        or any(type(run_binding.get(key)) is not type(value) or run_binding.get(key) != value for key, value in expected_run.items())
+        or run_binding.get("state") != "issued" or run_binding.get("consumed_at") is not None
+        or run_binding.get("event_receipts") != []
         or issued_at.tzinfo is None or issued_at > current + timedelta(seconds=30)
-        or current - issued_at > timedelta(minutes=5)
-    ):
+    )
+    if binding_matches:
         raise RuntimeError("trusted acceptance run binding mismatch")
+    age = current - issued_at
+    if age > timedelta(minutes=5):
+        try:
+            verified_at = datetime.fromisoformat(str(page_observer_ack["verified_at"]).replace("Z", "+00:00"))
+            expected_binding = os.environ["R297_TRUSTED_ACCEPTANCE_RUN_BINDING_SHA256"]
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeError("trusted page Observer ACK invalid") from None
+        if (
+            set(page_observer_ack) != {
+                "schema_version", "verifier_id", "result", "verified_at", "binding_file_sha256",
+                "receiver_ack_file_sha256", "observer_ack_file_sha256", "raw_event_sha256",
+                "receiver_event_sha256", "observer_event_sha256",
+            }
+            or page_observer_ack["schema_version"] != 1
+            or page_observer_ack["verifier_id"] != "tiantong-r297-ack-broker-v1"
+            or page_observer_ack["result"] != "VERIFIED"
+            or page_observer_ack["binding_file_sha256"] != expected_binding
+            or verified_at.tzinfo is None or verified_at < issued_at
+            or verified_at > current + timedelta(seconds=30) or current - verified_at > timedelta(hours=12)
+        ):
+            raise RuntimeError("trusted page Observer ACK invalid")
     if (
         set(artifact_manifest) != {"release_sha", "workbench_executable_sha256"}
         or artifact_manifest["release_sha"] != scope["release_sha"]
@@ -205,7 +271,8 @@ def _validate_request_approvals(
 
 def recover_trusted_output(
     path: Path, *, request: dict, signer_sha: str,
-    artifact_manifest: dict, run_binding: dict, now: datetime | None = None,
+    artifact_manifest: dict, run_binding: dict, page_observer_ack: dict | None = None,
+    now: datetime | None = None,
 ) -> bool:
     """Recover only an already signed event bound to the current protected inputs."""
     if not path.exists():
@@ -213,6 +280,7 @@ def recover_trusted_output(
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     scope = _validate_request_approvals(
         request, current=current, artifact_manifest=artifact_manifest, run_binding=run_binding,
+        page_observer_ack=page_observer_ack,
     )
     metadata = path.lstat()
     if (
@@ -269,12 +337,14 @@ def observe_and_sign(
     process_is_running=_process_is_running, backend_reader=_backend_reader,
     now=lambda: datetime.now(timezone.utc), sleep=time.sleep,
     artifact_manifest=None, run_binding=None, monotonic=time.monotonic,
+    page_observer_ack=None,
 ) -> dict:
     approved_run = run_binding or _trusted_run_binding()
     current = now().astimezone(timezone.utc)
     manifest = artifact_manifest or _trusted_artifact_manifest()
     scope = _validate_request_approvals(
         request, current=current, artifact_manifest=manifest, run_binding=approved_run,
+        page_observer_ack=page_observer_ack,
     )
     process_id = request["process_id"]
     if type(process_id) is not int or process_id <= 0 or not process_is_running(process_id):
@@ -334,9 +404,16 @@ def main() -> int:
     request = _read_bound_json(args.request)
     artifact_manifest = _trusted_artifact_manifest()
     run_binding = _trusted_run_binding()
+    issued_at = datetime.fromisoformat(str(run_binding.get("issued_at", "")).replace("Z", "+00:00"))
+    page_observer_ack = (
+        _trusted_page_observer_ack()
+        if issued_at.tzinfo is None or datetime.now(timezone.utc) - issued_at > timedelta(minutes=5)
+        else None
+    )
     if recover_trusted_output(
         args.output, request=request, signer_sha=signer_sha,
         artifact_manifest=artifact_manifest, run_binding=run_binding,
+        page_observer_ack=page_observer_ack,
     ):
         print(f"R297_TRUSTED_WINDOWS_EVENT={args.output}")
         print(f"R297_TRUSTED_SIGNER_SHA={signer_sha}")
@@ -344,6 +421,7 @@ def main() -> int:
         return 0
     event = observe_and_sign(
         request, artifact_manifest=artifact_manifest, run_binding=run_binding,
+        page_observer_ack=page_observer_ack,
     )
     content = (json.dumps({"signer_sha": signer_sha, "event": event}, sort_keys=True) + "\n").encode()
     write_sha256_bound_file(args.output, content)

@@ -267,9 +267,14 @@ class EvidenceBroker:
         value = _update(self.run_ledger, persist, now=now)
         root = self.snapshot_root / scope["run_id"] / "ack"
         root.mkdir(mode=0o700, exist_ok=True)
+        receiver_path, observer_path = root / "01-pagehide.json", root / "02-observer.json"
+        for event_path, content in zip((receiver_path, observer_path), contents):
+            self._publish_readonly(event_path, content)
         path = root / "ack-broker-result.json"
         self._publish_readonly(path, (json.dumps(value, sort_keys=True) + "\n").encode())
-        return {"result": "verified", "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        return {"result": "verified", "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "receiver_path": str(receiver_path), "observer_path": str(observer_path),
+                "binding_path": str(self.snapshot_root / scope["run_id"] / "acceptance-run-binding.json")}
 
     def _publish_readonly(self, path: Path, content: bytes) -> None:
         parent = path.parent.lstat()
@@ -284,6 +289,9 @@ class EvidenceBroker:
                     or stat.S_IMODE(meta.st_mode) not in {0o444, 0o600} or member.read_bytes() != wanted):
                     raise ValueError("publication changed")
         else:
+            # The same Broker publishes several immutable files in this directory.
+            # Temporarily restore the private staging mode; no peer can write it.
+            path.parent.chmod(0o700)
             write_sha256_bound_file(path, content)
         path.chmod(0o444)
         sidecar.chmod(0o444)
