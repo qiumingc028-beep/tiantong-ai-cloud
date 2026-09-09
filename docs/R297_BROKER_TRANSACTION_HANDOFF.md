@@ -71,12 +71,26 @@ scheduler result must pass the existing verifier. Only actual `r297-verifier`
 peer UID may invoke ack; neither Runner nor any Producer may manufacture it.
 
 The response value has exactly `result` (string `verified`), `path` (absolute
-server-selected path), `sha256` (64 lowercase hex characters). Default install
+server-selected path), `sha256` (64 lowercase hex characters), `receiver_path`,
+`observer_path` and `binding_path` (absolute server-selected paths). Default install
 path is `/var/lib/tiantong-r297/snapshots/<run_id>/ack/ack-broker-result.json`.
 `R297_ACK_BROKER_RESULT_PATH` MUST name this actual output of the fixed reviewed
 Broker. Runner must not generate, copy-and-relabel, or substitute this proof.
 Trusted orchestration also pins the Broker executable/source SHA; root ownership
 alone does not establish that an arbitrary root program is the reviewed Broker.
+
+Producer services retain original 0600 files below their own 0700
+`/var/lib/tiantong-r297/events/<role>/<run_id>/` directory. Their UID-authenticated
+response includes `event`, `content_base64` (EXACT original file bytes) and
+`content_sha256`. The Verifier checks these agree and forwards those bytes to
+`ack`; JSON reserialization is forbidden. Broker publishes these same bytes as
+root-owned 0444 `ack/01-pagehide.json` and `ack/02-observer.json`, with matching
+sidecars, before returning the proof. Runner reads `receiver_path` and
+`observer_path` using its existing ACK environment variables, `binding_path`
+using `R297_ACCEPTANCE_RUN_BINDING_PATH`, and `path` using
+`R297_ACK_BROKER_RESULT_PATH`. It must not read Producer-private files or create
+its own replacement. `issue` CLI's output is only an orchestration record copy,
+not the protected binding supplied to Runner; that is the Broker snapshot.
 
 The immutable file has exactly schema_version=1 (integer), verifier_id=
 `tiantong-r297-ack-broker-v1`, result=`VERIFIED`, verified_at (timestamp string),
@@ -108,6 +122,14 @@ five-minute rule; a fresh event must go through that rule, not the recovery API.
 Changing observed_at and re-signing, changing scope, or crossing twelve hours
 fails. Producer retains and republishes its original file bytes; canonical event
 matching is not permission to serialize a replacement file or wrapper.
+
+Role services and the Linux Producer CLI call this existing API before recovering
+their file/sidecar. Only wire error `R297_BROKER_RECEIPT_NOT_VERIFIED` permits a
+normal `receipt` attempt on the SAME existing event; its freshness clock remains
+Broker-owned. Explicit expiration becomes `ROLE_NO_RECOVERABLE_FACT`, other Broker errors
+become `ROLE_RECOVERY_BLOCKED`. Neither is authorization to re-sign, re-observe,
+or replace the run. Transport errors also stop. A successful receipt can resume
+publication after five minutes but only inside the existing twelve-hour window.
 
 ⑤ must wire receipt persistence BEFORE the publication window that it wants
 to recover. Recovery lookup must precede local current-time freshness rejection

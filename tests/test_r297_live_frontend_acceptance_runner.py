@@ -67,6 +67,10 @@ def test_live_frontend_runner_is_public_fail_closed_and_receiver_compatible():
     assert "exactKeys(createBody, ['store_id', 'status', 'expires_in'])" in source
     assert "createBody.expires_in <= 600" in source
     assert "const controller = new AbortController()" in source
+    assert "redirect: 'error'" in source
+    assert "context.route('**/*', route => enforceApprovedOrigin" in source
+    assert "context.routeWebSocket('**/*', route => enforceApprovedWebSocket" in source
+    assert "maxRedirects: 0" in source
 
 
 def test_live_frontend_runner_reports_every_missing_protected_input_without_starting_browser():
@@ -143,6 +147,8 @@ def test_live_frontend_runner_closes_receiver_viewer_and_timeout_gaps():
     assert normal_run.index("assertLiveViewerForRevocation(revocationViewer)") < normal_run.index("const deleted = await")
     assert "() => revocationViewer.websocket.isClosed()" in source
     assert "R297OwnerLogin.openViewer({" in source
+    assert "gotoApproved(page, config.origin, '/stores.html'" in source
+    assert "waitForViewerReady(popup, config.storeId, runController.signal, config.origin)" in source
 
     completed = subprocess.run(
         ["node", str(ROOT / "tests/r297_live_frontend_acceptance.cjs"), "--self-test"],

@@ -7,6 +7,20 @@ WINDOWS = (ROOT / "ops" / "install_r297_trusted_windows_observer.ps1").read_text
 DATABASE = (ROOT / "ops" / "provision_r297_observer_database.sh").read_text(encoding="utf-8")
 
 
+def test_endpoint_migration_keeps_existing_password_and_role_units_reload():
+    migration = DATABASE.split('if [[ $migrate_endpoint == 1 ]]; then', 1)[1].split('elif [[ $exists == 0 ]]', 1)[0]
+    assert 'password=${BASH_REMATCH[1]}' in migration
+    assert 'role_sql=' in migration
+    assert 'openssl' not in migration and 'ALTER ROLE' not in migration
+    role_units = LINUX.split('for role in receiver observer windows-relay;', 1)[1]
+    assert role_units.index('systemctl daemon-reload') < role_units.index('systemctl enable')
+
+
+def test_windows_producer_permissions_reach_children_with_inheritance_disabled():
+    for path, rights in (("installStage", "RX"), ("inbox", "RX"), ("outbox", "M"), ("protected", "RX")):
+        assert f'& icacls ${path} /grant "$TrustedObserverAccount`:(OI)(CI){rights}" /T /C' in WINDOWS
+
+
 def test_linux_fixed_sha_install_has_complete_import_closure(tmp_path):
     import re
     import shutil
@@ -16,6 +30,7 @@ def test_linux_fixed_sha_install_has_complete_import_closure(tmp_path):
     assert '"${broker_files[@]}"' in LINUX
     (tmp_path / "ops").mkdir()
     for name in files:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, tmp_path / name)
     result = subprocess.run([sys.executable, "-I", "-c",
         "import sys; sys.path.insert(0, sys.argv[1]); from ops.r297_evidence_broker import EvidenceBroker; from ops.r297_broker_client import peer_uid", str(tmp_path)],
@@ -24,13 +39,14 @@ def test_linux_fixed_sha_install_has_complete_import_closure(tmp_path):
 
 
 def test_linux_broker_is_keyless_sandboxed_and_owns_both_ledgers():
+    broker_unit = LINUX.split("unit=/etc/systemd/system/tiantong-r297-evidence-broker.service", 1)[1].split("systemctl daemon-reload", 1)[0]
     assert "RestrictAddressFamilies=AF_UNIX" in LINUX
     assert "CapabilityBoundingSet=" in LINUX
     assert "Group=r297-evidence-producers" in LINUX
     assert "NoNewPrivileges=true" in LINUX
-    assert "R297_PAGE_EVENT_RECEIVER_PRIVATE_KEY" not in LINUX
-    assert "R297_OBSERVER_PRIVATE_KEY" not in LINUX
-    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY" not in LINUX
+    assert "R297_PAGE_EVENT_RECEIVER_PRIVATE_KEY" not in broker_unit
+    assert "R297_OBSERVER_PRIVATE_KEY" not in broker_unit
+    assert "R297_WINDOWS_RUNNER_PRIVATE_KEY" not in broker_unit
     assert "--run-ledger /var/lib/tiantong-r297/broker/runs.json" in LINUX
     assert "--nonce-ledger /var/lib/tiantong-r297/broker/nonces.json" in LINUX
     assert "r297-page-receiver" in LINUX
@@ -38,8 +54,13 @@ def test_linux_broker_is_keyless_sandboxed_and_owns_both_ledgers():
     assert "r297-verifier" in LINUX
     assert "r297-windows-relay" in LINUX
     assert "systemctl restart tiantong-r297-evidence-broker.service" in LINUX
+    assert "for role in receiver observer windows-relay" in LINUX
+    assert "RuntimeDirectory=tiantong-r297-$role" in LINUX
     assert 'git -C "$source_root" archive "$source_sha"' in LINUX
     assert '"$staging/$path"' in LINUX
+    assert "code_root=/opt/tiantong-r297-evidence/code" in LINUX
+    assert 'install -d -o root -g "$producer_group" -m 0750' in LINUX
+    assert 'install -d -o root -g "$producer_group" -m 0550 "$install_root"' in LINUX
 
 
 def test_windows_installer_separates_candidate_from_fixed_observer():
@@ -68,11 +89,14 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "R297_TRUSTED_OBSERVER_TASK_RUNNING" in WINDOWS
     assert "Disable-ScheduledTask" in WINDOWS
     assert "Unregister-ScheduledTask" in WINDOWS
-    assert WINDOWS.index("Unregister-ScheduledTask") < WINDOWS.index("Copy-Item -Path")
+    assert "R297_PREVIOUS_TASK_NOT_TRUSTED" in WINDOWS
+    assert "R297_TRUSTED_INSTALL_ROLLBACK" in WINDOWS
+    assert WINDOWS.index("R297_NEW_INSTALL_VALIDATED") < WINDOWS.rindex("Register-ScheduledTask")
     assert WINDOWS.rindex("Register-ScheduledTask") > WINDOWS.index("R297_UNAUTHORIZED_WRITE_ACE")
     assert "} catch {" in WINDOWS
     assert "git -C $SourceCheckout archive" in WINDOWS
     assert "Join-Path $codeStage $relative" in WINDOWS
+    assert "CODE_MANIFEST.json" in WINDOWS
     assert "git -C $SourceCheckout status --porcelain" in WINDOWS
     assert "fsutil reparsepoint query" in WINDOWS
     assert "/inheritance:r" in WINDOWS
@@ -82,6 +106,16 @@ def test_windows_installer_separates_candidate_from_fixed_observer():
     assert "Register-ScheduledTask" in WINDOWS
     assert "r297_trusted_windows_observer" in WINDOWS
     assert "r297_windows_acceptance.ps1" not in WINDOWS
+    for composite in (
+        "FileSystemRights]::Write -bor", "FileSystemRights]::Modify -bor",
+        "FileSystemRights]::FullControl -bor",
+    ):
+        assert composite not in WINDOWS
+    for right in (
+        "WriteData", "AppendData", "WriteExtendedAttributes", "WriteAttributes",
+        "Delete", "DeleteSubdirectoriesAndFiles", "ChangePermissions", "TakeOwnership",
+    ):
+        assert f"FileSystemRights]::{right}" in WINDOWS
 
 
 def test_observer_database_role_is_read_only_and_grants_only_three_tables():

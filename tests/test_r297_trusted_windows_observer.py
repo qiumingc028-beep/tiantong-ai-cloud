@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from ops.r297_trusted_windows_observer import observe_and_sign, recover_trusted_output
+from ops.r297_trusted_windows_observer import (
+    _fixed_signer_checkout,
+    observe_and_sign,
+    recover_trusted_output,
+)
 
 
 def _request(tmp_path):
@@ -29,7 +33,47 @@ def _run_binding(request, issued_at):
             "run_id", "run_attempt", "challenge", "source_workflow_run_id",
         )},
         "issued_at": issued_at.isoformat(),
+        "state": "issued", "consumed_at": None, "event_receipts": [],
     }
+
+
+def test_fixed_signer_identity_uses_protected_manifest_without_git(monkeypatch, tmp_path):
+    install = tmp_path / ("b" * 40)
+    code = install / "code"
+    module = code / "ops" / "trusted.py"
+    module.parent.mkdir(parents=True)
+    module.write_bytes(b"trusted bytes\n")
+    (install / "SIGNER_SHA").write_text("b" * 40 + "\n", encoding="ascii")
+    manifest = [{"path": "ops/trusted.py", "sha256": hashlib.sha256(module.read_bytes()).hexdigest()}]
+    (install / "CODE_MANIFEST.json").write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("R297_TRUSTED_SIGNER_SHA", "b" * 40)
+    monkeypatch.setenv("R297_TEST_TRUSTED_CODE_ROOT", str(code))
+    monkeypatch.setattr("ops.r297_trusted_windows_observer.subprocess.run", lambda *_a, **_k: pytest.fail("git must not run"))
+    assert _fixed_signer_checkout() == "b" * 40
+
+    module.write_bytes(b"changed\n")
+    with pytest.raises(RuntimeError, match="manifest mismatch"):
+        _fixed_signer_checkout()
+
+
+def test_windows_accepts_original_complete_broker_snapshot_and_rejects_extra_fields(tmp_path):
+    from ops.r297_trusted_windows_observer import _validate_request_approvals
+    _, started, request = _request(tmp_path)
+    binding = {**_run_binding(request, started), "state": "issued", "consumed_at": None, "event_receipts": []}
+    manifest = {"release_sha": request["release_sha"], "workbench_executable_sha256": request["executable_sha256"]}
+    assert _validate_request_approvals(request, current=started, artifact_manifest=manifest, run_binding=binding)["run_id"] == request["run_id"]
+    with pytest.raises(RuntimeError):
+        _validate_request_approvals(request, current=started, artifact_manifest=manifest, run_binding={**binding, "extra": True})
+
+
+def test_windows_acl_probe_checks_only_write_capabilities():
+    source = (__import__("pathlib").Path(__file__).parents[1] / "ops" / "r297_trusted_windows_observer.py").read_text()
+    assert "FileSystemRights]::Modify" not in source
+    assert "FileSystemRights]::FullControl" not in source
+    assert "FileSystemRights]::ReadAndExecute" not in source
+    for right in ("WriteData", "AppendData", "Delete", "ChangePermissions", "TakeOwnership"):
+        assert f"FileSystemRights]::{right}" in source
 
 
 def test_trusted_observer_checks_real_exit_and_post_exit_cycle(monkeypatch, tmp_path):
@@ -128,6 +172,29 @@ def test_trusted_observer_rejects_unapproved_run_binding(tmp_path):
                 "workbench_executable_sha256": request["executable_sha256"],
             },
             run_binding=approved,
+        )
+
+
+def test_trusted_observer_long_cycle_requires_exact_protected_page_ack(monkeypatch, tmp_path):
+    executable, started, request = _request(tmp_path)
+    current = started + timedelta(minutes=20)
+    binding = _run_binding(request, started)
+    monkeypatch.setenv("R297_TRUSTED_ACCEPTANCE_RUN_BINDING_SHA256", "c" * 64)
+    manifest = {"release_sha": "a" * 40, "workbench_executable_sha256": request["executable_sha256"]}
+    with pytest.raises(RuntimeError, match="page Observer ACK"):
+        observe_and_sign(request, artifact_manifest=manifest, run_binding=binding, now=lambda: current)
+    ack = {
+        "schema_version": 1, "verifier_id": "tiantong-r297-ack-broker-v1", "result": "VERIFIED",
+        "verified_at": (started + timedelta(seconds=30)).isoformat(), "binding_file_sha256": "c" * 64,
+        "receiver_ack_file_sha256": "1" * 64, "observer_ack_file_sha256": "2" * 64,
+        "raw_event_sha256": "3" * 64, "receiver_event_sha256": "4" * 64,
+        "observer_event_sha256": "5" * 64,
+    }
+    # Approval passes; the next independent requirement is a live Electron process.
+    with pytest.raises(RuntimeError, match="was not live"):
+        observe_and_sign(
+            request, artifact_manifest=manifest, run_binding=binding,
+            page_observer_ack=ack, now=lambda: current, process_is_running=lambda _pid: False,
         )
 
 
