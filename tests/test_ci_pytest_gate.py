@@ -318,6 +318,25 @@ def test_real_plugin_execution_manifest_survives_nested_progress_tests(tmp_path)
     assert json.loads((tmp_path / "status.json").read_text())["exitstatus"] == 0
 
 
+def test_actions_keeps_partition_identity_inside_one_runner():
+    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml").read_text()
+    assert "pytest-identity:" not in workflow
+    assert "needs.pytest-identity.outputs.key" not in workflow
+    assert "R297_CI_PYTEST_IDENTITY_ROOT_KEY" not in workflow
+    assert workflow.count('CI_PYTEST_IDENTITY_KEY="$(python -c \'import secrets; print(secrets.token_urlsafe(48))\')"') == 1
+    assert workflow.count('echo "::add-mask::$CI_PYTEST_IDENTITY_KEY"') == 1
+    assert "if [[ ${#CI_PYTEST_IDENTITY_KEY} -lt 64 ]]" in workflow
+    assert "export R297_REDACT_EXACT_ENV_NAMES=CI_PYTEST_IDENTITY_KEY" in workflow
+    assert "trap 'unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES' EXIT" in workflow
+    assert "python -m ops.ci_pytest_gate /tmp/r297-pytest &" in workflow
+    assert "python -m ops.ci_pytest_gate /tmp/r297-ownership-matrix" in workflow
+    assert "python -m ops.ci_pytest_gate --aggregate /tmp/r297-full-coverage" in workflow
+    assert "unset CI_PYTEST_IDENTITY_KEY" in workflow
+    assert "name: PostgreSQL ownership matrix" in workflow
+    assert "name: Exact full-repository pytest coverage gate" in workflow
+    assert 'xml_root.tag == "testsuite"' in workflow
+
+
 def test_progress_does_not_use_product_fault_injected_fsync(tmp_path, monkeypatch):
     gate = _start_progress(tmp_path, monkeypatch)
     def fail(_fd):

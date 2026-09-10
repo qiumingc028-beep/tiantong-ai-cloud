@@ -20,21 +20,7 @@ permissions:
   contents: read
 
 jobs:
-  pytest-identity:
-    name: Mint ephemeral pytest identity key
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      key: ${{ steps.key.outputs.value }}
-    steps:
-      - id: key
-        shell: bash
-        run: |
-          value=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
-          echo "value=$value" >> "$GITHUB_OUTPUT"
-
   test-and-build:
-    needs: pytest-identity
     runs-on: ubuntu-latest
     timeout-minutes: 120
     services:
@@ -56,6 +42,29 @@ jobs:
         image: redis:7
         ports:
           - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping | grep PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres-ownership:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5433:5432
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U ci -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis-ownership:
+        image: redis:7
+        ports:
+          - 6380:6379
         options: >-
           --health-cmd "redis-cli ping | grep PONG"
           --health-interval 10s
@@ -738,11 +747,41 @@ jobs:
           R297_PROCESS_ACCEPTANCE_EVIDENCE: /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
           CI_PYTEST_IGNORE: tests/test_task_center_full_entrypoint_ownership.py
           CI_PYTEST_MINIMUM: "1700"
-          CI_PYTEST_IDENTITY_KEY: ${{ needs.pytest-identity.outputs.key }}
         run: |
+          set +e
+          CI_PYTEST_IDENTITY_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          if [[ ${#CI_PYTEST_IDENTITY_KEY} -lt 64 ]]; then
+            echo "CI_PYTEST_IDENTITY_KEY_MISSING"
+            exit 1
+          fi
           echo "::add-mask::$CI_PYTEST_IDENTITY_KEY"
-          bash -n ops/r297_workbench_deploy.sh
-          python -m ops.ci_pytest_gate /tmp/r297-pytest
+          export CI_PYTEST_IDENTITY_KEY
+          export R297_REDACT_EXACT_ENV_NAMES=CI_PYTEST_IDENTITY_KEY
+          trap 'unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES' EXIT
+          bash -n ops/r297_workbench_deploy.sh || exit 1
+          python -m ops.ci_pytest_gate /tmp/r297-pytest &
+          main_pid=$!
+          (
+            export V2_ALPHA_POSTGRES_ADMIN_URL=postgresql+psycopg2://ci:ci@127.0.0.1:5433/postgres
+            export STORE_AUTHZ_POSTGRES_URL=postgresql+psycopg2://ci:ci@127.0.0.1:5433/postgres
+            export REDIS_URL=redis://127.0.0.1:6380/0
+            export CI_PYTEST_TARGET=tests/test_task_center_full_entrypoint_ownership.py
+            export CI_PYTEST_MINIMUM=500
+            unset CI_PYTEST_IGNORE
+            python -m ops.ci_pytest_gate /tmp/r297-ownership-matrix
+          ) &
+          matrix_pid=$!
+          wait "$main_pid"
+          main_exit=$?
+          wait "$matrix_pid"
+          matrix_exit=$?
+          if [[ $main_exit -eq 0 ]]; then export CI_MAIN_JOB_RESULT=success; else export CI_MAIN_JOB_RESULT=failure; fi
+          if [[ $matrix_exit -eq 0 ]]; then export CI_MATRIX_JOB_RESULT=success; else export CI_MATRIX_JOB_RESULT=failure; fi
+          unset CI_PYTEST_IGNORE CI_PYTEST_TARGET CI_PYTEST_MINIMUM
+          python -m ops.ci_pytest_gate --aggregate /tmp/r297-full-coverage /tmp/r297-pytest /tmp/r297-ownership-matrix
+          aggregate_exit=$?
+          unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES
+          if [[ $main_exit -ne 0 || $matrix_exit -ne 0 || $aggregate_exit -ne 0 ]]; then exit 1; fi
 
       - name: Upload complete pytest execution report
         if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
@@ -750,6 +789,24 @@ jobs:
         with:
           name: r297-pytest-${{ github.event.pull_request.head.sha || github.sha }}
           path: /tmp/r297-pytest/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload ownership matrix execution report
+        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}
+          path: /tmp/r297-ownership-matrix/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload exact coverage decision
+        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-full-coverage-${{ github.event.pull_request.head.sha || github.sha }}
+          path: /tmp/r297-full-coverage/
           if-no-files-found: error
           retention-days: 14
 
@@ -808,113 +865,68 @@ jobs:
 
   ownership-matrix-tests:
     name: PostgreSQL ownership matrix
-    needs: pytest-identity
+    needs: test-and-build
+    if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 100
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: postgres
-          POSTGRES_USER: ci
-          POSTGRES_PASSWORD: ci
-        ports:
-          - 5432:5432
-        options: >-
-          --shm-size=1g
-          --health-cmd "pg_isready -U ci -d postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping | grep PONG"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    timeout-minutes: 5
     env:
-      V2_ALPHA_POSTGRES_ADMIN_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
-      STORE_AUTHZ_POSTGRES_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
-      REDIS_URL: redis://127.0.0.1:6379/0
       RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install dependencies
-        id: matrix_dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
-      - name: Run complete PostgreSQL ownership matrix
-        timeout-minutes: 90
-        env:
-          CI_PYTEST_TARGET: tests/test_task_center_full_entrypoint_ownership.py
-          CI_PYTEST_MINIMUM: "500"
-          CI_PYTEST_IDENTITY_KEY: ${{ needs.pytest-identity.outputs.key }}
-        run: |
-          echo "::add-mask::$CI_PYTEST_IDENTITY_KEY"
-          python -m ops.ci_pytest_gate /tmp/r297-ownership-matrix
-      - name: Upload ownership matrix execution report
-        if: ${{ always() && steps.matrix_dependencies.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
+      - name: Download ownership matrix execution report
+        uses: actions/download-artifact@v8
         with:
           name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}
-          path: /tmp/r297-ownership-matrix/
-          if-no-files-found: error
-          retention-days: 14
+          path: /tmp/r297-ownership-matrix
+      - name: Require complete passing ownership execution
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          root = Path("/tmp/r297-ownership-matrix")
+          run = json.loads((root / "run.json").read_text())
+          status = json.loads((root / "status.json").read_text())
+          nodes = json.loads((root / "collected-nodeids.json").read_text())
+          progress = [json.loads(line) for line in (root / "progress.jsonl").read_text().splitlines()]
+          xml_root = ET.parse(root / "junit.xml").getroot()
+          suites = [xml_root] if xml_root.tag == "testsuite" else xml_root.findall("testsuite")
+          totals = {key: sum(int(suite.attrib.get(key, "0")) for suite in suites)
+                    for key in ("tests", "failures", "errors", "skipped")}
+          executed = [row["nodeid_sha256"] for row in progress if row.get("phase") == "teardown"]
+          assert run == {"head": "${{ env.RELEASE_SOURCE_SHA }}", "run_id": "${{ github.run_id }}", "run_attempt": "${{ github.run_attempt }}", "exit_code": 0}
+          assert status.get("result") == "COMPLETE" and status.get("exitstatus") == 0
+          assert len(nodes) >= 500 and len(nodes) == len(set(nodes))
+          assert sorted(executed) == sorted(nodes)
+          assert totals["tests"] == len(nodes)
+          assert all(totals[key] == 0 for key in ("failures", "errors", "skipped"))
+          PY
 
   pytest-complete-gate:
     name: Exact full-repository pytest coverage gate
-    needs: [pytest-identity, test-and-build, ownership-matrix-tests]
+    needs: [test-and-build, ownership-matrix-tests]
     if: ${{ always() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     env:
       RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      CI_MAIN_JOB_RESULT: ${{ needs.test-and-build.result }}
-      CI_MATRIX_JOB_RESULT: ${{ needs.ownership-matrix-tests.result }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install collection dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Download main execution report
+      - name: Download exact coverage decision
         uses: actions/download-artifact@v8
-        with:
-          name: r297-pytest-${{ env.RELEASE_SOURCE_SHA }}
-          path: /tmp/r297-main-report
-      - name: Download ownership execution report
-        if: ${{ always() }}
-        uses: actions/download-artifact@v8
-        with:
-          name: r297-ownership-matrix-${{ env.RELEASE_SOURCE_SHA }}
-          path: /tmp/r297-matrix-report
-      - name: Require exact same-head collection union and both jobs successful
-        if: ${{ always() }}
-        env:
-          CI_PYTEST_IDENTITY_KEY: ${{ needs.pytest-identity.outputs.key }}
-        run: |
-          echo "::add-mask::$CI_PYTEST_IDENTITY_KEY"
-          python -m ops.ci_pytest_gate --aggregate /tmp/r297-full-coverage /tmp/r297-main-report /tmp/r297-matrix-report
-      - name: Upload exact coverage decision
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
         with:
           name: r297-full-coverage-${{ env.RELEASE_SOURCE_SHA }}
-          path: /tmp/r297-full-coverage/
-          if-no-files-found: error
-          retention-days: 14
+          path: /tmp/r297-full-coverage
+      - name: Require exact same-head collection union
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = json.loads(Path("/tmp/r297-full-coverage/aggregate.json").read_text())
+          assert result.get("head") == "${{ env.RELEASE_SOURCE_SHA }}"
+          assert result.get("run_id") == "${{ github.run_id }}"
+          assert result.get("run_attempt") == "${{ github.run_attempt }}"
+          assert result.get("result") == "PASS"
+          assert result.get("overlap") == 0 and result.get("missing") == 0
+          assert result.get("collected") == result.get("executed")
+          PY
