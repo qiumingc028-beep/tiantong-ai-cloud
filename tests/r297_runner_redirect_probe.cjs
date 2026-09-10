@@ -39,6 +39,24 @@ const close = server => new Promise(resolve => server.close(resolve));
     assert.equal(redirects, 2);
     assert.equal(outsideRequests, 0);
     console.log('R297_RUNNER_REDIRECT_NETWORK_TEST=PASS cases=3 outside_requests=0');
+    // Exercise the PRODUCT adapter without the Runner route guard masking it.
+    const product = await browser.newContext({serviceWorkers: 'block'});
+    const productPage = await product.newPage();
+    await productPage.goto(origin);
+    await productPage.addScriptTag({content: fs.readFileSync(path.join(__dirname, '../frontend/r297-owner-login.js'), 'utf8')});
+    const productResult = await productPage.evaluate(async outsidePort => {
+      const request = R297OwnerLogin.createSameOriginRequest(fetch, location);
+      const result = [];
+      for (const url of ['/redirect', `${location.origin}//127.0.0.1:${outsidePort}/capture`]) {
+        try { await request(url, {method: 'POST', body: 'public-test-body'}); result.push('unexpected'); }
+        catch { result.push('blocked'); }
+      }
+      result.push((await request('/')).status);
+      return result;
+    }, outside.address().port);
+    assert.deepEqual(productResult, ['blocked', 'blocked', 200]);
+    assert.equal(outsideRequests, 0);
+    console.log('R297_PRODUCT_REDIRECT_NETWORK_TEST=PASS cases=3 outside_requests=0');
   } finally {
     if (browser) await browser.close();
     await Promise.all([close(server), close(outside)]);

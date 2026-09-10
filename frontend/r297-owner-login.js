@@ -100,7 +100,10 @@
       let response;
       try { response = await request(path, {...options, headers: {...options.headers, 'x-owner-operation-id': key,
         ...(acknowledged.has(name) ? {'x-owner-ack-operation-id': acknowledged.get(name)} : {})}}); }
-      catch (_error) { throw new Error('网络连接失败，请稍后重试'); }
+      catch (error) {
+        if (error && error.code === 'UNSAFE_REDIRECT') throw error;
+        throw new Error('网络连接失败，请稍后重试');
+      }
       if (response.status === 409) {
         const body = await response.json();
         if (body.detail && /^[0-9a-f]{32}$/.test(body.detail.operation_id || '')) {
@@ -144,6 +147,38 @@
     });
   }
 
+  function createSameOriginRequest(request, location = root.location) {
+    if (typeof request !== 'function' || !location || !location.origin) throw new Error('安全请求适配器不可用');
+    return async (input, options = {}) => {
+      const target = new URL(input, location.origin);
+      if (target.origin !== location.origin || target.username || target.password || target.hash || target.pathname.startsWith('//')) {
+        const error = new Error('已阻止携带登录信息的跨域请求');
+        error.code = 'UNSAFE_REDIRECT';
+        throw error;
+      }
+      let response;
+      try {
+        response = await request(`${target.pathname}${target.search}`, {
+          credentials: 'include', ...options, redirect: 'error', referrerPolicy: 'no-referrer'
+        });
+      } catch (error) {
+        if (error && error.name === 'AbortError') throw error;
+        const failure = new Error('网络请求失败或发生重定向，已停止以保护登录信息');
+        failure.code = 'UNSAFE_REDIRECT';
+        throw failure;
+      }
+      const finalUrl = response && response.url ? new URL(response.url, location.origin) : target;
+      if (!response || response.status >= 300 && response.status < 400
+          || response.redirected === true || finalUrl.origin !== location.origin
+          || finalUrl.pathname !== target.pathname || finalUrl.search !== target.search) {
+        const error = new Error('请求发生重定向，已停止以保护登录信息');
+        error.code = 'UNSAFE_REDIRECT';
+        throw error;
+      }
+      return response;
+    };
+  }
+
   async function redeemTicket(request, value, response, signal) {
     if (typeof request !== 'function') throw new Error('受控登录服务不可用');
     const id = storeId(value);
@@ -157,7 +192,10 @@
         method: 'POST', credentials: 'include', cache: 'no-store', referrerPolicy: 'no-referrer',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket }), signal
       });
-    } catch (_error) { throw new Error('网络连接失败，请稍后重试'); }
+    } catch (error) {
+      if (error && error.code === 'UNSAFE_REDIRECT') throw error;
+      throw new Error('网络连接失败，请稍后重试');
+    }
     if (!result || result.status !== 204) {
       const error = new Error(result && result.status === 403 ? '无权打开该店铺登录窗口' : result && result.status === 409 ? '登录会话状态冲突，请刷新后重试' : result && result.status >= 200 && result.status < 300 ? '登录凭证兑换响应无效' : '登录凭证已失效或不适用于该店铺，请重新申请');
       error.status = result && result.status;
@@ -358,5 +396,5 @@
     windows.closeAll();
   }
 
-  return Object.freeze({ PAGE_CLOSE_OBSERVER_CONTRACT, closePageResources, createClient, createOperationGate, createPageCloseReporter, createPoller, createWindowRegistry, errorMessage, isOwner, openViewer, redeemTicket, runPreflight, sessionState, statusView, verifyNoVncWebSocket });
+  return Object.freeze({ PAGE_CLOSE_OBSERVER_CONTRACT, closePageResources, createClient, createOperationGate, createPageCloseReporter, createPoller, createSameOriginRequest, createWindowRegistry, errorMessage, isOwner, openViewer, redeemTicket, runPreflight, sessionState, statusView, verifyNoVncWebSocket });
 });

@@ -716,6 +716,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+
       - name: Run tests
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
         timeout-minutes: 90
@@ -847,5 +848,49 @@ jobs:
         with:
           name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}
           path: /tmp/r297-ownership-matrix/
+          if-no-files-found: error
+          retention-days: 14
+
+  pytest-complete-gate:
+    name: Exact full-repository pytest coverage gate
+    needs: [test-and-build, ownership-matrix-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      CI_MAIN_JOB_RESULT: ${{ needs.test-and-build.result }}
+      CI_MATRIX_JOB_RESULT: ${{ needs.ownership-matrix-tests.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install collection dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Download main execution report
+        uses: actions/download-artifact@v8
+        with:
+          name: r297-pytest-${{ env.RELEASE_SOURCE_SHA }}
+          path: /tmp/r297-main-report
+      - name: Download ownership execution report
+        if: ${{ always() }}
+        uses: actions/download-artifact@v8
+        with:
+          name: r297-ownership-matrix-${{ env.RELEASE_SOURCE_SHA }}
+          path: /tmp/r297-matrix-report
+      - name: Require exact same-head collection union and both jobs successful
+        if: ${{ always() }}
+        run: python -m ops.ci_pytest_gate --aggregate /tmp/r297-full-coverage /tmp/r297-main-report /tmp/r297-matrix-report
+      - name: Upload exact coverage decision
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-full-coverage-${{ env.RELEASE_SOURCE_SHA }}
+          path: /tmp/r297-full-coverage/
           if-no-files-found: error
           retention-days: 14
