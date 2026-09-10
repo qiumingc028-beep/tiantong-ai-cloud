@@ -264,6 +264,25 @@ def test_collection_and_execution_keep_exact_identity_without_publishing_secret_
     assert rows[0]["nodeid"] == rows[1]["nodeid"]  # display redaction may collide; identity must not.
 
 
+def test_cached_collection_identity_does_not_re_read_removed_key(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    node = "tests/test_one.py::test_one"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "x" * 43)
+    _start_progress(gate, tmp_path, monkeypatch)
+    gate.pytest_collection_finish(SimpleNamespace(items=[SimpleNamespace(nodeid=node)]))
+    expected = json.loads((tmp_path / "nodes.json").read_text())[0]
+    monkeypatch.delenv("CI_PYTEST_IDENTITY_KEY")
+
+    gate.pytest_runtest_logreport(SimpleNamespace(
+        nodeid=node, when="teardown", outcome="passed", duration=0.1,
+    ))
+
+    row = json.loads((tmp_path / "progress.jsonl").read_text().splitlines()[-1])
+    assert row["nodeid_sha256"] == expected
+
+
 def test_anonymous_identity_detects_same_count_replacement_after_redaction():
     from ops import ci_pytest_gate as gate
 
