@@ -12,6 +12,7 @@ import re
 import secrets
 import stat
 import subprocess
+from contextlib import contextmanager
 
 try:
     import fcntl
@@ -82,6 +83,20 @@ def signed_event_sha256(event: dict) -> str:
 
 def write_sha256_bound_file(path: Path, content: bytes) -> str:
     """Publish bytes with a sidecar commit marker and recover a body-only crash."""
+    if os.name == "nt":
+        from ops.r297_windows_file_security import protected_open, read_protected
+        # Never create a formal output directory in a caller-controlled location.
+        with protected_open(path.parent, output=True, directory=True):
+            if path.exists() and read_protected(path, output=True) != content:
+                raise FileExistsError(path)
+            sidecar = Path(f"{path}.sha256")
+            if sidecar.exists():
+                read_protected(sidecar, output=True)
+            return _write_sha256_bound_file(path, content)
+    return _write_sha256_bound_file(path, content)
+
+
+def _write_sha256_bound_file(path: Path, content: bytes) -> str:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     parent_metadata = path.parent.stat()
     if (
@@ -254,6 +269,9 @@ def validate_page_event_payload(payload: object) -> None:
 
 
 def _read_protected_file(path: Path) -> bytes:
+    if os.name == "nt":
+        from ops.r297_windows_file_security import read_protected
+        return read_protected(path)
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         metadata = os.fstat(descriptor)
@@ -292,7 +310,8 @@ def _validate_trust_manifest(manifest: object, *, environment: str) -> dict:
     if not isinstance(manifest, dict) or set(manifest) != _MANIFEST_FIELDS:
         raise ValueError("evidence trust manifest schema mismatch")
     if (
-        manifest.get("schema_version") != 1
+        type(manifest.get("schema_version")) is not int
+        or manifest.get("schema_version") != 1
         or manifest.get("environment") != environment
         or not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", str(manifest.get("manifest_id", "")))
     ):
@@ -368,22 +387,28 @@ def _private_key_variable(environment: str, issuer: str) -> str:
     return f"{prefix}_{'TEST_' if environment == 'test' else ''}PRIVATE_KEY_PATH"
 
 
-def _open_private_key(environment: str, issuer: str) -> int:
+@contextmanager
+def _open_private_key(environment: str, issuer: str):
     variable = _private_key_variable(environment, issuer)
     value = os.getenv(variable, "")
     if not value:
         label = "windows runner" if issuer == "windows_runner" else "observer"
         raise RuntimeError(f"{label} private key missing")
+    if os.name == "nt":
+        from ops.r297_windows_file_security import protected_open
+        with protected_open(value, secret=True) as descriptor:
+            yield descriptor, value
+        return
     descriptor = os.open(value, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     metadata = os.fstat(descriptor)
-    permissions_invalid = (
-        bool(metadata.st_mode & stat.S_IWRITE)
-        if os.name == "nt" else metadata.st_uid not in {0, os.geteuid()} or bool(metadata.st_mode & 0o077)
-    )
-    if not stat.S_ISREG(metadata.st_mode) or permissions_invalid:
+    permissions_invalid = metadata.st_uid not in {0, os.geteuid()} or bool(metadata.st_mode & 0o077)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or permissions_invalid:
         os.close(descriptor)
         raise RuntimeError("evidence private key permissions invalid")
-    return descriptor
+    try:
+        yield descriptor, value
+    finally:
+        os.close(descriptor)
 
 
 def _private_integer(value: str) -> int:
@@ -393,8 +418,7 @@ def _private_integer(value: str) -> int:
 def sign_event(event: dict, *, environment: str, manifest: dict, issuer: str) -> dict:
     signing_key = next(key for key in manifest["keys"] if key["issuer"] == issuer)
     event = {**event, "key_id": signing_key["key_id"]}
-    descriptor = _open_private_key(environment, issuer)
-    try:
+    with _open_private_key(environment, issuer) as (descriptor, key_path):
         if environment == "test":
             private = json.loads(os.read(descriptor, os.fstat(descriptor).st_size).decode("utf-8"))
             if (
@@ -410,8 +434,10 @@ def sign_event(event: dict, *, environment: str, manifest: dict, issuer: str) ->
                 _private_integer(private["n"]),
             ).to_bytes(256, "big")
         elif os.name == "nt":
+            # The key and every parent remain open, denying replacement and key
+            # mutation until OpenSSL finishes its read of this exact pathname.
             result = subprocess.run(
-                ["openssl", "dgst", "-sha256", "-sign", os.environ[_private_key_variable(environment, issuer)]],
+                ["openssl", "dgst", "-sha256", "-sign", key_path],
                 input=_canonical(event), capture_output=True, check=False,
             )
             if result.returncode:
@@ -425,8 +451,6 @@ def sign_event(event: dict, *, environment: str, manifest: dict, issuer: str) ->
             if result.returncode:
                 raise RuntimeError("evidence signing failed")
             signature = result.stdout
-    finally:
-        os.close(descriptor)
     signed = {**event, "signature": base64.urlsafe_b64encode(signature).rstrip(b"=").decode()}
     _verify_signature(signed, signing_key)
     return signed
@@ -466,6 +490,7 @@ def verify_signed_event(
         raise ValueError("invalid evidence event scope")
     if (
         type(event.get("store_id")) is not int
+        or type(event.get("run_id")) is not str
         or event["store_id"] <= 0
         or not isinstance(event.get("platform"), str)
         or re.fullmatch(r"[a-z0-9_-]{1,32}", event["platform"]) is None

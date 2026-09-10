@@ -26,14 +26,9 @@ def _progress_path(name: str) -> Path | None:
 
 
 def _node_identities(nodes: list[str]) -> list[str]:
-    seen: dict[str, int] = {}
-    identities = []
-    for node in nodes:
-        display = _redact_text(node)
-        ordinal = seen.get(display, 0)
-        seen[display] = ordinal + 1
-        identities.append(hashlib.sha256(f"{display}\0{ordinal}".encode()).hexdigest())
-    return identities
+    # Redaction is display-only. Identity must survive partitioning and reordering.
+    # This is not secret storage: live credentials must never be test parameters.
+    return [hashlib.sha256(b"r297-pytest-node-v1\0" + node.encode("utf-8")).hexdigest() for node in nodes]
 
 
 def _write_status(**updates) -> None:

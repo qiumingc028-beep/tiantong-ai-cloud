@@ -167,3 +167,12 @@ def test_observer_database_role_is_read_only_and_grants_only_three_tables():
     assert "has_table_privilege" in DATABASE
     assert "R297_OBSERVER_WRITE_PROBE_UNEXPECTED_SUCCESS" in DATABASE
     assert "exists == 0 && -e $config" in DATABASE
+def test_windows_installer_rejects_acl_bypass_privileges_and_stale_logons():
+    from pathlib import Path
+    source = (Path(__file__).parents[1] / "ops/install_r297_trusted_windows_observer.ps1").read_text()
+    assert "Get-LocalGroup" in source and "Test-LocalGroupContains $group.SID.Value $sid" in source
+    assert "S-1-5-32-551" in source
+    assert "secedit /export" in source and "/areas USER_RIGHTS" in source
+    for privilege in ("SeBackupPrivilege", "SeRestorePrivilege", "SeDebugPrivilege", "SeImpersonatePrivilege", "SeTakeOwnershipPrivilege"):
+        assert privilege in source
+    assert "GetOwnerSid" in source and "LOGOFF_REQUIRED" in source

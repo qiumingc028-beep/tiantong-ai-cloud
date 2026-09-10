@@ -37,6 +37,47 @@ function Assert-LocalNonAdminAccount([string]$Account, [string]$Role) {
   if (Test-LocalGroupContains 'S-1-5-32-544' $sid @{}) {
     throw "R297_${Role}_MUST_NOT_BE_ADMIN"
   }
+  # ACLs cannot constrain backup/debug/impersonation privileges. Inspect direct
+  # and nested group assignments before allowing either unprivileged identity.
+  $effectiveSids = @($sid, 'S-1-1-0', 'S-1-2-0', 'S-1-5-11', 'S-1-5-2',
+    'S-1-5-3', 'S-1-5-4', 'S-1-5-6', 'S-1-5-14', 'S-1-5-113')
+  foreach ($group in @(Get-LocalGroup)) {
+    if (Test-LocalGroupContains $group.SID.Value $sid @{}) { $effectiveSids += $group.SID.Value }
+  }
+  if ($effectiveSids -contains 'S-1-5-32-551') { throw "R297_${Role}_BACKUP_OPERATOR_REJECTED" }
+  $rightsPath = Join-Path $env:TEMP ("r297-user-rights-{0}.inf" -f [guid]::NewGuid())
+  try {
+    & secedit /export /cfg $rightsPath /areas USER_RIGHTS /quiet | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'R297_USER_RIGHTS_QUERY_FAILED' }
+    $dangerousRights = @('SeBackupPrivilege', 'SeRestorePrivilege', 'SeDebugPrivilege',
+      'SeTakeOwnershipPrivilege', 'SeImpersonatePrivilege', 'SeAssignPrimaryTokenPrivilege',
+      'SeCreateTokenPrivilege', 'SeLoadDriverPrivilege', 'SeTcbPrivilege',
+      'SeRelabelPrivilege', 'SeTrustedCredManAccessPrivilege', 'SeManageVolumePrivilege',
+      'SeDelegateSessionUserImpersonatePrivilege')
+    foreach ($line in Get-Content -LiteralPath $rightsPath) {
+      $parts = $line -split '=', 2
+      if ($parts.Count -ne 2 -or $dangerousRights -notcontains $parts[0].Trim()) { continue }
+      foreach ($identity in ($parts[1] -split ',')) {
+        $assigned = $identity.Trim().TrimStart('*')
+        if (-not $assigned) { continue }
+        if (-not $assigned.StartsWith('S-1-')) {
+          $assigned = ([Security.Principal.NTAccount]$assigned).Translate([Security.Principal.SecurityIdentifier]).Value
+        }
+        if ($effectiveSids -contains $assigned) { throw "R297_${Role}_DANGEROUS_PRIVILEGE_REJECTED" }
+      }
+    }
+  } finally { Remove-Item -LiteralPath $rightsPath -Force -ErrorAction SilentlyContinue }
+  # A pre-existing token can retain a revoked privilege until logoff. Do not
+  # certify an account with running processes from a previous logon.
+  foreach ($process in @(Get-CimInstance Win32_Process)) {
+    $processOwner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop
+    if ($processOwner.ReturnValue -ne 0 -and $process.ProcessId -notin @(0, 4)) {
+      throw 'R297_PROCESS_OWNER_QUERY_INCOMPLETE'
+    }
+    if ($processOwner.ReturnValue -eq 0 -and $processOwner.Sid -ceq $sid) {
+      throw "R297_${Role}_LOGOFF_REQUIRED"
+    }
+  }
   return $sid
 }
 if ((git -C $SourceCheckout rev-parse HEAD).Trim() -cne $SignerSha) { throw 'R297_SIGNER_SHA_MISMATCH' }
@@ -212,6 +253,7 @@ $files = @(
   'ops\__init__.py',
   'ops\r297_acceptance_run.py',
   'ops\r297_evidence_events.py',
+  'ops\r297_windows_file_security.py',
   'ops\r297_trusted_windows_observer.py',
   'ops\r297_windows_event_signer.py',
   'backend\__init__.py',
@@ -270,6 +312,34 @@ foreach ($path in @($installStage, $dataRoot)) {
 & icacls $protected /grant "$TrustedObserverAccount`:(OI)(CI)RX" /T /C | Out-Null
 & icacls $installStage /deny "$CandidateAccount`:(OI)(CI)F" | Out-Null
 & icacls $dataRoot /deny "$CandidateAccount`:(OI)(CI)F" | Out-Null
+
+# Fixed admin-owned policy, not caller-provided identity or a second receipt ledger.
+$policyPath = Join-Path $protected 'file-policy.json'
+$policyBytes = [Text.UTF8Encoding]::new($false).GetBytes((@{
+  schema_version = 1; observer_sid = $observerSid; candidate_sid = $candidateSid
+} | ConvertTo-Json -Compress) + "`n")
+if (Test-Path -LiteralPath $policyPath) {
+  $oldPolicy = [IO.File]::ReadAllText($policyPath) | ConvertFrom-Json
+  if ($oldPolicy.observer_sid -cne $observerSid -or $oldPolicy.candidate_sid -cne $candidateSid) {
+    throw 'R297_WINDOWS_IDENTITY_POLICY_CHANGE_REQUIRES_REVIEW'
+  }
+} else {
+  $policyStream = [IO.File]::Open($policyPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+  try { $policyStream.Write($policyBytes, 0, $policyBytes.Length); $policyStream.Flush($true) }
+  finally { $policyStream.Dispose() }
+  $newDataPaths += $policyPath
+}
+# Replace the policy DACL exactly; /grant:r alone would retain unrelated ACEs.
+$policyAcl = New-Object Security.AccessControl.FileSecurity
+$policyAcl.SetAccessRuleProtection($true, $false)
+$policyAcl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+  $policyAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+    [Security.Principal.SecurityIdentifier]::new($sid), 'FullControl', 'Allow'))
+}
+$policyAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+  [Security.Principal.SecurityIdentifier]::new($observerSid), 'Read', 'Allow'))
+Set-Acl -LiteralPath $policyPath -AclObject $policyAcl
 
 foreach ($path in @($installStage, $codeRoot, $runtimeRoot, $dataRoot, $inbox, $outbox, $protected) + @(
   Get-ChildItem -LiteralPath $codeRoot -Recurse -Force | ForEach-Object FullName

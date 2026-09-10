@@ -10,14 +10,19 @@ from ops.r297_ci_redact import _redact_text
 
 
 def _ids(nodes):
-    seen = {}
-    identities = []
-    for node in nodes:
-        display = _redact_text(node)
-        ordinal = seen.get(display, 0)
-        seen[display] = ordinal + 1
-        identities.append(hashlib.sha256(f"{display}\0{ordinal}".encode()).hexdigest())
-    return identities
+    return [hashlib.sha256(b"r297-pytest-node-v1\0" + node.encode()).hexdigest() for node in nodes]
+
+
+def test_redacted_node_replacement_and_partition_reordering_cannot_change_identity():
+    from ops.ci_pytest_gate import _node_identities
+    first = "tests/test_boundary.py::test_url[password=FIRSTVALUE]"
+    second = "tests/test_boundary.py::test_url[password=SECONDVALUE]"
+    assert _redact_text(first) == _redact_text(second)
+    assert _node_identities([first]) != _node_identities([second])
+    assert _node_identities([first, second]) == [
+        _node_identities([first])[0], _node_identities([second])[0],
+    ]
+    assert _node_identities([second, first]) == _node_identities([first, second])[::-1]
 
 
 def _partition_artifacts(root, nodes, *, head="a" * 40, result=0):

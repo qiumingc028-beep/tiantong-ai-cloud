@@ -41,41 +41,18 @@ def _sha256(path: Path) -> str:
 
 
 def _read_bound_json(path: Path) -> dict:
-    content = path.read_bytes()
+    read = _read_protected_bytes if os.name == "nt" else lambda item, label: item.read_bytes()
+    content = read(path, "trusted observation request")
     digest = hashlib.sha256(content).hexdigest()
-    if Path(f"{path}.sha256").read_text(encoding="ascii").strip().split() != [digest, path.name]:
+    if read(Path(f"{path}.sha256"), "trusted observation request sidecar").decode("ascii").strip().split() != [digest, path.name]:
         raise RuntimeError("trusted observation request binding invalid")
     return json.loads(content)
 
 
-def _windows_acl_is_protected(path: Path) -> bool:
-    script = r'''
-$acl = Get-Acl -LiteralPath $args[0]
-$allowed = @('S-1-5-18', 'S-1-5-32-544')
-$owner = $acl.Owner
-try { $owner = ([System.Security.Principal.NTAccount]$owner).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}
-if ($allowed -notcontains $owner) { exit 3 }
-$write = [int]([System.Security.AccessControl.FileSystemRights]::WriteData -bor
-  [System.Security.AccessControl.FileSystemRights]::AppendData -bor
-  [System.Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
-  [System.Security.AccessControl.FileSystemRights]::WriteAttributes -bor
-  [System.Security.AccessControl.FileSystemRights]::Delete -bor
-  [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
-  [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor
-  [System.Security.AccessControl.FileSystemRights]::TakeOwnership)
-foreach ($entry in $acl.Access) {
-  if ($entry.AccessControlType -ne 'Allow') { continue }
-  try { $sid = $entry.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { exit 4 }
-  if (([int]$entry.FileSystemRights -band $write) -ne 0 -and $allowed -notcontains $sid) { exit 5 }
-}
-'''
-    return subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, str(path)],
-        capture_output=True, check=False,
-    ).returncode == 0
-
-
 def _read_protected_bytes(path: Path, label: str) -> bytes:
+    if os.name == "nt":
+        from ops.r297_windows_file_security import read_protected
+        return read_protected(path)
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
         metadata = os.fstat(descriptor)
@@ -85,7 +62,6 @@ def _read_protected_bytes(path: Path, label: str) -> bytes:
                 stat.S_IMODE(metadata.st_mode) & 0o222
                 or metadata.st_uid not in {0, os.geteuid()}
             ))
-            or (os.name == "nt" and not _windows_acl_is_protected(path))
         ):
             raise RuntimeError(f"{label} permissions invalid")
         with os.fdopen(os.dup(descriptor), "rb") as handle:
@@ -217,9 +193,12 @@ def _relay_receipt_time(receipt: dict | None, event: dict, request: dict, curren
         raise RuntimeError("trusted Windows relay receipt invalid") from None
     if (
         set(receipt) != required
+        or type(receipt["schema_version"]) is not int
         or receipt["schema_version"] != 1
         or receipt["verifier_id"] != "tiantong-r297-receipt-broker-v1"
+        or type(receipt["source_workflow_run_id"]) is not int
         or receipt["source_workflow_run_id"] != request["source_workflow_run_id"]
+        or type(receipt["sequence"]) is not int
         or receipt["sequence"] != 3
         or receipt["event_sha256"] != signed_event_sha256(event)
         or any(type(receipt.get(field)) is not type(value) or receipt.get(field) != value
@@ -273,6 +252,28 @@ def _validate_request_approvals(
 ) -> dict:
     if set(request) != _REQUEST_FIELDS:
         raise ValueError("trusted Windows observation request schema invalid")
+    if (
+        any(type(request[field]) is not int or request[field] <= 0 for field in
+            ("store_id", "run_attempt", "source_workflow_run_id", "process_id"))
+        or any(not (type(request[field]) is int and request[field] > 0 or
+                    type(request[field]) is str and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", request[field]))
+               for field in ("tenant_id", "company_id"))
+        or any(type(request[field]) is not str or re.fullmatch(pattern, request[field]) is None
+               for field, pattern in {
+                   "namespace": r"[A-Za-z0-9._:-]{1,128}", "run_id": r"[A-Za-z0-9._:-]{1,128}",
+                   "platform": r"[a-z0-9_-]{1,32}", "release_sha": r"[0-9a-f]{40}",
+                   "challenge": r"[A-Za-z0-9_-]{16,128}", "executable_sha256": r"[0-9a-f]{64}",
+               }.items())
+        or type(request["executable_path"]) is not str or not request["executable_path"]
+        or type(request["process_started_at"]) is not str
+    ):
+        raise ValueError("trusted Windows observation request types invalid")
+    try:
+        started = datetime.fromisoformat(request["process_started_at"].replace("Z", "+00:00"))
+        if started.tzinfo is None or started > current:
+            raise ValueError
+    except ValueError:
+        raise ValueError("trusted Windows process start time invalid") from None
     scope = {field: request[field] for field in _SCOPE_FIELDS}
     expected_run = {**scope, "source_workflow_run_id": request["source_workflow_run_id"]}
     try:
@@ -301,6 +302,7 @@ def _validate_request_approvals(
                 "receiver_ack_file_sha256", "observer_ack_file_sha256", "raw_event_sha256",
                 "receiver_event_sha256", "observer_event_sha256",
             }
+            or type(page_observer_ack["schema_version"]) is not int
             or page_observer_ack["schema_version"] != 1
             or page_observer_ack["verifier_id"] != "tiantong-r297-ack-broker-v1"
             or page_observer_ack["result"] != "VERIFIED"
@@ -340,7 +342,11 @@ def recover_trusted_output(
         ))
     ):
         raise RuntimeError("trusted Windows output metadata invalid")
-    content = path.read_bytes()
+    if os.name == "nt":
+        from ops.r297_windows_file_security import read_protected
+        content = read_protected(path, output=True)
+    else:
+        content = path.read_bytes()
     wrapper = json.loads(content)
     if set(wrapper) != {"signer_sha", "event"} or wrapper["signer_sha"] != signer_sha:
         raise RuntimeError("trusted Windows output binding mismatch")
@@ -383,7 +389,8 @@ def recover_trusted_output(
                 sidecar_metadata.st_uid != os.geteuid()
                 or stat.S_IMODE(sidecar_metadata.st_mode) != 0o600
             ))
-            or sidecar.read_text(encoding="ascii").strip().split() != [digest, path.name]
+            or (read_protected(sidecar, output=True).decode("ascii") if os.name == "nt"
+                else sidecar.read_text(encoding="ascii")).strip().split() != [digest, path.name]
         ):
             raise RuntimeError("trusted Windows output sidecar mismatch")
     else:

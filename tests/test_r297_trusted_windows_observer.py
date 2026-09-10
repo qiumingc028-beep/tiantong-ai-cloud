@@ -37,6 +37,68 @@ def _run_binding(request, issued_at):
     }
 
 
+@pytest.mark.parametrize("field,value", [
+    ("run_id", True), ("run_id", 123), ("run_attempt", True),
+    ("source_workflow_run_id", True), ("source_workflow_run_id", 1.0),
+    ("store_id", True), ("process_id", True), ("process_started_at", 123),
+])
+def test_windows_request_rejects_wrong_types_even_when_binding_matches(tmp_path, field, value):
+    from ops.r297_trusted_windows_observer import _validate_request_approvals
+    _, started, request = _request(tmp_path)
+    request[field] = value
+    manifest = {"release_sha": request["release_sha"], "workbench_executable_sha256": request["executable_sha256"]}
+    with pytest.raises((ValueError, RuntimeError)):
+        _validate_request_approvals(request, current=started, artifact_manifest=manifest,
+                                    run_binding=_run_binding(request, started))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("schema_version", True), ("schema_version", 1.0), ("sequence", 3.0),
+    ("source_workflow_run_id", 34123456789.0),
+])
+def test_windows_relay_receipt_strict_types(tmp_path, field, value):
+    from ops.r297_evidence_events import signed_event_sha256
+    from ops.r297_trusted_windows_observer import _relay_receipt_time, _SCOPE_FIELDS
+    _, started, request = _request(tmp_path)
+    event = {"observed_at": started.isoformat()}
+    receipt = {
+        **{key: request[key] for key in _SCOPE_FIELDS}, "schema_version": 1,
+        "verifier_id": "tiantong-r297-receipt-broker-v1", "sequence": 3,
+        "source_workflow_run_id": request["source_workflow_run_id"],
+        "event_sha256": signed_event_sha256(event), "received_at": started.isoformat(),
+    }
+    receipt[field] = value
+    with pytest.raises(RuntimeError, match="receipt invalid"):
+        _relay_receipt_time(receipt, event, request, started + timedelta(minutes=6))
+
+
+@pytest.mark.parametrize("defect", ["missing", "late_first_receipt", "expired_recovery", "resigned_time", "scope", "attempt", "challenge", "source"])
+def test_windows_original_receipt_recovery_rejects_rewritten_or_unverified_facts(tmp_path, defect):
+    from ops.r297_evidence_events import signed_event_sha256
+    from ops.r297_trusted_windows_observer import _relay_receipt_time, _SCOPE_FIELDS
+    _, started, request = _request(tmp_path)
+    event = {"observed_at": started.isoformat(), "signature": "original-test-signature"}
+    receipt = {
+        **{key: request[key] for key in _SCOPE_FIELDS}, "schema_version": 1,
+        "verifier_id": "tiantong-r297-receipt-broker-v1", "sequence": 3,
+        "source_workflow_run_id": request["source_workflow_run_id"],
+        "event_sha256": signed_event_sha256(event), "received_at": started.isoformat(),
+    }
+    current = started + timedelta(minutes=6)
+    assert _relay_receipt_time(receipt, event, request, current) == started
+    if defect == "missing": receipt = None
+    if defect == "late_first_receipt": receipt["received_at"] = current.isoformat()
+    if defect == "expired_recovery": current = started + timedelta(hours=12, seconds=1)
+    if defect == "resigned_time":
+        event = {**event, "observed_at": (started - timedelta(seconds=1)).isoformat(), "signature": "re-signed"}
+    if defect == "scope": receipt["store_id"] += 1
+    if defect == "attempt": receipt["run_attempt"] += 1
+    if defect == "challenge": receipt["challenge"] += "other"
+    if defect == "source": receipt["source_workflow_run_id"] += 1
+    with pytest.raises(RuntimeError, match="relay receipt"):
+        _relay_receipt_time(receipt, event, request, current)
+
+
 def test_fixed_signer_identity_uses_protected_manifest_without_git(monkeypatch, tmp_path):
     install = tmp_path / ("b" * 40)
     code = install / "code"
@@ -68,12 +130,12 @@ def test_windows_accepts_original_complete_broker_snapshot_and_rejects_extra_fie
 
 
 def test_windows_acl_probe_checks_only_write_capabilities():
-    source = (__import__("pathlib").Path(__file__).parents[1] / "ops" / "r297_trusted_windows_observer.py").read_text()
-    assert "FileSystemRights]::Modify" not in source
-    assert "FileSystemRights]::FullControl" not in source
-    assert "FileSystemRights]::ReadAndExecute" not in source
-    for right in ("WriteData", "AppendData", "Delete", "ChangePermissions", "TakeOwnership"):
-        assert f"FileSystemRights]::{right}" in source
+    # Same assertion at the new handle-bound seam, not dead PowerShell text.
+    from ops.r297_windows_file_security import _validate_acl
+    _validate_acl("S-1-5-32-544", [(0, 0, 0x1200A9, "S-1-5-32-545")])
+    for right in (2, 4, 0x10000, 0x40000, 0x80000):
+        with pytest.raises(RuntimeError, match="WRITE_ACE"):
+            _validate_acl("S-1-5-32-544", [(0, 0, right, "S-1-5-32-545")])
 
 
 def test_trusted_observer_checks_real_exit_and_post_exit_cycle(monkeypatch, tmp_path):
