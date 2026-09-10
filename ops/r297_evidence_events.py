@@ -84,15 +84,19 @@ def signed_event_sha256(event: dict) -> str:
 def write_sha256_bound_file(path: Path, content: bytes) -> str:
     """Publish bytes with a sidecar commit marker and recover a body-only crash."""
     if os.name == "nt":
-        from ops.r297_windows_file_security import protected_open, read_protected
+        from ops.r297_windows_file_security import _RecoveryIO, read_protected
         # Never create a formal output directory in a caller-controlled location.
-        with protected_open(path.parent, output=True, directory=True):
+        io = _RecoveryIO()
+        with io.lock(path.parent) as directory:
+            io.flush_directory(directory)
             if path.exists() and read_protected(path, output=True) != content:
                 raise FileExistsError(path)
             sidecar = Path(f"{path}.sha256")
             if sidecar.exists():
                 read_protected(sidecar, output=True)
-            return _write_sha256_bound_file(path, content)
+            digest = _write_sha256_bound_file(path, content)
+            io.flush_directory(directory)
+            return digest
     return _write_sha256_bound_file(path, content)
 
 

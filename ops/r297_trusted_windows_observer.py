@@ -320,33 +320,7 @@ def _validate_request_approvals(
     return scope
 
 
-def recover_trusted_output(
-    path: Path, *, request: dict, signer_sha: str,
-    artifact_manifest: dict, run_binding: dict, page_observer_ack: dict | None = None,
-    relay_receipt: dict | None = None,
-    now: datetime | None = None,
-) -> bool:
-    """Recover only an already signed event bound to the current protected inputs."""
-    if not path.exists():
-        return False
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    scope = _validate_request_approvals(
-        request, current=current, artifact_manifest=artifact_manifest, run_binding=run_binding,
-        page_observer_ack=page_observer_ack,
-    )
-    metadata = path.lstat()
-    if (
-        path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink not in {1, 2}
-        or (os.name != "nt" and (
-            metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600
-        ))
-    ):
-        raise RuntimeError("trusted Windows output metadata invalid")
-    if os.name == "nt":
-        from ops.r297_windows_file_security import read_protected
-        content = read_protected(path, output=True)
-    else:
-        content = path.read_bytes()
+def _validate_recovered_event(content, *, request, signer_sha, scope, relay_receipt, current):
     wrapper = json.loads(content)
     if set(wrapper) != {"signer_sha", "event"} or wrapper["signer_sha"] != signer_sha:
         raise RuntimeError("trusted Windows output binding mismatch")
@@ -378,6 +352,37 @@ def recover_trusted_output(
         or event.get("payload", {}).get("process_started_at") != requested_started_at
     ):
         raise RuntimeError("trusted Windows output binding mismatch")
+
+
+def recover_trusted_output(
+    path: Path, *, request: dict, signer_sha: str,
+    artifact_manifest: dict, run_binding: dict, page_observer_ack: dict | None = None,
+    relay_receipt: dict | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Recover only an already signed event bound to the current protected inputs."""
+    if not path.exists():
+        return False
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    scope = _validate_request_approvals(
+        request, current=current, artifact_manifest=artifact_manifest, run_binding=run_binding,
+        page_observer_ack=page_observer_ack,
+    )
+    def validate(content):
+        _validate_recovered_event(content, request=request, signer_sha=signer_sha,
+                                  scope=scope, relay_receipt=relay_receipt, current=current)
+    if os.name == "nt":
+        from ops.r297_windows_file_security import recover_bound_file
+        content = recover_bound_file(path, validate=validate)
+        if not Path(f"{path}.sha256").exists():
+            write_sha256_bound_file(path, content)
+        return True
+    metadata = path.lstat()
+    if (path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink not in {1, 2}
+            or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600):
+        raise RuntimeError("trusted Windows output metadata invalid")
+    content = path.read_bytes()
+    validate(content)
     sidecar = Path(f"{path}.sha256")
     if sidecar.exists():
         digest = hashlib.sha256(content).hexdigest()
@@ -389,8 +394,7 @@ def recover_trusted_output(
                 sidecar_metadata.st_uid != os.geteuid()
                 or stat.S_IMODE(sidecar_metadata.st_mode) != 0o600
             ))
-            or (read_protected(sidecar, output=True).decode("ascii") if os.name == "nt"
-                else sidecar.read_text(encoding="ascii")).strip().split() != [digest, path.name]
+            or sidecar.read_text(encoding="ascii").strip().split() != [digest, path.name]
         ):
             raise RuntimeError("trusted Windows output sidecar mismatch")
     else:

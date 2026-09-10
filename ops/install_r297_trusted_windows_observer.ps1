@@ -271,6 +271,7 @@ $files = @(
   'ops\r297_acceptance_run.py',
   'ops\r297_evidence_events.py',
   'ops\r297_windows_file_security.py',
+  'ops\r297_windows_recovery_probe.py',
   'ops\r297_trusted_windows_observer.py',
   'ops\r297_windows_event_signer.py',
   'backend\__init__.py',

@@ -7,8 +7,10 @@ from contextlib import contextmanager, ExitStack
 import ctypes as C
 from ctypes import wintypes as W
 import json
+import hashlib
 import os
-from pathlib import PureWindowsPath
+import re
+from pathlib import Path, PureWindowsPath
 
 _ADMINS = {"S-1-5-18", "S-1-5-32-544"}
 _TRUSTED_INSTALLER = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
@@ -103,6 +105,12 @@ class _FileInfo(C.Structure):
 @contextmanager
 def protected_open(path, *, secret=False, output=False, directory=False):
     """Yield a CRT descriptor whose ACL and bytes belong to the same locked object."""
+    with _protected_open(path, secret=secret, output=output, directory=directory) as descriptor:
+        yield descriptor
+
+
+@contextmanager
+def _protected_open(path, *, secret=False, output=False, directory=False, recovery=False, delete=False, flush=False):
     kernel, security = _native()
     import msvcrt
     path = PureWindowsPath(path)
@@ -125,8 +133,14 @@ def protected_open(path, *, secret=False, output=False, directory=False):
         for current in [*reversed(path.parents), path]:
             leaf = current == path
             is_file = leaf and not directory
-            handle = kernel.CreateFileW(str(current), 0x80020000 if is_file else 0x20080,
-                                        1 if is_file else 3, None, 3, 0x02200000, None)
+            access = 0x80020000 if is_file else 0x20080
+            share = 1 if is_file else 3
+            if leaf and recovery:
+                access |= 0x10000 if delete else 0x40000000
+                share = 7 if delete else 5
+            if leaf and flush:
+                access |= 0x40000000
+            handle = kernel.CreateFileW(str(current), access, share, None, 3, 0x02200000, None)
             if handle == C.c_void_p(-1).value:
                 raise OSError(C.get_last_error(), "R297_WINDOWS_PROTECTED_OPEN_FAILED")
             stack.callback(kernel.CloseHandle, handle)
@@ -135,7 +149,7 @@ def protected_open(path, *, secret=False, output=False, directory=False):
                 raise RuntimeError("R297_WINDOWS_FILE_IDENTITY_FAILED")
             if info.attributes & 0x400 or bool(info.attributes & 0x10) == is_file:
                 raise RuntimeError("R297_WINDOWS_REPARSE_OR_TYPE_INVALID")
-            if is_file and info.links != 1:
+            if is_file and info.links not in ({1, 2} if recovery else {1}):
                 raise RuntimeError("R297_WINDOWS_HARDLINK_REJECTED")
             owner, entries = _handle_acl(kernel, security, handle)
             _validate_acl(owner, entries, observer=observer, secret=secret and leaf,
@@ -161,3 +175,145 @@ def read_protected(path, *, output=False):
     with protected_open(path, output=output) as descriptor:
         with os.fdopen(os.dup(descriptor), "rb") as stream:
             return stream.read()
+
+
+class _RecoveryIO:
+    """Native filesystem adapter. Portable tests do not certify its Win32 calls."""
+    @contextmanager
+    def lock(self, parent):
+        with _protected_open(parent, output=True, directory=True, flush=True) as directory:
+            kernel, security = _native()
+            # ponytail: one lock per output directory; per-run directories bound contention.
+            handle = kernel.CreateFileW(str(parent / ".r297-publication.lock"), 0x80020000,
+                                        0, None, 4, 0x02200000, None)
+            if handle == C.c_void_p(-1).value:
+                raise RuntimeError("R297_WINDOWS_PUBLICATION_BUSY_OR_UNSAFE")
+            try:
+                info = _FileInfo()
+                if (not kernel.GetFileInformationByHandle(handle, C.byref(info))
+                        or info.attributes & (0x400 | 0x10) or info.links != 1):
+                    raise RuntimeError("R297_WINDOWS_PUBLICATION_LOCK_INVALID")
+                # Read policy through the public single-link boundary.
+                policy = json.loads(read_protected(_POLICY))
+                owner, entries = _handle_acl(kernel, security, handle)
+                _validate_acl(owner, entries, observer=policy["observer_sid"], output=True)
+                yield directory
+            finally:
+                kernel.CloseHandle(handle)
+
+    def open(self, path, *, delete=False):
+        return _protected_open(path, output=True, recovery=True, delete=delete)
+
+    def identity(self, descriptor):
+        import msvcrt
+        kernel, _ = _native()
+        info = _FileInfo()
+        if not kernel.GetFileInformationByHandle(msvcrt.get_osfhandle(descriptor), C.byref(info)):
+            raise RuntimeError("R297_WINDOWS_FILE_IDENTITY_FAILED")
+        return info.volume, info.index_high, info.index_low, info.links
+
+    def read(self, descriptor):
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        with os.fdopen(os.dup(descriptor), "rb") as stream:
+            content = stream.read(2 * 1024 * 1024 + 1)
+        if len(content) > 2 * 1024 * 1024:
+            raise RuntimeError("R297_WINDOWS_RECOVERY_SIZE_LIMIT")
+        return content
+
+    def remove(self, descriptor, path):
+        import msvcrt
+        kernel, _ = _native()
+        handle = msvcrt.get_osfhandle(descriptor)
+        kernel.GetFinalPathNameByHandleW.argtypes = [W.HANDLE, W.LPWSTR, W.DWORD, W.DWORD]
+        kernel.GetFinalPathNameByHandleW.restype = W.DWORD
+        buffer = C.create_unicode_buffer(32768)
+        length = kernel.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)
+        if not length or length >= len(buffer) or PureWindowsPath(buffer.value.removeprefix("\\\\?\\")) != PureWindowsPath(path):
+            raise RuntimeError("R297_WINDOWS_RECOVERY_LINK_MOVED")
+        kernel.SetFileInformationByHandle.argtypes = [W.HANDLE, C.c_int, C.c_void_p, W.DWORD]
+        kernel.SetFileInformationByHandle.restype = W.BOOL
+        flags = W.DWORD(3)  # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS.
+        if not kernel.SetFileInformationByHandle(handle, 21, C.byref(flags), C.sizeof(flags)):
+            raise RuntimeError("R297_WINDOWS_RECOVERY_DELETE_UNSUPPORTED_OR_FAILED")
+
+    def flush(self, descriptor):
+        import msvcrt
+        kernel, _ = _native()
+        kernel.FlushFileBuffers.argtypes = [W.HANDLE]
+        kernel.FlushFileBuffers.restype = W.BOOL
+        if not kernel.FlushFileBuffers(msvcrt.get_osfhandle(descriptor)):
+            raise RuntimeError("R297_WINDOWS_RECOVERY_FILE_FLUSH_FAILED")
+
+    def flush_directory(self, descriptor):
+        import msvcrt
+        class IOStatus(C.Structure):
+            _fields_ = [("status_or_pointer", C.c_void_p), ("information", C.c_size_t)]
+        native = C.WinDLL("ntdll", use_last_error=True)
+        flush = native.NtFlushBuffersFileEx
+        flush.argtypes = [W.HANDLE, C.c_uint32, C.c_void_p, C.c_uint32, C.POINTER(IOStatus)]
+        flush.restype = C.c_int32
+        status = IOStatus()
+        # Flags 0 includes metadata and device synchronization; never DATA_ONLY/NO_SYNC.
+        if flush(msvcrt.get_osfhandle(descriptor), 0, None, 0, C.byref(status)) != 0:
+            raise RuntimeError("R297_WINDOWS_RECOVERY_DIRECTORY_FLUSH_FAILED")
+
+
+def _recovery_entry(io, stack, path):
+    descriptor = stack.enter_context(io.open(path))
+    identity = io.identity(descriptor)
+    content = io.read(descriptor)
+    if identity[3] not in {1, 2}:
+        raise RuntimeError("R297_WINDOWS_RECOVERY_LINK_COUNT_INVALID")
+    temporary = None
+    if identity[3] == 2:
+        pattern = re.compile(rf"\.{re.escape(path.name)}\.[0-9a-f]{{16}}")
+        names = [item for item in path.parent.iterdir() if pattern.fullmatch(item.name)]
+        if len(names) != 1:
+            raise RuntimeError("R297_WINDOWS_RECOVERY_TEMPORARY_AMBIGUOUS")
+        handles = stack.enter_context(ExitStack())
+        peer = handles.enter_context(io.open(names[0], delete=True))
+        if io.identity(peer) != identity or io.read(peer) != content:
+            raise RuntimeError("R297_WINDOWS_RECOVERY_LINK_IDENTITY_MISMATCH")
+        temporary = (peer, names[0], handles)
+    return descriptor, identity, content, temporary
+
+
+def recover_bound_file(path, *, validate):
+    """Recover only a verified original, never widen ordinary protected reads.
+
+    validate must verify the original signature, scope and protected receipt before
+    this function mutates any link. No new evidence body is produced here.
+    """
+    path = Path(path)
+    io = _RecoveryIO()
+    with io.lock(path.parent) as directory, ExitStack() as stack:
+        body = _recovery_entry(io, stack, path)
+        content = body[2]
+        sidecar = Path(str(path) + ".sha256")
+        entries = [body]
+        if sidecar.exists():
+            marker = _recovery_entry(io, stack, sidecar)
+            if marker[2] != f"{hashlib.sha256(content).hexdigest()}  {path.name}\n".encode("ascii"):
+                raise RuntimeError("R297_WINDOWS_RECOVERY_SIDECAR_MISMATCH")
+            entries.append(marker)
+        validate(content)
+        # Verify flush support before deletion. Retrying after an interrupted flush
+        # executes these barriers again even if the temporary link is already gone.
+        for descriptor, identity, expected, temporary in entries:
+            io.flush(descriptor)
+        io.flush_directory(directory)
+        for descriptor, identity, expected, temporary in entries:
+            if io.identity(descriptor) != identity or io.read(descriptor) != expected:
+                raise RuntimeError("R297_WINDOWS_RECOVERY_OBJECT_CHANGED")
+            if temporary is not None:
+                peer, name, handles = temporary
+                if io.identity(peer) != identity or io.read(peer) != expected:
+                    raise RuntimeError("R297_WINDOWS_RECOVERY_OBJECT_CHANGED")
+                io.remove(peer, name)
+                handles.close()
+                if io.identity(descriptor) != (*identity[:3], 1):
+                    raise RuntimeError("R297_WINDOWS_RECOVERY_CLEANUP_INCOMPLETE")
+                io.flush(descriptor)
+                io.flush_directory(directory)
+        io.flush_directory(directory)
+        return content
