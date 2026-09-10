@@ -35,3 +35,9 @@ def test_ancestor_sibling_creation_does_not_permit_replacement():
         _validate_acl("S-1-5-32-544", [(0, 0, 64, CANDIDATE)], ancestor=True)
     with pytest.raises(RuntimeError, match="UNSUPPORTED_ACE"):
         _validate_acl("S-1-5-32-544", [(9, 0, 0, OBSERVER)])
+
+
+def test_output_directory_cannot_grant_candidate_write_via_inherit_only_ace():
+    with pytest.raises(RuntimeError, match="WRITE_ACE"):
+        _validate_acl(OBSERVER, [(0, 9, 2, CANDIDATE)], observer=OBSERVER, output=True, children=True)
+    _validate_acl(OBSERVER, [(0, 9, 0x1F01FF, "S-1-3-0")], observer=OBSERVER, output=True, children=True)

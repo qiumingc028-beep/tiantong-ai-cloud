@@ -17,7 +17,7 @@ _WRITE = 0x40000000 | 0x10000000 | 0xD0156
 _READ = 0x80000000 | 0x10000000 | 1
 
 
-def _validate_acl(owner, entries, *, observer=None, secret=False, output=False, ancestor=False):
+def _validate_acl(owner, entries, *, observer=None, secret=False, output=False, ancestor=False, children=False):
     owners = _ADMINS | ({observer} if output and observer else set())
     if ancestor:
         owners = owners | {_TRUSTED_INSTALLER}
@@ -29,8 +29,13 @@ def _validate_acl(owner, entries, *, observer=None, secret=False, output=False, 
     for kind, flags, mask, sid in entries:
         if kind not in {0, 1}:  # No unevaluated object/callback/conditional ACEs.
             raise RuntimeError("R297_WINDOWS_UNSUPPORTED_ACE")
-        if kind == 1 or flags & 8:  # Deny or INHERIT_ONLY cannot grant access here.
+        if kind == 1:
             continue
+        if flags & 8 and not (children and flags & 3):
+            continue
+        # CREATOR OWNER resolves to the trusted publisher on new child files.
+        if children and flags & 3 and sid == "S-1-3-0":
+            sid = observer
         if mask & write_mask and sid not in writers:
             raise RuntimeError("R297_WINDOWS_UNAUTHORIZED_WRITE_ACE")
         if secret and mask & _READ and sid not in _ADMINS | {observer}:
@@ -134,7 +139,7 @@ def protected_open(path, *, secret=False, output=False, directory=False):
                 raise RuntimeError("R297_WINDOWS_HARDLINK_REJECTED")
             owner, entries = _handle_acl(kernel, security, handle)
             _validate_acl(owner, entries, observer=observer, secret=secret and leaf,
-                          output=output, ancestor=not leaf)
+                          output=output, ancestor=not leaf, children=directory and leaf)
         # Duplicate before transferring ownership to the CRT; original stays locked.
         kernel.GetCurrentProcess.restype = W.HANDLE
         kernel.DuplicateHandle.argtypes = [W.HANDLE, W.HANDLE, W.HANDLE, C.c_void_p, W.DWORD, W.BOOL, W.DWORD]
