@@ -123,6 +123,11 @@ def main() -> int:
         CI_PYTEST_COLLECTION_MANIFEST=str(manifest),
         CI_PYTEST_PROGRESS_DIRECTORY=str(output),
     )
+    target = os.getenv("CI_PYTEST_TARGET", "tests/")
+    ignored = os.getenv("CI_PYTEST_IGNORE", "")
+    allowed_matrix = "tests/test_task_center_full_entrypoint_ownership.py"
+    if target not in {"tests/", allowed_matrix} or ignored not in {"", allowed_matrix}:
+        raise RuntimeError("CI_PYTEST_SELECTION_INVALID")
     print("CI_PYTEST_STARTED=ALL_COLLECTED_TESTS", flush=True)
     # Failure tracebacks can include credentials. Do not send raw subprocess
     # output to Actions; sanitize it before either logging or artifact upload.
@@ -130,10 +135,13 @@ def main() -> int:
     # cancelled before pytest finishes. Only a sanitized copy may be published.
     with tempfile.TemporaryDirectory(prefix="r297-ci-pytest-") as raw_directory:
         raw_report = Path(raw_directory) / "junit.xml"
-        result = subprocess.run([
-            sys.executable, "-m", "pytest", "-v", "tests/", "--tb=short", "--show-capture=no",
+        command = [
+            sys.executable, "-m", "pytest", "-v", target, "--tb=short", "--show-capture=no",
             "-p", "ops.ci_pytest_gate", f"--junitxml={raw_report}",
-        ], env=env, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        ]
+        if ignored:
+            command.append(f"--ignore={ignored}")
+        result = subprocess.run(command, env=env, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
            text=True, encoding="utf-8", errors="replace")
         try:
             safe_output = _redact_text(result.stdout or "")
@@ -148,7 +156,7 @@ def main() -> int:
             return 1
     print(safe_output, end="", flush=True)
     try:
-        totals = validate_report(report, manifest)
+        totals = validate_report(report, manifest, minimum=int(os.getenv("CI_PYTEST_MINIMUM", "1846")))
     except (OSError, ValueError, ET.ParseError) as exc:
         print(f"CI_PYTEST_RESULT=BLOCK ({type(exc).__name__})")
         return result.returncode or 1

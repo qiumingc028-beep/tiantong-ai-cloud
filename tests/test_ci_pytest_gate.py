@@ -11,6 +11,7 @@ def _start_progress(gate, tmp_path, monkeypatch):
     # Restore the live plugin's session root after this unit test's teardown.
     monkeypatch.setattr(gate, "_PROGRESS_ROOT", gate._PROGRESS_ROOT)
     monkeypatch.setenv("CI_PYTEST_PROGRESS_DIRECTORY", str(tmp_path))
+    monkeypatch.setenv("CI_PYTEST_COLLECTION_MANIFEST", str(tmp_path / "nodes.json"))
     gate.pytest_sessionstart(None)
 
 
@@ -67,6 +68,46 @@ def test_cli_never_publishes_raw_failures_or_relabels_failure_as_pass(tmp_path, 
         import xml.etree.ElementTree as ET
         root = ET.parse(output / "junit.xml").getroot()
         assert root.attrib["failures"] == "1"
+
+
+def test_expensive_postgresql_matrix_can_run_in_parallel_without_omission(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    output = tmp_path / "upload"
+    monkeypatch.setattr(gate.sys, "argv", ["ci_pytest_gate", str(output)])
+    monkeypatch.setenv("CI_PYTEST_TARGET", "tests/test_task_center_full_entrypoint_ownership.py")
+    monkeypatch.setenv("CI_PYTEST_MINIMUM", "1")
+
+    def execute(command, **kwargs):
+        assert "tests/test_task_center_full_entrypoint_ownership.py" in command
+        assert not any(part.startswith("--ignore=") for part in command)
+        raw = Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml=")))
+        raw.write_text('<testsuite tests="1" failures="0" errors="0" skipped="0"/>')
+        Path(kwargs["env"]["CI_PYTEST_COLLECTION_MANIFEST"]).write_text(json.dumps(["matrix-test"]))
+        return SimpleNamespace(returncode=0, stdout="matrix pass\n")
+
+    monkeypatch.setattr(gate.subprocess, "run", execute)
+    assert gate.main() == 0
+
+
+def test_main_suite_ignores_only_the_parallelized_matrix(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    output = tmp_path / "upload"
+    monkeypatch.setattr(gate.sys, "argv", ["ci_pytest_gate", str(output)])
+    monkeypatch.setenv("CI_PYTEST_IGNORE", "tests/test_task_center_full_entrypoint_ownership.py")
+    monkeypatch.setenv("CI_PYTEST_MINIMUM", "1")
+
+    def execute(command, **kwargs):
+        assert "tests/" in command
+        assert "--ignore=tests/test_task_center_full_entrypoint_ownership.py" in command
+        raw = Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml=")))
+        raw.write_text('<testsuite tests="1" failures="0" errors="0" skipped="0"/>')
+        Path(kwargs["env"]["CI_PYTEST_COLLECTION_MANIFEST"]).write_text(json.dumps(["main-test"]))
+        return SimpleNamespace(returncode=0, stdout="main pass\n")
+
+    monkeypatch.setattr(gate.subprocess, "run", execute)
+    assert gate.main() == 0
 
 
 def test_progress_survives_an_incomplete_run_and_identifies_last_test(tmp_path, monkeypatch):
