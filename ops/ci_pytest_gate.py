@@ -102,12 +102,15 @@ def pytest_runtest_teardown(item, nextitem):
 
 def pytest_runtest_logreport(report):
     nodeid = _redact_text(report.nodeid)
+    identity = _NODE_IDENTITIES.get(report.nodeid)
+    if identity is None:
+        identity = _node_identities([report.nodeid])[0]
     previous = _OUTCOMES.get(nodeid, "passed")
     if _OUTCOME_PRIORITY.get(report.outcome, 2) >= _OUTCOME_PRIORITY.get(previous, 0):
         _OUTCOMES[nodeid] = report.outcome
     _append_progress({
         "nodeid": nodeid, "outcome": report.outcome, "phase": report.when,
-        "nodeid_sha256": _NODE_IDENTITIES.get(report.nodeid, _node_identities([report.nodeid])[0]),
+        "nodeid_sha256": identity,
         "duration_seconds": round(report.duration, 6),
     })
     if report.when == "teardown":
