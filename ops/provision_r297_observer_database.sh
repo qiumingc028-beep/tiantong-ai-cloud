@@ -64,15 +64,26 @@ fi
 migrate_endpoint=0
 if [[ -f $config ]] && grep -q '@postgres:5432/' "$config"; then migrate_endpoint=1; fi
 if [[ $exists == 0 || ! -f $config || $migrate_endpoint == 1 ]]; then
-  password=$(openssl rand -hex 32)
-  if [[ $exists == 0 ]]; then
+  if [[ $migrate_endpoint == 1 ]]; then
+    config_line=$(<"$config")
+    if [[ ! $config_line =~ ^R297_OBSERVER_DATABASE_URL=postgresql://r297_observer:([a-f0-9]{64})@postgres:5432/([a-zA-Z0-9_]+)$ || ${BASH_REMATCH[2]} != "$database" ]]; then
+      echo "R297_OBSERVER_ROLE_CONFIG_DRIFT" >&2
+      exit 1
+    fi
+    password=${BASH_REMATCH[1]}
+    role_sql=
+  elif [[ $exists == 0 ]]; then
+    password=$(openssl rand -hex 32)
     role_sql="CREATE ROLE r297_observer LOGIN PASSWORD :'password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;"
   else
+    password=$(openssl rand -hex 32)
     role_sql="ALTER ROLE r297_observer PASSWORD :'password';"
   fi
-  printf "\\set password '%s'\n%s\n" "$password" "$role_sql" \
+  if [[ -n $role_sql ]]; then
+    printf "\\set password '%s'\n%s\n" "$password" "$role_sql" \
     | docker exec -i "$container" sh -c \
       'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >/dev/null
+  fi
   temporary=$(mktemp /etc/tiantong/r297-observer/.database.env.XXXXXX)
   printf 'R297_OBSERVER_DATABASE_URL=postgresql://%s:%s@%s:%s/%s\n' \
     "$role" "$password" "$observer_host" "$observer_port" "$database" >"$temporary"

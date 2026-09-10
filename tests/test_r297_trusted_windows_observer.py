@@ -33,6 +33,7 @@ def _run_binding(request, issued_at):
             "run_id", "run_attempt", "challenge", "source_workflow_run_id",
         )},
         "issued_at": issued_at.isoformat(),
+        "state": "issued", "consumed_at": None, "event_receipts": [],
     }
 
 
@@ -54,6 +55,16 @@ def test_fixed_signer_identity_uses_protected_manifest_without_git(monkeypatch, 
     module.write_bytes(b"changed\n")
     with pytest.raises(RuntimeError, match="manifest mismatch"):
         _fixed_signer_checkout()
+
+
+def test_windows_accepts_original_complete_broker_snapshot_and_rejects_extra_fields(tmp_path):
+    from ops.r297_trusted_windows_observer import _validate_request_approvals
+    _, started, request = _request(tmp_path)
+    binding = {**_run_binding(request, started), "state": "issued", "consumed_at": None, "event_receipts": []}
+    manifest = {"release_sha": request["release_sha"], "workbench_executable_sha256": request["executable_sha256"]}
+    assert _validate_request_approvals(request, current=started, artifact_manifest=manifest, run_binding=binding)["run_id"] == request["run_id"]
+    with pytest.raises(RuntimeError):
+        _validate_request_approvals(request, current=started, artifact_manifest=manifest, run_binding={**binding, "extra": True})
 
 
 def test_windows_acl_probe_checks_only_write_capabilities():
@@ -224,6 +235,61 @@ def test_trusted_observer_recovers_exact_published_output(monkeypatch, tmp_path)
             output, request=request, signer_sha="b" * 40,
             artifact_manifest=manifest, run_binding=approved, now=started + timedelta(seconds=10),
         )
+
+
+def test_trusted_observer_recovers_old_original_bytes_only_with_relay_receipt(monkeypatch, tmp_path):
+    from ops.r297_evidence_events import signed_event_sha256
+    executable, started, request = _request(tmp_path)
+    output = tmp_path / "trusted-event.json"
+    observed = started + timedelta(seconds=10)
+    event = {
+        **{key: request[key] for key in (
+            "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+            "run_id", "run_attempt", "challenge",
+        )},
+        "event_type": "electron_exit", "issuer": "windows_runner",
+        "observed_at": observed.isoformat(), "sequence": 3,
+        "nonce": "trusted-old-output-recovery-01", "key_id": "windows-key",
+        "payload": {"exited": True, "process_id": 42, "process_started_at": started.isoformat()},
+        "signature": "signature",
+    }
+    output.write_text(json.dumps({"signer_sha": "b" * 40, "event": event}, sort_keys=True) + "\n")
+    output.chmod(0o600)
+    current = started + timedelta(minutes=6)
+    monkeypatch.setenv("R297_TRUSTED_ACCEPTANCE_RUN_BINDING_SHA256", "c" * 64)
+    ack = {
+        "schema_version": 1, "verifier_id": "tiantong-r297-ack-broker-v1", "result": "VERIFIED",
+        "verified_at": (started + timedelta(seconds=20)).isoformat(), "binding_file_sha256": "c" * 64,
+        "receiver_ack_file_sha256": "1" * 64, "observer_ack_file_sha256": "2" * 64,
+        "raw_event_sha256": "3" * 64, "receiver_event_sha256": "4" * 64,
+        "observer_event_sha256": "5" * 64,
+    }
+    receipt = {
+        "schema_version": 1, "verifier_id": "tiantong-r297-receipt-broker-v1",
+        "source_workflow_run_id": request["source_workflow_run_id"],
+        "event_sha256": signed_event_sha256(event), "sequence": 3,
+        "received_at": (observed + timedelta(seconds=1)).isoformat(),
+        **{field: request[field] for field in (
+            "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+            "run_id", "run_attempt", "challenge",
+        )},
+    }
+    verified_at = []
+    monkeypatch.setattr(
+        "ops.r297_trusted_windows_observer.verify_signed_event",
+        lambda *_a, **kwargs: verified_at.append(kwargs["now"]) or ({}, {}),
+    )
+    arguments = dict(
+        request=request, signer_sha="b" * 40,
+        artifact_manifest={"release_sha": request["release_sha"], "workbench_executable_sha256": request["executable_sha256"]},
+        run_binding=_run_binding(request, started), page_observer_ack=ack, now=current,
+    )
+    with pytest.raises(RuntimeError, match="relay receipt missing"):
+        recover_trusted_output(output, **arguments)
+    assert recover_trusted_output(output, relay_receipt=receipt, **arguments) is True
+    assert verified_at == [observed + timedelta(seconds=1)]
+    with pytest.raises(RuntimeError, match="relay receipt invalid"):
+        recover_trusted_output(output, relay_receipt={**receipt, "run_attempt": 2}, **arguments)
 
 
 def test_backend_observer_never_forwards_bearer_on_redirect(monkeypatch, tmp_path):

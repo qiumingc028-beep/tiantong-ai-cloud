@@ -31,5 +31,6 @@ def role_request(socket_path: Path, request: dict, *, expected_user: str) -> dic
         raise RuntimeError("ROLE_RESPONSE_INVALID")
     result = json.loads(response)
     if result.get("ok") is not True:
-        raise RuntimeError("ROLE_REQUEST_REJECTED")
+        code = result.get("error")
+        raise RuntimeError(code if code in {"ROLE_NO_RECOVERABLE_FACT", "ROLE_RECOVERY_BLOCKED"} else "ROLE_REQUEST_REJECTED")
     return result["value"]

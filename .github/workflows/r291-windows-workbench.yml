@@ -22,6 +22,7 @@ on:
       - ops/r297_evidence_preflight.py
       - ops/r297_evidence_events.py
       - ops/r297_trusted_windows_observer.py
+      - ops/install_r297_windows_relay_receipt.ps1
       - .github/workflows/r291-windows-workbench.yml
   push:
     branches:
@@ -40,6 +41,7 @@ on:
       - ops/r297_evidence_preflight.py
       - ops/r297_evidence_events.py
       - ops/r297_trusted_windows_observer.py
+      - ops/install_r297_windows_relay_receipt.ps1
       - .github/workflows/r291-windows-workbench.yml
 
 permissions:

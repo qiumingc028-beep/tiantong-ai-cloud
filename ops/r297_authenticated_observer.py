@@ -392,7 +392,7 @@ def _write_signed_event(path: Path, event: dict) -> None:
 
 def _record_receipt(
     path: Path, event: dict, source_workflow_run_id: int, *, recover: bool = False,
-) -> None:
+) -> dict:
     """Commit the exact published bytes through the role-fenced Broker."""
     from ops.r297_event_receipt import _read_bound_event, record_event
     if _read_bound_event(path) != event:
@@ -401,40 +401,45 @@ def _record_receipt(
         from ops.r297_broker_client import broker_request
         if recover:
             try:
-                result = broker_request({
+                response = broker_request({
                     "action": "recover_receipt", "event": event,
                     "source_workflow_run_id": source_workflow_run_id,
-                })["result"]
+                })
+                result = response["result"]
             except RuntimeError as exc:
                 if str(exc) != "R297_BROKER_RECEIPT_NOT_VERIFIED":
                     raise
             else:
                 if result != "recovered":
                     raise RuntimeError("evidence receipt recovery result invalid")
-                return
-        result = broker_request({
+                return response
+        response = broker_request({
                 "action": "receipt", "event": event,
                 "source_workflow_run_id": source_workflow_run_id,
-            })["result"]
+            })
+        result = response["result"]
     else:
         result = record_event(
             Path("/broker-owned/run-ledger"), path,
             source_workflow_run_id=source_workflow_run_id,
         )
+        response = {"result": result}
     if result not in {"recorded", "recovered"}:
         raise RuntimeError("evidence receipt result invalid")
+    return response
 
 
 def _recover_signed_event(
     path: Path, *, environment: str, event_type: str, issuer: str,
     expected_scope: dict, subject_event: dict | None = None, expected_payload: dict | None = None,
-) -> bool:
+    source_workflow_run_id: int | None = None,
+) -> bool | dict:
     if not path.exists():
         return False
     content = path.read_bytes()
     event = json.loads(content)
-    if not Path(f"{path}.sha256").exists():
-        write_sha256_bound_file(path, content)
+    if event.get("event_type") != event_type or event.get("issuer") != issuer:
+        raise ValueError("recovered evidence role mismatch")
     if any(type(event.get(field)) is not type(value) or event.get(field) != value
            for field, value in expected_scope.items()):
         raise ValueError("recovered evidence event scope mismatch")
@@ -449,8 +454,42 @@ def _recover_signed_event(
         or event.get("payload", {}).get("subject_event_sha256") != signed_event_sha256(subject_event)
     ):
         raise ValueError("recovered observer subject mismatch")
-    write_sha256_bound_file(path, content)
-    return True
+    if source_workflow_run_id is not None:
+        from ops.r297_broker_client import broker_request
+        request = {"action": "recover_receipt", "event": event, "source_workflow_run_id": source_workflow_run_id}
+        try:
+            result = broker_request(request)
+        except RuntimeError as exc:
+            if str(exc) != "R297_BROKER_RECEIPT_NOT_VERIFIED":
+                raise
+            # Only a genuinely missing receipt may enter first-time verification.
+            # Submit the SAME event; the Broker owns the five-minute clock.
+            try:
+                result = broker_request({**request, "action": "receipt"})
+            except RuntimeError as first_error:
+                if str(first_error) != "R297_BROKER_RECOVERY_EXPIRED":
+                    raise
+                raise RuntimeError("R297_PRODUCER_NO_RECOVERABLE_FACT") from first_error
+        if result.get("result") not in {"recovered", "recorded"}:
+            raise RuntimeError("evidence recovery receipt invalid")
+    else:
+        if environment != "test":
+            raise RuntimeError("evidence recovery source workflow required")
+        verify_signed_event(event, event_type=event_type, issuer=issuer,
+                            environment=environment, now=datetime.now(timezone.utc))
+    try:
+        write_sha256_bound_file(path, content)
+    except FileExistsError:
+        import stat
+        from ops.r297_event_receipt import _read_bound_event
+        for member in (path, Path(f"{path}.sha256")):
+            metadata = member.lstat()
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600):
+                raise ValueError("recovered evidence metadata invalid") from None
+        if _read_bound_event(path) != event:
+            raise ValueError("recovered evidence changed") from None
+    return result if source_workflow_run_id is not None else True
 
 
 def main() -> int:
@@ -492,10 +531,8 @@ def main() -> int:
         if _recover_signed_event(
             args.output, environment=environment, event_type="web_page_close",
             issuer="page_event_receiver", expected_scope=scope, expected_payload=payload,
+            source_workflow_run_id=raw["workflow_run_id"],
         ):
-            _record_receipt(
-                args.output, json.loads(args.output.read_text()), raw["workflow_run_id"], recover=True,
-            )
             return 0
         event = produce_page_event_receiver(raw, scope)
         _write_signed_event(args.output, event)
@@ -510,11 +547,8 @@ def main() -> int:
     if _recover_signed_event(
         args.output, environment=environment, event_type="authenticated_observer",
         issuer="authenticated_observer", expected_scope=scope, subject_event=page_event,
+        source_workflow_run_id=args.source_workflow_run_id,
     ):
-        _record_receipt(
-            args.output, json.loads(args.output.read_text()),
-            args.source_workflow_run_id, recover=True,
-        )
         return 0
     observed_at = datetime.now(timezone.utc)
     manifest = _validate_subject_event(page_event, environment, now=observed_at)

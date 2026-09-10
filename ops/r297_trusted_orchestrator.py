@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ops.r297_broker_client import broker_request
 from ops.r297_evidence_bundle import build_bundle
-from ops.r297_evidence_events import write_sha256_bound_file
+from ops.r297_evidence_events import signed_event_sha256, write_sha256_bound_file
 from ops.r297_role_client import role_request
 
 
@@ -34,6 +34,13 @@ def _publish(path: Path, value: dict) -> None:
     write_sha256_bound_file(path, content)
 
 
+def _role_bytes(result: dict) -> bytes:
+    content = base64.b64decode(result["content_base64"], validate=True)
+    if hashlib.sha256(content).hexdigest() != result["content_sha256"] or json.loads(content) != result["event"]:
+        raise RuntimeError("role original bytes mismatch")
+    return content
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--receiver-socket", type=Path, default=Path("/run/tiantong-r297-receiver/receiver.sock"))
@@ -52,7 +59,8 @@ def main() -> int:
     first.add_argument("output", type=Path)
     finish = sub.add_parser("finish")
     finish.add_argument("binding", type=Path); finish.add_argument("first_pair", type=Path)
-    finish.add_argument("electron_event", type=Path); finish.add_argument("output", type=Path)
+    finish.add_argument("electron_event", type=Path); finish.add_argument("relay_receipt_output", type=Path)
+    finish.add_argument("output", type=Path)
     args = parser.parse_args()
     if args.command == "issue":
         scope = {name: getattr(args, name) for name in ("namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha")}
@@ -63,13 +71,17 @@ def main() -> int:
     scope = {name: binding[name] for name in ("namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha", "run_id", "run_attempt", "challenge")}
     source = binding["source_workflow_run_id"]
     if args.command == "first-pair":
-        page = role_request(args.receiver_socket, {"action": "receive", "artifact_directory": args.artifact_directory, "artifact_archive": args.artifact_archive, "scope": scope}, expected_user="r297-page-receiver")["event"]
-        observer = role_request(args.observer_socket, {"action": "observe", "subject": page, "source_workflow_run_id": source}, expected_user="r297-observer")["event"]
+        page_result = role_request(args.receiver_socket, {"action": "receive", "artifact_directory": args.artifact_directory, "artifact_archive": args.artifact_archive, "scope": scope}, expected_user="r297-page-receiver")
+        page_content = _role_bytes(page_result)
+        page = page_result["event"]
+        observer_result = role_request(args.observer_socket, {"action": "observe", "subject": page, "source_workflow_run_id": source}, expected_user="r297-observer")
+        observer_content = _role_bytes(observer_result)
+        observer = observer_result["event"]
         raw = {"event": "web_page_close", "observed_at": page["observed_at"], "release_sha": scope["release_sha"], "store_id": scope["store_id"]}
         ack = broker_request({
             "action": "ack", "scope": scope, "source_workflow_run_id": source, "raw_event": raw,
-            "receiver_content_base64": base64.b64encode((json.dumps(page, sort_keys=True) + "\n").encode()).decode(),
-            "observer_content_base64": base64.b64encode((json.dumps(observer, sort_keys=True) + "\n").encode()).decode(),
+            "receiver_content_base64": base64.b64encode(page_content).decode("ascii"),
+            "observer_content_base64": base64.b64encode(observer_content).decode("ascii"),
         })
         _publish(args.output, {"events": [page, observer], "ack": ack})
         return 0
@@ -82,7 +94,22 @@ def main() -> int:
     ):
         raise RuntimeError("trusted Windows output wrapper invalid")
     electron = wrapper["event"]
-    relayed = role_request(args.relay_socket, {"action": "relay", "event": electron, "source_workflow_run_id": source}, expected_user="r297-windows-relay")["event"]
+    relay_result = role_request(args.relay_socket, {"action": "relay", "event": electron, "source_workflow_run_id": source}, expected_user="r297-windows-relay")
+    relayed, receipt = relay_result["event"], relay_result["receipt"]
+    if (
+        set(receipt) != {
+            "schema_version", "verifier_id", "source_workflow_run_id", "event_sha256",
+            "sequence", "received_at", *scope,
+        }
+        or receipt["schema_version"] != 1
+        or receipt["verifier_id"] != "tiantong-r297-receipt-broker-v1"
+        or receipt["source_workflow_run_id"] != source
+        or receipt["sequence"] != 3
+        or receipt["event_sha256"] != signed_event_sha256(relayed)
+        or any(type(receipt.get(field)) is not type(value) or receipt.get(field) != value for field, value in scope.items())
+    ):
+        raise RuntimeError("trusted Windows relay receipt invalid")
+    _publish(args.relay_receipt_output, receipt)
     observer = role_request(args.observer_socket, {"action": "observe", "subject": relayed, "source_workflow_run_id": source}, expected_user="r297-observer")["event"]
     bundle = build_bundle([*first_pair["events"], relayed, observer], expected_scope=scope, now=datetime.now(timezone.utc))
     _publish(args.output, bundle)

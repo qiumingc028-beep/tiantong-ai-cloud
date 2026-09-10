@@ -18,7 +18,7 @@ import socketserver
 import stat
 import threading
 
-from ops.r297_acceptance_run import _update, _require_observation_live, acceptance_transaction, complete_acceptance_run, issue_acceptance_run, stage_acceptance_output, validate_acceptance_run
+from ops.r297_acceptance_run import _update, _require_observation_live, acceptance_transaction, complete_acceptance_run, issue_acceptance_run, read_acceptance_event_receipt, stage_acceptance_output, validate_acceptance_run
 from ops.r297_event_receipt import record_event_value
 from ops.r297_evidence_events import _observer_result, _verify_acceptance_event_bundle_local, signed_event_sha256, verify_signed_event, validate_page_event_payload, write_sha256_bound_file
 
@@ -117,14 +117,30 @@ class EvidenceBroker:
             role = _ORDER[sequence - 1][1]
             if peer_uid != self.role_uids[role]:
                 raise PermissionError("receipt role denied")
+            event = request["event"]
+            digest = signed_event_sha256(event)
             if action == "recover_receipt":
-                result = record_event_value(self.run_ledger, request["event"],
+                result = record_event_value(self.run_ledger, event,
                     source_workflow_run_id=request["source_workflow_run_id"], require_existing=True)
-                return {"result": result, "event_sha256": signed_event_sha256(request["event"])}
-            result = self.record_event(
-                self.run_ledger, request["event"], request["source_workflow_run_id"],
+            else:
+                result = self.record_event(
+                    self.run_ledger, event, request["source_workflow_run_id"],
+                )
+            received_at = read_acceptance_event_receipt(
+                self.run_ledger,
+                expected_scope={field: event[field] for field in _SCOPE_FIELDS},
+                source_workflow_run_id=request["source_workflow_run_id"],
+                sequence=sequence, event_sha256=digest, now=datetime.now(timezone.utc),
             )
-            return {"result": result}
+            if received_at is None:
+                raise ValueError("acceptance event receipt missing")
+            return {"result": result, "receipt": {
+                "schema_version": 1, "verifier_id": "tiantong-r297-receipt-broker-v1",
+                "source_workflow_run_id": request["source_workflow_run_id"],
+                "event_sha256": digest, "sequence": sequence,
+                "received_at": received_at.astimezone(timezone.utc).isoformat(),
+                **{field: event[field] for field in _SCOPE_FIELDS},
+            }}
         raise ValueError("broker request invalid")
 
     def _transaction(self, request: dict) -> dict:
@@ -267,9 +283,14 @@ class EvidenceBroker:
         value = _update(self.run_ledger, persist, now=now)
         root = self.snapshot_root / scope["run_id"] / "ack"
         root.mkdir(mode=0o700, exist_ok=True)
+        receiver_path, observer_path = root / "01-pagehide.json", root / "02-observer.json"
+        for event_path, content in zip((receiver_path, observer_path), contents):
+            self._publish_readonly(event_path, content)
         path = root / "ack-broker-result.json"
         self._publish_readonly(path, (json.dumps(value, sort_keys=True) + "\n").encode())
-        return {"result": "verified", "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        return {"result": "verified", "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "receiver_path": str(receiver_path), "observer_path": str(observer_path),
+                "binding_path": str(self.snapshot_root / scope["run_id"] / "acceptance-run-binding.json")}
 
     def _publish_readonly(self, path: Path, content: bytes) -> None:
         parent = path.parent.lstat()
@@ -284,6 +305,9 @@ class EvidenceBroker:
                     or stat.S_IMODE(meta.st_mode) not in {0o444, 0o600} or member.read_bytes() != wanted):
                     raise ValueError("publication changed")
         else:
+            # The same Broker publishes several immutable files in this directory.
+            # Temporarily restore the private staging mode; no peer can write it.
+            path.parent.chmod(0o700)
             write_sha256_bound_file(path, content)
         path.chmod(0o444)
         sidecar.chmod(0o444)

@@ -653,6 +653,15 @@ jobs:
             tests/test_r297_windows_event_signer.py \
             tests/test_r297_evidence_preflight.py
 
+      - name: Verify Runner redirects never reach an unapproved target
+        timeout-minutes: 3
+        run: |
+          docker run --rm --network none \
+            --entrypoint node \
+            --env NODE_PATH=/app/services/jd-cloud-browser-runtime/node_modules \
+            --mount type=bind,source="$PWD",target=/workspace,readonly \
+            "$S12_JD_RUNTIME_IMAGE" /workspace/tests/r297_runner_redirect_probe.cjs
+
       - name: Generate R297 native pagehide evidence
         timeout-minutes: 5
         if: ${{ !cancelled() }}

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 from datetime import datetime, timezone
 import json
 import grp
@@ -16,6 +18,7 @@ from ops.r297_authenticated_observer import (
     _SCOPE_FIELDS,
     _produce_authenticated_observer,
     _record_receipt,
+    _recover_signed_event,
     _validate_subject_event,
     _write_signed_event,
     load_native_pagehide_artifact,
@@ -71,17 +74,17 @@ class RoleService:
                 "artifact_name", "workflow_run_id",
             )},
         }
-        recovered = output.exists()
-        if recovered:
+        if output.exists():
             event = self._recover_event(
                 output, "web_page_close", "page_event_receiver", scope,
                 expected_payload=expected_payload,
+                source_workflow_run_id=raw["workflow_run_id"],
             )
         else:
             event = produce_page_event_receiver(raw, scope, run_binding_path=binding)
             _write_signed_event(output, event)
-        _record_receipt(output, event, raw["workflow_run_id"], recover=recovered)
-        return {"result": "recorded", "event": event, "source_workflow_run_id": raw["workflow_run_id"]}
+            _record_receipt(output, event, raw["workflow_run_id"])
+        return {**self._result(output, event), "source_workflow_run_id": raw["workflow_run_id"]}
 
     def _observe(self, request: dict) -> dict:
         if set(request) != {"action", "subject", "source_workflow_run_id"} or request["action"] != "observe":
@@ -93,11 +96,10 @@ class RoleService:
         if not isinstance(subject, dict):
             raise ValueError("observer subject invalid")
         output = self._output(subject["run_id"], f"{subject['sequence'] + 1:02d}-observer.json")
-        recovered = output.exists()
-        if recovered:
+        if output.exists():
             event = self._recover_event(output, "authenticated_observer", "authenticated_observer", {
                 field: subject[field] for field in _SCOPE_FIELDS
-            }, subject=subject)
+            }, subject=subject, source_workflow_run_id=source)
         else:
             now = datetime.now(timezone.utc)
             environment = os.environ.get("APP_ENV", "")
@@ -110,8 +112,8 @@ class RoleService:
                 observed_at=now, environment=environment, manifest=manifest,
             )
             _write_signed_event(output, event)
-        _record_receipt(output, event, source, recover=recovered)
-        return {"result": "recorded", "event": event}
+            _record_receipt(output, event, source)
+        return self._result(output, event)
 
     def _relay(self, request: dict) -> dict:
         if set(request) != {"action", "event", "source_workflow_run_id"} or request["action"] != "relay":
@@ -120,19 +122,27 @@ class RoleService:
         if not isinstance(event, dict) or type(source) is not int or source <= 0:
             raise ValueError("Windows relay request invalid")
         output = self._output(event["run_id"], "03-electron-exit.json")
-        recovered_existing = output.exists()
-        if recovered_existing:
-            recovered = self._recover_event(output, "electron_exit", "windows_runner", {
+        if output.exists():
+            recovered, receipt = self._recover_event(output, "electron_exit", "windows_runner", {
                 field: event[field] for field in _SCOPE_FIELDS
-            })
+            }, source_workflow_run_id=source, return_receipt=True)
             if signed_event_sha256(recovered) != signed_event_sha256(event):
                 raise ValueError("Windows relay event changed")
             event = recovered
         else:
             _validate_subject_event(event, os.environ.get("APP_ENV", ""), now=datetime.now(timezone.utc))
             _write_signed_event(output, event)
-        _record_receipt(output, event, source, recover=recovered_existing)
-        return {"result": "recorded", "event": event}
+            receipt = _record_receipt(output, event, source)["receipt"]
+        return self._result(output, event, receipt=receipt)
+
+    @staticmethod
+    def _result(path: Path, event: dict, **extra) -> dict:
+        content = path.read_bytes()
+        if _read_bound_event(path) != event:
+            raise ValueError("role output changed")
+        return {"result": "recorded", "event": event, **extra,
+                "content_base64": base64.b64encode(content).decode("ascii"),
+                "content_sha256": hashlib.sha256(content).hexdigest()}
 
     def _output(self, run_id: str, name: str) -> Path:
         if not isinstance(run_id, str) or not run_id or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-" for character in run_id):
@@ -143,28 +153,19 @@ class RoleService:
 
     @staticmethod
     def _recover_event(
-        path: Path, event_type: str, issuer: str, scope: dict,
+        path: Path, event_type: str, issuer: str, scope: dict, *,
         subject: dict | None = None, expected_payload: dict | None = None,
-    ) -> dict:
-        content = path.read_bytes()
-        sidecar = Path(f"{path}.sha256")
-        if not sidecar.exists():
-            from ops.r297_evidence_events import write_sha256_bound_file
-            write_sha256_bound_file(path, content)
+        source_workflow_run_id: int, return_receipt: bool = False,
+    ) -> dict | tuple[dict, dict]:
+        recovery = _recover_signed_event(path, environment=os.environ.get("APP_ENV", ""),
+                              event_type=event_type, issuer=issuer, expected_scope=scope,
+                              subject_event=subject, expected_payload=expected_payload,
+                              source_workflow_run_id=source_workflow_run_id)
         event = _read_bound_event(path)
-        if any(type(event.get(field)) is not type(value) or event.get(field) != value for field, value in scope.items()):
-            raise ValueError("role event recovery scope mismatch")
-        if subject is not None and (
-            event.get("sequence") != subject["sequence"] + 1
-            or event.get("payload", {}).get("subject_nonce") != subject.get("nonce")
-            or event.get("payload", {}).get("subject_event_sha256") != signed_event_sha256(subject)
-        ):
-            raise ValueError("role event recovery subject mismatch")
-        if expected_payload is not None:
-            payload = dict(event.get("payload", {}))
-            payload.pop("freshness_receipt", None)
-            if payload != expected_payload:
-                raise ValueError("role event recovery artifact mismatch")
+        if return_receipt:
+            if not isinstance(recovery, dict) or not isinstance(recovery.get("receipt"), dict):
+                raise RuntimeError("Windows relay recovery receipt missing")
+            return event, recovery["receipt"]
         return event
 
 
@@ -177,8 +178,13 @@ class _Handler(socketserver.StreamRequestHandler):
         try:
             value = self.server.service.dispatch(json.loads(line), uid=peer_uid(self.request))
             response = {"ok": True, "value": value}
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-            response = {"ok": False, "error": "ROLE_REQUEST_REJECTED"}
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            code = "ROLE_REQUEST_REJECTED"
+            if str(exc) == "R297_PRODUCER_NO_RECOVERABLE_FACT":
+                code = "ROLE_NO_RECOVERABLE_FACT"
+            elif isinstance(exc, OSError) or (isinstance(exc, RuntimeError) and str(exc).startswith(("R297_BROKER_", "BROKER_"))):
+                code = "ROLE_RECOVERY_BLOCKED"
+            response = {"ok": False, "error": code}
         self.wfile.write((json.dumps(response, sort_keys=True) + "\n").encode())
 
 

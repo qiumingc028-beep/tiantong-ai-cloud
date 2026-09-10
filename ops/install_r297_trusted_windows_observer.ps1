@@ -208,6 +208,7 @@ if (($sourceRuntimeManifest | ConvertTo-Json -Compress) -cne
 }
 
 $files = @(
+  'ops\install_r297_windows_relay_receipt.ps1',
   'ops\__init__.py',
   'ops\r297_acceptance_run.py',
   'ops\r297_evidence_events.py',
@@ -261,12 +262,12 @@ foreach ($path in @($installStage, $dataRoot)) {
 }
 & icacls $installStage /inheritance:r /T /C | Out-Null
 & icacls $installStage /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
-& icacls $installStage /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
+& icacls $installStage /grant "$TrustedObserverAccount`:(OI)(CI)RX" /T /C | Out-Null
 & icacls $dataRoot /inheritance:r /T /C | Out-Null
 & icacls $dataRoot /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
-& icacls $inbox /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
-& icacls $outbox /grant "$TrustedObserverAccount`:(OI)(CI)M" | Out-Null
-& icacls $protected /grant "$TrustedObserverAccount`:(OI)(CI)RX" | Out-Null
+& icacls $inbox /grant "$TrustedObserverAccount`:(OI)(CI)RX" /T /C | Out-Null
+& icacls $outbox /grant "$TrustedObserverAccount`:(OI)(CI)M" /T /C | Out-Null
+& icacls $protected /grant "$TrustedObserverAccount`:(OI)(CI)RX" /T /C | Out-Null
 & icacls $installStage /deny "$CandidateAccount`:(OI)(CI)F" | Out-Null
 & icacls $dataRoot /deny "$CandidateAccount`:(OI)(CI)F" | Out-Null
 

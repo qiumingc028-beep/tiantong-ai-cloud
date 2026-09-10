@@ -20,7 +20,7 @@ from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 from backend.services.jd_runtime_contract import NoCredentialRedirect
 
 from ops.r297_windows_event_signer import produce_electron_exit_event, _process_is_running
-from ops.r297_evidence_events import verify_signed_event, write_sha256_bound_file
+from ops.r297_evidence_events import signed_event_sha256, verify_signed_event, write_sha256_bound_file
 
 
 _SCOPE_FIELDS = {
@@ -184,6 +184,55 @@ def _trusted_page_observer_ack() -> dict:
     return _read_protected_bound_json(path, expected, "trusted page Observer ACK")
 
 
+def _trusted_windows_relay_receipt() -> dict | None:
+    default = Path(r"C:\ProgramData\TiantongAI\R297TrustedWindowsObserver\protected\windows-relay-receipt.json")
+    path = Path(os.getenv("R297_TEST_WINDOWS_RELAY_RECEIPT", "")) if os.getenv("APP_ENV") == "test" else default
+    if not path.is_file():
+        return None
+    if path.is_symlink():
+        raise RuntimeError("trusted Windows relay receipt invalid")
+    if os.getenv("APP_ENV") == "test":
+        expected = os.getenv("R297_TRUSTED_WINDOWS_RELAY_RECEIPT_SHA256", "")
+    else:
+        approval = _read_protected_bytes(Path(f"{path}.sha256"), "trusted Windows relay receipt sidecar")
+        fields = approval.decode("ascii").strip().split()
+        expected = fields[0] if len(fields) == 2 and fields[1] == path.name else ""
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise RuntimeError("trusted Windows relay receipt invalid")
+    return _read_protected_bound_json(path, expected, "trusted Windows relay receipt")
+
+
+def _relay_receipt_time(receipt: dict | None, event: dict, request: dict, current: datetime) -> datetime:
+    if receipt is None:
+        raise RuntimeError("trusted Windows relay receipt missing")
+    expected_scope = {field: request[field] for field in _SCOPE_FIELDS}
+    required = {
+        "schema_version", "verifier_id", "source_workflow_run_id", "event_sha256",
+        "sequence", "received_at", *expected_scope,
+    }
+    try:
+        received_at = datetime.fromisoformat(str(receipt["received_at"]).replace("Z", "+00:00"))
+        observed_at = datetime.fromisoformat(str(event["observed_at"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("trusted Windows relay receipt invalid") from None
+    if (
+        set(receipt) != required
+        or receipt["schema_version"] != 1
+        or receipt["verifier_id"] != "tiantong-r297-receipt-broker-v1"
+        or receipt["source_workflow_run_id"] != request["source_workflow_run_id"]
+        or receipt["sequence"] != 3
+        or receipt["event_sha256"] != signed_event_sha256(event)
+        or any(type(receipt.get(field)) is not type(value) or receipt.get(field) != value
+               for field, value in expected_scope.items())
+        or received_at.tzinfo is None or observed_at.tzinfo is None
+        or received_at < observed_at or received_at - observed_at > timedelta(minutes=5)
+        or received_at > current + timedelta(seconds=30)
+        or current - received_at > timedelta(hours=12)
+    ):
+        raise RuntimeError("trusted Windows relay receipt invalid")
+    return received_at
+
+
 def _windows_process_probe(process_id: int) -> dict:
     if os.name != "nt":
         raise RuntimeError("trusted Windows observer requires Windows")
@@ -231,7 +280,10 @@ def _validate_request_approvals(
     except (KeyError, ValueError):
         raise RuntimeError("trusted acceptance run issue time invalid") from None
     binding_matches = (
-        {key: value for key, value in run_binding.items() if key != "issued_at"} != expected_run
+        set(run_binding) != set(expected_run) | {"issued_at", "state", "consumed_at", "event_receipts"}
+        or any(type(run_binding.get(key)) is not type(value) or run_binding.get(key) != value for key, value in expected_run.items())
+        or run_binding.get("state") != "issued" or run_binding.get("consumed_at") is not None
+        or run_binding.get("event_receipts") != []
         or issued_at.tzinfo is None or issued_at > current + timedelta(seconds=30)
     )
     if binding_matches:
@@ -269,6 +321,7 @@ def _validate_request_approvals(
 def recover_trusted_output(
     path: Path, *, request: dict, signer_sha: str,
     artifact_manifest: dict, run_binding: dict, page_observer_ack: dict | None = None,
+    relay_receipt: dict | None = None,
     now: datetime | None = None,
 ) -> bool:
     """Recover only an already signed event bound to the current protected inputs."""
@@ -292,9 +345,18 @@ def recover_trusted_output(
     if set(wrapper) != {"signer_sha", "event"} or wrapper["signer_sha"] != signer_sha:
         raise RuntimeError("trusted Windows output binding mismatch")
     event = wrapper["event"]
+    try:
+        observed_at = datetime.fromisoformat(str(event["observed_at"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("trusted Windows output binding mismatch") from None
+    verification_time = (
+        _relay_receipt_time(relay_receipt, event, request, current)
+        if observed_at.tzinfo is None or current - observed_at > timedelta(minutes=5)
+        else current
+    )
     verify_signed_event(
         event, event_type="electron_exit", issuer="windows_runner",
-        environment=os.getenv("APP_ENV", "").strip().lower(), now=current,
+        environment=os.getenv("APP_ENV", "").strip().lower(), now=verification_time,
     )
     try:
         requested_started_at = datetime.fromisoformat(
@@ -411,6 +473,7 @@ def main() -> int:
         args.output, request=request, signer_sha=signer_sha,
         artifact_manifest=artifact_manifest, run_binding=run_binding,
         page_observer_ack=page_observer_ack,
+        relay_receipt=_trusted_windows_relay_receipt(),
     ):
         print(f"R297_TRUSTED_WINDOWS_EVENT={args.output}")
         print(f"R297_TRUSTED_SIGNER_SHA={signer_sha}")

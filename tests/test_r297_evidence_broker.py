@@ -42,7 +42,17 @@ def test_producer_recovers_only_own_preverified_fact_after_five_minutes(transact
     monkeypatch.setattr(r297_event_receipt, "datetime", Clock)
     request = {"action": "recover_receipt", "event": bundle["events"][index], "source_workflow_run_id": 33949515935}
     result = broker.dispatch(request, peer_uid=uid)
-    assert result == {"result": "recovered", "event_sha256": signed_event_sha256(request["event"])}
+    assert result["result"] == "recovered"
+    assert result["receipt"] == {
+        "schema_version": 1, "verifier_id": "tiantong-r297-receipt-broker-v1",
+        "source_workflow_run_id": 33949515935,
+        "event_sha256": signed_event_sha256(request["event"]), "sequence": index + 1,
+        "received_at": result["receipt"]["received_at"],
+        **{field: request["event"][field] for field in (
+            "namespace", "tenant_id", "company_id", "store_id", "platform",
+            "release_sha", "run_id", "run_attempt", "challenge",
+        )},
+    }
     assert broker.dispatch(request, peer_uid=uid) == result
     for other_uid in (100, 101, 102, 103, 999):
         if other_uid != uid:
@@ -292,7 +302,14 @@ def test_broker_is_the_only_ledger_writer_and_publishes_read_only_snapshot(tmp_p
         }, peer_uid=101)
 
 
-def test_broker_fences_receipts_by_real_peer_role(tmp_path):
+def test_broker_fences_receipts_by_real_peer_role(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from ops.r297_evidence_events import signed_event_sha256
+    received_at = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        "ops.r297_evidence_broker.read_acceptance_event_receipt",
+        lambda *_a, **_k: received_at,
+    )
     received = []
     broker = EvidenceBroker(
         run_ledger=tmp_path / "runs.json",
@@ -304,10 +321,17 @@ def test_broker_fences_receipts_by_real_peer_role(tmp_path):
             (ledger, event["sequence"], source)
         ) or "recorded",
     )
-    event = {"sequence": 1, "event_type": "web_page_close"}
-    assert broker.dispatch({
+    event = {
+        **_scope(), "run_id": "r297-run-000000000001", "run_attempt": 1,
+        "challenge": "challenge-value-00000001", "sequence": 1,
+        "event_type": "web_page_close",
+    }
+    result = broker.dispatch({
         "action": "receipt", "event": event, "source_workflow_run_id": 7,
-    }, peer_uid=101) == {"result": "recorded"}
+    }, peer_uid=101)
+    assert result["result"] == "recorded"
+    assert result["receipt"]["event_sha256"] == signed_event_sha256(event)
+    assert result["receipt"]["received_at"] == received_at.isoformat()
     assert received == [(tmp_path / "runs.json", 1, 7)]
 
     with pytest.raises(PermissionError, match="receipt role denied"):
@@ -422,6 +446,14 @@ def test_ack_and_receipt_response_loss_recover_exact_original_proof(transaction_
     monkeypatch.setattr(broker, "_publish_readonly", publish)
     result = broker.dispatch(request, peer_uid=100)
     assert json.loads(Path(result["path"]).read_text()) == persisted
+    for field, request_field in (("receiver_path", "receiver_content_base64"), ("observer_path", "observer_content_base64")):
+        published = Path(result[field])
+        assert published.read_bytes() == base64.b64decode(request[request_field])
+        assert published.stat().st_mode & 0o777 == 0o444
+        assert published.stat().st_nlink == 1
+    assert Path(result["binding_path"]).read_bytes() == (broker.snapshot_root / scope["run_id"] / "acceptance-run-binding.json").read_bytes()
+    with pytest.raises(ValueError, match="ACK verification binding mismatch"):
+        broker.dispatch({**request, "receiver_content_base64": base64.b64encode(base64.b64decode(request["receiver_content_base64"]) + b"\n").decode()}, peer_uid=100)
     assert persisted["raw_event_sha256"] == signed_event_sha256(raw)
     assert broker.dispatch(request, peer_uid=100) == result
     for uid in (101, 102, 103):
