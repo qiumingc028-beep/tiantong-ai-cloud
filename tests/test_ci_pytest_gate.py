@@ -1,5 +1,6 @@
 import json
 import hashlib
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -50,12 +51,16 @@ def test_split_gate_requires_exact_same_head_union_and_successful_execution(tmp_
         assert result == {"collected": 3, "executed": 3, "overlap": 0, "missing": 0}
 
 
-def _start_progress(gate, tmp_path, monkeypatch):
-    # Restore the live plugin's session root after this unit test's teardown.
-    monkeypatch.setattr(gate, "_PROGRESS_ROOT", gate._PROGRESS_ROOT)
+def _start_progress(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        "_r297_isolated_ci_pytest_gate", Path(__file__).parents[1] / "ops" / "ci_pytest_gate.py"
+    )
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
     monkeypatch.setenv("CI_PYTEST_PROGRESS_DIRECTORY", str(tmp_path))
     monkeypatch.setenv("CI_PYTEST_COLLECTION_MANIFEST", str(tmp_path / "nodes.json"))
     gate.pytest_sessionstart(None)
+    return gate
 
 
 @pytest.mark.parametrize("job_result", ["success", "failure", "cancelled", "skipped", ""])
@@ -177,9 +182,7 @@ def test_main_suite_ignores_only_the_parallelized_matrix(tmp_path, monkeypatch):
 
 
 def test_progress_survives_an_incomplete_run_and_identifies_last_test(tmp_path, monkeypatch):
-    from ops import ci_pytest_gate as gate
-
-    _start_progress(gate, tmp_path, monkeypatch)
+    gate = _start_progress(tmp_path, monkeypatch)
     gate.pytest_collection_finish(SimpleNamespace(items=[
         SimpleNamespace(nodeid="tests/test_one.py::test_one"),
         SimpleNamespace(nodeid="tests/test_two.py::test_two"),
@@ -206,18 +209,14 @@ def test_progress_survives_an_incomplete_run_and_identifies_last_test(tmp_path, 
 
 
 def test_session_finish_marks_progress_complete(tmp_path, monkeypatch):
-    from ops import ci_pytest_gate as gate
-
-    _start_progress(gate, tmp_path, monkeypatch)
+    gate = _start_progress(tmp_path, monkeypatch)
     gate.pytest_sessionfinish(None, 1)
     status = json.loads((tmp_path / "status.json").read_text())
     assert status["result"] == "COMPLETE" and status["exitstatus"] == 1
 
 
 def test_passing_teardown_does_not_relabel_failed_test(tmp_path, monkeypatch):
-    from ops import ci_pytest_gate as gate
-
-    _start_progress(gate, tmp_path, monkeypatch)
+    gate = _start_progress(tmp_path, monkeypatch)
     for phase, outcome in (("setup", "passed"), ("call", "failed"), ("teardown", "passed")):
         gate.pytest_runtest_logreport(SimpleNamespace(
             when=phase, failed=outcome == "failed", skipped=False,
@@ -227,9 +226,7 @@ def test_passing_teardown_does_not_relabel_failed_test(tmp_path, monkeypatch):
 
 
 def test_progress_path_is_fixed_before_a_test_changes_os_name(tmp_path, monkeypatch):
-    from ops import ci_pytest_gate as gate
-
-    _start_progress(gate, tmp_path, monkeypatch)
+    gate = _start_progress(tmp_path, monkeypatch)
     monkeypatch.setattr(gate.os, "name", "nt")
     gate.pytest_runtest_logreport(SimpleNamespace(
         when="call", failed=False, skipped=False,
@@ -237,8 +234,7 @@ def test_progress_path_is_fixed_before_a_test_changes_os_name(tmp_path, monkeypa
     ))
     assert (tmp_path / "progress.jsonl").is_file()
 def test_collection_and_execution_keep_exact_identity_without_publishing_secret_nodeids(tmp_path, monkeypatch):
-    from ops import ci_pytest_gate as gate
-    _start_progress(gate, tmp_path, monkeypatch)
+    gate = _start_progress(tmp_path, monkeypatch)
     nodes = ["tests/test_one.py::test_one[password=FIRSTVALUE]", "tests/test_one.py::test_one[password=SECONDVALUE]"]
     gate.pytest_collection_finish(SimpleNamespace(items=[SimpleNamespace(nodeid=node) for node in nodes]))
     for node in nodes:
@@ -253,12 +249,10 @@ def test_collection_and_execution_keep_exact_identity_without_publishing_secret_
 
 
 def test_cached_collection_identity_does_not_re_read_removed_key(tmp_path, monkeypatch):
-    from ops import ci_pytest_gate as gate
-
     node = "tests/test_one.py::test_one"
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "x" * 43)
-    _start_progress(gate, tmp_path, monkeypatch)
+    gate = _start_progress(tmp_path, monkeypatch)
     gate.pytest_collection_finish(SimpleNamespace(items=[SimpleNamespace(nodeid=node)]))
     expected = json.loads((tmp_path / "nodes.json").read_text())[0]
     monkeypatch.delenv("CI_PYTEST_IDENTITY_KEY")
@@ -301,25 +295,31 @@ def test_real_plugin_execution_manifest_survives_nested_progress_tests(tmp_path)
     import os
     import subprocess
     import sys
-    env = dict(os.environ, CI_PYTEST_COLLECTION_MANIFEST=str(tmp_path / "nodes.json"),
-               CI_PYTEST_PROGRESS_DIRECTORY=str(tmp_path))
+    env = dict(
+        os.environ,
+        CI_PYTEST_COLLECTION_MANIFEST=str(tmp_path / "nodes.json"),
+        CI_PYTEST_PROGRESS_DIRECTORY=str(tmp_path),
+        CI_PYTEST_IDENTITY_KEY="x" * 43,
+        GITHUB_ACTIONS="true",
+    )
     targets = ["test_progress_survives_an_incomplete_run_and_identifies_last_test",
                "test_passing_teardown_does_not_relabel_failed_test",
-               "test_progress_path_is_fixed_before_a_test_changes_os_name"]
-    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "ops.ci_pytest_gate",
+               "test_progress_path_is_fixed_before_a_test_changes_os_name",
+               "test_cached_collection_identity_does_not_re_read_removed_key",
+               "test_actions_requires_ephemeral_identity_key"]
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", "--noconftest", "-p", "ops.ci_pytest_gate",
                              *["tests/test_ci_pytest_gate.py::" + name for name in targets]],
                             env=env, capture_output=True, text=True)
     assert result.returncode == 0, "nested plugin run failed; inspect private test report"
     nodes = json.loads((tmp_path / "nodes.json").read_text())
     rows = [json.loads(line) for line in (tmp_path / "progress.jsonl").read_text().splitlines()]
     assert sorted(row["nodeid_sha256"] for row in rows if row["phase"] == "teardown") == sorted(nodes)
-    assert len(nodes) == 3
+    assert len(nodes) == 5
     assert json.loads((tmp_path / "status.json").read_text())["exitstatus"] == 0
 
 
 def test_progress_does_not_use_product_fault_injected_fsync(tmp_path, monkeypatch):
-    from ops import ci_pytest_gate as gate
-    _start_progress(gate, tmp_path, monkeypatch)
+    gate = _start_progress(tmp_path, monkeypatch)
     def fail(_fd):
         raise OSError("injected product fsync failure")
     monkeypatch.setattr(gate.os, "fsync", fail)
