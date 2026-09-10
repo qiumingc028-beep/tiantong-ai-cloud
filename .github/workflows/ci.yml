@@ -20,7 +20,21 @@ permissions:
   contents: read
 
 jobs:
+  pytest-identity:
+    name: Mint ephemeral pytest identity key
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      key: ${{ steps.key.outputs.value }}
+    steps:
+      - id: key
+        shell: bash
+        run: |
+          value=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
   test-and-build:
+    needs: pytest-identity
     runs-on: ubuntu-latest
     timeout-minutes: 120
     services:
@@ -724,7 +738,9 @@ jobs:
           R297_PROCESS_ACCEPTANCE_EVIDENCE: /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
           CI_PYTEST_IGNORE: tests/test_task_center_full_entrypoint_ownership.py
           CI_PYTEST_MINIMUM: "1700"
+          CI_PYTEST_IDENTITY_KEY: ${{ needs.pytest-identity.outputs.key }}
         run: |
+          echo "::add-mask::$CI_PYTEST_IDENTITY_KEY"
           bash -n ops/r297_workbench_deploy.sh
           python -m ops.ci_pytest_gate /tmp/r297-pytest
 
@@ -792,6 +808,7 @@ jobs:
 
   ownership-matrix-tests:
     name: PostgreSQL ownership matrix
+    needs: pytest-identity
     runs-on: ubuntu-latest
     timeout-minutes: 100
     services:
@@ -841,7 +858,10 @@ jobs:
         env:
           CI_PYTEST_TARGET: tests/test_task_center_full_entrypoint_ownership.py
           CI_PYTEST_MINIMUM: "500"
-        run: python -m ops.ci_pytest_gate /tmp/r297-ownership-matrix
+          CI_PYTEST_IDENTITY_KEY: ${{ needs.pytest-identity.outputs.key }}
+        run: |
+          echo "::add-mask::$CI_PYTEST_IDENTITY_KEY"
+          python -m ops.ci_pytest_gate /tmp/r297-ownership-matrix
       - name: Upload ownership matrix execution report
         if: ${{ always() && steps.matrix_dependencies.outcome == 'success' }}
         uses: actions/upload-artifact@v7
@@ -853,7 +873,7 @@ jobs:
 
   pytest-complete-gate:
     name: Exact full-repository pytest coverage gate
-    needs: [test-and-build, ownership-matrix-tests]
+    needs: [pytest-identity, test-and-build, ownership-matrix-tests]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -885,7 +905,11 @@ jobs:
           path: /tmp/r297-matrix-report
       - name: Require exact same-head collection union and both jobs successful
         if: ${{ always() }}
-        run: python -m ops.ci_pytest_gate --aggregate /tmp/r297-full-coverage /tmp/r297-main-report /tmp/r297-matrix-report
+        env:
+          CI_PYTEST_IDENTITY_KEY: ${{ needs.pytest-identity.outputs.key }}
+        run: |
+          echo "::add-mask::$CI_PYTEST_IDENTITY_KEY"
+          python -m ops.ci_pytest_gate --aggregate /tmp/r297-full-coverage /tmp/r297-main-report /tmp/r297-matrix-report
       - name: Upload exact coverage decision
         if: ${{ always() }}
         uses: actions/upload-artifact@v7

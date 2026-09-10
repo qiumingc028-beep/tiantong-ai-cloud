@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 import os
 from os import fsync as _progress_fsync
 import re
@@ -19,6 +20,7 @@ _OUTCOMES: dict[str, str] = {}
 _NODE_IDENTITIES: dict[str, str] = {}
 _OUTCOME_PRIORITY = {"passed": 0, "skipped": 1, "failed": 2}
 _PROGRESS_ROOT: Path | None = None
+_LOCAL_IDENTITY_KEY = b"r297-local-pytest-identity-only"
 
 
 def _progress_path(name: str) -> Path | None:
@@ -26,9 +28,11 @@ def _progress_path(name: str) -> Path | None:
 
 
 def _node_identities(nodes: list[str]) -> list[str]:
-    # Redaction is display-only. Identity must survive partitioning and reordering.
-    # This is not secret storage: live credentials must never be test parameters.
-    return [hashlib.sha256(b"r297-pytest-node-v1\0" + node.encode("utf-8")).hexdigest() for node in nodes]
+    raw = os.getenv("CI_PYTEST_IDENTITY_KEY")
+    if os.getenv("GITHUB_ACTIONS") == "true" and (raw is None or len(raw) < 43):
+        raise RuntimeError("CI_PYTEST_IDENTITY_KEY_MISSING")
+    key = raw.encode() if raw is not None else _LOCAL_IDENTITY_KEY
+    return [hmac.new(key, node.encode(), hashlib.sha256).hexdigest() for node in nodes]
 
 
 def _write_status(**updates) -> None:
