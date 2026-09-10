@@ -76,6 +76,7 @@ def test_expensive_postgresql_matrix_can_run_in_parallel_without_omission(tmp_pa
     output = tmp_path / "upload"
     monkeypatch.setattr(gate.sys, "argv", ["ci_pytest_gate", str(output)])
     monkeypatch.setenv("CI_PYTEST_TARGET", "tests/test_task_center_full_entrypoint_ownership.py")
+    monkeypatch.delenv("CI_PYTEST_IGNORE", raising=False)
     monkeypatch.setenv("CI_PYTEST_MINIMUM", "1")
 
     def execute(command, **kwargs):
