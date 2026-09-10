@@ -10,14 +10,8 @@ from ops.r297_ci_redact import _redact_text
 
 
 def _ids(nodes):
-    seen = {}
-    identities = []
-    for node in nodes:
-        display = _redact_text(node)
-        ordinal = seen.get(display, 0)
-        seen[display] = ordinal + 1
-        identities.append(hashlib.sha256(f"{display}\0{ordinal}".encode()).hexdigest())
-    return identities
+    from ops import ci_pytest_gate as gate
+    return gate._node_identities(nodes)
 
 
 def _partition_artifacts(root, nodes, *, head="a" * 40, result=0):
@@ -256,6 +250,32 @@ def test_collection_and_execution_keep_exact_identity_without_publishing_secret_
     rows = [json.loads(line) for line in (tmp_path / "progress.jsonl").read_text().splitlines()]
     assert [row["nodeid_sha256"] for row in rows] == _ids(nodes)
     assert rows[0]["nodeid"] == rows[1]["nodeid"]  # display redaction may collide; identity must not.
+
+
+def test_anonymous_identity_detects_same_count_replacement_after_redaction():
+    from ops import ci_pytest_gate as gate
+
+    original = [
+        "tests/test_secret.py::test_case[token=FIRSTVALUE]",
+        "tests/test_secret.py::test_case[token=SECONDVALUE]",
+    ]
+    replaced = [
+        original[0],
+        "tests/test_secret.py::test_case[token=THIRDVALUE]",
+    ]
+    assert [_redact_text(node) for node in original] == [
+        _redact_text(node) for node in replaced
+    ]
+    assert gate._node_identities(original) != gate._node_identities(replaced)
+
+
+def test_actions_requires_ephemeral_identity_key(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("CI_PYTEST_IDENTITY_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="CI_PYTEST_IDENTITY_KEY_MISSING"):
+        gate._node_identities(["tests/test_one.py::test_one"])
 
 
 def test_real_plugin_execution_manifest_survives_nested_progress_tests(tmp_path):

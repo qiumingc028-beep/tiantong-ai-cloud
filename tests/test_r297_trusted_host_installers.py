@@ -76,6 +76,8 @@ def test_linux_upgrade_stages_all_units_and_rolls_back_failed_switch():
     assert "R297_BROKER_LEDGER_PAIR_INCOMPLETE" in LINUX
     assert "runs_present != $nonces_present" in LINUX
     assert "sha256sum" in LINUX
+    rollback = LINUX.split("rollback_unit_switch()", 1)[1].split("trap rollback_unit_switch EXIT", 1)[0]
+    assert rollback.index('systemctl stop "$service"') < rollback.index('if [[ ${had_unit[$service]} == 1 ]]')
 
 
 def test_windows_installer_separates_candidate_from_fixed_observer():
