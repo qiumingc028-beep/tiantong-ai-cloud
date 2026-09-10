@@ -176,3 +176,5 @@ def test_windows_installer_rejects_acl_bypass_privileges_and_stale_logons():
     for privilege in ("SeBackupPrivilege", "SeRestorePrivilege", "SeDebugPrivilege", "SeImpersonatePrivilege", "SeTakeOwnershipPrivilege"):
         assert privilege in source
     assert "GetOwnerSid" in source and "LOGOFF_REQUIRED" in source
+    assert "SeServiceLogonRight = @('S-1-5-6')" in source
+    assert "$accountSids -contains $_" in source

@@ -39,8 +39,7 @@ function Assert-LocalNonAdminAccount([string]$Account, [string]$Role) {
   }
   # ACLs cannot constrain backup/debug/impersonation privileges. Inspect direct
   # and nested group assignments before allowing either unprivileged identity.
-  $effectiveSids = @($sid, 'S-1-1-0', 'S-1-2-0', 'S-1-5-11', 'S-1-5-2',
-    'S-1-5-3', 'S-1-5-4', 'S-1-5-6', 'S-1-5-14', 'S-1-5-113')
+  $effectiveSids = @($sid, 'S-1-1-0', 'S-1-2-0', 'S-1-5-11', 'S-1-5-113')
   foreach ($group in @(Get-LocalGroup)) {
     if (Test-LocalGroupContains $group.SID.Value $sid @{}) { $effectiveSids += $group.SID.Value }
   }
@@ -49,20 +48,38 @@ function Assert-LocalNonAdminAccount([string]$Account, [string]$Role) {
   try {
     & secedit /export /cfg $rightsPath /areas USER_RIGHTS /quiet | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'R297_USER_RIGHTS_QUERY_FAILED' }
+    $assignedRights = @{}
+    foreach ($line in Get-Content -LiteralPath $rightsPath) {
+      $parts = $line -split '=', 2
+      if ($parts.Count -ne 2 -or $parts[0].Trim() -notmatch '^Se[A-Za-z]+(Right|Privilege)$') { continue }
+      $assignedRights[$parts[0].Trim()] = @($parts[1] -split ',' | ForEach-Object {
+        $value = $_.Trim().TrimStart('*')
+        if ($value -and -not $value.StartsWith('S-1-')) {
+          $value = ([Security.Principal.NTAccount]$value).Translate([Security.Principal.SecurityIdentifier]).Value
+        }
+        $value
+      })
+    }
+    # Add logon SIDs only for logon types this account is actually granted.
+    # Never ascribe SERVICE's default privileges to an interactive-only user.
+    $logonSids = @{
+      SeServiceLogonRight = @('S-1-5-6'); SeBatchLogonRight = @('S-1-5-3')
+      SeInteractiveLogonRight = @('S-1-5-4'); SeRemoteInteractiveLogonRight = @('S-1-5-4', 'S-1-5-14')
+      SeNetworkLogonRight = @('S-1-5-2')
+    }
+    $accountSids = @($effectiveSids)
+    foreach ($right in $logonSids.Keys) {
+      if (@($assignedRights[$right] | Where-Object { $accountSids -contains $_ }).Count -gt 0) {
+        $effectiveSids += $logonSids[$right]
+      }
+    }
     $dangerousRights = @('SeBackupPrivilege', 'SeRestorePrivilege', 'SeDebugPrivilege',
       'SeTakeOwnershipPrivilege', 'SeImpersonatePrivilege', 'SeAssignPrimaryTokenPrivilege',
       'SeCreateTokenPrivilege', 'SeLoadDriverPrivilege', 'SeTcbPrivilege',
       'SeRelabelPrivilege', 'SeTrustedCredManAccessPrivilege', 'SeManageVolumePrivilege',
       'SeDelegateSessionUserImpersonatePrivilege')
-    foreach ($line in Get-Content -LiteralPath $rightsPath) {
-      $parts = $line -split '=', 2
-      if ($parts.Count -ne 2 -or $dangerousRights -notcontains $parts[0].Trim()) { continue }
-      foreach ($identity in ($parts[1] -split ',')) {
-        $assigned = $identity.Trim().TrimStart('*')
-        if (-not $assigned) { continue }
-        if (-not $assigned.StartsWith('S-1-')) {
-          $assigned = ([Security.Principal.NTAccount]$assigned).Translate([Security.Principal.SecurityIdentifier]).Value
-        }
+    foreach ($right in $dangerousRights) {
+      foreach ($assigned in $assignedRights[$right]) {
         if ($effectiveSids -contains $assigned) { throw "R297_${Role}_DANGEROUS_PRIVILEGE_REJECTED" }
       }
     }
