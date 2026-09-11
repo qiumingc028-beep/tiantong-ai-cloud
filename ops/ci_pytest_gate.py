@@ -257,8 +257,19 @@ def _terminal_error_matches_exits(terminal_error: object, exits: object) -> bool
                 and _timeout_exit_valid(exits.get(match.group(1).lower())))
 
 
-def _partition_publication_eligible(primary_error: object, terminal_error: object) -> bool:
-    return terminal_error is None and primary_error != "PYTEST_SUPERVISOR_CANCELLED" and not (
+def _supervision_state_valid(supervision_complete: object, exits: object) -> bool:
+    return (
+        type(supervision_complete) is bool
+        and isinstance(exits, dict)
+        and set(exits) == {"main", "ownership", "aggregate"}
+        and (not supervision_complete or all(type(value) is int for value in exits.values()))
+    )
+
+
+def _partition_publication_eligible(
+    primary_error: object, terminal_error: object, supervision_complete: object, exits: object,
+) -> bool:
+    return _supervision_state_valid(supervision_complete, exits) and supervision_complete is True and terminal_error is None and primary_error != "PYTEST_SUPERVISOR_CANCELLED" and not (
         isinstance(primary_error, str) and primary_error.endswith("_TIMEOUT")
     )
 
@@ -272,6 +283,7 @@ def _validate_publication(output: Path, *, head: str, run_id: str, run_attempt: 
     allowed = _AGGREGATE_FILES if partition == "aggregate" else _PARTITION_FILES
     if (any(publication.get(key) != value for key, value in expected.items())
         or "terminal_error" not in publication
+        or type(publication.get("supervision_complete")) is not bool
         or partition not in {"main", "ownership", "aggregate"}
         or publication.get("result") != "PASS"
         or publication.get("partition_result") != "PASS"
@@ -282,8 +294,10 @@ def _validate_publication(output: Path, *, head: str, run_id: str, run_attempt: 
         or not isinstance(exits, dict) or set(exits) != {"main", "ownership", "aggregate"}
         or not _primary_error_matches_exits(publication.get("primary_error"), exits)
         or not _terminal_error_matches_exits(publication.get("terminal_error"), exits)
+        or not _supervision_state_valid(publication.get("supervision_complete"), exits)
         or not _partition_publication_eligible(
-            publication.get("primary_error"), publication.get("terminal_error")
+            publication.get("primary_error"), publication.get("terminal_error"),
+            publication.get("supervision_complete"), exits,
         )
         or type(exits.get(partition)) is not int
         or exits.get(partition) != 0
@@ -319,6 +333,7 @@ def validate_publication_outputs(outputs: list[Path], *, head: str, run_id: str,
         expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt}
         if (publication.get("partition") != partition
             or "terminal_error" not in publication
+            or type(publication.get("supervision_complete")) is not bool
             or publication.get("result") not in {"PASS", "BLOCK"}
             or publication.get("partition_result") != publication.get("result")
             or publication.get("artifact_result") not in {"PASS", "BLOCK"}
@@ -340,10 +355,13 @@ def validate_publication_outputs(outputs: list[Path], *, head: str, run_id: str,
             raise ValueError("PYTEST_PUBLICATION_INVALID")
         if not _terminal_error_matches_exits(publication.get("terminal_error"), exits):
             raise ValueError("PYTEST_PUBLICATION_INVALID")
+        if not _supervision_state_valid(publication.get("supervision_complete"), exits):
+            raise ValueError("PYTEST_PUBLICATION_INVALID")
         terminal_safe = (
             not publication.get("cleanup_error") and not publication.get("publication_error")
             and _partition_publication_eligible(
-                publication.get("primary_error"), publication.get("terminal_error")
+                publication.get("primary_error"), publication.get("terminal_error"),
+                publication.get("supervision_complete"), exits,
             )
         )
         expected_overall = "PASS" if (
@@ -611,12 +629,14 @@ def _publication_payload(identity: dict, partition: str, partition_result: str,
                          overall_result: str, artifact_result: str, primary_error: str | None,
                          terminal_error: str | None,
                          cleanup_error: str | None, publication_error: str | None,
-                         stage_exit_codes: dict[str, int | None], artifact_sha256: dict[str, str]) -> dict:
+                         stage_exit_codes: dict[str, int | None], artifact_sha256: dict[str, str],
+                         supervision_complete: bool) -> dict:
     return {
         **identity, "partition": partition, "result": partition_result,
         "partition_result": partition_result, "overall_result": overall_result,
         "artifact_result": artifact_result, "primary_error": primary_error,
         "terminal_error": terminal_error,
+        "supervision_complete": supervision_complete,
         "cleanup_error": cleanup_error, "publication_error": publication_error,
         "stage_exit_codes": stage_exit_codes, "artifact_sha256": artifact_sha256,
     }
@@ -736,10 +756,12 @@ def _rename_directory_noreplace(source: Path, target: Path) -> None:
 def _receipt_results(partition: str, artifact_result: str, overall_result: str,
                      cleanup_error: str | None, publication_error: str | None,
                      stage_exit_codes: dict[str, int | None], primary_error: str | None,
-                     terminal_error: str | None) -> str:
+                     terminal_error: str | None, supervision_complete: bool) -> str:
     if artifact_result != "PASS" or cleanup_error or publication_error:
         return "BLOCK"
-    if not _partition_publication_eligible(primary_error, terminal_error):
+    if not _partition_publication_eligible(
+        primary_error, terminal_error, supervision_complete, stage_exit_codes,
+    ):
         return "BLOCK"
     if partition == "aggregate":
         return overall_result
@@ -748,7 +770,8 @@ def _receipt_results(partition: str, artifact_result: str, overall_result: str,
 
 def publish_outputs(specs: list[tuple[Path, Path, set[str]]], *, identity: dict, result: str,
                     primary_error: str | None, cleanup_error: str | None,
-                    stage_exit_codes: dict[str, int | None], atomic_root: Path | None = None,
+                    stage_exit_codes: dict[str, int | None], supervision_complete: bool,
+                    atomic_root: Path | None = None,
                     terminal_error: str | None = None) -> str:
     """Publish only stable, scanned files after all writers have stopped."""
     partitions = ("main", "ownership", "aggregate") if len(specs) == 3 else ("aggregate",)
@@ -793,17 +816,20 @@ def publish_outputs(specs: list[tuple[Path, Path, set[str]]], *, identity: dict,
                 stage_owned["digests"][name] = hashlib.sha256(payload).hexdigest()
             staged.append((stage_owned, target, allowed))
         overall_result = "PASS" if (
-            result == "PASS" and primary_error is None and terminal_error is None and cleanup_error is None
+            _supervision_state_valid(supervision_complete, stage_exit_codes)
+            and supervision_complete and result == "PASS" and primary_error is None
+            and terminal_error is None and cleanup_error is None
             and all(type(value) is int and value == 0 for value in stage_exit_codes.values())
         ) else "BLOCK"
         for partition, (stage_owned, target, _allowed) in zip(partitions, staged):
             partition_result = _receipt_results(
                 partition, "PASS", overall_result, None, None, stage_exit_codes, primary_error,
-                terminal_error,
+                terminal_error, supervision_complete,
             )
             payload = _publication_payload(
                 identity, partition, partition_result, overall_result, "PASS",
                 primary_error, terminal_error, None, None, stage_exit_codes, stage_owned["digests"],
+                supervision_complete,
             )
             _write_owned_file(stage_owned, "publication.json", json.dumps(payload, sort_keys=True).encode() + b"\n")
         _scan_identity_key([stage_owned["path"] for stage_owned, _, _ in staged])
@@ -876,6 +902,7 @@ def publish_outputs(specs: list[tuple[Path, Path, set[str]]], *, identity: dict,
             payload = _publication_payload(
                 identity, partition, "BLOCK", "BLOCK", "BLOCK", primary_error,
                 terminal_error, cleanup_error, publication_error, stage_exit_codes, {},
+                supervision_complete,
             )
             _write_owned_file(receipt, "publication.json", json.dumps(payload, sort_keys=True).encode() + b"\n")
         if receipt_bundle is not None:
@@ -971,6 +998,7 @@ def _partitions_main() -> int:
     phase = "failed"
     primary_error = None
     terminal_error = None
+    supervision_complete = False
     cleanup_error = None
     stage_exits = {"main": None, "ownership": None, "aggregate": None}
     cache_directory = None
@@ -1012,6 +1040,7 @@ def _partitions_main() -> int:
         result = 0 if exits == [0, 0] and aggregate_exit == 0 else 1
         if result:
             primary_error = primary_error or _first_stage_failure(records)
+        supervision_complete = True
         phase = "complete"
     except _SignalExit as exc:
         result = 128 + exc.signum
@@ -1070,6 +1099,7 @@ def _partitions_main() -> int:
             ],
             identity=_run_identity(), result="PASS" if result == 0 else "BLOCK",
             primary_error=primary_error, cleanup_error=cleanup_error, stage_exit_codes=stage_exits,
+            supervision_complete=supervision_complete,
             atomic_root=publish_main.parent if explicit_publish else None,
             terminal_error=terminal_error,
         )
