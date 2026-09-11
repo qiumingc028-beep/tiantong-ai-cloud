@@ -229,7 +229,7 @@ def test_native_probe_full_entry_recovers_original_and_publishes_missing_sidecar
     sidecar = Path(str(body) + ".sha256")
     if phase == "sidecar":
         temporary.unlink()
-        sidecar.write_text(f"{hashlib.sha256(original).hexdigest()}  {body.name}\n")
+        sidecar.write_bytes(f"{hashlib.sha256(original).hexdigest()}  {body.name}\n".encode("ascii"))
         sidecar.chmod(0o600)
         temporary = sidecar.with_name(f".{sidecar.name}.0123456789abcdef")
         os.link(sidecar, temporary)
