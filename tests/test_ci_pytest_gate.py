@@ -988,7 +988,7 @@ def test_unidentified_new_session_is_terminated_as_a_group(monkeypatch):
         pid = 7
         def wait(self, timeout=None): return -signal.SIGKILL
 
-    alive = iter([True, True, False])
+    alive = iter([True, True, False, False])
     monkeypatch.setattr(gate, "_group_alive", lambda _pgid: next(alive, False))
     monkeypatch.setattr(gate.time, "sleep", lambda _seconds: None)
     signals = []

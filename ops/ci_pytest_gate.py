@@ -556,7 +556,16 @@ def publish_outputs(specs: list[tuple[Path, Path, set[str]]], *, identity: dict,
         for stage, _ in staged:
             (stage / "publication.json").write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
         if shared_stage_root is not None:
-            os.replace(shared_stage_root, shared_target_root)
+            try:
+                shared_target_root.mkdir(mode=0o700, exist_ok=False)
+            except FileExistsError:
+                shared_target_preexisting = True
+                raise RuntimeError("PYTEST_PUBLISH_TARGET_NOT_FRESH")
+            for stage, target in staged:
+                target.mkdir(mode=0o700, exist_ok=False)
+                for item in stage.iterdir():
+                    os.link(item, target / item.name, follow_symlinks=False)
+            shutil.rmtree(shared_stage_root)
         else:
             for stage, target in staged:
                 os.replace(stage, target)
@@ -604,6 +613,11 @@ def _terminate_new_process_group(process: subprocess.Popen, *, grace_seconds: fl
     try:
         process.wait(timeout=1)
     except subprocess.TimeoutExpired:
+        raise _SupervisorFailure("PYTEST_PROCESS_REAP_FAILED")
+    deadline = time.monotonic() + 1.0
+    while _group_alive(process.pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    if _group_alive(process.pid):
         raise _SupervisorFailure("PYTEST_PROCESS_REAP_FAILED")
 
 
