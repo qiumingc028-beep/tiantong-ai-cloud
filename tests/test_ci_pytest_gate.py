@@ -698,6 +698,7 @@ def test_publication_keeps_primary_failure_when_cleanup_also_fails(tmp_path, mon
 def test_aggregate_fixed_set_includes_the_collected_manifest(tmp_path, monkeypatch):
     from ops import ci_pytest_gate as gate
 
+    assert "full-collected-nodeids.display.json" in gate._AGGREGATE_FILES
     monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "identity-key-" + "x" * 52)
     source = tmp_path / "work"
     source.mkdir()

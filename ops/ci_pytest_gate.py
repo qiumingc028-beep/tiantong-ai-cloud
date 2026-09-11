@@ -32,7 +32,10 @@ _PARTITION_FILES = {
     "collected-nodeids.json", "collected-nodeids.display.json", "junit.xml",
     "progress.jsonl", "pytest.log", "run.json", "status.json",
 }
-_AGGREGATE_FILES = {"aggregate.json", "collection.log", "full-collected-nodeids.json", "processes.json"}
+_AGGREGATE_FILES = {
+    "aggregate.json", "collection.log", "full-collected-nodeids.json",
+    "full-collected-nodeids.display.json", "processes.json",
+}
 
 
 def _progress_path(name: str) -> Path | None:
