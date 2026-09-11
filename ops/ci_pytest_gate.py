@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import base64
+import ctypes
+import errno
 import hashlib
 import hmac
 import json
@@ -10,7 +12,6 @@ from os import fsync as _progress_fsync
 from pathlib import Path
 import re
 import signal
-import shutil
 import stat
 import subprocess
 import sys
@@ -157,10 +158,7 @@ def validate_report(report: Path, manifest: Path, *, minimum: int = 1846) -> dic
 def validate_partition_output(output: Path, *, head: str, run_id: str, run_attempt: str,
                               minimum: int, published: bool = True) -> list[str]:
     if published:
-        _validate_publication(
-            output, head=head, run_id=run_id, run_attempt=run_attempt,
-            qualifying_stage="ownership",
-        )
+        _validate_publication(output, head=head, run_id=run_id, run_attempt=run_attempt)
     expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt, "exit_code": 0}
     run = json.loads((output / "run.json").read_text(encoding="utf-8"))
     if not isinstance(run, dict) or any(type(run.get(key)) is not type(value) or run.get(key) != value
@@ -226,47 +224,58 @@ def _read_publication(output: Path) -> dict:
     return publication
 
 
-def _validate_publication(output: Path, *, head: str, run_id: str, run_attempt: str,
-                          qualifying_stage: str | None = None) -> None:
+def _primary_error_matches_exits(primary_error: object, exits: object) -> bool:
+    if primary_error is None:
+        return True
+    if not isinstance(primary_error, str) or not re.fullmatch(r"(?:CI_)?PYTEST_[A-Z_]+", primary_error):
+        return False
+    if not isinstance(exits, dict):
+        return False
+    for stage in ("main", "ownership", "aggregate"):
+        prefix = f"PYTEST_{stage.upper()}_"
+        if primary_error.startswith(prefix):
+            value = exits.get(stage)
+            if primary_error == prefix + "TIMEOUT":
+                return value is None
+            if primary_error == prefix + "FAILED":
+                return type(value) is int and value != 0
+            return False
+    return True
+
+
+def _validate_publication(output: Path, *, head: str, run_id: str, run_attempt: str) -> None:
     publication = _read_publication(output)
     expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt}
     exits = publication.get("stage_exit_codes")
-    exits_valid = (
-        isinstance(exits, dict) and set(exits) == {"main", "ownership", "aggregate"}
-        and all(value is None or type(value) is int for value in exits.values())
-    )
-    primary_error = publication.get("primary_error")
-    stage_error_consistent = True
-    if isinstance(primary_error, str):
-        for stage in ("main", "ownership", "aggregate"):
-            if primary_error.startswith(f"PYTEST_{stage.upper()}_"):
-                stage_exit = exits.get(stage) if exits_valid else None
-                if primary_error == f"PYTEST_{stage.upper()}_TIMEOUT":
-                    stage_error_consistent = exits_valid and stage_exit is None
-                elif primary_error == f"PYTEST_{stage.upper()}_FAILED":
-                    stage_error_consistent = exits_valid and type(stage_exit) is int and stage_exit != 0
-                else:
-                    stage_error_consistent = False
-    stage_qualified = (
-        qualifying_stage is not None
-        and publication.get("result") == publication.get("artifact_result") == "BLOCK"
-        and exits_valid and exits.get(qualifying_stage) == 0
-        and any(value != 0 for name, value in exits.items() if name != qualifying_stage)
-        and isinstance(publication.get("primary_error"), str)
-        and publication.get("error") == publication.get("primary_error")
-        and re.fullmatch(r"(?:CI_)?PYTEST_[A-Z_]+", publication["primary_error"])
-        and not publication["primary_error"].startswith(f"PYTEST_{qualifying_stage.upper()}_")
-        and stage_error_consistent
-        and publication.get("cleanup_error") is None
-        and publication.get("publication_error") is None
-    )
+    digests = publication.get("artifact_sha256")
+    partition = publication.get("partition")
+    allowed = _AGGREGATE_FILES if partition == "aggregate" else _PARTITION_FILES
     if (any(publication.get(key) != value for key, value in expected.items())
-        or (publication.get("result") != "PASS" and not stage_qualified)
-        or (publication.get("artifact_result") != "PASS" and not stage_qualified)
-        or (publication.get("primary_error") is not None and not stage_qualified)
+        or partition not in {"main", "ownership", "aggregate"}
+        or publication.get("result") != "PASS"
+        or publication.get("partition_result") != "PASS"
+        or publication.get("artifact_result") != "PASS"
+        or publication.get("overall_result") not in {"PASS", "BLOCK"}
+        or not isinstance(digests, dict)
         or any(publication.get(key) is not None for key in ("cleanup_error", "publication_error"))
-        or not exits_valid
-        or (not stage_qualified and any(type(value) is not int or value != 0 for value in exits.values()))):
+        or not isinstance(exits, dict) or set(exits) != {"main", "ownership", "aggregate"}
+        or not _primary_error_matches_exits(publication.get("primary_error"), exits)
+        or type(exits.get(partition)) is not int
+        or exits.get(partition) != 0
+        or not {path.name for path in output.iterdir()}.issubset(allowed | {"publication.json"})
+        or any(value is not None and (not isinstance(value, str)
+                                      or not re.fullmatch(r"(?:CI_)?PYTEST_[A-Z_]+", value))
+               for value in (publication.get("primary_error"), publication.get("cleanup_error"),
+                             publication.get("publication_error")))
+        or (partition == "aggregate" and (
+            publication.get("overall_result") != "PASS"
+            or publication.get("primary_error") is not None
+            or any(type(value) is not int or value != 0 for value in exits.values())
+        ))):
+        raise ValueError("PYTEST_PUBLICATION_INVALID")
+    files = {path.name: hashlib.sha256(_stable_file_bytes(path)).hexdigest()
+             for path in output.iterdir() if path.name != "publication.json"}
+    if files != digests:
         raise ValueError("PYTEST_PUBLICATION_INVALID")
 
 
@@ -279,33 +288,55 @@ def validate_publication_outputs(outputs: list[Path], *, head: str, run_id: str,
         (outputs[2], _AGGREGATE_FILES),
     )
     publications = []
-    for output, allowed in specs:
+    for partition, (output, allowed) in zip(("main", "ownership", "aggregate"), specs):
         publication = _read_publication(output)
+        digests = publication.get("artifact_sha256")
         expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt}
-        if (publication.get("result") not in {"PASS", "BLOCK"}
-            or publication.get("artifact_result") != publication.get("result")
+        if (publication.get("partition") != partition
+            or publication.get("result") not in {"PASS", "BLOCK"}
+            or publication.get("partition_result") != publication.get("result")
+            or publication.get("artifact_result") not in {"PASS", "BLOCK"}
+            or publication.get("overall_result") not in {"PASS", "BLOCK"}
+            or not isinstance(digests, dict)
             or any(publication.get(key) != value for key, value in expected.items())
             or not {path.name for path in output.iterdir()}.issubset(allowed | {"publication.json"})):
             raise ValueError("PYTEST_PUBLICATION_INVALID")
         for key in ("primary_error", "cleanup_error", "publication_error"):
             value = publication.get(key)
-            if value is not None and not re.fullmatch(r"(?:CI_)?PYTEST_[A-Z_]+", value):
+            if value is not None and (not isinstance(value, str)
+                                      or not re.fullmatch(r"(?:CI_)?PYTEST_[A-Z_]+", value)):
                 raise ValueError("PYTEST_PUBLICATION_INVALID")
         exits = publication.get("stage_exit_codes")
         if (not isinstance(exits, dict) or set(exits) != {"main", "ownership", "aggregate"}
             or any(value is not None and type(value) is not int for value in exits.values())):
             raise ValueError("PYTEST_PUBLICATION_INVALID")
-        if publication.get("result") == "PASS" and (
-            any(publication.get(key) is not None for key in ("primary_error", "cleanup_error", "publication_error"))
-            or any(type(value) is not int or value != 0 for value in exits.values())
-        ):
+        if not _primary_error_matches_exits(publication.get("primary_error"), exits):
             raise ValueError("PYTEST_PUBLICATION_INVALID")
-        if (publication.get("cleanup_error") or publication.get("publication_error")) and {
+        terminal_safe = not publication.get("cleanup_error") and not publication.get("publication_error")
+        expected_overall = "PASS" if (
+            terminal_safe and publication.get("primary_error") is None
+            and all(type(value) is int and value == 0 for value in exits.values())
+        ) else "BLOCK"
+        expected_partition = "PASS" if (
+            publication.get("artifact_result") == "PASS" and terminal_safe
+            and ((partition != "aggregate" and exits.get(partition) == 0)
+                 or (partition == "aggregate" and expected_overall == "PASS"))
+        ) else "BLOCK"
+        if (publication.get("overall_result") != expected_overall
+            or publication.get("partition_result") != expected_partition):
+            raise ValueError("PYTEST_PUBLICATION_INVALID")
+        if publication.get("artifact_result") == "BLOCK" and {
             path.name for path in output.iterdir()
         } != {"publication.json"}:
             raise ValueError("PYTEST_PUBLICATION_UNSAFE_BLOCK")
+        files = {path.name: hashlib.sha256(_stable_file_bytes(path)).hexdigest()
+                 for path in output.iterdir() if path.name != "publication.json"}
+        if files != digests:
+            raise ValueError("PYTEST_PUBLICATION_INVALID")
         publications.append(publication)
-    if any(publication != publications[0] for publication in publications[1:]):
+    shared = lambda value: {key: item for key, item in value.items()
+                            if key not in {"partition", "result", "partition_result", "artifact_sha256"}}
+    if any(shared(publication) != shared(publications[0]) for publication in publications[1:]):
         raise ValueError("PYTEST_PUBLICATION_STATE_MISMATCH")
     _scan_identity_key(outputs)
 
@@ -318,7 +349,7 @@ def _run_identity() -> dict:
 
 def _partition_environments(cache_root: Path) -> tuple[dict, dict, dict]:
     base = dict(os.environ)
-    # Only the supervisor may write step outputs; test subprocesses are untrusted.
+    # Only the supervisor may declare publication readiness to the workflow.
     base.pop("GITHUB_OUTPUT", None)
     main = dict(base, V2_ALPHA_POSTGRES_ADMIN_URL="postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres",
                 STORE_AUTHZ_POSTGRES_URL="postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres",
@@ -348,58 +379,69 @@ def _group_alive(pgid: int) -> bool:
         return True
 
 
+def _observe_process_exit(record: dict) -> int | None:
+    if "exit_code" in record:
+        return record["exit_code"]
+    if not record.get("owns_group"):
+        value = record["process"].poll()
+        if value is not None:
+            record.update(exit_code=int(value), reaped=True)
+        return value
+    waitid = getattr(os, "waitid", None)
+    if waitid is None:
+        value = record["process"].poll()
+        if value is not None:
+            record.update(exit_code=int(value), reaped=True)
+        return value
+    try:
+        status = waitid(os.P_PID, record["pid"], os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError as exc:
+        raise _SupervisorFailure("PYTEST_PROCESS_OWNERSHIP_UNPROVEN") from exc
+    if status is None:
+        return None
+    exit_code = status.si_status if status.si_code == os.CLD_EXITED else -status.si_status
+    record["exit_code"] = int(exit_code)
+    return int(exit_code)
+
+
+def _owned_process_group(record: dict) -> bool:
+    if record.get("reaped") or not record.get("owns_group") or record["pid"] != record["pgid"]:
+        return False
+    expected_identity = record.get("process_identity")
+    if expected_identity is None or _process_identity(record["pid"]) != expected_identity:
+        return False
+    try:
+        return os.getpgid(record["pid"]) == record["pgid"]
+    except ProcessLookupError:
+        return False
+
+
 def _terminate_processes(records: list[dict], *, grace_seconds: float = 5.0) -> None:
     active = [record for record in records if not record.get("reaped")]
-    verified = []
-    reap_error = None
+    unowned = [record for record in active if not _owned_process_group(record)]
+    if unowned:
+        raise RuntimeError("PYTEST_PROCESS_REAP_FAILED")
     for record in active:
-        running = record["process"].poll() is None
-        expected_identity = record.get("process_identity")
-        current_identity = _process_identity(record["pid"])
-        same_process = (expected_identity is not None and current_identity is not None
-                        and expected_identity == current_identity)
-        if running and same_process:
-            verified.append(record)
-        elif _group_alive(record["pgid"]):
-            reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
-        else:
-            try:
-                record["process"].wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
-            record["reaped"] = True
-    for record in verified:
-        if _group_alive(record["pgid"]):
-            try:
-                os.killpg(record["pgid"], signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        try:
+            os.killpg(record["pgid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
     deadline = time.monotonic() + grace_seconds
-    while any(_group_alive(record["pgid"]) for record in verified) and time.monotonic() < deadline:
-        for record in verified:
-            record["process"].poll()
+    while active and time.monotonic() < deadline:
         time.sleep(0.02)
-    for record in verified:
-        record["process"].poll()
-    for record in verified:
-        if _group_alive(record["pgid"]):
+    for record in active:
+        if _owned_process_group(record):
             try:
                 os.killpg(record["pgid"], signal.SIGKILL)
             except ProcessLookupError:
                 pass
-    for record in verified:
+    reap_error = None
+    for record in active:
         try:
-            record["process"].wait(timeout=1)
+            record["exit_code"] = int(record["process"].wait(timeout=1))
+            record["reaped"] = True
         except subprocess.TimeoutExpired:
             reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
-    deadline = time.monotonic() + 1.0
-    while any(_group_alive(record["pgid"]) for record in verified) and time.monotonic() < deadline:
-        time.sleep(0.02)
-    for record in verified:
-        if _group_alive(record["pgid"]):
-            reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
-        else:
-            record["reaped"] = True
     if reap_error is not None:
         raise reap_error
 
@@ -408,8 +450,12 @@ class _SupervisorFailure(Exception):
     pass
 
 
+class _CleanupFailure(Exception):
+    pass
+
+
 def _first_stage_failure(records: list[dict]) -> str | None:
-    failed = [record for record in records if record["process"].poll() not in (None, 0)]
+    failed = [record for record in records if _observe_process_exit(record) not in (None, 0)]
     if not failed:
         return None
     first = min(failed, key=lambda record: record.get("finished_at", float("inf")))
@@ -418,7 +464,7 @@ def _first_stage_failure(records: list[dict]) -> str | None:
 
 def _wait_managed(records: list[dict], timeouts: dict[str, float]) -> list[int]:
     while True:
-        exits = [record["process"].poll() for record in records]
+        exits = [_observe_process_exit(record) for record in records]
         now = time.monotonic()
         for record, exit_code in zip(records, exits):
             if exit_code is not None and "finished_at" not in record:
@@ -437,23 +483,30 @@ def _write_process_state(path: Path, records: list[dict], phase: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"phase": phase, "processes": [
         {"name": record["name"], "pid": record["pid"], "pgid": record["pgid"],
-         "exit_code": record["process"].poll()} for record in records
+         "exit_code": record.get("exit_code")} for record in records
     ]}
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
 
 
-def _scan_identity_key(outputs: list[Path]) -> None:
+def _identity_key_parts() -> tuple[bytes, bytes, bytes]:
     value = os.environ.get("CI_PYTEST_IDENTITY_KEY", "")
     if len(value) < 43:
         raise RuntimeError("CI_PYTEST_IDENTITY_KEY_MISSING")
     raw = value.encode()
-    hex_value = raw.hex().encode()
-    needles = (raw, base64.b64encode(raw), hex_value, hex_value.upper())
+    return raw, base64.b64encode(raw), raw.hex().encode()
+
+
+def _contains_identity_key(payload: bytes) -> bool:
+    raw, encoded, hexadecimal = _identity_key_parts()
+    return raw in payload or encoded in payload or hexadecimal in payload.lower()
+
+
+def _scan_identity_key(outputs: list[Path]) -> None:
     for output in outputs:
         for path in output.rglob("*"):
-            if path.is_file() and any(needle in path.read_bytes() for needle in needles):
+            if path.is_file() and _contains_identity_key(_stable_file_bytes(path)):
                 raise RuntimeError("CI_PYTEST_IDENTITY_ARTIFACT_LEAK")
 
 
@@ -485,6 +538,7 @@ def _stable_file_bytes(path: Path) -> bytes:
 
 
 def _process_identity(pid: int) -> str | None:
+    """Read Linux start time so a recycled PID can never prove ownership."""
     try:
         value = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
         return value[value.rfind(")") + 2:].split()[19]
@@ -492,102 +546,285 @@ def _process_identity(pid: int) -> str | None:
         return None
 
 
-def _publication_payload(identity: dict, result: str, primary_error: str | None,
+def _publication_payload(identity: dict, partition: str, partition_result: str,
+                         overall_result: str, artifact_result: str, primary_error: str | None,
                          cleanup_error: str | None, publication_error: str | None,
-                         stage_exit_codes: dict[str, int | None]) -> dict:
+                         stage_exit_codes: dict[str, int | None], artifact_sha256: dict[str, str]) -> dict:
     return {
-        **identity, "result": result, "artifact_result": result,
-        "primary_error": primary_error, "error": primary_error or publication_error,
+        **identity, "partition": partition, "result": partition_result,
+        "partition_result": partition_result, "overall_result": overall_result,
+        "artifact_result": artifact_result, "primary_error": primary_error,
         "cleanup_error": cleanup_error, "publication_error": publication_error,
-        "stage_exit_codes": stage_exit_codes,
+        "stage_exit_codes": stage_exit_codes, "artifact_sha256": artifact_sha256,
     }
+
+
+def _path_identity(path: Path) -> tuple[int, int, int]:
+    value = os.lstat(path)
+    return value.st_dev, value.st_ino, value.st_mode
+
+
+def _open_owned_directory(path: Path) -> dict:
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    value = os.fstat(descriptor)
+    if not stat.S_ISDIR(value.st_mode):
+        os.close(descriptor)
+        raise RuntimeError("PYTEST_PUBLISH_TARGET_OWNERSHIP_LOST")
+    return {
+        "path": path, "fd": descriptor,
+        "identity": (value.st_dev, value.st_ino, value.st_mode),
+        "files": {}, "unverified_files": set(), "digests": {},
+    }
+
+
+def _new_owned_directory(path: Path) -> dict:
+    path.mkdir(mode=0o700)
+    return _open_owned_directory(path)
+
+
+def _write_owned_file(owned: dict, name: str, payload: bytes) -> None:
+    if _path_identity(owned["path"]) != owned["identity"]:
+        raise RuntimeError("PYTEST_PUBLISH_TARGET_OWNERSHIP_LOST")
+    descriptor = os.open(
+        name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600, dir_fd=owned["fd"],
+    )
+    owned["unverified_files"].add(name)
+    stream = None
+    try:
+        value = os.fstat(descriptor)
+        owned["files"][name] = (value.st_dev, value.st_ino, value.st_mode)
+        owned["unverified_files"].discard(name)
+        stream = os.fdopen(descriptor, "wb")
+        descriptor = -1
+        with stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _cleanup_owned_directory(owned: dict) -> None:
+    path = owned["path"]
+    descriptor = owned.get("fd")
+    if descriptor is None:
+        if owned.get("cleanup_failed"):
+            raise RuntimeError("PYTEST_PUBLICATION_CLEANUP_FAILED")
+        return
+    failed = bool(owned.get("unverified_files"))
+    try:
+        try:
+            if not os.path.lexists(path) or _path_identity(path) != owned["identity"]:
+                failed = True
+        except OSError:
+            failed = True
+        for name, identity in reversed(tuple(owned["files"].items())):
+            try:
+                value = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                if (value.st_dev, value.st_ino, value.st_mode) == identity:
+                    os.unlink(name, dir_fd=descriptor)
+                else:
+                    failed = True
+            except OSError:
+                failed = True
+    finally:
+        owned.pop("fd", None)
+        try:
+            os.close(descriptor)
+        except OSError:
+            failed = True
+        owned["cleanup_failed"] = failed
+    if failed:
+        raise RuntimeError("PYTEST_PUBLICATION_CLEANUP_FAILED")
+
+
+def _close_owned_directory(owned: dict) -> None:
+    descriptor = owned.pop("fd", None)
+    if descriptor is not None:
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            raise RuntimeError("PYTEST_PUBLICATION_CLEANUP_FAILED") from exc
+
+
+def _rename_directory_noreplace(source: Path, target: Path) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux"):
+        result = libc.renameat2(-100, os.fsencode(source), -100, os.fsencode(target), 1)
+    elif sys.platform == "darwin":
+        result = libc.renamex_np(os.fsencode(source), os.fsencode(target), 4)
+    else:
+        if os.path.lexists(target):
+            raise RuntimeError("PYTEST_PUBLISH_TARGET_NOT_FRESH")
+        os.rename(source, target)
+        return
+    if result == 0:
+        return
+    code = ctypes.get_errno()
+    if code in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise RuntimeError("PYTEST_PUBLISH_TARGET_NOT_FRESH")
+    raise OSError(code, os.strerror(code), str(target))
+
+
+def _receipt_results(partition: str, artifact_result: str, overall_result: str,
+                     cleanup_error: str | None, publication_error: str | None,
+                     stage_exit_codes: dict[str, int | None]) -> str:
+    if artifact_result != "PASS" or cleanup_error or publication_error:
+        return "BLOCK"
+    if partition == "aggregate":
+        return overall_result
+    return "PASS" if stage_exit_codes.get(partition) == 0 else "BLOCK"
 
 
 def publish_outputs(specs: list[tuple[Path, Path, set[str]]], *, identity: dict, result: str,
                     primary_error: str | None, cleanup_error: str | None,
                     stage_exit_codes: dict[str, int | None], atomic_root: Path | None = None) -> str:
     """Publish only stable, scanned files after all writers have stopped."""
-    key = os.environ.get("CI_PYTEST_IDENTITY_KEY", "")
-    scan_error = None
-    staged: list[tuple[Path, Path]] = []
+    partitions = ("main", "ownership", "aggregate") if len(specs) == 3 else ("aggregate",)
     targets = [target for _, target, _ in specs]
-    shared_target_root = atomic_root
-    if shared_target_root is not None and (
-        len(targets) < 2 or any(target.parent != shared_target_root for target in targets)
+    if atomic_root is not None and (
+        len(targets) < 2 or any(target.parent != atomic_root for target in targets)
     ):
         raise ValueError("PYTEST_PUBLISH_ATOMIC_ROOT_INVALID")
-    shared_stage_root = None
-    shared_target_preexisting = False
+    if (len(partitions) != len(specs)
+        or (atomic_root is not None and os.path.lexists(atomic_root))
+        or any(os.path.lexists(target) for target in targets)):
+        print("CI_PYTEST_PUBLICATION=BLOCK (PYTEST_PUBLISH_TARGET_NOT_FRESH)")
+        return "UNPUBLISHABLE"
+    publication_error = None
+    owned: list[dict] = []
+    bundle = None
     try:
         if cleanup_error:
-            raise RuntimeError("PYTEST_PUBLICATION_REAP_UNPROVEN")
-        if len(key) < 43:
-            raise RuntimeError("CI_PYTEST_IDENTITY_KEY_MISSING")
+            raise RuntimeError(cleanup_error)
         _scan_identity_key([source for source, _, _ in specs])
-        raw = key.encode()
-        hex_value = raw.hex().encode()
-        needles = (raw, base64.b64encode(raw), hex_value, hex_value.upper())
-        if shared_target_root is not None:
-            if shared_target_root.exists() or shared_target_root.is_symlink():
-                shared_target_preexisting = True
-                raise RuntimeError("PYTEST_PUBLISH_TARGET_NOT_FRESH")
-            shared_stage_root = Path(tempfile.mkdtemp(
-                prefix=f".{shared_target_root.name}.", dir=shared_target_root.parent,
-            ))
+        staged: list[tuple[dict, Path, set[str]]] = []
+        if atomic_root is not None:
+            bundle_path = Path(tempfile.mkdtemp(prefix=f".{atomic_root.name}.", dir=atomic_root.parent))
+            bundle = _open_owned_directory(bundle_path)
+            owned.append(bundle)
         for source, target, allowed in specs:
-            if target.exists():
-                raise RuntimeError("PYTEST_PUBLISH_TARGET_NOT_FRESH")
             source_names = {path.name for path in source.iterdir()}
             if not source_names.issubset(allowed):
                 raise RuntimeError("PYTEST_ARTIFACT_FILE_SET_INVALID")
-            if shared_stage_root is not None:
-                stage = shared_stage_root / target.name
-                stage.mkdir()
+            if bundle is not None:
+                stage = bundle["path"] / target.name
+                stage_owned = _new_owned_directory(stage)
             else:
                 stage = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
-            staged.append((stage, target))
+                stage_owned = _open_owned_directory(stage)
+            owned.append(stage_owned)
             for name in sorted(source_names):
                 payload = _stable_file_bytes(source / name)
-                if any(needle in payload for needle in needles):
+                if _contains_identity_key(payload):
                     raise RuntimeError("CI_PYTEST_IDENTITY_ARTIFACT_LEAK")
-                (stage / name).write_bytes(payload)
-        final_result = "PASS" if result == "PASS" and not primary_error and not cleanup_error else "BLOCK"
-        payload = _publication_payload(identity, final_result, primary_error, cleanup_error, None, stage_exit_codes)
-        for stage, _ in staged:
-            (stage / "publication.json").write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
-        if shared_stage_root is not None:
-            try:
-                shared_target_root.mkdir(mode=0o700, exist_ok=False)
-            except FileExistsError:
-                shared_target_preexisting = True
-                raise RuntimeError("PYTEST_PUBLISH_TARGET_NOT_FRESH")
-            for stage, target in staged:
-                target.mkdir(mode=0o700, exist_ok=False)
-                for item in stage.iterdir():
-                    os.link(item, target / item.name, follow_symlinks=False)
-            shutil.rmtree(shared_stage_root)
+                _write_owned_file(stage_owned, name, payload)
+                stage_owned["digests"][name] = hashlib.sha256(payload).hexdigest()
+            staged.append((stage_owned, target, allowed))
+        overall_result = "PASS" if (
+            result == "PASS" and primary_error is None and cleanup_error is None
+            and all(type(value) is int and value == 0 for value in stage_exit_codes.values())
+        ) else "BLOCK"
+        for partition, (stage_owned, target, _allowed) in zip(partitions, staged):
+            partition_result = _receipt_results(
+                partition, "PASS", overall_result, None, None, stage_exit_codes,
+            )
+            payload = _publication_payload(
+                identity, partition, partition_result, overall_result, "PASS",
+                primary_error, None, None, stage_exit_codes, stage_owned["digests"],
+            )
+            _write_owned_file(stage_owned, "publication.json", json.dumps(payload, sort_keys=True).encode() + b"\n")
+        _scan_identity_key([stage_owned["path"] for stage_owned, _, _ in staged])
+        for stage_owned, _, allowed in staged:
+            if (_path_identity(stage_owned["path"]) != stage_owned["identity"]
+                or {path.name for path in stage_owned["path"].iterdir()} != allowed.intersection(
+                    stage_owned["files"]
+                ) | {"publication.json"}):
+                raise RuntimeError("PYTEST_ARTIFACT_FILE_SET_INVALID")
+        if bundle is not None:
+            _rename_directory_noreplace(bundle["path"], atomic_root)
+            bundle["path"] = atomic_root
+            for stage_owned, target, _ in staged:
+                stage_owned["path"] = target
         else:
-            for stage, target in staged:
-                os.replace(stage, target)
+            for stage_owned, target, _ in staged:
+                _rename_directory_noreplace(stage_owned["path"], target)
+                stage_owned["path"] = target
+        _scan_identity_key([target for _, target, _ in specs])
+        for stage_owned, (_, target, allowed) in zip((item[0] for item in staged), specs):
+            if (_path_identity(target) != stage_owned["identity"]
+                or {path.name for path in target.iterdir()} != allowed.intersection(
+                    stage_owned["files"]
+                ) | {"publication.json"}):
+                raise RuntimeError("PYTEST_ARTIFACT_FILE_SET_INVALID")
+            if any(_path_identity(target / name) != file_identity
+                   for name, file_identity in stage_owned["files"].items()):
+                raise RuntimeError("PYTEST_PUBLISH_TARGET_OWNERSHIP_LOST")
+            actual = {name: hashlib.sha256(_stable_file_bytes(target / name)).hexdigest()
+                      for name in stage_owned["digests"]}
+            if actual != stage_owned["digests"]:
+                raise RuntimeError("PYTEST_ARTIFACT_UNSTABLE")
+        if bundle is not None and _path_identity(atomic_root) != bundle["identity"]:
+            raise RuntimeError("PYTEST_PUBLISH_TARGET_OWNERSHIP_LOST")
+        for item in reversed(owned):
+            _close_owned_directory(item)
+        owned.clear()
     except (OSError, RuntimeError) as exc:
-        scan_error = _error_code(exc)
-        if shared_stage_root is not None:
-            shutil.rmtree(shared_stage_root, ignore_errors=True)
-        else:
-            for stage, _ in staged:
-                shutil.rmtree(stage, ignore_errors=True)
+        failure_code = _error_code(exc)
+        if failure_code == "PYTEST_PUBLICATION_CLEANUP_FAILED":
+            cleanup_error = cleanup_error or failure_code
+        elif not cleanup_error or str(exc) != cleanup_error:
+            publication_error = failure_code
+        cleanup_fail = None
+        for item in reversed(owned):
+            try:
+                _cleanup_owned_directory(item)
+            except RuntimeError as cleanup_exc:
+                cleanup_fail = cleanup_fail or _error_code(cleanup_exc)
+        cleanup_error = cleanup_error or cleanup_fail
+        if str(exc) == "PYTEST_PUBLISH_TARGET_NOT_FRESH":
+            print("CI_PYTEST_PUBLICATION=BLOCK (PYTEST_PUBLISH_TARGET_NOT_FRESH)")
+            return "UNPUBLISHABLE"
     else:
-        return final_result
-    payload = _publication_payload(identity, "BLOCK", primary_error or scan_error, cleanup_error,
-                                   scan_error, stage_exit_codes)
-    if shared_target_preexisting:
-        return "UNPUBLISHABLE"
-    for _, target, _ in specs:
-        try:
-            target.mkdir(parents=True, exist_ok=False)
-            (target / "publication.json").write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
-        except OSError:
-            pass
+        return overall_result
+    receipt_owned: list[dict] = []
+    receipt_bundle = None
+    try:
+        if atomic_root is not None:
+            receipt_root = Path(tempfile.mkdtemp(prefix=f".{atomic_root.name}.receipt.", dir=atomic_root.parent))
+            receipt_bundle = _open_owned_directory(receipt_root)
+            receipt_owned.append(receipt_bundle)
+        for partition, (_, target, _) in zip(partitions, specs):
+            if receipt_bundle is not None:
+                receipt = _new_owned_directory(receipt_bundle["path"] / target.name)
+            else:
+                receipt_path = Path(tempfile.mkdtemp(prefix=f".{target.name}.receipt.", dir=target.parent))
+                receipt = _open_owned_directory(receipt_path)
+            receipt_owned.append(receipt)
+            payload = _publication_payload(
+                identity, partition, "BLOCK", "BLOCK", "BLOCK", primary_error,
+                cleanup_error, publication_error, stage_exit_codes, {},
+            )
+            _write_owned_file(receipt, "publication.json", json.dumps(payload, sort_keys=True).encode() + b"\n")
+        if receipt_bundle is not None:
+            _rename_directory_noreplace(receipt_bundle["path"], atomic_root)
+            receipt_bundle["path"] = atomic_root
+        else:
+            for receipt, (_, target, _) in zip(receipt_owned, specs):
+                _rename_directory_noreplace(receipt["path"], target)
+                receipt["path"] = target
+        for item in reversed(receipt_owned):
+            _close_owned_directory(item)
+    except (OSError, RuntimeError):
+        for item in reversed(receipt_owned):
+            try:
+                _cleanup_owned_directory(item)
+            except RuntimeError:
+                pass
     return "UNPUBLISHABLE"
 
 
@@ -612,13 +849,8 @@ def _terminate_new_process_group(process: subprocess.Popen, *, grace_seconds: fl
             pass
     try:
         process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        raise _SupervisorFailure("PYTEST_PROCESS_REAP_FAILED")
-    deadline = time.monotonic() + 1.0
-    while _group_alive(process.pid) and time.monotonic() < deadline:
-        time.sleep(0.02)
-    if _group_alive(process.pid):
-        raise _SupervisorFailure("PYTEST_PROCESS_REAP_FAILED")
+    except subprocess.TimeoutExpired as exc:
+        raise _SupervisorFailure("PYTEST_PROCESS_REAP_FAILED") from exc
 
 
 def _start_managed_process(name: str, command: list[str], environment: dict, records: list[dict]) -> dict:
@@ -637,7 +869,8 @@ def _start_managed_process(name: str, command: list[str], environment: dict, rec
             _terminate_new_process_group(process)
             raise _SupervisorFailure("PYTEST_PROCESS_IDENTITY_UNAVAILABLE")
         record = {"name": name, "process": process, "pid": process.pid, "pgid": process.pid,
-                  "process_identity": process_identity, "started_at": time.monotonic()}
+                  "process_identity": process_identity, "started_at": time.monotonic(),
+                  "owns_group": True}
         records.append(record)
     finally:
         for signum, handler in previous_handlers.items():
@@ -692,7 +925,7 @@ def _partitions_main() -> int:
             _terminate_processes(records, grace_seconds=_PROCESS_TERM_GRACE_SECONDS)
         except Exception as exc:
             cleanup_error = cleanup_error or _error_code(exc)
-            raise
+            raise _CleanupFailure from None
         aggregate_env.update(
             CI_MAIN_JOB_RESULT="success" if exits[0] == 0 else "failure",
             CI_MATRIX_JOB_RESULT="success" if exits[1] == 0 else "failure",
@@ -715,6 +948,9 @@ def _partitions_main() -> int:
         result = 128 + exc.signum
         primary_error = primary_error or _first_stage_failure(records) or "PYTEST_SUPERVISOR_CANCELLED"
         phase = "cancelled"
+    except _CleanupFailure:
+        result = 1
+        phase = "cleanup_failed"
     except (OSError, RuntimeError, _SupervisorFailure) as exc:
         primary_error = primary_error or _error_code(exc)
         result = 1
@@ -737,7 +973,7 @@ def _partitions_main() -> int:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
     for record in records:
-        stage_exits[record["name"]] = record["process"].poll()
+        stage_exits[record["name"]] = record.get("exit_code")
     if result == 0 and cleanup_error is None:
         try:
             totals = validate_partitions(
@@ -763,15 +999,20 @@ def _partitions_main() -> int:
             primary_error=primary_error, cleanup_error=cleanup_error, stage_exit_codes=stage_exits,
             atomic_root=publish_main.parent if explicit_publish else None,
         )
-        if final != "UNPUBLISHABLE":
-            validate_publication_outputs(
-                [publish_main, publish_ownership, publish_aggregate], **_run_identity(),
-            )
+        if final == "UNPUBLISHABLE":
+            raise RuntimeError("PYTEST_PUBLICATION_UNPUBLISHABLE")
+        validate_publication_outputs(
+            [publish_main, publish_ownership, publish_aggregate], **_run_identity(),
+        )
         output_path = os.getenv("GITHUB_OUTPUT")
         if output_path:
             with open(output_path, "a", encoding="utf-8") as stream:
-                stream.write(f"publication_ready={'true' if final != 'UNPUBLISHABLE' else 'false'}\n")
+                stream.write("publication_ready=true\n")
     except Exception:
+        output_path = os.getenv("GITHUB_OUTPUT")
+        if output_path:
+            with open(output_path, "a", encoding="utf-8") as stream:
+                stream.write("publication_ready=false\n")
         print("CI_PYTEST_SUPERVISOR=BLOCK (PYTEST_PUBLICATION_FAILED)")
         return 1
     return 0 if final == "PASS" else result or 1
