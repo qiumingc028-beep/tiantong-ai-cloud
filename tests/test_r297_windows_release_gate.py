@@ -214,6 +214,29 @@ def test_windows_build_is_secretless_and_publishes_before_independent_formal_gat
     assert "./ops/r297_windows_acceptance.ps1" not in formal
 
 
+def test_windows_native_reports_publish_only_after_stable_atomic_finalization():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    native = workflow.split("      - name: Run complete Windows recovery regressions", 1)[1].split(
+        "      - name: Upload sanitized native Windows reports", 1
+    )[0]
+    upload = workflow.split("      - name: Upload sanitized native Windows reports", 1)[1].split(
+        "  formal-windows-acceptance:", 1
+    )[0]
+    assert "Remove-Item Env:GITHUB_OUTPUT" in native
+    assert "[Guid]::NewGuid()" in native
+    assert native.index("SequenceEqual[byte]") < native.index("[IO.Directory]::Move")
+    assert "R297_NATIVE_TEST_EXIT=$testExit" in native
+    assert "R297_NATIVE_PUBLICATION_ERROR=$publicationError" in native
+    assert "R297_NATIVE_CLEANUP_ERROR=$cleanupError" in native
+    assert "catch { $cleanupError = 'R297_NATIVE_REPORT_CLEANUP_FAILED' }" in native
+    assert "R297_NATIVE_REPORT_PUBLICATION_FAILED" in native
+    assert "$safeReportError = if ($publicationError -ne 'NONE') { $publicationError } else { $cleanupError }" in native
+    assert "if ($publicationError -eq 'NONE' -and $cleanupError -eq 'NONE')" in native
+    assert "steps.native_reports.outputs.publish_path" in upload
+    assert "r297-windows-native-work" not in upload
+    assert "r297-windows-native-stage" not in upload
+
+
 def test_trusted_windows_observer_is_fixed_source_and_does_not_execute_candidate():
     source = TRUSTED_OBSERVER.read_text(encoding="utf-8")
     assert "R297_TRUSTED_SIGNER_SHA" in source
@@ -260,12 +283,21 @@ def test_windows_native_job_runs_windows_only_boundaries_without_protected_envir
     assert "R297_EVIDENCE_CLASS=TEST_ONLY" in native
     assert "R297_FORMAL_EVIDENCE=false" in native
     assert "name: test-only-r297-windows-native-recovery-" in native
-    assert "r297-windows-native-classification.txt" in native
+    assert "classification.txt" in native
     assert "tzdata==2026.3" in requirements
     assert "--junitxml" in native
     assert "ops/r297_ci_redact.py" in native
     assert "if (Test-Path -LiteralPath $junit)" in native
     assert "if-no-files-found: error" in native
+    assert "r297-windows-native-work-$nonce" in native
+    assert "steps.native_reports.outputs.publish_path" in native
+    assert "R297_NATIVE_SOURCE_SHA=$env:RELEASE_SOURCE_SHA" in native
+    assert "R297_NATIVE_RUN_ID=${{ github.run_id }}" in native
+    assert "R297_NATIVE_RUN_ATTEMPT=${{ github.run_attempt }}" in native
+    upload = native.split("      - name: Upload sanitized native Windows reports", 1)[1]
+    assert "native-work" not in upload
+    assert "R297_NATIVE_PUBLICATION_ERROR" in native
+    assert "R297_NATIVE_CLEANUP_ERROR" in native
     job_env, steps = native.split("    steps:", 1)
     assert "ASSET_STORAGE_ROOT" not in job_env
     recovery = steps.split("      - name: Run complete Windows recovery regressions", 1)[1]
