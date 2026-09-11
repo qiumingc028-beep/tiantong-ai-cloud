@@ -1159,6 +1159,103 @@ def test_timeout_does_not_replace_an_earlier_stage_failure():
     assert caught.value.terminal_error == "PYTEST_OWNERSHIP_TIMEOUT"
 
 
+def test_supervisor_identity_failure_does_not_replace_an_earlier_stage_failure(
+    tmp_path, monkeypatch,
+):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("RELEASE_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "x" * 64)
+    started = []
+
+    class Process:
+        def __init__(self):
+            self.pid = 54000 + len(started)
+
+        def wait(self, timeout=None):
+            return -signal.SIGTERM
+
+    def popen(command, **_kwargs):
+        output = Path(command[-1])
+        output.mkdir(parents=True, exist_ok=True)
+        process = Process()
+        started.append(process)
+        return process
+
+    def fail_after_main(records, _timeouts):
+        records[0]["exit_code"] = 1
+        raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
+
+    def cleanup(records, **_kwargs):
+        for record in records:
+            record.setdefault("exit_code", -signal.SIGTERM)
+            record["reaped"] = True
+
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    monkeypatch.setattr(gate, "_process_identity", lambda pid: str(pid))
+    monkeypatch.setattr(
+        gate, "_observe_process_exit",
+        lambda _record: (_ for _ in ()).throw(AssertionError("must not re-observe during failure handling")),
+    )
+    monkeypatch.setattr(gate, "_wait_managed", fail_after_main)
+    monkeypatch.setattr(gate, "_terminate_processes", cleanup)
+    outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
+    monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])
+
+    assert gate.main() == 1
+    receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
+    assert receipt["primary_error"] == "PYTEST_MAIN_FAILED"
+    assert receipt["terminal_error"] == "PYTEST_PROCESS_OWNERSHIP_UNPROVEN"
+    assert receipt["supervision_complete"] is False
+    assert receipt["partition_result"] == "BLOCK"
+
+
+def test_standalone_supervisor_identity_failure_is_recorded_as_terminal(
+    tmp_path, monkeypatch,
+):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("RELEASE_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "x" * 64)
+
+    class Process:
+        pid = 55000
+
+        def wait(self, timeout=None):
+            return -signal.SIGTERM
+
+    def popen(command, **_kwargs):
+        Path(command[-1]).mkdir(parents=True, exist_ok=True)
+        return Process()
+
+    def cleanup(records, **_kwargs):
+        for record in records:
+            record.update(exit_code=-signal.SIGTERM, reaped=True)
+
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    monkeypatch.setattr(gate, "_process_identity", lambda pid: str(pid))
+    monkeypatch.setattr(
+        gate, "_wait_managed",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
+        ),
+    )
+    monkeypatch.setattr(gate, "_terminate_processes", cleanup)
+    outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
+    monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])
+
+    assert gate.main() == 1
+    receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
+    assert receipt["primary_error"] == "PYTEST_PROCESS_OWNERSHIP_UNPROVEN"
+    assert receipt["terminal_error"] == "PYTEST_PROCESS_OWNERSHIP_UNPROVEN"
+    assert receipt["supervision_complete"] is False
+    assert receipt["partition_result"] == "BLOCK"
+
+
 def test_live_child_identity_read_failure_is_not_skipped(monkeypatch):
     from ops import ci_pytest_gate as gate
 
@@ -1817,10 +1914,40 @@ def test_timeout_errors_accept_only_unfinished_or_supervisor_terminated_stage(ex
     from ops import ci_pytest_gate as gate
     exits = {"main": exit_code, "ownership": 0, "aggregate": 0}
     assert gate._primary_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits)
-    assert gate._terminal_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits)
+    assert gate._terminal_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits, False)
     exits["main"] = 1
     assert not gate._primary_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits)
-    assert not gate._terminal_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits)
+    assert not gate._terminal_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits, False)
+
+
+def test_validator_rejects_terminal_error_with_completed_supervision(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "k" * 64)
+    identity = {"head": "a" * 40, "run_id": "123", "run_attempt": "1"}
+    specs = []
+    for index, allowed in enumerate((
+        gate._PARTITION_FILES, gate._PARTITION_FILES, gate._AGGREGATE_FILES,
+    )):
+        source = tmp_path / f"work-{index}"
+        target = tmp_path / f"publish-{index}"
+        source.mkdir()
+        (source / next(iter(allowed))).write_text("safe")
+        specs.append((source, target, allowed))
+    assert gate.publish_outputs(
+        specs, identity=identity, result="BLOCK",
+        primary_error="PYTEST_PROCESS_OWNERSHIP_UNPROVEN",
+        terminal_error="PYTEST_PROCESS_OWNERSHIP_UNPROVEN", cleanup_error=None,
+        stage_exit_codes={"main": -signal.SIGTERM, "ownership": 0, "aggregate": 1},
+        supervision_complete=False,
+    ) == "BLOCK"
+    for _, target, _ in specs:
+        receipt_path = target / "publication.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["supervision_complete"] = True
+        receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="PYTEST_PUBLICATION_INVALID"):
+        gate.validate_publication_outputs([target for _, target, _ in specs], **identity)
 
 
 def test_later_terminal_error_blocks_all_partitions_without_replacing_first_error(
@@ -1940,7 +2067,11 @@ def test_signal_does_not_replace_an_earlier_stage_failure(tmp_path, monkeypatch)
     monkeypatch.setattr(gate.subprocess, "Popen", popen)
     monkeypatch.setattr(gate, "_process_identity", lambda pid: str(pid))
     monkeypatch.setattr(gate, "_observe_process_exit", lambda record: record["process"].poll())
-    monkeypatch.setattr(gate, "_wait_managed", lambda *_args, **_kwargs: (_ for _ in ()).throw(gate._SignalExit(signal.SIGTERM)))
+    def cancel_after_main(records, _timeouts):
+        records[0]["exit_code"] = 1
+        raise gate._SignalExit(signal.SIGTERM)
+
+    monkeypatch.setattr(gate, "_wait_managed", cancel_after_main)
     monkeypatch.setattr(gate, "_terminate_processes", lambda *_args, **_kwargs: None)
     outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
     monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])

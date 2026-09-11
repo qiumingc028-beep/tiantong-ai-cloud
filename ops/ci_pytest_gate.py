@@ -31,6 +31,13 @@ _PROCESS_TERM_GRACE_SECONDS = 5.0
 _PROCESS_TREE_SCAN_SECONDS = 1.0
 _PROCESS_TREE_MAX_NODES = 4096
 _SUPERVISOR_TIMEOUTS = {"main": 75 * 60.0, "ownership": 75 * 60.0, "aggregate": 10 * 60.0}
+_SUPERVISOR_TERMINAL_ERRORS = {
+    "PYTEST_PROCESS_IDENTITY_UNAVAILABLE",
+    "PYTEST_PROCESS_OWNERSHIP_UNPROVEN",
+    "PYTEST_PROCESS_REAP_FAILED",
+    "PYTEST_SUPERVISOR_INTERNAL_ERROR",
+    "PYTEST_SUPERVISOR_OS_ERROR",
+}
 _PR_SET_CHILD_SUBREAPER = 36
 _PARTITION_FILES = {
     "collected-nodeids.json", "collected-nodeids.display.json", "junit.xml",
@@ -250,10 +257,16 @@ def _timeout_exit_valid(value: object) -> bool:
     return value in {None, -signal.SIGTERM, -signal.SIGKILL}
 
 
-def _terminal_error_matches_exits(terminal_error: object, exits: object) -> bool:
+def _terminal_error_matches_exits(
+    terminal_error: object, exits: object, supervision_complete: object,
+) -> bool:
     if terminal_error is None:
         return True
+    if supervision_complete is not False:
+        return False
     if terminal_error == "PYTEST_SUPERVISOR_CANCELLED":
+        return True
+    if terminal_error in _SUPERVISOR_TERMINAL_ERRORS:
         return True
     match = re.fullmatch(r"PYTEST_(MAIN|OWNERSHIP|AGGREGATE)_TIMEOUT", terminal_error or "")
     return bool(match and isinstance(exits, dict)
@@ -296,7 +309,9 @@ def _validate_publication(output: Path, *, head: str, run_id: str, run_attempt: 
         or any(publication.get(key) is not None for key in ("cleanup_error", "publication_error"))
         or not isinstance(exits, dict) or set(exits) != {"main", "ownership", "aggregate"}
         or not _primary_error_matches_exits(publication.get("primary_error"), exits)
-        or not _terminal_error_matches_exits(publication.get("terminal_error"), exits)
+        or not _terminal_error_matches_exits(
+            publication.get("terminal_error"), exits, publication.get("supervision_complete"),
+        )
         or not _supervision_state_valid(publication.get("supervision_complete"), exits)
         or not _partition_publication_eligible(
             publication.get("primary_error"), publication.get("terminal_error"),
@@ -356,7 +371,9 @@ def validate_publication_outputs(outputs: list[Path], *, head: str, run_id: str,
             raise ValueError("PYTEST_PUBLICATION_INVALID")
         if not _primary_error_matches_exits(publication.get("primary_error"), exits):
             raise ValueError("PYTEST_PUBLICATION_INVALID")
-        if not _terminal_error_matches_exits(publication.get("terminal_error"), exits):
+        if not _terminal_error_matches_exits(
+            publication.get("terminal_error"), exits, publication.get("supervision_complete"),
+        ):
             raise ValueError("PYTEST_PUBLICATION_INVALID")
         if not _supervision_state_valid(publication.get("supervision_complete"), exits):
             raise ValueError("PYTEST_PUBLICATION_INVALID")
@@ -745,7 +762,15 @@ class _CleanupFailure(Exception):
 
 
 def _first_stage_failure(records: list[dict]) -> str | None:
-    failed = [record for record in records if _observe_process_exit(record) not in (None, 0)]
+    for record in records:
+        exit_code = _observe_process_exit(record)
+        if exit_code is not None:
+            record.setdefault("exit_code", int(exit_code))
+    return _recorded_stage_failure(records)
+
+
+def _recorded_stage_failure(records: list[dict]) -> str | None:
+    failed = [record for record in records if record.get("exit_code") not in (None, 0)]
     if not failed:
         return None
     first = min(failed, key=lambda record: record.get("finished_at", float("inf")))
@@ -1295,7 +1320,7 @@ def _partitions_main() -> int:
         phase = "complete"
     except _SignalExit as exc:
         result = 128 + exc.signum
-        primary_error = primary_error or _first_stage_failure(records) or "PYTEST_SUPERVISOR_CANCELLED"
+        primary_error = primary_error or _recorded_stage_failure(records) or "PYTEST_SUPERVISOR_CANCELLED"
         terminal_error = "PYTEST_SUPERVISOR_CANCELLED"
         phase = "cancelled"
     except _CleanupFailure:
@@ -1303,9 +1328,11 @@ def _partitions_main() -> int:
         phase = "cleanup_failed"
     except (OSError, RuntimeError, _SupervisorFailure) as exc:
         failure_code = _error_code(exc)
-        primary_error = primary_error or failure_code
+        primary_error = primary_error or _recorded_stage_failure(records) or failure_code
         terminal_error = terminal_error or getattr(exc, "terminal_error", None)
         if terminal_error is None and failure_code.endswith("_TIMEOUT"):
+            terminal_error = failure_code
+        if terminal_error is None and failure_code in _SUPERVISOR_TERMINAL_ERRORS:
             terminal_error = failure_code
         result = 1
         phase = "failed"
