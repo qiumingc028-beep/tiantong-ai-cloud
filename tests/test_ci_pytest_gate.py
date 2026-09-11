@@ -1,7 +1,14 @@
-import json
+import base64
 import hashlib
 import importlib.util
+import json
+import os
 from pathlib import Path
+import signal
+import subprocess
+import sys
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -87,10 +94,12 @@ def test_aggregate_cli_requires_both_job_results_even_when_reports_pass(tmp_path
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("CI_MAIN_JOB_RESULT", job_result)
     monkeypatch.setenv("CI_MATRIX_JOB_RESULT", "success")
+    monkeypatch.setenv("CI_PYTEST_CACHE_DIR", str(tmp_path / "aggregate-cache"))
     monkeypatch.setattr(gate.subprocess, "check_output", lambda *a, **k: "a" * 40)
     def collect(command, **kwargs):
         assert "--collect-only" in command and "tests/" in command
         assert not any(arg.startswith(("--ignore", "-k")) for arg in command)
+        assert ["-o", f"cache_dir={tmp_path / 'aggregate-cache'}"] == command[-2:]
         Path(kwargs["env"]["CI_PYTEST_COLLECTION_MANIFEST"]).write_text(json.dumps(_ids(["test_a", "test_b"])))
         return SimpleNamespace(returncode=0, stdout="collected")
     monkeypatch.setattr(gate.subprocess, "run", collect)
@@ -160,10 +169,12 @@ def test_expensive_postgresql_matrix_can_run_in_parallel_without_omission(tmp_pa
     monkeypatch.setenv("CI_PYTEST_TARGET", "tests/test_task_center_full_entrypoint_ownership.py")
     monkeypatch.delenv("CI_PYTEST_IGNORE", raising=False)
     monkeypatch.setenv("CI_PYTEST_MINIMUM", "1")
+    monkeypatch.setenv("CI_PYTEST_CACHE_DIR", str(tmp_path / "matrix-cache"))
 
     def execute(command, **kwargs):
         assert "tests/test_task_center_full_entrypoint_ownership.py" in command
         assert not any(part.startswith("--ignore=") for part in command)
+        assert ["-o", f"cache_dir={tmp_path / 'matrix-cache'}"] == command[-2:]
         raw = Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml=")))
         raw.write_text('<testsuite tests="1" failures="0" errors="0" skipped="0"/>')
         Path(kwargs["env"]["CI_PYTEST_COLLECTION_MANIFEST"]).write_text(json.dumps(["matrix-test"]))
@@ -340,13 +351,206 @@ def test_actions_keeps_partition_identity_inside_one_runner():
     assert "if [[ ${#CI_PYTEST_IDENTITY_KEY} -lt 64 ]]" in workflow
     assert "export R297_REDACT_EXACT_ENV_NAMES=CI_PYTEST_IDENTITY_KEY" in workflow
     assert "trap 'unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES' EXIT" in workflow
-    assert "python -m ops.ci_pytest_gate /tmp/r297-pytest &" in workflow
-    assert "python -m ops.ci_pytest_gate /tmp/r297-ownership-matrix" in workflow
-    assert "python -m ops.ci_pytest_gate --aggregate /tmp/r297-full-coverage" in workflow
+    assert "python -m ops.ci_pytest_gate --partitions" in workflow
+    assert "python -m ops.ci_pytest_gate --validate-partition /tmp/r297-ownership-matrix 500" in workflow
+    assert "python -m ops.ci_pytest_gate --validate-aggregate /tmp/r297-full-coverage" in workflow
     assert "unset CI_PYTEST_IDENTITY_KEY" in workflow
     assert "name: PostgreSQL ownership matrix" in workflow
     assert "name: Exact full-repository pytest coverage gate" in workflow
-    assert 'xml_root.tag == "testsuite"' in workflow
+    assert "assert run ==" not in workflow
+    assert workflow.count("-${{ github.run_attempt }}") >= 5
+
+
+@pytest.mark.parametrize("mode", ["partition", "aggregate"])
+def test_optimized_validator_rejects_invalid_artifact(tmp_path, mode):
+    env = dict(os.environ, RELEASE_SOURCE_SHA="a" * 40, GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2")
+    if mode == "partition":
+        output = tmp_path / "partition"
+        _partition_artifacts(output, ["tests/test_one.py::test_one"])
+        command = [sys.executable, "-O", "-m", "ops.ci_pytest_gate", "--validate-partition", str(output), "1"]
+    else:
+        output = tmp_path / "aggregate"
+        output.mkdir()
+        (output / "aggregate.json").write_text(json.dumps({
+            "head": "a" * 40, "run_id": "123", "run_attempt": "1", "result": "PASS",
+            "collected": 1, "executed": 1, "overlap": 0, "missing": 0,
+        }))
+        command = [sys.executable, "-O", "-m", "ops.ci_pytest_gate", "--validate-aggregate", str(output)]
+    result = subprocess.run(command, env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "CI_PYTEST_VALIDATION=BLOCK" in result.stdout
+
+
+def test_optimized_validators_accept_same_attempt_valid_artifacts(tmp_path):
+    env = dict(os.environ, RELEASE_SOURCE_SHA="a" * 40, GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2")
+    partition = tmp_path / "partition"
+    _partition_artifacts(partition, ["tests/test_one.py::test_one"])
+    run = json.loads((partition / "run.json").read_text())
+    run["run_attempt"] = "2"
+    (partition / "run.json").write_text(json.dumps(run))
+    aggregate = tmp_path / "aggregate"
+    aggregate.mkdir()
+    (aggregate / "aggregate.json").write_text(json.dumps({
+        "head": "a" * 40, "run_id": "123", "run_attempt": "2", "result": "PASS",
+        "collected": 1, "executed": 1, "overlap": 0, "missing": 0,
+    }))
+    for command in (
+        [sys.executable, "-O", "-m", "ops.ci_pytest_gate", "--validate-partition", str(partition), "1"],
+        [sys.executable, "-O", "-m", "ops.ci_pytest_gate", "--validate-aggregate", str(aggregate)],
+    ):
+        result = subprocess.run(command, env=env, capture_output=True, text=True)
+        assert result.returncode == 0 and "CI_PYTEST_VALIDATION=PASS" in result.stdout
+
+
+@pytest.mark.skipif(os.name == "nt", reason="CI partition supervisor runs on ubuntu")
+def test_partition_cleanup_terminates_and_reaps_its_process_group(tmp_path):
+    from ops import ci_pytest_gate as gate
+
+    child_pid = tmp_path / "child.pid"
+    script = (
+        "import pathlib,signal,subprocess,sys,time;"
+        "child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)']);"
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid));"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"
+    )
+    process = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
+    try:
+        deadline = time.monotonic() + 5
+        while not child_pid.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        descendant = int(child_pid.read_text())
+        records = [{"name": "partition", "process": process, "pid": process.pid, "pgid": os.getpgid(process.pid)}]
+        gate._terminate_processes(records, grace_seconds=0.05)
+        assert process.returncode == -signal.SIGKILL
+        assert descendant != process.pid
+        assert not gate._group_alive(records[0]["pgid"])
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="CI partition supervisor runs on ubuntu")
+def test_partition_cleanup_allows_graceful_term_before_kill(tmp_path):
+    from ops import ci_pytest_gate as gate
+
+    ready = tmp_path / "ready"
+    script = (
+        "import pathlib,signal,sys,time;"
+        "signal.signal(signal.SIGTERM,lambda *_:sys.exit(0));"
+        "blocked=signal.pthread_sigmask(signal.SIG_BLOCK,[]);"
+        f"pathlib.Path({str(ready)!r}).write_text(','.join(str(item.value) for item in blocked));"
+        "time.sleep(60)"
+    )
+    records = []
+    record = gate._start_managed_process(
+        "partition", [sys.executable, "-c", script], dict(os.environ), records,
+    )
+    process = record["process"]
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.read_text() == ""
+        gate._terminate_processes(records, grace_seconds=0.5)
+        assert process.returncode == 0
+        assert not gate._group_alive(record["pgid"])
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+
+
+def test_partition_environments_isolate_databases_redis_caches_and_outputs(tmp_path):
+    from ops import ci_pytest_gate as gate
+
+    main, ownership, aggregate = gate._partition_environments(tmp_path)
+    assert main["V2_ALPHA_POSTGRES_ADMIN_URL"].endswith(":5432/postgres")
+    assert ownership["V2_ALPHA_POSTGRES_ADMIN_URL"].endswith(":5433/postgres")
+    assert main["REDIS_URL"].endswith(":6379/0")
+    assert ownership["REDIS_URL"].endswith(":6380/0")
+    caches = {main["CI_PYTEST_CACHE_DIR"], ownership["CI_PYTEST_CACHE_DIR"], aggregate["CI_PYTEST_CACHE_DIR"]}
+    assert len(caches) == 3
+    assert all(Path(path).parent == tmp_path for path in caches)
+
+
+@pytest.mark.parametrize("encoding", ["raw", "base64", "hex"])
+def test_partition_artifact_scan_rejects_identity_key_encodings(tmp_path, monkeypatch, encoding):
+    from ops import ci_pytest_gate as gate
+
+    key = "identity-key-" + "x" * 52
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", key)
+    value = {"raw": key, "base64": base64.b64encode(key.encode()).decode(), "hex": key.encode().hex()}[encoding]
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "artifact.txt").write_text(value)
+    with pytest.raises(RuntimeError, match="CI_PYTEST_IDENTITY_ARTIFACT_LEAK"):
+        gate._scan_identity_key([output])
+
+
+@pytest.mark.skipif(os.name == "nt", reason="CI partition supervisor runs on ubuntu")
+def test_partition_start_failure_reaps_already_started_group(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    real_popen = subprocess.Popen
+    started = []
+
+    def start(command, **kwargs):
+        if started:
+            raise OSError("injected second partition start failure")
+        process = real_popen(
+            [sys.executable, "-c", "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"],
+            start_new_session=kwargs["start_new_session"],
+        )
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(gate.subprocess, "Popen", start)
+    monkeypatch.setattr(gate.sys, "argv", [
+        "gate", "--partitions", str(tmp_path / "main"), str(tmp_path / "ownership"), str(tmp_path / "aggregate"),
+    ])
+    with pytest.raises(OSError, match="second partition start failure"):
+        gate._partitions_main()
+    assert started[0].poll() is not None
+    state = json.loads((tmp_path / "aggregate" / "processes.json").read_text())
+    assert state["phase"] == "failed" and state["processes"][0]["exit_code"] is not None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="CI partition supervisor runs on ubuntu")
+def test_partition_supervisor_handles_term_and_reaps_both_groups(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    real_popen = subprocess.Popen
+    started = []
+    both_started = threading.Event()
+
+    def start(command, **kwargs):
+        process = real_popen(
+            [sys.executable, "-c", "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"],
+            start_new_session=kwargs["start_new_session"],
+        )
+        started.append(process)
+        if len(started) == 2:
+            both_started.set()
+        return process
+
+    def cancel():
+        assert both_started.wait(5)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(gate.subprocess, "Popen", start)
+    monkeypatch.setattr(gate, "_PROCESS_TERM_GRACE_SECONDS", 0.05)
+    monkeypatch.setattr(gate.sys, "argv", [
+        "gate", "--partitions", str(tmp_path / "main"), str(tmp_path / "ownership"), str(tmp_path / "aggregate"),
+    ])
+    thread = threading.Thread(target=cancel)
+    thread.start()
+    assert gate._partitions_main() == 128 + signal.SIGTERM
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    assert all(process.returncode in {-signal.SIGTERM, -signal.SIGKILL} for process in started)
+    state = json.loads((tmp_path / "aggregate" / "processes.json").read_text())
+    assert state["phase"] == "cancelled"
 
 
 def test_progress_does_not_use_product_fault_injected_fsync(tmp_path, monkeypatch):

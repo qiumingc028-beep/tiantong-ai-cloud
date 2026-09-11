@@ -1,16 +1,19 @@
 """Execute every collected test and verify its JUnit result, without a stale total."""
 from __future__ import annotations
 
-import json
+import base64
 import hashlib
 import hmac
+import json
 import os
 from os import fsync as _progress_fsync
-import re
 from pathlib import Path
+import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
@@ -21,6 +24,7 @@ _NODE_IDENTITIES: dict[str, str] = {}
 _OUTCOME_PRIORITY = {"passed": 0, "skipped": 1, "failed": 2}
 _PROGRESS_ROOT: Path | None = None
 _LOCAL_IDENTITY_KEY = b"r297-local-pytest-identity-only"
+_PROCESS_TERM_GRACE_SECONDS = 5.0
 
 
 def _progress_path(name: str) -> Path | None:
@@ -139,6 +143,27 @@ def validate_report(report: Path, manifest: Path, *, minimum: int = 1846) -> dic
     return totals
 
 
+def validate_partition_output(output: Path, *, head: str, run_id: str, run_attempt: str, minimum: int) -> list[str]:
+    expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt, "exit_code": 0}
+    run = json.loads((output / "run.json").read_text(encoding="utf-8"))
+    if not isinstance(run, dict) or any(type(run.get(key)) is not type(value) or run.get(key) != value
+                                        for key, value in expected.items()):
+        raise ValueError("PYTEST_PARTITION_RUN_MISMATCH_OR_FAILED")
+    status = json.loads((output / "status.json").read_text(encoding="utf-8"))
+    if not isinstance(status, dict) or status.get("result") != "COMPLETE" or type(status.get("exitstatus")) is not int or status.get("exitstatus") != 0:
+        raise ValueError("PYTEST_PARTITION_INCOMPLETE")
+    manifest = output / "collected-nodeids.json"
+    validate_report(output / "junit.xml", manifest, minimum=minimum)
+    nodes = json.loads(manifest.read_text(encoding="utf-8"))
+    if any(not isinstance(node, str) or not re.fullmatch(r"[0-9a-f]{64}", node) for node in nodes):
+        raise ValueError("PYTEST_PARTITION_COLLECTION_INVALID")
+    progress = [json.loads(line) for line in (output / "progress.jsonl").read_text(encoding="utf-8").splitlines()]
+    executed = [row.get("nodeid_sha256") for row in progress if row.get("phase") == "teardown"]
+    if sorted(executed) != sorted(nodes):
+        raise ValueError("PYTEST_EXECUTED_NODEIDS_MISMATCH")
+    return nodes
+
+
 def validate_partitions(full_manifest: Path, outputs: list[Path], *, head: str, run_id: str, run_attempt: str) -> dict:
     """Require two successful, disjoint executions of the independently collected tree."""
     full = json.loads(full_manifest.read_text(encoding="utf-8"))
@@ -148,21 +173,9 @@ def validate_partitions(full_manifest: Path, outputs: list[Path], *, head: str, 
         raise ValueError("PYTEST_FULL_COLLECTION_INVALID")
     combined = set()
     for output in outputs:
-        run = json.loads((output / "run.json").read_text(encoding="utf-8"))
-        if any(type(run.get(key)) is not type(value) or run.get(key) != value for key, value in {"head": head, "run_id": run_id, "run_attempt": run_attempt, "exit_code": 0}.items()):
-            raise ValueError("PYTEST_PARTITION_RUN_MISMATCH_OR_FAILED")
-        status = json.loads((output / "status.json").read_text(encoding="utf-8"))
-        if status.get("result") != "COMPLETE" or type(status.get("exitstatus")) is not int or status.get("exitstatus") != 0:
-            raise ValueError("PYTEST_PARTITION_INCOMPLETE")
-        manifest = output / "collected-nodeids.json"
-        validate_report(output / "junit.xml", manifest, minimum=1)
-        nodes = json.loads(manifest.read_text(encoding="utf-8"))
-        if any(not isinstance(node, str) for node in nodes):
-            raise ValueError("PYTEST_PARTITION_COLLECTION_INVALID")
-        progress = [json.loads(line) for line in (output / "progress.jsonl").read_text(encoding="utf-8").splitlines()]
-        executed = [row["nodeid_sha256"] for row in progress if row.get("phase") == "teardown"]
-        if sorted(executed) != sorted(nodes):
-            raise ValueError("PYTEST_EXECUTED_NODEIDS_MISMATCH")
+        nodes = validate_partition_output(
+            output, head=head, run_id=run_id, run_attempt=run_attempt, minimum=1,
+        )
         if combined.intersection(nodes):
             raise ValueError("PYTEST_PARTITION_OVERLAP")
         combined.update(nodes)
@@ -171,10 +184,212 @@ def validate_partitions(full_manifest: Path, outputs: list[Path], *, head: str, 
     return {"collected": len(full), "executed": len(combined), "overlap": 0, "missing": 0}
 
 
+def validate_aggregate_output(output: Path, *, head: str, run_id: str, run_attempt: str) -> dict:
+    result = json.loads((output / "aggregate.json").read_text(encoding="utf-8"))
+    expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt, "result": "PASS"}
+    if not isinstance(result, dict) or any(result.get(key) != value for key, value in expected.items()):
+        raise ValueError("PYTEST_AGGREGATE_IDENTITY_OR_RESULT_INVALID")
+    counts = {key: result.get(key) for key in ("collected", "executed", "overlap", "missing")}
+    if (any(type(value) is not int for value in counts.values()) or counts["collected"] < 1
+        or counts["collected"] != counts["executed"] or counts["overlap"] != 0 or counts["missing"] != 0):
+        raise ValueError("PYTEST_AGGREGATE_COVERAGE_INVALID")
+    return result
+
+
 def _run_identity() -> dict:
     return {"head": os.getenv("RELEASE_SOURCE_SHA", ""),
             "run_id": os.getenv("GITHUB_RUN_ID", "local"),
             "run_attempt": os.getenv("GITHUB_RUN_ATTEMPT", "1")}
+
+
+def _partition_environments(cache_root: Path) -> tuple[dict, dict, dict]:
+    base = dict(os.environ)
+    main = dict(base, V2_ALPHA_POSTGRES_ADMIN_URL="postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres",
+                STORE_AUTHZ_POSTGRES_URL="postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres",
+                REDIS_URL="redis://127.0.0.1:6379/0",
+                CI_PYTEST_IGNORE="tests/test_task_center_full_entrypoint_ownership.py",
+                CI_PYTEST_MINIMUM="1700", CI_PYTEST_CACHE_DIR=str(cache_root / "main"))
+    main.pop("CI_PYTEST_TARGET", None)
+    ownership = dict(base, V2_ALPHA_POSTGRES_ADMIN_URL="postgresql+psycopg2://ci:ci@127.0.0.1:5433/postgres",
+                     STORE_AUTHZ_POSTGRES_URL="postgresql+psycopg2://ci:ci@127.0.0.1:5433/postgres",
+                     REDIS_URL="redis://127.0.0.1:6380/0",
+                     CI_PYTEST_TARGET="tests/test_task_center_full_entrypoint_ownership.py",
+                     CI_PYTEST_MINIMUM="500", CI_PYTEST_CACHE_DIR=str(cache_root / "ownership"))
+    ownership.pop("CI_PYTEST_IGNORE", None)
+    aggregate = dict(base, CI_PYTEST_CACHE_DIR=str(cache_root / "aggregate"))
+    for name in ("CI_PYTEST_TARGET", "CI_PYTEST_IGNORE", "CI_PYTEST_MINIMUM"):
+        aggregate.pop(name, None)
+    return main, ownership, aggregate
+
+
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _terminate_processes(records: list[dict], *, grace_seconds: float = 5.0) -> None:
+    for record in records:
+        record["process"].poll()
+    for record in records:
+        if _group_alive(record["pgid"]):
+            try:
+                os.killpg(record["pgid"], signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+    deadline = time.monotonic() + grace_seconds
+    while any(_group_alive(record["pgid"]) for record in records) and time.monotonic() < deadline:
+        for record in records:
+            record["process"].poll()
+        time.sleep(0.02)
+    for record in records:
+        record["process"].poll()
+    for record in records:
+        if _group_alive(record["pgid"]):
+            try:
+                os.killpg(record["pgid"], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    for record in records:
+        try:
+            record["process"].wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("PYTEST_PROCESS_REAP_FAILED") from None
+
+
+def _write_process_state(path: Path, records: list[dict], phase: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"phase": phase, "processes": [
+        {"name": record["name"], "pid": record["pid"], "pgid": record["pgid"],
+         "exit_code": record["process"].poll()} for record in records
+    ]}
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _scan_identity_key(outputs: list[Path]) -> None:
+    value = os.environ.get("CI_PYTEST_IDENTITY_KEY", "")
+    if len(value) < 43:
+        raise RuntimeError("CI_PYTEST_IDENTITY_KEY_MISSING")
+    raw = value.encode()
+    needles = (raw, base64.b64encode(raw), raw.hex().encode())
+    for output in outputs:
+        for path in output.rglob("*"):
+            if path.is_file() and any(needle in path.read_bytes() for needle in needles):
+                raise RuntimeError("CI_PYTEST_IDENTITY_ARTIFACT_LEAK")
+
+
+class _SignalExit(Exception):
+    def __init__(self, signum: int):
+        self.signum = signum
+
+
+def _start_managed_process(name: str, command: list[str], environment: dict, records: list[dict]) -> dict:
+    deferred: list[int] = []
+    previous_handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
+
+    def defer(signum, _frame):
+        deferred.append(signum)
+
+    try:
+        for signum in previous_handlers:
+            signal.signal(signum, defer)
+        process = subprocess.Popen(command, env=environment, start_new_session=True)
+        record = {"name": name, "process": process, "pid": process.pid, "pgid": process.pid}
+        records.append(record)
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+    if deferred:
+        raise _SignalExit(deferred[0])
+    return record
+
+
+def _partitions_main() -> int:
+    main_output, ownership_output, aggregate_output = map(Path, sys.argv[2:5])
+    process_state = aggregate_output / "processes.json"
+    records: list[dict] = []
+    previous_handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
+
+    def interrupted(signum, _frame):
+        raise _SignalExit(signum)
+
+    for signum in previous_handlers:
+        signal.signal(signum, interrupted)
+    result = 1
+    phase = "failed"
+    cache_directory = tempfile.TemporaryDirectory(prefix="r297-pytest-caches-")
+    try:
+        main_env, ownership_env, aggregate_env = _partition_environments(Path(cache_directory.name))
+        for name, output, environment in (
+            ("main", main_output, main_env), ("ownership", ownership_output, ownership_env),
+        ):
+            _start_managed_process(
+                name,
+                [sys.executable, "-m", "ops.ci_pytest_gate", str(output)],
+                environment,
+                records,
+            )
+            _write_process_state(process_state, records, "running")
+        exits = [record["process"].wait() for record in records]
+        aggregate_env.update(
+            CI_MAIN_JOB_RESULT="success" if exits[0] == 0 else "failure",
+            CI_MATRIX_JOB_RESULT="success" if exits[1] == 0 else "failure",
+        )
+        aggregate_record = _start_managed_process(
+            "aggregate",
+            [sys.executable, "-m", "ops.ci_pytest_gate", "--aggregate", str(aggregate_output),
+             str(main_output), str(ownership_output)],
+            aggregate_env,
+            records,
+        )
+        _write_process_state(process_state, records, "aggregating")
+        aggregate_exit = aggregate_record["process"].wait()
+        _scan_identity_key([main_output, ownership_output, aggregate_output])
+        result = 0 if exits == [0, 0] and aggregate_exit == 0 else 1
+        phase = "complete"
+    except _SignalExit as exc:
+        result = 128 + exc.signum
+        phase = "cancelled"
+    finally:
+        cleanup_error = None
+        try:
+            for signum in previous_handlers:
+                signal.signal(signum, signal.SIG_IGN)
+            try:
+                _terminate_processes(records, grace_seconds=_PROCESS_TERM_GRACE_SECONDS)
+            except Exception as exc:
+                cleanup_error = exc
+                phase = "cleanup_failed"
+            finally:
+                cache_directory.cleanup()
+            _write_process_state(process_state, records, phase)
+            if cleanup_error is not None:
+                raise cleanup_error
+        finally:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
+    return result
+
+
+def _validation_main(kind: str) -> int:
+    identity = _run_identity()
+    try:
+        if kind == "--validate-partition":
+            validate_partition_output(Path(sys.argv[2]), minimum=int(sys.argv[3]), **identity)
+        else:
+            validate_aggregate_output(Path(sys.argv[2]), **identity)
+    except (OSError, ValueError, KeyError, TypeError, ET.ParseError) as exc:
+        code = str(exc) if re.fullmatch(r"PYTEST_[A-Z_]+", str(exc)) else type(exc).__name__
+        print(f"CI_PYTEST_VALIDATION=BLOCK ({code})")
+        return 1
+    print("CI_PYTEST_VALIDATION=PASS")
+    return 0
 
 
 def _aggregate_main() -> int:
@@ -190,8 +405,11 @@ def _aggregate_main() -> int:
         manifest = output / "full-collected-nodeids.json"
         env = dict(os.environ, CI_PYTEST_COLLECTION_MANIFEST=str(manifest))
         env.pop("CI_PYTEST_PROGRESS_DIRECTORY", None)
-        result = subprocess.run([sys.executable, "-m", "pytest", "tests/", "--collect-only", "-q",
-                                 "-p", "ops.ci_pytest_gate"], env=env, text=True,
+        command = [sys.executable, "-m", "pytest", "tests/", "--collect-only", "-q",
+                   "-p", "ops.ci_pytest_gate"]
+        if cache_directory := os.getenv("CI_PYTEST_CACHE_DIR"):
+            command.extend(["-o", f"cache_dir={cache_directory}"])
+        result = subprocess.run(command, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         (output / "collection.log").write_text(_redact_text(result.stdout), encoding="utf-8")
         if result.returncode != 0:
@@ -210,6 +428,10 @@ def _aggregate_main() -> int:
 
 
 def main() -> int:
+    if sys.argv[1] == "--partitions":
+        return _partitions_main()
+    if sys.argv[1] in {"--validate-partition", "--validate-aggregate"}:
+        return _validation_main(sys.argv[1])
     if sys.argv[1] == "--aggregate":
         return _aggregate_main()
     output = Path(sys.argv[1])
@@ -241,6 +463,8 @@ def main() -> int:
             sys.executable, "-m", "pytest", "-v", target, "--tb=short", "--show-capture=no",
             "-p", "ops.ci_pytest_gate", f"--junitxml={raw_report}",
         ]
+        if cache_directory := os.getenv("CI_PYTEST_CACHE_DIR"):
+            command.extend(["-o", f"cache_dir={cache_directory}"])
         if ignored:
             command.append(f"--ignore={ignored}")
         result = subprocess.run(command, env=env, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

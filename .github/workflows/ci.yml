@@ -745,10 +745,7 @@ jobs:
         timeout-minutes: 90
         env:
           R297_PROCESS_ACCEPTANCE_EVIDENCE: /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
-          CI_PYTEST_IGNORE: tests/test_task_center_full_entrypoint_ownership.py
-          CI_PYTEST_MINIMUM: "1700"
         run: |
-          set +e
           CI_PYTEST_IDENTITY_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
           if [[ ${#CI_PYTEST_IDENTITY_KEY} -lt 64 ]]; then
             echo "CI_PYTEST_IDENTITY_KEY_MISSING"
@@ -759,35 +756,17 @@ jobs:
           export R297_REDACT_EXACT_ENV_NAMES=CI_PYTEST_IDENTITY_KEY
           trap 'unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES' EXIT
           bash -n ops/r297_workbench_deploy.sh || exit 1
-          python -m ops.ci_pytest_gate /tmp/r297-pytest &
-          main_pid=$!
-          (
-            export V2_ALPHA_POSTGRES_ADMIN_URL=postgresql+psycopg2://ci:ci@127.0.0.1:5433/postgres
-            export STORE_AUTHZ_POSTGRES_URL=postgresql+psycopg2://ci:ci@127.0.0.1:5433/postgres
-            export REDIS_URL=redis://127.0.0.1:6380/0
-            export CI_PYTEST_TARGET=tests/test_task_center_full_entrypoint_ownership.py
-            export CI_PYTEST_MINIMUM=500
-            unset CI_PYTEST_IGNORE
-            python -m ops.ci_pytest_gate /tmp/r297-ownership-matrix
-          ) &
-          matrix_pid=$!
-          wait "$main_pid"
-          main_exit=$?
-          wait "$matrix_pid"
-          matrix_exit=$?
-          if [[ $main_exit -eq 0 ]]; then export CI_MAIN_JOB_RESULT=success; else export CI_MAIN_JOB_RESULT=failure; fi
-          if [[ $matrix_exit -eq 0 ]]; then export CI_MATRIX_JOB_RESULT=success; else export CI_MATRIX_JOB_RESULT=failure; fi
-          unset CI_PYTEST_IGNORE CI_PYTEST_TARGET CI_PYTEST_MINIMUM
-          python -m ops.ci_pytest_gate --aggregate /tmp/r297-full-coverage /tmp/r297-pytest /tmp/r297-ownership-matrix
-          aggregate_exit=$?
+          python -m ops.ci_pytest_gate --partitions \
+            /tmp/r297-pytest /tmp/r297-ownership-matrix /tmp/r297-full-coverage
+          result=$?
           unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES
-          if [[ $main_exit -ne 0 || $matrix_exit -ne 0 || $aggregate_exit -ne 0 ]]; then exit 1; fi
+          exit "$result"
 
       - name: Upload complete pytest execution report
         if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: r297-pytest-${{ github.event.pull_request.head.sha || github.sha }}
+          name: r297-pytest-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
           path: /tmp/r297-pytest/
           if-no-files-found: error
           retention-days: 14
@@ -796,7 +775,7 @@ jobs:
         if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}
+          name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
           path: /tmp/r297-ownership-matrix/
           if-no-files-found: error
           retention-days: 14
@@ -805,7 +784,7 @@ jobs:
         if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: r297-full-coverage-${{ github.event.pull_request.head.sha || github.sha }}
+          name: r297-full-coverage-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
           path: /tmp/r297-full-coverage/
           if-no-files-found: error
           retention-days: 14
@@ -872,35 +851,17 @@ jobs:
     env:
       RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Download ownership matrix execution report
         uses: actions/download-artifact@v8
         with:
-          name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}
+          name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
           path: /tmp/r297-ownership-matrix
       - name: Require complete passing ownership execution
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-
-          root = Path("/tmp/r297-ownership-matrix")
-          run = json.loads((root / "run.json").read_text())
-          status = json.loads((root / "status.json").read_text())
-          nodes = json.loads((root / "collected-nodeids.json").read_text())
-          progress = [json.loads(line) for line in (root / "progress.jsonl").read_text().splitlines()]
-          xml_root = ET.parse(root / "junit.xml").getroot()
-          suites = [xml_root] if xml_root.tag == "testsuite" else xml_root.findall("testsuite")
-          totals = {key: sum(int(suite.attrib.get(key, "0")) for suite in suites)
-                    for key in ("tests", "failures", "errors", "skipped")}
-          executed = [row["nodeid_sha256"] for row in progress if row.get("phase") == "teardown"]
-          assert run == {"head": "${{ env.RELEASE_SOURCE_SHA }}", "run_id": "${{ github.run_id }}", "run_attempt": "${{ github.run_attempt }}", "exit_code": 0}
-          assert status.get("result") == "COMPLETE" and status.get("exitstatus") == 0
-          assert len(nodes) >= 500 and len(nodes) == len(set(nodes))
-          assert sorted(executed) == sorted(nodes)
-          assert totals["tests"] == len(nodes)
-          assert all(totals[key] == 0 for key in ("failures", "errors", "skipped"))
-          PY
+        run: python -m ops.ci_pytest_gate --validate-partition /tmp/r297-ownership-matrix 500
 
   pytest-complete-gate:
     name: Exact full-repository pytest coverage gate
@@ -911,22 +872,14 @@ jobs:
     env:
       RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Download exact coverage decision
         uses: actions/download-artifact@v8
         with:
-          name: r297-full-coverage-${{ env.RELEASE_SOURCE_SHA }}
+          name: r297-full-coverage-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_attempt }}
           path: /tmp/r297-full-coverage
       - name: Require exact same-head collection union
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          result = json.loads(Path("/tmp/r297-full-coverage/aggregate.json").read_text())
-          assert result.get("head") == "${{ env.RELEASE_SOURCE_SHA }}"
-          assert result.get("run_id") == "${{ github.run_id }}"
-          assert result.get("run_attempt") == "${{ github.run_attempt }}"
-          assert result.get("result") == "PASS"
-          assert result.get("overlap") == 0 and result.get("missing") == 0
-          assert result.get("collected") == result.get("executed")
-          PY
+        run: python -m ops.ci_pytest_gate --validate-aggregate /tmp/r297-full-coverage
