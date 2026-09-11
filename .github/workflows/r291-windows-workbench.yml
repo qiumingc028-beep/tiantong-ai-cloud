@@ -26,10 +26,12 @@ on:
       - ops/r297_acceptance_run.py
       - ops/r297_evidence_preflight.py
       - ops/r297_evidence_events.py
+      - ops/r297_evidence_trust_manifest.test.json
       - ops/r297_ci_redact.py
       - ops/r297_trusted_windows_observer.py
       - ops/r297_windows_file_security.py
       - ops/r297_windows_recovery_probe.py
+      - ops/r297_windows_job_supervisor.py
       - ops/install_r297_trusted_windows_observer.ps1
       - ops/install_r297_windows_relay_receipt.ps1
       - ops/install_r297_trusted_linux_host.sh
@@ -52,6 +54,7 @@ on:
       - tests/test_r297_trusted_windows_observer.py
       - tests/test_r297_trusted_host_installers.py
       - tests/r297_windows_native_boundary.ps1
+      - .gitattributes
       - .github/workflows/r291-windows-workbench.yml
   push:
     branches:
@@ -72,10 +75,12 @@ on:
       - ops/r297_acceptance_run.py
       - ops/r297_evidence_preflight.py
       - ops/r297_evidence_events.py
+      - ops/r297_evidence_trust_manifest.test.json
       - ops/r297_ci_redact.py
       - ops/r297_trusted_windows_observer.py
       - ops/r297_windows_file_security.py
       - ops/r297_windows_recovery_probe.py
+      - ops/r297_windows_job_supervisor.py
       - ops/install_r297_trusted_windows_observer.ps1
       - ops/install_r297_windows_relay_receipt.ps1
       - ops/install_r297_trusted_linux_host.sh
@@ -98,6 +103,7 @@ on:
       - tests/test_r297_trusted_windows_observer.py
       - tests/test_r297_trusted_host_installers.py
       - tests/r297_windows_native_boundary.ps1
+      - .gitattributes
       - .github/workflows/r291-windows-workbench.yml
 
 permissions:
@@ -240,37 +246,119 @@ jobs:
             [void][scriptblock]::Create([IO.File]::ReadAllText((Resolve-Path $_)))
           }
 
-      - name: Run native ACL handle and hardlink boundary probe
-        id: native_boundary
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          ./tests/r297_windows_native_boundary.ps1
-          Write-Output 'R297_NATIVE_POWER_LOSS_REBOOT=NOT_TESTED'
-
       - name: Run complete Windows recovery regressions
         id: native_reports
         shell: pwsh
         env:
           ASSET_STORAGE_ROOT: ${{ runner.temp }}\r297-assets
-          R297_NATIVE_BOUNDARY_OUTCOME: ${{ steps.native_boundary.outcome }}
         run: |
+          Write-Output 'R297_EVIDENCE_CLASS=TEST_ONLY'
+          Write-Output 'R297_FORMAL_EVIDENCE=false'
+          Write-Output 'R297_NATIVE_POWER_LOSS_REBOOT=NOT_TESTED'
           $stepOutput = $env:GITHUB_OUTPUT
           Remove-Item Env:GITHUB_OUTPUT
           $nonce = [Guid]::NewGuid().ToString('N')
           $work = Join-Path $env:RUNNER_TEMP "r297-windows-native-work-$nonce"
           $stage = Join-Path $env:RUNNER_TEMP "r297-windows-native-stage-$nonce"
           $publish = Join-Path $env:RUNNER_TEMP "r297-windows-native-publish-$nonce"
-          [void](New-Item -ItemType Directory -Path $work)
-          $log = Join-Path $work 'pytest.log'
-          $junit = Join-Path $work 'junit.xml'
-          $testExit = 1
-          $publicationError = 'NONE'
-          $cleanupError = 'NONE'
-          $logBytes = $null
-          $junitBytes = $null
-          try {
-            python -m pytest -q `
+          $log = Join-Path $work 'r297-windows-native-pytest.log'
+          $junit = Join-Path $work 'r297-windows-native-junit.xml'
+          $boundaryLog = Join-Path $work 'boundary.log'
+          $boundaryGate = Join-Path $work 'boundary-supervisor.gate'
+          $boundarySupervisorResultPath = Join-Path $work 'boundary-supervisor-result.json'
+          $pytestGate = Join-Path $work 'pytest-supervisor.gate'
+          $pytestSupervisorResultPath = Join-Path $work 'pytest-supervisor-result.json'
+          $safeLog = Join-Path $stage 'r297-windows-native-pytest.log'
+          $safeJunit = Join-Path $stage 'r297-windows-native-junit.xml'
+          $safeClassification = Join-Path $stage 'r297-windows-native-classification.txt'
+          $status = 1
+          $publicationReady = $false
+          $copyComplete = $false
+          $reportsComplete = $false
+          $boundarySupervisionComplete = $false
+          $workOwned = $false
+          $stageOwned = $false
+          $primaryErrorCode = $null
+          $publicationErrorCode = $null
+          $cleanupErrorCode = $null
+          $boundaryResult = 'BLOCK'
+          function Remove-OwnedTree([string]$Path, [string]$ExpectedLeaf) {
+            try {
+              $full = [IO.Path]::GetFullPath($Path).TrimEnd([IO.Path]::DirectorySeparatorChar)
+              $root = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
+              if (-not [string]::Equals([IO.Path]::GetDirectoryName($full), $root, [StringComparison]::OrdinalIgnoreCase) -or
+                  -not [string]::Equals([IO.Path]::GetFileName($full), $ExpectedLeaf, [StringComparison]::Ordinal) -or
+                  -not (Test-Path -LiteralPath $full -PathType Container)) {
+                throw 'R297_NATIVE_REPORT_CLEANUP_OWNERSHIP_INVALID'
+              }
+              $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw 'R297_NATIVE_REPORT_CLEANUP_OWNERSHIP_INVALID'
+              }
+              $marker = Join-Path $full '.r297-owner'
+              if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or
+                  ([IO.File]::ReadAllText($marker) -cne $nonce)) {
+                throw 'R297_NATIVE_REPORT_CLEANUP_OWNERSHIP_INVALID'
+              }
+              Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop
+              if (Test-Path -LiteralPath $full) { throw 'R297_NATIVE_REPORT_CLEANUP_FAILED' }
+              return $null
+            } catch {
+              return 'R297_NATIVE_REPORT_CLEANUP_FAILED'
+            }
+          }
+          if ((Test-Path -LiteralPath $work) -or (Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $publish)) {
+            $publicationErrorCode = 'R297_NATIVE_REPORT_TARGET_NOT_FRESH'
+          } else {
+            try {
+              New-Item -ItemType Directory -Path $work -ErrorAction Stop | Out-Null
+              [IO.File]::WriteAllText((Join-Path $work '.r297-owner'), $nonce, [Text.Encoding]::ASCII)
+              $workOwned = $true
+            } catch {
+              $publicationErrorCode = 'R297_NATIVE_REPORT_WORKDIR_FAILED'
+            }
+          }
+          if (-not $publicationErrorCode) {
+            python ops/r297_windows_job_supervisor.py `
+              --gate $boundaryGate --log $boundaryLog --result $boundarySupervisorResultPath `
+              --timeout-seconds 300 -- pwsh -NoProfile -NonInteractive -File tests/r297_windows_native_boundary.ps1
+            $boundarySupervisorStatus = $LASTEXITCODE
+            if (-not (Test-Path -LiteralPath $boundarySupervisorResultPath -PathType Leaf)) {
+              $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+            } else {
+              try {
+                $boundarySupervisorResult = Get-Content -LiteralPath $boundarySupervisorResultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($boundarySupervisorResult.cleanup_error) { $cleanupErrorCode = [string]$boundarySupervisorResult.cleanup_error }
+                if ($boundarySupervisorResult.supervisor_error) {
+                  $primaryErrorCode = [string]$boundarySupervisorResult.supervisor_error
+                } elseif ($null -eq $boundarySupervisorResult.process_exit_code) {
+                  $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+                } else {
+                  $boundaryExit = [int]$boundarySupervisorResult.process_exit_code
+                  $boundaryPrimary = Select-String -LiteralPath $boundaryLog -Pattern '^R297_NATIVE_PRIMARY_ERROR=(R297_NATIVE_[A-Z_]+)$' | Select-Object -First 1
+                  $boundaryCleanup = Select-String -LiteralPath $boundaryLog -Pattern '^R297_NATIVE_CLEANUP_ERROR=R297_NATIVE_FIXTURE_CLEANUP_FAILED$' | Select-Object -First 1
+                  $boundaryComplete = Select-String -LiteralPath $boundaryLog -Pattern '^R297_NATIVE_PROBE_COMPLETE=true$' | Select-Object -First 1
+                  if ($boundaryCleanup) { $cleanupErrorCode = 'R297_NATIVE_FIXTURE_CLEANUP_FAILED' }
+                  if ($boundaryComplete) { $boundarySupervisionComplete = $true }
+                  else { $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED' }
+                  if ($boundaryExit -eq 0 -and $boundaryComplete -and -not $boundaryCleanup) {
+                    $boundaryResult = 'PASS'
+                  } elseif (-not $primaryErrorCode) {
+                    $primaryErrorCode = if ($boundaryPrimary) { [string]$boundaryPrimary.Matches[0].Groups[1].Value } else { 'R297_NATIVE_BOUNDARY_FAILED' }
+                  }
+                }
+              } catch {
+                $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+              }
+            }
+            if ($boundarySupervisorStatus -ne 0 -and -not $primaryErrorCode) {
+              $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+            }
+          }
+          if (-not $publicationErrorCode -and -not $cleanupErrorCode -and $boundarySupervisionComplete) {
+            python ops/r297_windows_job_supervisor.py `
+              --gate $pytestGate --log $log --result $pytestSupervisorResultPath `
+              --timeout-seconds 1200 -- python -m pytest -q `
               tests/test_r297_windows_file_security.py `
               tests/test_r297_windows_recovery.py `
               tests/test_r297_trusted_windows_observer.py `
@@ -278,84 +366,206 @@ jobs:
               tests/test_r297_trusted_host_installers.py::test_windows_installer_separates_candidate_from_fixed_observer `
               tests/test_r297_trusted_host_installers.py::test_windows_relay_receipt_is_admin_installed_into_protected_root `
               tests/test_r297_trusted_host_installers.py::test_windows_installer_rejects_acl_bypass_privileges_and_stale_logons `
-              --junitxml=$junit *> $log
-            $testExit = $LASTEXITCODE
-            python ops/r297_ci_redact.py $log
-            if ($LASTEXITCODE -ne 0) {
-              $publicationError = 'R297_NATIVE_REPORT_REDACTION_FAILED'
-            }
-            if (Test-Path -LiteralPath $junit) {
-              python ops/r297_ci_redact.py $junit
-              if ($LASTEXITCODE -ne 0) {
-                $publicationError = 'R297_NATIVE_REPORT_REDACTION_FAILED'
-              }
+              --junitxml=$junit
+            $supervisorStatus = $LASTEXITCODE
+            if (-not (Test-Path -LiteralPath $pytestSupervisorResultPath -PathType Leaf)) {
+              if (-not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED' }
             } else {
-              $publicationError = 'R297_NATIVE_JUNIT_MISSING'
-            }
-            if ($publicationError -eq 'NONE') {
-              $logBytes = [IO.File]::ReadAllBytes($log)
-              $junitBytes = [IO.File]::ReadAllBytes($junit)
-              Start-Sleep -Milliseconds 50
-              if (-not [Linq.Enumerable]::SequenceEqual[byte]($logBytes, [IO.File]::ReadAllBytes($log)) -or
-                  -not [Linq.Enumerable]::SequenceEqual[byte]($junitBytes, [IO.File]::ReadAllBytes($junit))) {
-                $publicationError = 'R297_NATIVE_REPORT_UNSTABLE'
-              }
-            }
-          } catch {
-            $publicationError = 'R297_NATIVE_REPORT_PUBLICATION_FAILED'
-          } finally {
-            try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop }
-            catch { $cleanupError = 'R297_NATIVE_REPORT_CLEANUP_FAILED' }
-          }
-          $boundaryResult = if ($env:R297_NATIVE_BOUNDARY_OUTCOME -ceq 'success') { 'PASS' } else { 'BLOCK' }
-          $finalExit = if ($testExit -eq 0 -and $boundaryResult -eq 'PASS' -and $publicationError -eq 'NONE' -and $cleanupError -eq 'NONE') { 0 } else { 1 }
-          $safeReportError = if ($publicationError -ne 'NONE') { $publicationError } else { $cleanupError }
-          try {
-            [void](New-Item -ItemType Directory -Path $stage -ErrorAction Stop)
-            if ($publicationError -eq 'NONE' -and $cleanupError -eq 'NONE') {
-              [IO.File]::WriteAllBytes((Join-Path $stage 'pytest.log'), $logBytes)
-              [IO.File]::WriteAllBytes((Join-Path $stage 'junit.xml'), $junitBytes)
-            } else {
-              [IO.File]::WriteAllText((Join-Path $stage 'pytest.log'), "$safeReportError`n", [Text.UTF8Encoding]::new($false))
-              [IO.File]::WriteAllText((Join-Path $stage 'junit.xml'), "<testsuite tests=`"1`" failures=`"1`"><testcase name=`"publication`"><failure>$safeReportError</failure></testcase></testsuite>", [Text.UTF8Encoding]::new($false))
               try {
-                [xml]$synthetic = [IO.File]::ReadAllText((Join-Path $stage 'junit.xml'))
-                if ($synthetic.testsuite.tests -cne '1' -or $synthetic.testsuite.failures -cne '1' -or
-                    $synthetic.testsuite.testcase.failure.InnerText -cne $safeReportError) {
-                  throw 'invalid'
+                $supervisorResult = Get-Content -LiteralPath $pytestSupervisorResultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($supervisorResult.cleanup_error) { $cleanupErrorCode = [string]$supervisorResult.cleanup_error }
+                if ($supervisorResult.supervisor_error) {
+                  if (-not $primaryErrorCode) { $primaryErrorCode = [string]$supervisorResult.supervisor_error }
+                } elseif ($null -eq $supervisorResult.process_exit_code) {
+                  if (-not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED' }
+                } else {
+                  $status = [int]$supervisorResult.process_exit_code
+                  $reportsComplete = $true
+                  if ($status -ne 0 -and -not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_TEST_FAILED' }
                 }
-              } catch { throw 'R297_NATIVE_SYNTHETIC_JUNIT_INVALID' }
+              } catch {
+                if (-not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED' }
+              }
             }
-            [IO.File]::WriteAllText((Join-Path $stage 'classification.txt'), "R297_EVIDENCE_CLASS=TEST_ONLY`nR297_FORMAL_EVIDENCE=false`n", [Text.UTF8Encoding]::new($false))
-            [IO.File]::WriteAllText((Join-Path $stage 'result.txt'), "R297_NATIVE_SOURCE_SHA=$env:RELEASE_SOURCE_SHA`nR297_NATIVE_RUN_ID=${{ github.run_id }}`nR297_NATIVE_RUN_ATTEMPT=${{ github.run_attempt }}`nR297_NATIVE_BOUNDARY_RESULT=$boundaryResult`nR297_NATIVE_TEST_EXIT=$testExit`nR297_NATIVE_PUBLICATION_ERROR=$publicationError`nR297_NATIVE_CLEANUP_ERROR=$cleanupError`n", [Text.UTF8Encoding]::new($false))
-            [IO.Directory]::Move($stage, $publish)
-          } catch {
-            $finalExit = 1
-            $publicationError = 'R297_NATIVE_REPORT_PUBLICATION_FAILED'
-            $publish = Join-Path $env:RUNNER_TEMP "r297-windows-native-unpublished-$nonce"
-            try { if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop } }
-            catch { $cleanupError = 'R297_NATIVE_REPORT_CLEANUP_FAILED' }
+            if ($supervisorStatus -ne 0 -and -not $primaryErrorCode) {
+              $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+            }
+            if ($reportsComplete -and $status -eq 0 -and $boundaryResult -ne 'PASS') {
+              $status = 1
+              if (-not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_BOUNDARY_FAILED' }
+            }
           }
-          $publishedNames = if (Test-Path -LiteralPath $publish -PathType Container) {
-            @((Get-ChildItem -LiteralPath $publish -File | ForEach-Object Name | Sort-Object))
-          } else { @() }
-          if (($publishedNames -join ',') -ceq 'classification.txt,junit.xml,pytest.log,result.txt') {
-            "publish_path=$publish" | Out-File -FilePath $stepOutput -Encoding utf8 -Append
-            "publication_ready=true" | Out-File -FilePath $stepOutput -Encoding utf8 -Append
-            Get-Content -LiteralPath (Join-Path $publish 'pytest.log')
+          if (-not $publicationErrorCode -and -not $cleanupErrorCode -and $boundarySupervisionComplete -and $reportsComplete) {
+            try {
+              if (-not (Test-Path -LiteralPath $log -PathType Leaf) -or -not (Test-Path -LiteralPath $junit -PathType Leaf)) {
+                throw 'R297_NATIVE_REPORT_MISSING'
+              }
+              New-Item -ItemType Directory -Path $stage -ErrorAction Stop | Out-Null
+              [IO.File]::WriteAllText((Join-Path $stage '.r297-owner'), $nonce, [Text.Encoding]::ASCII)
+              $stageOwned = $true
+              Copy-Item -LiteralPath $log -Destination $safeLog -ErrorAction Stop
+              Copy-Item -LiteralPath $junit -Destination $safeJunit -ErrorAction Stop
+              [IO.File]::WriteAllText(
+                $safeClassification,
+                "R297_EVIDENCE_CLASS=TEST_ONLY`nR297_FORMAL_EVIDENCE=false`nR297_NATIVE_SOURCE_SHA=$env:RELEASE_SOURCE_SHA`nR297_NATIVE_RUN_ID=${{ github.run_id }}`nR297_NATIVE_RUN_ATTEMPT=${{ github.run_attempt }}`nR297_NATIVE_BOUNDARY_RESULT=$boundaryResult`n",
+                [Text.UTF8Encoding]::new($false)
+              )
+              python ops/r297_ci_redact.py $safeLog $safeJunit
+              if ($LASTEXITCODE -ne 0) { throw 'R297_NATIVE_REPORT_REDACTION_FAILED' }
+              $before = @(
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $safeLog).Hash,
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $safeJunit).Hash
+              )
+              python ops/r297_ci_redact.py $safeLog $safeJunit
+              $after = @(
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $safeLog).Hash,
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $safeJunit).Hash
+              )
+              if ($LASTEXITCODE -ne 0 -or $before[0] -cne $after[0] -or $before[1] -cne $after[1]) {
+                throw 'R297_NATIVE_REPORT_REDACTION_UNSTABLE'
+              }
+              python -c "import sys,xml.etree.ElementTree as E;r=E.parse(sys.argv[1]).getroot();s=[r] if r.tag=='testsuite' else r.findall('testsuite');sys.exit(0 if s and sum(int(x.attrib.get('tests','0')) for x in s)>0 else 1)" $safeJunit
+              if ($LASTEXITCODE -ne 0) { throw 'R297_NATIVE_JUNIT_INVALID' }
+              $validatedDigests = @{
+                'r297-windows-native-pytest.log' = $after[0]
+                'r297-windows-native-junit.xml' = $after[1]
+                'r297-windows-native-classification.txt' = (Get-FileHash -Algorithm SHA256 -LiteralPath $safeClassification).Hash
+              }
+              New-Item -ItemType Directory -Path $publish -ErrorAction Stop | Out-Null
+              foreach ($name in @('r297-windows-native-pytest.log', 'r297-windows-native-junit.xml', 'r297-windows-native-classification.txt')) {
+                $source = Join-Path $stage $name
+                $destination = Join-Path $publish $name
+                $sourceItem = Get-Item -LiteralPath $source -Force -ErrorAction Stop
+                if ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                  throw 'R297_NATIVE_REPORT_PATH_INVALID'
+                }
+                $stream = [IO.File]::Open($source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+                try {
+                  $memory = [IO.MemoryStream]::new()
+                  try {
+                    $stream.CopyTo($memory)
+                    $bytes = $memory.ToArray()
+                  } finally {
+                    $memory.Dispose()
+                  }
+                } finally {
+                  $stream.Dispose()
+                }
+                [IO.File]::WriteAllBytes($destination, $bytes)
+                if ((Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash -cne $validatedDigests[$name]) {
+                  throw 'R297_NATIVE_REPORT_DIGEST_MISMATCH'
+                }
+              }
+              if (@(Get-ChildItem -LiteralPath $publish -Force).Count -ne 3) {
+                throw 'R297_NATIVE_REPORT_FILE_SET_INVALID'
+              }
+              $logDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-pytest.log')).Hash
+              $junitDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-junit.xml')).Hash
+              $classificationDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-classification.txt')).Hash
+              $copyComplete = $true
+            } catch {
+              $code = [string]$_.Exception.Message
+              if ($code -notmatch '^R297_NATIVE_[A-Z_]+$') {
+                $code = 'R297_NATIVE_REPORT_PUBLICATION_FAILED'
+              }
+              if (-not $publicationErrorCode) { $publicationErrorCode = $code }
+              $status = 1
+            }
+          }
+          if ($workOwned) {
+            $workCleanupError = Remove-OwnedTree $work "r297-windows-native-work-$nonce"
+            if (-not $cleanupErrorCode) { $cleanupErrorCode = $workCleanupError }
+          }
+          if ($stageOwned) {
+            $stageCleanupError = Remove-OwnedTree $stage "r297-windows-native-stage-$nonce"
+            if (-not $cleanupErrorCode) { $cleanupErrorCode = $stageCleanupError }
+          }
+          if ($cleanupErrorCode) { $status = 1 }
+          $publicationReady = $copyComplete -and $boundarySupervisionComplete -and $reportsComplete -and -not $publicationErrorCode -and -not $cleanupErrorCode
+          if ($publicationReady) {
+            "publication_ready=true" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "publish_path=$publish" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "publish_nonce=$nonce" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "log_sha256=$logDigest" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "junit_sha256=$junitDigest" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "classification_sha256=$classificationDigest" | Out-File -FilePath $stepOutput -Append -Encoding utf8
           } else {
-            "publication_ready=false" | Out-File -FilePath $stepOutput -Encoding utf8 -Append
-            Write-Output $publicationError
-            $finalExit = 1
+            "publication_ready=false" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "publish_path=" | Out-File -FilePath $stepOutput -Append -Encoding utf8
           }
-          exit $finalExit
+          if ($primaryErrorCode) { Write-Output "R297_NATIVE_PRIMARY_ERROR=$primaryErrorCode" }
+          if ($publicationErrorCode) { Write-Output "R297_NATIVE_PUBLICATION_ERROR=$publicationErrorCode" }
+          if ($cleanupErrorCode) { Write-Output "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode" }
+          Write-Output "R297_NATIVE_BOUNDARY_RESULT=$boundaryResult"
+          if ($publicationReady) {
+            Get-Content -LiteralPath (Join-Path $publish 'r297-windows-native-pytest.log')
+          }
+          exit $status
+
+      - name: Revalidate fixed native Windows publication
+        id: native_publication
+        if: ${{ always() && !cancelled() && steps.native_reports.outputs.publication_ready == 'true' }}
+        shell: pwsh
+        env:
+          R297_NATIVE_PUBLISH_PATH: ${{ steps.native_reports.outputs.publish_path }}
+          R297_NATIVE_PUBLISH_NONCE: ${{ steps.native_reports.outputs.publish_nonce }}
+        run: |
+          $publicationOutput = $env:GITHUB_OUTPUT
+          Remove-Item Env:GITHUB_OUTPUT
+          $rawPublish = [string]$env:R297_NATIVE_PUBLISH_PATH
+          $nonce = [string]$env:R297_NATIVE_PUBLISH_NONCE
+          if ([string]::IsNullOrWhiteSpace($rawPublish) -or
+              -not [IO.Path]::IsPathFullyQualified($rawPublish) -or
+              $nonce -notmatch '^[0-9a-f]{32}$') {
+            throw 'R297_NATIVE_REPORT_PATH_INVALID'
+          }
+          $publish = [IO.Path]::GetFullPath($rawPublish).TrimEnd([IO.Path]::DirectorySeparatorChar)
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
+          $publishParent = [IO.Path]::GetDirectoryName($publish)
+          $expectedLeaf = "r297-windows-native-publish-$nonce"
+          if ($publish -eq [IO.Path]::GetPathRoot($publish) -or
+              -not [string]::Equals($publishParent, $runnerTemp, [StringComparison]::OrdinalIgnoreCase) -or
+              -not [string]::Equals([IO.Path]::GetFileName($publish), $expectedLeaf, [StringComparison]::Ordinal)) {
+            throw 'R297_NATIVE_REPORT_PATH_INVALID'
+          }
+          $publishItem = Get-Item -LiteralPath $publish -Force
+          if (-not $publishItem.PSIsContainer -or ($publishItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'R297_NATIVE_REPORT_PATH_INVALID'
+          }
+          $expected = @(
+            'r297-windows-native-classification.txt',
+            'r297-windows-native-junit.xml',
+            'r297-windows-native-pytest.log'
+          )
+          $actual = @(Get-ChildItem -LiteralPath $publish -Force | ForEach-Object Name | Sort-Object)
+          if (Compare-Object $expected $actual) { throw 'R297_NATIVE_REPORT_FILE_SET_INVALID' }
+          foreach ($name in $expected) {
+            $item = Get-Item -LiteralPath (Join-Path $publish $name) -Force
+            if (-not $item.PSIsContainer -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw 'R297_NATIVE_REPORT_REPARSE_REJECTED'
+            }
+          }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-pytest.log')).Hash -cne '${{ steps.native_reports.outputs.log_sha256 }}' -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-junit.xml')).Hash -cne '${{ steps.native_reports.outputs.junit_sha256 }}' -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-classification.txt')).Hash -cne '${{ steps.native_reports.outputs.classification_sha256 }}') {
+            throw 'R297_NATIVE_REPORT_DIGEST_MISMATCH'
+          }
+          python -c "import sys,xml.etree.ElementTree as E;r=E.parse(sys.argv[1]).getroot();s=[r] if r.tag=='testsuite' else r.findall('testsuite');sys.exit(0 if s and sum(int(x.attrib.get('tests','0')) for x in s)>0 else 1)" (Join-Path $publish 'r297-windows-native-junit.xml')
+          if ($LASTEXITCODE -ne 0) { throw 'R297_NATIVE_JUNIT_INVALID' }
+          foreach ($name in $expected) {
+            Set-ItemProperty -LiteralPath (Join-Path $publish $name) -Name IsReadOnly -Value $true
+          }
+          "publication_complete=true" | Out-File -FilePath $publicationOutput -Append -Encoding utf8
 
       - name: Upload sanitized native Windows reports
-        if: ${{ always() && steps.native_reports.outputs.publication_ready == 'true' }}
+        if: ${{ always() && !cancelled() && steps.native_publication.outcome == 'success' && steps.native_publication.outputs.publication_complete == 'true' && steps.native_reports.outputs.publication_ready == 'true' && steps.native_reports.outputs.publish_path != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: test-only-r297-windows-native-recovery-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.native_reports.outputs.publish_path }}/
+          path: |
+            ${{ steps.native_reports.outputs.publish_path }}/r297-windows-native-pytest.log
+            ${{ steps.native_reports.outputs.publish_path }}/r297-windows-native-junit.xml
+            ${{ steps.native_reports.outputs.publish_path }}/r297-windows-native-classification.txt
           if-no-files-found: error
           retention-days: 14
 

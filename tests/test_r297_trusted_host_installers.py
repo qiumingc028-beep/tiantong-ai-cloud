@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,7 @@ def test_windows_producer_permissions_reach_children_with_inheritance_disabled()
         assert f'& icacls ${path} /grant "$TrustedObserverAccount`:(OI)(CI){rights}" /T /C' in WINDOWS
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX import closure requires fcntl")
 def test_linux_fixed_sha_install_has_complete_import_closure(tmp_path):
     import re
     import shutil

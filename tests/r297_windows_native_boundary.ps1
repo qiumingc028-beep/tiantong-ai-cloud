@@ -110,9 +110,14 @@ try {
   }
 }
 
+Write-Output 'R297_NATIVE_PROBE_COMPLETE=true'
 if ($primaryErrorCode) {
+  Write-Output "R297_NATIVE_PRIMARY_ERROR=$primaryErrorCode"
   if ($cleanupErrorCode) { Write-Output "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode" }
-  throw $primaryErrorCode
+  exit 1
 }
-if ($cleanupErrorCode) { throw $cleanupErrorCode }
+if ($cleanupErrorCode) {
+  Write-Output "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode"
+  exit 1
+}
 $results | ForEach-Object { Write-Output $_ }

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +10,7 @@ ACCEPTANCE_SCRIPT = ROOT / "ops" / "r297_windows_acceptance.ps1"
 EVENT_SIGNER = ROOT / "ops" / "r297_windows_event_signer.py"
 TRUSTED_OBSERVER = ROOT / "ops" / "r297_trusted_windows_observer.py"
 NATIVE_BOUNDARY = ROOT / "tests" / "r297_windows_native_boundary.ps1"
+JOB_SUPERVISOR = ROOT / "ops" / "r297_windows_job_supervisor.py"
 
 
 def test_r297_windows_gate_packages_only_the_official_workbench():
@@ -224,40 +226,19 @@ def test_windows_native_reports_publish_only_after_stable_atomic_finalization():
     )[0]
     assert "Remove-Item Env:GITHUB_OUTPUT" in native
     assert "[Guid]::NewGuid()" in native
-    assert native.index("SequenceEqual[byte]") < native.index("[IO.Directory]::Move")
-    assert "R297_NATIVE_TEST_EXIT=$testExit" in native
-    assert "R297_NATIVE_PUBLICATION_ERROR=$publicationError" in native
-    assert "R297_NATIVE_CLEANUP_ERROR=$cleanupError" in native
-    assert "catch { $cleanupError = 'R297_NATIVE_REPORT_CLEANUP_FAILED' }" in native
+    assert "[IO.File]::Open($source" in native
+    assert "[IO.FileShare]::None" in native
+    assert "$validatedDigests[$name]" in native
+    assert "R297_NATIVE_PRIMARY_ERROR=$primaryErrorCode" in native
+    assert "R297_NATIVE_PUBLICATION_ERROR=$publicationErrorCode" in native
     assert "R297_NATIVE_REPORT_PUBLICATION_FAILED" in native
-    assert "$safeReportError = if ($publicationError -ne 'NONE') { $publicationError } else { $cleanupError }" in native
-    assert "if ($publicationError -eq 'NONE' -and $cleanupError -eq 'NONE')" in native
+    assert "publication_complete=true" in native
+    assert "steps.native_publication.outputs.publication_complete == 'true'" in upload
+    assert "steps.native_reports.outputs.publish_path != ''" in upload
     assert "steps.native_reports.outputs.publish_path" in upload
-    assert "steps.native_reports.outputs.publication_ready == 'true'" in upload
     assert "r297-windows-native-work" not in upload
     assert "r297-windows-native-stage" not in upload
-    assert "publication_ready=true" in native
-    assert "publication_ready=false" in native
-    assert "R297_NATIVE_SYNTHETIC_JUNIT_INVALID" in native
-
-
-def test_windows_native_boundary_failure_is_reported_and_linux_only_test_is_not_selected():
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    native = workflow.split("  windows-native-recovery-tests:", 1)[1].split(
-        "  formal-windows-acceptance:", 1
-    )[0]
-    assert "id: native_boundary" in native
-    assert "continue-on-error: true" in native
-    assert "R297_NATIVE_BOUNDARY_OUTCOME: ${{ steps.native_boundary.outcome }}" in native
-    assert "R297_NATIVE_BOUNDARY_RESULT=$boundaryResult" in native
-    assert "tests/test_r297_trusted_host_installers.py `" not in native
-    for nodeid in (
-        "test_windows_producer_permissions_reach_children_with_inheritance_disabled",
-        "test_windows_installer_separates_candidate_from_fixed_observer",
-        "test_windows_relay_receipt_is_admin_installed_into_protected_root",
-        "test_windows_installer_rejects_acl_bypass_privileges_and_stale_logons",
-    ):
-        assert f"tests/test_r297_trusted_host_installers.py::{nodeid}" in native
+    assert '<testsuite tests="1"' not in native
 
 
 def test_trusted_windows_observer_is_fixed_source_and_does_not_execute_candidate():
@@ -292,6 +273,7 @@ def test_r297_windows_acceptance_run_id_is_per_dispatch_not_static_environment_s
 def test_windows_native_job_runs_windows_only_boundaries_without_protected_environment():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
     native = workflow.split("  windows-native-recovery-tests:", 1)[1].split(
         "  formal-windows-acceptance:", 1
     )[0]
@@ -308,23 +290,199 @@ def test_windows_native_job_runs_windows_only_boundaries_without_protected_envir
     assert "name: test-only-r297-windows-native-recovery-" in native
     assert "classification.txt" in native
     assert "tzdata==2026.3" in requirements
-    assert "--junitxml" in native
+    assert "ops/r297_evidence_trust_manifest.test.json text eol=lf" in attributes
+    assert workflow.count("- ops/r297_evidence_trust_manifest.test.json") == 2
+    assert workflow.count("- .gitattributes") == 2
+    assert "--junitxml=$junit" in native
     assert "ops/r297_ci_redact.py" in native
-    assert "if (Test-Path -LiteralPath $junit)" in native
+    assert "Test-Path -LiteralPath $junit -PathType Leaf" in native
     assert "if-no-files-found: error" in native
     assert "r297-windows-native-work-$nonce" in native
     assert "steps.native_reports.outputs.publish_path" in native
     assert "R297_NATIVE_SOURCE_SHA=$env:RELEASE_SOURCE_SHA" in native
     assert "R297_NATIVE_RUN_ID=${{ github.run_id }}" in native
     assert "R297_NATIVE_RUN_ATTEMPT=${{ github.run_attempt }}" in native
+    assert "id: native_boundary" not in native
+    assert "continue-on-error: true" not in native
+    assert "--timeout-seconds 300 -- pwsh -NoProfile -NonInteractive -File tests/r297_windows_native_boundary.ps1" in native
+    assert "$boundarySupervisorResult.cleanup_error" in native
+    assert "$boundarySupervisionComplete" in native
+    assert "R297_NATIVE_PROBE_COMPLETE=true" in native
+    assert "-and $boundarySupervisionComplete -and $reportsComplete" in native
+    assert "$publicationReady = $copyComplete -and $boundarySupervisionComplete" in native
+    assert "R297_NATIVE_BOUNDARY_RESULT=$boundaryResult" in native
+    assert "tests/test_r297_trusted_host_installers.py `" not in native
+    for nodeid in (
+        "test_windows_producer_permissions_reach_children_with_inheritance_disabled",
+        "test_windows_installer_separates_candidate_from_fixed_observer",
+        "test_windows_relay_receipt_is_admin_installed_into_protected_root",
+        "test_windows_installer_rejects_acl_bypass_privileges_and_stale_logons",
+    ):
+        assert f"tests/test_r297_trusted_host_installers.py::{nodeid}" in native
     upload = native.split("      - name: Upload sanitized native Windows reports", 1)[1]
     assert "native-work" not in upload
     assert "R297_NATIVE_PUBLICATION_ERROR" in native
-    assert "R297_NATIVE_CLEANUP_ERROR" in native
+    assert "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode" in native
     job_env, steps = native.split("    steps:", 1)
     assert "ASSET_STORAGE_ROOT" not in job_env
     recovery = steps.split("      - name: Run complete Windows recovery regressions", 1)[1]
     assert "ASSET_STORAGE_ROOT: ${{ runner.temp }}\\r297-assets" in recovery.split("      - name:", 1)[0]
+
+
+def test_windows_native_reports_publish_only_after_sanitized_validation():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    native = workflow.split("  windows-native-recovery-tests:", 1)[1].split(
+        "  formal-windows-acceptance:", 1
+    )[0]
+    run_step, upload = native.split("      - name: Upload sanitized native Windows reports", 1)
+
+    assert "id: native_reports" in run_step
+    assert "r297-windows-native-work" in run_step
+    assert "r297-windows-native-publish" in run_step
+    assert "publication_ready=true" in run_step
+    assert "Remove-Item -LiteralPath $full -Recurse" in run_step
+    assert "Remove-Item -LiteralPath $publish -Recurse" not in run_step
+    assert "Remove-OwnedTree $work" in run_step
+    assert "Remove-OwnedTree $stage" in run_step
+    assert "$workOwned" in run_step and "$stageOwned" in run_step
+    assert "steps.native_reports.outputs.publication_ready == 'true'" in upload
+    assert "steps.native_publication.outcome == 'success'" in upload
+    assert "steps.native_publication.outputs.publication_complete == 'true'" in upload
+    assert "steps.native_reports.outputs.publish_path != ''" in upload
+    assert "steps.native_reports.outcome == 'success'" not in upload
+    assert "!cancelled()" in upload
+    assert "R297_NATIVE_REPORT_DIGEST_MISMATCH" in run_step
+    assert "[IO.FileShare]::None" in run_step
+    assert "$validatedDigests[$name]" in run_step
+    assert "[IO.Path]::IsPathFullyQualified($rawPublish)" in run_step
+    assert "R297_NATIVE_REPORT_PATH_INVALID" in run_step
+    assert "R297_NATIVE_PUBLISH_NONCE" in run_step
+    assert "[IO.Path]::GetDirectoryName($publish)" in run_step
+    assert "[IO.Path]::GetPathRoot($publish)" in run_step
+    assert "$publishItem.Attributes -band [IO.FileAttributes]::ReparsePoint" in run_step
+    assert "R297_NATIVE_PRIMARY_ERROR=$primaryErrorCode" in run_step
+    assert "R297_NATIVE_PUBLICATION_ERROR=$publicationErrorCode" in run_step
+    assert "${{ steps.native_reports.outputs.publish_path }}/r297-windows-native-pytest.log" in upload
+    assert "${{ steps.native_reports.outputs.publish_path }}/r297-windows-native-junit.xml" in upload
+    assert "${{ steps.native_reports.outputs.publish_path }}/r297-windows-native-classification.txt" in upload
+    assert "${{ runner.temp }}/r297-windows-native-pytest.log" not in upload
+    assert "${{ runner.temp }}/r297-windows-native-junit.xml" not in upload
+    assert '<testsuite tests="1"' not in native
+
+
+def test_windows_native_pytest_is_owned_and_reaped_before_publication():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    supervisor = JOB_SUPERVISOR.read_text(encoding="utf-8")
+    native = workflow.split("  windows-native-recovery-tests:", 1)[1].split(
+        "  formal-windows-acceptance:", 1
+    )[0]
+    assert workflow.count("- ops/r297_windows_job_supervisor.py") == 2
+    assert "python ops/r297_windows_job_supervisor.py" in native
+    assert "R297_NATIVE_PROCESS_REAP_FAILED" in supervisor
+    assert "R297_NATIVE_REPORT_CLEANUP_FAILED" in native
+    assert "AssignProcessToJobObject" in supervisor
+    assert "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE" in supervisor
+    assert "TerminateJobObject" in supervisor
+    assert "QueryInformationJobObject" in supervisor
+    assert "CREATE_BREAKAWAY_FROM_JOB" not in supervisor
+    assert supervisor.index("AssignProcessToJobObject(job, process)") < supervisor.index(
+        'args.gate.write_text("go\\n"'
+    )
+
+
+def test_windows_job_supervisor_cleanup_failure_keeps_fixed_result(tmp_path, monkeypatch, capsys):
+    from ops import r297_windows_job_supervisor as supervisor
+
+    class FakeKernel:
+        def CreateJobObjectW(self, *_args):
+            return 1
+
+        def SetInformationJobObject(self, *_args):
+            return True
+
+        def OpenProcess(self, *_args):
+            return 0
+
+        def TerminateJobObject(self, *_args):
+            return False
+
+        def CloseHandle(self, *_args):
+            return True
+
+    class FakeChild:
+        pid = 123
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            raise RuntimeError("sensitive-cleanup-detail")
+
+        def wait(self, **_kwargs):
+            raise RuntimeError("sensitive-wait-detail")
+
+    result = tmp_path / "result.json"
+    monkeypatch.setattr(supervisor, "_api", lambda: FakeKernel())
+    monkeypatch.setattr(supervisor.subprocess, "Popen", lambda *_args, **_kwargs: FakeChild())
+    assert supervisor._supervise(SimpleNamespace(
+        gate=tmp_path / "gate", log=tmp_path / "log", result=result,
+        timeout_seconds=1, command=["ignored"],
+    )) == 1
+    assert json.loads(result.read_text()) == {
+        "cleanup_error": "R297_NATIVE_PROCESS_REAP_FAILED",
+        "process_exit_code": None,
+        "supervisor_error": "R297_NATIVE_PROCESS_OWNERSHIP_FAILED",
+    }
+    assert "sensitive" not in "".join(capsys.readouterr())
+
+
+def test_windows_job_supervisor_records_process_handle_close_failure(tmp_path, monkeypatch):
+    from ops import r297_windows_job_supervisor as supervisor
+
+    class FakeKernel:
+        close_calls = 0
+
+        def CreateJobObjectW(self, *_args):
+            return 1
+
+        def SetInformationJobObject(self, *_args):
+            return True
+
+        def OpenProcess(self, *_args):
+            return 2
+
+        def AssignProcessToJobObject(self, *_args):
+            return True
+
+        def TerminateJobObject(self, *_args):
+            return True
+
+        def CloseHandle(self, *_args):
+            self.close_calls += 1
+            return self.close_calls != 1
+
+    class FakeChild:
+        pid = 123
+
+        def poll(self):
+            return 0
+
+        def wait(self, **_kwargs):
+            return 0
+
+    result = tmp_path / "result.json"
+    monkeypatch.setattr(supervisor, "_api", lambda: FakeKernel())
+    monkeypatch.setattr(supervisor, "_active_processes", lambda *_args: 0)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", lambda *_args, **_kwargs: FakeChild())
+    assert supervisor._supervise(SimpleNamespace(
+        gate=tmp_path / "gate", log=tmp_path / "log", result=result,
+        timeout_seconds=1, command=["ignored"],
+    )) == 1
+    assert json.loads(result.read_text()) == {
+        "cleanup_error": "R297_NATIVE_PROCESS_REAP_FAILED",
+        "process_exit_code": 0,
+        "supervisor_error": None,
+    }
 
 
 def test_native_boundary_probe_uses_real_windows_accounts_acl_handles_and_hardlinks():
@@ -338,5 +496,10 @@ def test_native_boundary_probe_uses_real_windows_accounts_acl_handles_and_hardli
     assert "R297_NATIVE_HARDLINK=PASS" in source
     assert source.index("if ($primaryErrorCode)") < source.index("if ($cleanupErrorCode)")
     assert "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode" in source
+    assert "R297_NATIVE_PROBE_COMPLETE=true" in source
     assert "R297_NATIVE_PROBE_FAILED" in source
     assert "} finally {\n  try {" in source
+    assert "throw $primaryErrorCode" not in source
+    assert source.index("} finally {") < source.index("R297_NATIVE_PROBE_COMPLETE=true") < source.index(
+        "if ($primaryErrorCode)"
+    )

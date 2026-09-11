@@ -24,7 +24,16 @@ class FilesystemChecks:
 
     @contextmanager
     def open(self, path, *, delete=False):
-        descriptor = os.open(path, os.O_RDONLY)
+        if os.name == "nt":
+            import msvcrt
+            kernel, _ = security._native()
+            access = 0x80000000 | (0x10000 if delete else 0)
+            handle = kernel.CreateFileW(str(path), access, 7, None, 3, 0x80, None)
+            if handle == security.C.c_void_p(-1).value:
+                raise OSError(security.C.get_last_error(), "test recovery open failed")
+            descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY)
+        else:
+            descriptor = os.open(path, os.O_RDONLY)
         try:
             yield descriptor
         finally:
