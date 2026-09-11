@@ -157,8 +157,7 @@ def test_native_probe_reaps_all_children_and_requires_success(monkeypatch, tmp_p
     if failure != "both_busy": assert all(child.killed for child in children)
 
 
-@pytest.mark.parametrize("receipt_state", ["original", "missing", "rewritten"])
-def test_windows_dispatch_verifies_signed_receipt_before_cleanup_and_finishes_sidecar(tmp_path, monkeypatch, receipt_state):
+def _signed_recovery_case(tmp_path, monkeypatch):
     from ops import r297_trusted_windows_observer as observer
     from ops.r297_evidence_events import signed_event_sha256
     from tests.test_r297_evidence_event_protocol import _sign
@@ -182,8 +181,6 @@ def test_windows_dispatch_verifies_signed_receipt_before_cleanup_and_finishes_si
            "verified_at": started.isoformat(), "binding_file_sha256": "c" * 64,
            **{key: "d" * 64 for key in ("receiver_ack_file_sha256", "observer_ack_file_sha256",
                                        "raw_event_sha256", "receiver_event_sha256", "observer_event_sha256")}}
-    if receipt_state == "missing": receipt = None
-    if receipt_state == "rewritten": receipt["event_sha256"] = "e" * 64
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("R297_TRUSTED_ACCEPTANCE_RUN_BINDING_SHA256", "c" * 64)
     # Exercise the Windows caller with a filesystem adapter, not a native claim.
@@ -194,6 +191,15 @@ def test_windows_dispatch_verifies_signed_receipt_before_cleanup_and_finishes_si
                   artifact_manifest={"release_sha": request["release_sha"],
                                      "workbench_executable_sha256": request["executable_sha256"]},
                   page_observer_ack=ack, relay_receipt=receipt, now=started + timedelta(minutes=6))
+    return body, temporary, original, io, kwargs
+
+
+@pytest.mark.parametrize("receipt_state", ["original", "missing", "rewritten"])
+def test_windows_dispatch_verifies_signed_receipt_before_cleanup_and_finishes_sidecar(tmp_path, monkeypatch, receipt_state):
+    from ops import r297_trusted_windows_observer as observer
+    body, temporary, original, io, kwargs = _signed_recovery_case(tmp_path, monkeypatch)
+    if receipt_state == "missing": kwargs["relay_receipt"] = None
+    if receipt_state == "rewritten": kwargs["relay_receipt"]["event_sha256"] = "e" * 64
     if receipt_state == "original":
         assert observer.recover_trusted_output(body, **kwargs) is True
         assert not temporary.exists()
@@ -204,3 +210,116 @@ def test_windows_dispatch_verifies_signed_receipt_before_cleanup_and_finishes_si
         assert temporary.exists() and "remove" not in io.events
         assert not Path(str(body) + ".sha256").exists()
     assert body.read_bytes() == original
+
+
+@pytest.mark.parametrize("phase", ["body", "sidecar"])
+@pytest.mark.parametrize("defect", [None, "missing_receipt", "wrong_receipt", "flush_failure"])
+def test_native_probe_full_entry_recovers_original_and_publishes_missing_sidecar(tmp_path, monkeypatch, phase, defect):
+    from ops import r297_windows_recovery_probe as probe
+    body, temporary, original, io, inputs = _signed_recovery_case(tmp_path, monkeypatch)
+    sidecar = Path(str(body) + ".sha256")
+    if phase == "sidecar":
+        temporary.unlink()
+        sidecar.write_text(f"{hashlib.sha256(original).hexdigest()}  {body.name}\n")
+        sidecar.chmod(0o600)
+        temporary = sidecar.with_name(f".{sidecar.name}.0123456789abcdef")
+        os.link(sidecar, temporary)
+    valid_inputs = inputs.copy()
+    if defect == "missing_receipt": inputs["relay_receipt"] = None
+    if defect == "wrong_receipt": inputs["relay_receipt"] = {**inputs["relay_receipt"], "event_sha256": "invalid"}
+    if defect == "flush_failure": io.fail_flush = True
+    if defect:
+        with pytest.raises((RuntimeError, OSError)):
+            probe.recover_original(body, inputs)
+        assert temporary.exists() and body.read_bytes() == original
+        assert "remove" not in io.events
+        assert sidecar.exists() is (phase == "sidecar")
+        io.fail_flush = False
+    probe.recover_original(body, valid_inputs)
+    assert not temporary.exists()
+    assert body.read_bytes() == original
+    assert sidecar.read_text().split() == [hashlib.sha256(original).hexdigest(), body.name]
+
+
+def test_native_probe_cli_recovery_uses_complete_entry(tmp_path, monkeypatch):
+    from ops import r297_windows_recovery_probe as probe
+    body, temporary, original, io, inputs = _signed_recovery_case(tmp_path, monkeypatch)
+    # Portable test of CLI dispatch. Protected Windows I/O/installation are not certified.
+    monkeypatch.setattr(probe, "os", SimpleNamespace(name="nt", getenv=lambda name: "acceptance"))
+    monkeypatch.setattr(probe, "_fixed_signer_checkout", lambda: "b" * 40)
+    monkeypatch.setattr(probe, "_load_original", lambda *args: (original, inputs))
+    @contextmanager
+    def protected_directory(*args, **kwargs): yield
+    monkeypatch.setattr(probe, "protected_open", protected_directory)
+    monkeypatch.setattr(probe.sys, "argv", ["probe", str(tmp_path), "--recover",
+                                         "--request", "protected-request", "--original-event", "protected-event"])
+    assert probe.main() == 0
+    assert not temporary.exists()
+    assert Path(str(body) + ".sha256").read_text().split() == [hashlib.sha256(original).hexdigest(), body.name]
+
+
+@pytest.mark.parametrize("error", [ValueError("private-test-detail"),
+                                  RuntimeError("R297_WINDOWS_PUBLICATION_BUSY_OR_UNSAFE")])
+def test_native_probe_child_entry_redacts_errors_and_distinguishes_busy(monkeypatch, capsys, error):
+    from ops import r297_windows_recovery_probe as probe
+    def fail(): raise error
+    monkeypatch.setattr(probe, "main", fail)
+    assert probe.entrypoint() == 1
+    output = capsys.readouterr()
+    expected = "R297_WINDOWS_PUBLICATION_BUSY_OR_UNSAFE" if isinstance(error, RuntimeError) else "R297_NATIVE_RECOVERY_PROBE=BLOCK"
+    assert output.out == "" and output.err.strip() == expected
+
+
+def test_complete_recovery_serializes_sidecar_publication_with_cleanup(tmp_path, monkeypatch):
+    from ops import r297_evidence_events as events, r297_windows_recovery_probe as probe
+    body, temporary, original, io, inputs = _signed_recovery_case(tmp_path, monkeypatch)
+    held = False
+    @contextmanager
+    def lock(parent):
+        nonlocal held
+        assert not held
+        held = True
+        try: yield parent
+        finally: held = False
+    io.lock = lock
+    publish = events._replace_file
+    def checked_publication(path, content):
+        if not held:
+            raise RuntimeError("sidecar published outside recovery transaction lock")
+        publish(path, content)
+    monkeypatch.setattr(events, "_replace_file", checked_publication)
+    probe.recover_original(body, inputs)
+    probe.recover_original(body, inputs)
+    assert body.read_bytes() == original and not temporary.exists()
+    assert Path(str(body) + ".sha256").read_text().split() == [hashlib.sha256(original).hexdigest(), body.name]
+
+
+@pytest.mark.parametrize("interruption", ["sidecar_link", "directory_flush"])
+def test_complete_entry_recovers_interrupted_sidecar_completion(tmp_path, monkeypatch, interruption):
+    from ops import r297_evidence_events as events, r297_windows_recovery_probe as probe
+    body, temporary, original, io, inputs = _signed_recovery_case(tmp_path, monkeypatch)
+    sidecar = Path(str(body) + ".sha256")
+    publish = events._replace_file
+    if interruption == "sidecar_link":
+        def interrupted_publish(path, content):
+            peer = path.with_name(f".{path.name}.fedcba9876543210")
+            peer.write_bytes(content); peer.chmod(0o600)
+            os.link(peer, path)
+            raise OSError("injected crash after sidecar link")
+        monkeypatch.setattr(events, "_replace_file", interrupted_publish)
+    else:
+        def interrupted_flush(parent):
+            if sidecar.exists(): raise OSError("injected final directory flush failure")
+        io.flush_directory = interrupted_flush
+    with pytest.raises(OSError):
+        probe.recover_original(body, inputs)
+    assert body.read_bytes() == original and not temporary.exists()
+    assert sidecar.exists()
+    if interruption == "sidecar_link": assert sidecar.stat().st_nlink == 2
+    monkeypatch.setattr(events, "_replace_file", publish)
+    fresh = FilesystemChecks()
+    monkeypatch.setattr(security, "_RecoveryIO", lambda: fresh)
+    probe.recover_original(body, inputs)
+    assert body.read_bytes() == original and sidecar.stat().st_nlink == 1
+    assert sidecar.read_text().split() == [hashlib.sha256(original).hexdigest(), body.name]
+    assert fresh.events[-1] == "directory_flush"

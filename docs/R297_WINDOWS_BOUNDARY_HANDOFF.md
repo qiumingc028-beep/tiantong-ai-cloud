@@ -1,6 +1,6 @@
 # R297 Windows boundary candidate (not release approval)
 
-CURRENT_RECOVERY_BASE_HEAD: `3037b67867aaed3246a49f655a6c4c28bff9eec8`
+CURRENT_RECOVERY_BASE_HEAD: `2c9e23e5e51fc0d54374549d0e63f6cbb31fac5f`
 
 The dedicated recovery increment below builds on all changes through this head.
 Its version is the commit containing this document; native certification remains
@@ -66,6 +66,9 @@ fail closed; callers must retry, never interpret them as success.
 
 File flushing and `NtFlushBuffersFileEx(flags=0)` directory barriers run before
 cleanup, after cleanup, and on retries even when no temporary link remains.
+Missing-sidecar publication and its ACL/content/flush checks now complete under
+that same recovery lock, closing the cleanup-to-publication race between two
+recoverers. No FileExistsError is ignored and the public writer stays exclusive.
 No data-only/no-sync fallback or ignored directory-flush failure is allowed.
 POSIX publication / sidecar B / ledger recovery are unchanged.
 
@@ -86,9 +89,11 @@ candidate on an authorized test host and retain the results for ③/④.
    chain is `ef38a43c4507b4f7f24808840ce6497c998aeeb0` →
    `0d77211781c436ba18b308878de7e135503f671c` →
    `360d9a2c4142b39085f9a379b4e15c0031fec76f` →
-   `cf86fe1b053fcd1aceeab884c265bbdee2e9716c`. The cf86 plugin-isolation fix is
-   accepted as delivered, but this chain is not integrated until ⑤'s cross-job
-   identity-key transport fix and ④'s scope review arrive. Formal Evidence is
+   `cf86fe1b053fcd1aceeab884c265bbdee2e9716c` →
+   `9319c7014e36c51ccb82f763a0e6dac47b08e4c6`. The cf86 plugin-isolation fix is
+   accepted as delivered and 9319's same-runner identity-key patch is fetched.
+   The chain still awaits ⑤'s assert, child-cleanup and cache-isolation follow-up
+   and ③/④ confirmation; it has not been merged. Formal Evidence is
    a separate gate, not a prerequisite for integrating safe evidence code.
 2. Windows workflow push/PR path filters must include
    `ops/r297_windows_file_security.py` and its tests. This candidate also changes
@@ -110,22 +115,44 @@ in the pinned signer manifest. With that pinned interpreter/code and the actual
 limited observer identity, execute the module against the protected outbox:
 
 ```text
-python -m ops.r297_windows_recovery_probe C:\ProgramData\TiantongAI\R297TrustedWindowsObserver\outbox
+python -m ops.r297_windows_recovery_probe C:\ProgramData\TiantongAI\R297TrustedWindowsObserver\outbox --request <protected-original-request.json> --original-event <protected-original-event.json>
 ```
 
 Use the installed task's isolated import setup (`-I` plus pinned code root), not
 an arbitrary checkout or test environment. The probe verifies SIGNER_SHA /
-CODE_MANIFEST first. It creates credential-free fixtures only in new directories,
-kills the producer process at body/sidecar link publication, then starts two
-recovery processes and requires at least one to succeed. Both are reaped on all
-exits. Fixtures remain for inspection; output explicitly says filesystem-only,
-no formal business Evidence, and no power-loss certification.
+CODE_MANIFEST first and requires APP_ENV=acceptance. Both input files and their
+sidecars must be protected, single-link original files. The event must already
+be more than five minutes old, with a timely protected relay receipt still
+inside the twelve-hour recovery period. Use the same installed signer SHA and
+protected run binding, artifact manifest, page Observer ACK and relay receipt
+as the original observation. No command option supplies a trusted clock or
+receipt; the existing fixed readers load those approvals. Missing prerequisites
+are BLOCK, never a reason to generate synthetic signed business evidence.
+
+The probe copies original signed bytes only into fresh protected subdirectories,
+interrupts fixture publication after body/sidecar hardlink creation, and calls
+the complete `recover_trusted_output` entry for every recovery. It checks missing
+and altered receipts before cleanup, missing-sidecar completion, original inode
+and byte preservation, and native dual-BUSY failure while holding the publication
+lock. Two subsequent recovery processes require at least one success; all child
+processes are reaped even on timeout or failed startup. Retry checks the complete
+entry again. No business process is rerun, timestamp changed or signature created.
+Fixture directories remain for inspection, never overwrite source evidence, and
+are not ingestion inputs. The report is recovery-test evidence only, not a new
+formal business result or power-loss certification.
 
 Additional native gates: invalid third link / foreign temporary / changed bytes,
 candidate ACL grants, parent junction/reparse and replacement races, cleanup and
-directory-flush interruptions, reboot/power-loss behavior, plus the full signed
-receipt → `recover_trusted_output` → missing-sidecar publication path. The portable
+directory-flush interruptions, reboot/power-loss behavior, and execution of this
+full signed receipt → `recover_trusted_output` → missing-sidecar probe. The portable
 filesystem-adapter tests cover control flow only, never Windows security claims.
+
+This increment changes `ops/r297_windows_recovery_probe.py`,
+`ops/r297_windows_file_security.py`, `ops/r297_trusted_windows_observer.py`,
+`tests/test_r297_windows_recovery.py` and this handoff. The prior installer and
+all existing hardening remain in 2c9e23e. ⑤ owns workflow launch and path-filter wiring for the
+probe, shared Windows helper, observer, installer and their tests; ① owns these
+core/probe implementations. Do not independently overwrite shared files.
 
 After any HEAD change: rebuild the pinned signer archive/CODE_MANIFEST, rerun
 affected core and native probes, and regenerate candidate-bound CI/Process/

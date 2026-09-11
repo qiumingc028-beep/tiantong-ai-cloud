@@ -290,10 +290,11 @@ def recover_bound_file(path, *, validate):
         body = _recovery_entry(io, stack, path)
         content = body[2]
         sidecar = Path(str(path) + ".sha256")
+        expected_marker = f"{hashlib.sha256(content).hexdigest()}  {path.name}\n".encode("ascii")
         entries = [body]
         if sidecar.exists():
             marker = _recovery_entry(io, stack, sidecar)
-            if marker[2] != f"{hashlib.sha256(content).hexdigest()}  {path.name}\n".encode("ascii"):
+            if marker[2] != expected_marker:
                 raise RuntimeError("R297_WINDOWS_RECOVERY_SIDECAR_MISMATCH")
             entries.append(marker)
         validate(content)
@@ -315,5 +316,14 @@ def recover_bound_file(path, *, validate):
                     raise RuntimeError("R297_WINDOWS_RECOVERY_CLEANUP_INCOMPLETE")
                 io.flush(descriptor)
                 io.flush_directory(directory)
+        if not sidecar.exists():
+            # Complete publication under the same lock; never race a second
+            # recovery between cleanup and the exclusive sidecar write.
+            from ops.r297_evidence_events import _replace_file
+            _replace_file(sidecar, expected_marker)
+            marker = _recovery_entry(io, stack, sidecar)
+            if marker[1][3] != 1 or marker[2] != expected_marker:
+                raise RuntimeError("R297_WINDOWS_RECOVERY_SIDECAR_MISMATCH")
+            io.flush(marker[0])
         io.flush_directory(directory)
         return content

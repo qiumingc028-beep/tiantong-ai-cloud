@@ -373,9 +373,7 @@ def recover_trusted_output(
                                   scope=scope, relay_receipt=relay_receipt, current=current)
     if os.name == "nt":
         from ops.r297_windows_file_security import recover_bound_file
-        content = recover_bound_file(path, validate=validate)
-        if not Path(f"{path}.sha256").exists():
-            write_sha256_bound_file(path, content)
+        recover_bound_file(path, validate=validate)
         return True
     metadata = path.lstat()
     if (path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink not in {1, 2}
