@@ -760,16 +760,10 @@ jobs:
           set +e
           python -m ops.ci_pytest_gate --partitions \
             /tmp/r297-pytest /tmp/r297-ownership-matrix /tmp/r297-full-coverage \
-            --publish /tmp/r297-publish-pytest /tmp/r297-publish-ownership /tmp/r297-publish-full-coverage
+            --publish /tmp/r297-publish-bundle/main /tmp/r297-publish-bundle/ownership /tmp/r297-publish-bundle/aggregate
+          # The parent supervisor validates the atomic bundle and writes publication_ready.
           result=$?
           set -e
-          if python -m ops.ci_pytest_gate --validate-publication \
-            /tmp/r297-publish-pytest /tmp/r297-publish-ownership /tmp/r297-publish-full-coverage; then
-            echo "publication_ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publication_ready=false" >> "$GITHUB_OUTPUT"
-            test "$result" -ne 0 || result=1
-          fi
           unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES
           exit "$result"
 
@@ -778,7 +772,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: r297-pytest-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
-          path: /tmp/r297-publish-pytest/
+          path: /tmp/r297-publish-bundle/main/
           if-no-files-found: error
           retention-days: 14
 
@@ -787,7 +781,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
-          path: /tmp/r297-publish-ownership/
+          path: /tmp/r297-publish-bundle/ownership/
           if-no-files-found: error
           retention-days: 14
 
@@ -796,7 +790,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: r297-full-coverage-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
-          path: /tmp/r297-publish-full-coverage/
+          path: /tmp/r297-publish-bundle/aggregate/
           if-no-files-found: error
           retention-days: 14
 
