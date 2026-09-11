@@ -232,8 +232,9 @@ def test_windows_native_reports_publish_only_after_stable_atomic_finalization():
     assert "R297_NATIVE_CLEANUP_ERROR=$cleanupError" in native
     assert "catch { $cleanupError = 'R297_NATIVE_REPORT_CLEANUP_FAILED' }" in native
     assert "R297_NATIVE_REPORT_PUBLICATION_FAILED" in native
-    assert "$safeReportError = if ($publicationError -ne 'NONE') { $publicationError } else { $cleanupError }" in native
     assert "if ($publicationError -eq 'NONE' -and $cleanupError -eq 'NONE')" in native
+    assert '<testsuite tests=' not in native
+    assert "[IO.File]::WriteAllText((Join-Path $stage 'pytest.log'), \"$safeReportError" not in native
     assert "steps.native_reports.outputs.publish_path" in upload
     assert "r297-windows-native-work" not in upload
     assert "r297-windows-native-stage" not in upload
