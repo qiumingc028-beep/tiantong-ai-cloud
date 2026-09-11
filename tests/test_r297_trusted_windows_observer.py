@@ -11,6 +11,14 @@ from ops.r297_trusted_windows_observer import (
 )
 
 
+def _use_portable_recovery_fixture(monkeypatch):
+    """Use isolated I/O here; the native PowerShell probe certifies ACLs."""
+    from ops import r297_windows_file_security as security
+    from tests.test_r297_windows_recovery import FilesystemChecks
+
+    monkeypatch.setattr(security, "_RecoveryIO", FilesystemChecks)
+
+
 def _request(tmp_path):
     executable = tmp_path / "workbench.exe"
     executable.write_bytes(b"candidate-bytes")
@@ -261,6 +269,7 @@ def test_trusted_observer_long_cycle_requires_exact_protected_page_ack(monkeypat
 
 
 def test_trusted_observer_recovers_exact_published_output(monkeypatch, tmp_path):
+    _use_portable_recovery_fixture(monkeypatch)
     executable, started, request = _request(tmp_path)
     output = tmp_path / "trusted-event.json"
     event = {
@@ -300,6 +309,7 @@ def test_trusted_observer_recovers_exact_published_output(monkeypatch, tmp_path)
 
 
 def test_trusted_observer_recovers_old_original_bytes_only_with_relay_receipt(monkeypatch, tmp_path):
+    _use_portable_recovery_fixture(monkeypatch)
     from ops.r297_evidence_events import signed_event_sha256
     executable, started, request = _request(tmp_path)
     output = tmp_path / "trusted-event.json"

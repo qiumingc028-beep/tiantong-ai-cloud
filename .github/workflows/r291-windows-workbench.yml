@@ -309,22 +309,11 @@ jobs:
           }
           $boundaryResult = if ($env:R297_NATIVE_BOUNDARY_OUTCOME -ceq 'success') { 'PASS' } else { 'BLOCK' }
           $finalExit = if ($testExit -eq 0 -and $boundaryResult -eq 'PASS' -and $publicationError -eq 'NONE' -and $cleanupError -eq 'NONE') { 0 } else { 1 }
-          $safeReportError = if ($publicationError -ne 'NONE') { $publicationError } else { $cleanupError }
           try {
             [void](New-Item -ItemType Directory -Path $stage -ErrorAction Stop)
             if ($publicationError -eq 'NONE' -and $cleanupError -eq 'NONE') {
               [IO.File]::WriteAllBytes((Join-Path $stage 'pytest.log'), $logBytes)
               [IO.File]::WriteAllBytes((Join-Path $stage 'junit.xml'), $junitBytes)
-            } else {
-              [IO.File]::WriteAllText((Join-Path $stage 'pytest.log'), "$safeReportError`n", [Text.UTF8Encoding]::new($false))
-              [IO.File]::WriteAllText((Join-Path $stage 'junit.xml'), "<testsuite tests=`"1`" failures=`"1`"><testcase name=`"publication`"><failure>$safeReportError</failure></testcase></testsuite>", [Text.UTF8Encoding]::new($false))
-              try {
-                [xml]$synthetic = [IO.File]::ReadAllText((Join-Path $stage 'junit.xml'))
-                if ($synthetic.testsuite.tests -cne '1' -or $synthetic.testsuite.failures -cne '1' -or
-                    $synthetic.testsuite.testcase.failure.InnerText -cne $safeReportError) {
-                  throw 'invalid'
-                }
-              } catch { throw 'R297_NATIVE_SYNTHETIC_JUNIT_INVALID' }
             }
             [IO.File]::WriteAllText((Join-Path $stage 'classification.txt'), "R297_EVIDENCE_CLASS=TEST_ONLY`nR297_FORMAL_EVIDENCE=false`n", [Text.UTF8Encoding]::new($false))
             [IO.File]::WriteAllText((Join-Path $stage 'result.txt'), "R297_NATIVE_SOURCE_SHA=$env:RELEASE_SOURCE_SHA`nR297_NATIVE_RUN_ID=${{ github.run_id }}`nR297_NATIVE_RUN_ATTEMPT=${{ github.run_attempt }}`nR297_NATIVE_BOUNDARY_RESULT=$boundaryResult`nR297_NATIVE_TEST_EXIT=$testExit`nR297_NATIVE_PUBLICATION_ERROR=$publicationError`nR297_NATIVE_CLEANUP_ERROR=$cleanupError`n", [Text.UTF8Encoding]::new($false))

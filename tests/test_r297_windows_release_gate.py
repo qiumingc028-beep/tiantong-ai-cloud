@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,6 +10,7 @@ ACCEPTANCE_SCRIPT = ROOT / "ops" / "r297_windows_acceptance.ps1"
 EVENT_SIGNER = ROOT / "ops" / "r297_windows_event_signer.py"
 TRUSTED_OBSERVER = ROOT / "ops" / "r297_trusted_windows_observer.py"
 NATIVE_BOUNDARY = ROOT / "tests" / "r297_windows_native_boundary.ps1"
+ATTRIBUTES = ROOT / ".gitattributes"
 
 
 def test_r297_windows_gate_packages_only_the_official_workbench():
@@ -230,15 +232,15 @@ def test_windows_native_reports_publish_only_after_stable_atomic_finalization():
     assert "R297_NATIVE_CLEANUP_ERROR=$cleanupError" in native
     assert "catch { $cleanupError = 'R297_NATIVE_REPORT_CLEANUP_FAILED' }" in native
     assert "R297_NATIVE_REPORT_PUBLICATION_FAILED" in native
-    assert "$safeReportError = if ($publicationError -ne 'NONE') { $publicationError } else { $cleanupError }" in native
     assert "if ($publicationError -eq 'NONE' -and $cleanupError -eq 'NONE')" in native
+    assert '<testsuite tests=' not in native
+    assert "[IO.File]::WriteAllText((Join-Path $stage 'pytest.log'), \"$safeReportError" not in native
     assert "steps.native_reports.outputs.publish_path" in upload
     assert "steps.native_reports.outputs.publication_ready == 'true'" in upload
     assert "r297-windows-native-work" not in upload
     assert "r297-windows-native-stage" not in upload
     assert "publication_ready=true" in native
     assert "publication_ready=false" in native
-    assert "R297_NATIVE_SYNTHETIC_JUNIT_INVALID" in native
 
 
 def test_windows_native_boundary_failure_is_reported_and_linux_only_test_is_not_selected():
@@ -258,6 +260,23 @@ def test_windows_native_boundary_failure_is_reported_and_linux_only_test_is_not_
         "test_windows_installer_rejects_acl_bypass_privileges_and_stale_logons",
     ):
         assert f"tests/test_r297_trusted_host_installers.py::{nodeid}" in native
+
+
+def test_windows_test_trust_manifest_checkout_bytes_are_lf_pinned():
+    from ops import r297_evidence_events
+
+    rule = "ops/r297_evidence_trust_manifest.test.json text eol=lf"
+    assert rule in ATTRIBUTES.read_text(encoding="utf-8").splitlines()
+    assert hashlib.sha256(
+        r297_evidence_events._TEST_TRUST_MANIFEST.read_bytes()
+    ).hexdigest() == r297_evidence_events._TEST_TRUST_MANIFEST_SHA256
+
+
+def test_linux_import_closure_node_is_routed_out_of_windows_native_file():
+    windows_file = (ROOT / "tests" / "test_r297_trusted_host_installers.py").read_text(encoding="utf-8")
+    linux_file = (ROOT / "tests" / "test_r297_trusted_linux_host_installers.py").read_text(encoding="utf-8")
+    assert "test_linux_fixed_sha_install_has_complete_import_closure" not in windows_file
+    assert "test_linux_fixed_sha_install_has_complete_import_closure" in linux_file
 
 
 def test_trusted_windows_observer_is_fixed_source_and_does_not_execute_candidate():
@@ -336,6 +355,9 @@ def test_native_boundary_probe_uses_real_windows_accounts_acl_handles_and_hardli
     assert "R297_NATIVE_ACL_NEGATIVE=PASS" in source
     assert "R297_NATIVE_HANDLE_DELETE_DENIAL=PASS" in source
     assert "R297_NATIVE_HARDLINK=PASS" in source
+    assert "R297_NATIVE_PROTECTED_RECOVERY=PASS" in source
+    assert "R297_NATIVE_UNSAFE_RECOVERY_REJECTED=PASS" in source
+    assert "from ops.r297_windows_file_security import recover_bound_file" in source
     assert source.index("if ($primaryErrorCode)") < source.index("if ($cleanupErrorCode)")
     assert "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode" in source
     assert "R297_NATIVE_PROBE_FAILED" in source

@@ -22,23 +22,6 @@ def test_windows_producer_permissions_reach_children_with_inheritance_disabled()
         assert f'& icacls ${path} /grant "$TrustedObserverAccount`:(OI)(CI){rights}" /T /C' in WINDOWS
 
 
-def test_linux_fixed_sha_install_has_complete_import_closure(tmp_path):
-    import re
-    import shutil
-    import subprocess
-    import sys
-    files = re.search(r"broker_files=\((.*?)\)", LINUX, re.S).group(1).split()
-    assert '"${broker_files[@]}"' in LINUX
-    (tmp_path / "ops").mkdir()
-    for name in files:
-        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / name, tmp_path / name)
-    result = subprocess.run([sys.executable, "-I", "-c",
-        "import sys; sys.path.insert(0, sys.argv[1]); from ops.r297_evidence_broker import EvidenceBroker; from ops.r297_broker_client import peer_uid", str(tmp_path)],
-        cwd=tmp_path, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
 def test_linux_broker_is_keyless_sandboxed_and_owns_both_ledgers():
     broker_unit = LINUX.split("unit=$unit_stage/tiantong-r297-evidence-broker.service", 1)[1].split("install -d -o root -g r297-evidence-producers", 1)[0]
     assert "RestrictAddressFamilies=AF_UNIX" in LINUX
