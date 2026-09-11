@@ -221,6 +221,8 @@ jobs:
 
       - name: Run complete Windows recovery regressions
         shell: pwsh
+        env:
+          ASSET_STORAGE_ROOT: ${{ runner.temp }}\r297-assets
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'r297-windows-native-pytest.log'
           $junit = Join-Path $env:RUNNER_TEMP 'r297-windows-native-junit.xml'
