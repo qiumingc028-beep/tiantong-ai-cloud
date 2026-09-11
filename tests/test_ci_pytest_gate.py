@@ -35,6 +35,7 @@ def _partition_artifacts(root, nodes, *, head="a" * 40, result=0):
         "result": "PASS", "partition_result": "PASS", "overall_result": "PASS",
         "artifact_result": "PASS", "primary_error": None, "cleanup_error": None,
         "terminal_error": None, "publication_error": None,
+        "supervision_complete": True,
         "stage_exit_codes": {"main": 0, "ownership": 0, "aggregate": 0},
         "artifact_sha256": digests,
     }))
@@ -387,6 +388,7 @@ def test_optimized_validator_rejects_invalid_artifact(tmp_path, mode):
             "result": "PASS", "partition_result": "PASS", "overall_result": "PASS",
             "artifact_result": "PASS", "primary_error": None, "cleanup_error": None,
             "terminal_error": None, "publication_error": None,
+            "supervision_complete": True,
             "stage_exit_codes": {"main": 0, "ownership": 0, "aggregate": 0},
             "artifact_sha256": {
                 "aggregate.json": hashlib.sha256((output / "aggregate.json").read_bytes()).hexdigest(),
@@ -420,6 +422,7 @@ def test_optimized_validators_accept_same_attempt_valid_artifacts(tmp_path):
         "result": "PASS", "partition_result": "PASS", "overall_result": "PASS",
         "artifact_result": "PASS", "primary_error": None, "cleanup_error": None,
         "terminal_error": None, "publication_error": None,
+        "supervision_complete": True,
         "stage_exit_codes": {"main": 0, "ownership": 0, "aggregate": 0},
         "artifact_sha256": {
             "aggregate.json": hashlib.sha256((aggregate / "aggregate.json").read_bytes()).hexdigest(),
@@ -637,6 +640,7 @@ def test_polluted_work_output_can_only_publish_fixed_block_receipt(tmp_path, mon
         primary_error=None,
         cleanup_error=None,
         stage_exit_codes={"main": 0, "ownership": 0, "aggregate": 0},
+        supervision_complete=True,
     )
 
     assert result == "UNPUBLISHABLE"
@@ -668,6 +672,7 @@ def test_copy_stage_rejects_mixed_case_hex_even_if_initial_scan_is_bypassed(tmp_
         identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
         result="PASS", primary_error=None, cleanup_error=None,
         stage_exit_codes={"main": 0, "ownership": 0, "aggregate": 0},
+        supervision_complete=True,
     ) == "UNPUBLISHABLE"
     assert {path.name for path in published.iterdir()} == {"publication.json"}
 
@@ -689,6 +694,7 @@ def test_nonfresh_publish_target_fails_without_mutating_existing_content(tmp_pat
         identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
         result="PASS", primary_error=None, cleanup_error=None,
         stage_exit_codes={"main": 0, "ownership": 0, "aggregate": 0},
+        supervision_complete=True,
     ) == "UNPUBLISHABLE"
     assert sentinel.read_text() == "must remain byte-for-byte"
     assert {path.name for path in published.iterdir()} == {"preexisting.txt"}
@@ -719,6 +725,7 @@ def test_concurrent_publish_target_is_preserved_without_partial_siblings(tmp_pat
         identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
         result="PASS", primary_error=None, cleanup_error=None,
         stage_exit_codes={"main": 0, "ownership": 0, "aggregate": 0},
+        supervision_complete=True,
     ) == "UNPUBLISHABLE"
     assert (published / "concurrent.txt").read_text() == "belongs to another writer"
     assert {path.name for path in published.iterdir()} == {"concurrent.txt"}
@@ -778,6 +785,7 @@ def test_normal_failure_publishes_scanned_fixed_reports_without_pass(tmp_path, m
         identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
         result="BLOCK", primary_error="PYTEST_MAIN_FAILED", cleanup_error=None,
         stage_exit_codes={"main": 1, "ownership": 0, "aggregate": 1},
+        supervision_complete=True,
     ) == "BLOCK"
     assert {path.name for path in published.iterdir()} == {"pytest.log", "junit.xml", "publication.json"}
     assert json.loads((published / "publication.json").read_text())["result"] == "BLOCK"
@@ -801,6 +809,7 @@ def test_safe_ownership_partition_can_pass_while_overall_result_blocks(tmp_path,
         identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
         result="BLOCK", primary_error="PYTEST_MAIN_FAILED", cleanup_error=None,
         stage_exit_codes={"main": 1, "ownership": 0, "aggregate": 1},
+        supervision_complete=True,
     ) == "BLOCK"
     main, ownership, aggregate = [target for _, target, _ in specs]
     gate.validate_publication_outputs(
@@ -837,6 +846,7 @@ def test_final_publication_validation_rejects_mixed_case_hex(tmp_path, monkeypat
         identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
         result="PASS", primary_error=None, cleanup_error=None,
         stage_exit_codes={"main": 0, "ownership": 0, "aggregate": 0},
+        supervision_complete=True,
     ) == "PASS"
     hexadecimal = key.encode().hex()
     mixed_hex = "".join(char.upper() if index % 2 else char for index, char in enumerate(hexadecimal))
@@ -902,6 +912,7 @@ def test_supervisor_deadline_reaps_descendants_and_preserves_timeout_code(tmp_pa
             specs, identity=identity, result="BLOCK", primary_error=f"PYTEST_{stage.upper()}_TIMEOUT",
             terminal_error=f"PYTEST_{stage.upper()}_TIMEOUT", cleanup_error=None,
             stage_exit_codes=exits,
+            supervision_complete=False,
         ) == "BLOCK"
         gate.validate_publication_outputs([target for _, target, _ in specs], **identity)
     finally:
@@ -925,6 +936,7 @@ def test_publication_keeps_primary_failure_when_cleanup_also_fails(tmp_path, mon
         primary_error="PYTEST_MAIN_TIMEOUT",
         cleanup_error="PYTEST_PROCESS_REAP_FAILED",
         stage_exit_codes={"main": None, "ownership": 1, "aggregate": None},
+        supervision_complete=False,
     )
     receipt = json.loads((published / "publication.json").read_text())
     assert receipt["primary_error"] == "PYTEST_MAIN_TIMEOUT"
@@ -946,6 +958,7 @@ def test_cleanup_only_failure_is_recorded_once_without_becoming_primary(tmp_path
         identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
         result="BLOCK", primary_error=None, cleanup_error="PYTEST_PROCESS_REAP_FAILED",
         stage_exit_codes={"main": 0, "ownership": 0, "aggregate": None},
+        supervision_complete=False,
     )
     receipt = json.loads((published / "publication.json").read_text())
     assert receipt["primary_error"] is None
@@ -1023,6 +1036,7 @@ def test_aggregate_fixed_set_includes_the_collected_manifest(tmp_path, monkeypat
         identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
         result="PASS", primary_error=None, cleanup_error=None,
         stage_exit_codes={"main": 0, "ownership": 0, "aggregate": 0},
+        supervision_complete=True,
     )
     assert result == "PASS"
     assert (published / "full-collected-nodeids.json").is_file()
@@ -1100,6 +1114,7 @@ def test_publication_validator_rejects_cross_stage_state_mismatch(tmp_path, monk
                 "artifact_result": "BLOCK",
                 "primary_error": "PYTEST_MAIN_FAILED",
                 "terminal_error": None, "cleanup_error": None, "publication_error": None,
+                "supervision_complete": True,
             "stage_exit_codes": {"main": 1, "ownership": 0, "aggregate": index},
             "artifact_sha256": {},
         }))
@@ -1267,6 +1282,7 @@ def test_publication_failure_preserves_preexisting_target(tmp_path, monkeypatch)
         [(source, target, {"report"})], identity=gate._run_identity(), result="BLOCK",
         primary_error="PYTEST_MAIN_FAILED", cleanup_error=None,
         stage_exit_codes={"main": 1, "ownership": 0, "aggregate": 1},
+        supervision_complete=True,
     ) == "UNPUBLISHABLE"
     assert marker.read_text() == "keep"
 
@@ -1284,6 +1300,7 @@ def test_multi_output_publication_commits_one_shared_root(tmp_path, monkeypatch)
     assert gate.publish_outputs(
         sources, identity=identity, result="PASS", primary_error=None, cleanup_error=None,
         stage_exit_codes={"main": 0, "ownership": 0, "aggregate": 0},
+        supervision_complete=True,
         atomic_root=tmp_path / "publish",
     ) == "PASS"
     assert {path.name for path in (tmp_path / "publish").iterdir()} == {"main", "ownership", "aggregate"}
@@ -1304,6 +1321,7 @@ def test_preexisting_shared_publication_root_is_never_modified(tmp_path, monkeyp
         specs, identity={"head": "a" * 40, "run_id": "123", "run_attempt": "1"},
         result="BLOCK", primary_error="PYTEST_MAIN_FAILED", cleanup_error=None,
         stage_exit_codes={"main": 1, "ownership": 0, "aggregate": 1},
+        supervision_complete=True,
         atomic_root=root,
     ) == "UNPUBLISHABLE"
     assert list(root.iterdir()) == [sentinel]
@@ -1405,6 +1423,7 @@ def test_published_block_can_still_qualify_successful_ownership(tmp_path, monkey
         "partition_result": "PASS", "overall_result": "BLOCK", "artifact_result": "PASS",
         "artifact_sha256": digests, "primary_error": "PYTEST_MAIN_FAILED",
         "terminal_error": None, "cleanup_error": None, "publication_error": None,
+        "supervision_complete": True,
         "stage_exit_codes": {"main": 1, "ownership": 0, "aggregate": 1},
     }
     (output / "publication.json").write_text(json.dumps(publication))
@@ -1413,12 +1432,14 @@ def test_published_block_can_still_qualify_successful_ownership(tmp_path, monkey
     ) == [gate._node_identities(["tests/test_owner.py::test_ok"])[0]]
 
 
-@pytest.mark.parametrize("primary_error,exits", [
-    ("PYTEST_SUPERVISOR_CANCELLED", {"main": 143, "ownership": 0, "aggregate": None}),
-    ("PYTEST_MAIN_TIMEOUT", {"main": None, "ownership": 0, "aggregate": None}),
+@pytest.mark.parametrize("primary_error,terminal_error,exits", [
+    ("PYTEST_SUPERVISOR_CANCELLED", "PYTEST_SUPERVISOR_CANCELLED", {"main": -15, "ownership": 0, "aggregate": None}),
+    ("PYTEST_MAIN_TIMEOUT", "PYTEST_MAIN_TIMEOUT", {"main": None, "ownership": 0, "aggregate": None}),
+    ("PYTEST_PROCESS_IDENTITY_UNAVAILABLE", None, {"main": None, "ownership": 0, "aggregate": None}),
+    (None, None, {"main": None, "ownership": 0, "aggregate": None}),
 ])
 def test_terminal_supervisor_error_never_qualifies_ownership_publication(
-    tmp_path, monkeypatch, primary_error, exits,
+    tmp_path, monkeypatch, primary_error, terminal_error, exits,
 ):
     from ops import ci_pytest_gate as gate
     monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "k" * 64)
@@ -1431,15 +1452,55 @@ def test_terminal_supervisor_error_never_qualifies_ownership_publication(
         specs.append((source, target, allowed))
     assert gate.publish_outputs(
         specs, identity={"head": "a" * 40, "run_id": "123", "run_attempt": "1"},
-        result="BLOCK", primary_error=primary_error, cleanup_error=None,
-        stage_exit_codes=exits,
+        result="BLOCK", primary_error=primary_error, terminal_error=terminal_error,
+        cleanup_error=None, stage_exit_codes=exits, supervision_complete=False,
     ) == "BLOCK"
     receipt = json.loads((specs[1][1] / "publication.json").read_text())
     assert receipt["partition_result"] == "BLOCK"
+    gate.validate_publication_outputs(
+        [target for _, target, _ in specs], head="a" * 40, run_id="123", run_attempt="1",
+    )
     with pytest.raises(ValueError, match="PYTEST_PUBLICATION_INVALID"):
         gate._validate_publication(
             specs[1][1], head="a" * 40, run_id="123", run_attempt="1",
         )
+
+
+@pytest.mark.parametrize(
+    "exits",
+    [
+        {"main": None, "ownership": 0, "aggregate": None},
+        {"main": 1, "ownership": 0},
+        {"main": 1, "ownership": 0, "aggregate": 1, "extra": 0},
+    ],
+)
+def test_claimed_complete_supervision_with_missing_exits_is_rejected(
+    tmp_path, monkeypatch, exits,
+):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "k" * 64)
+    identity = {"head": "a" * 40, "run_id": "123", "run_attempt": "1"}
+    specs = []
+    for index, allowed in enumerate((gate._PARTITION_FILES, gate._PARTITION_FILES, gate._AGGREGATE_FILES)):
+        source = tmp_path / f"work-{index}"
+        target = tmp_path / f"publish-{index}"
+        source.mkdir()
+        (source / next(iter(allowed))).write_text("safe")
+        specs.append((source, target, allowed))
+
+    assert gate.publish_outputs(
+        specs, identity=identity, result="PASS", primary_error=None, terminal_error=None,
+        cleanup_error=None, supervision_complete=True,
+        stage_exit_codes=exits,
+    ) == "BLOCK"
+    receipts = [json.loads((target / "publication.json").read_text()) for _, target, _ in specs]
+    assert [receipt["partition_result"] for receipt in receipts] == ["BLOCK", "BLOCK", "BLOCK"]
+    assert {receipt["overall_result"] for receipt in receipts} == {"BLOCK"}
+    with pytest.raises(ValueError, match="PYTEST_PUBLICATION_INVALID"):
+        gate._validate_publication(specs[1][1], **identity)
+    with pytest.raises(ValueError, match="PYTEST_PUBLICATION_INVALID"):
+        gate.validate_publication_outputs([target for _, target, _ in specs], **identity)
 
 
 @pytest.mark.parametrize("exit_code", [None, -signal.SIGTERM, -signal.SIGKILL])
@@ -1470,6 +1531,7 @@ def test_later_terminal_error_blocks_all_partitions_without_replacing_first_erro
         specs, identity=identity, result="BLOCK", primary_error="PYTEST_MAIN_FAILED",
         terminal_error="PYTEST_AGGREGATE_TIMEOUT", cleanup_error=None,
         stage_exit_codes={"main": 1, "ownership": 0, "aggregate": None},
+        supervision_complete=False,
     ) == "BLOCK"
     gate.validate_publication_outputs([target for _, target, _ in specs], **identity)
     receipts = [json.loads((target / "publication.json").read_text()) for _, target, _ in specs]
