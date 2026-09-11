@@ -1,14 +1,20 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
       - "sprint*"
       - "feature/**"
+      - "codex/r291-*"
+      - codex/r297-cloud-integration
+      - codex/r297-takeover-infra-evidence-r2
+      - codex/r297-takeover-infra-evidence-r3
   pull_request:
     branches:
       - main
+      - codex/r297-cloud-integration
 
 permissions:
   contents: read
@@ -16,6 +22,7 @@ permissions:
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     services:
       postgres:
         image: postgres:16
@@ -48,6 +55,7 @@ jobs:
       RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       S12_BACKEND_IMAGE: tiantong-ci-backend:${{ github.event.pull_request.head.sha || github.sha }}
       S12_WORKER_IMAGE: tiantong-ci-worker:${{ github.event.pull_request.head.sha || github.sha }}
+      S12_JD_RUNTIME_IMAGE: tiantong-ci-jd-browser-runtime:${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: Checkout
@@ -64,9 +72,11 @@ jobs:
           cache: pip
 
       - name: Install dependencies
+        id: dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
       - name: Verify CI PostgreSQL isolation
+        id: postgres_probe
         run: |
           python - <<'PY'
           import os
@@ -89,6 +99,17 @@ jobs:
               connection.close()
           PY
 
+      - name: Verify R297 database restore and failure injection contract
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: ci
+          PGPASSWORD: ci
+          R297_RESTORE_ACCEPTANCE_ISOLATED: "1"
+        run: |
+          bash ops/r297_database_restore_contract_test.sh
+          R297_SELF_TEST_FAILURE_INJECTION=1 bash ops/r297_workbench_deploy.sh
+
       - name: Verify CI Redis isolation
         run: |
           python - <<'PY'
@@ -105,6 +126,19 @@ jobs:
 
       - name: Syntax check
         run: python -m py_compile $(find backend tests -name '*.py')
+
+      - name: Verify bounded real Chrome readiness and cleanup
+        run: |
+          chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$chrome"
+          PYTHONPATH=. PAGE_CAPTURE_TEST_CHROME="$chrome" pytest -q \
+            tests/test_real_page_capture.py::test_real_adapter_captures_private_png_with_isolated_profile \
+            tests/test_real_page_capture.py::test_real_adapter_reports_bounded_chrome_startup_timeout_and_cleans_process \
+            tests/test_real_page_capture.py::test_real_adapter_reports_dom_ready_timeout_without_leaking_auth_and_cleans_process
+
+      - name: Run JD cloud browser runtime Node tests
+        working-directory: services/jd-cloud-browser-runtime
+        run: npm ci --no-audit --no-fund && npm test
 
       - name: Prepare verified amd64 wheelhouse
         run: |
@@ -145,33 +179,563 @@ jobs:
             --tag "$S12_WORKER_IMAGE" \
             .
 
-      - name: Run tests
+      - name: Build JD cloud browser runtime image
         run: |
-          python -m pytest -v tests/ --junitxml=/tmp/pytest-results.xml
-          python - <<'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
+          source_date_epoch="$(git show -s --format=%ct "$RELEASE_SOURCE_SHA")"
+          build_time="$(date -u --date "@$source_date_epoch" +%Y-%m-%dT%H:%M:%SZ)"
+          docker build \
+            --pull=false \
+            --build-arg "RELEASE_COMMIT=$RELEASE_SOURCE_SHA" \
+            --build-arg "BUILD_TIME=$build_time" \
+            --file services/jd-cloud-browser-runtime/Dockerfile \
+            --tag "$S12_JD_RUNTIME_IMAGE" \
+            .
+          test "$(docker image inspect --format '{{.Architecture}}' "$S12_JD_RUNTIME_IMAGE")" = amd64
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$S12_JD_RUNTIME_IMAGE")" = "$RELEASE_SOURCE_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' "$S12_JD_RUNTIME_IMAGE")" = sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+          test "$(docker image inspect --format '{{ index .Config.Labels "com.microsoft.playwright.version" }}' "$S12_JD_RUNTIME_IMAGE")" = 1.62.1
+          docker run --rm --entrypoint node "$S12_JD_RUNTIME_IMAGE" -e \
+            'const {chromium}=require("playwright");const p=chromium.executablePath();if(!p.startsWith("/ms-playwright/")||!require("fs").existsSync(p))process.exit(1);console.log(`RUNTIME_CHROMIUM_PATH=${p}`)'
+          docker run --rm --entrypoint sh "$S12_JD_RUNTIME_IMAGE" -c \
+            'sha256sum "$(node -e '\''process.stdout.write(require("playwright").chromium.executablePath())'\'')"'
 
-          result_path = Path("/tmp/pytest-results.xml")
-          root = ET.parse(result_path).getroot()
-          if root.tag == "testsuite":
-              suites = [root]
-          elif all(name in root.attrib for name in ("tests", "failures", "errors", "skipped")):
-              suites = [root]
-          else:
-              suites = root.findall("testsuite")
-          totals = {
-              name: sum(int(suite.attrib.get(name, "0")) for suite in suites)
-              for name in ("tests", "failures", "errors", "skipped")
+      - name: Verify JD cloud browser runtime container
+        id: runtime_gate
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          container="jd-browser-runtime-${RELEASE_SOURCE_SHA:0:12}"
+          network="jd-browser-runtime-${RELEASE_SOURCE_SHA:0:12}"
+          volume="jd-browser-runtime-archives-${RELEASE_SOURCE_SHA:0:12}-${GITHUB_RUN_ID}"
+          auth_pid=""
+          runtime_stage="setup"
+          cancelled=0
+          cleanup_done=0
+          redacted_runtime_logs() {
+            runtime_log="$(mktemp "$RUNNER_TEMP/r297-runtime-container.XXXXXX")"
+            timeout 1s docker logs --tail 200 "$container" >"$runtime_log" 2>&1 || true
+            if R297_REDACT_EXACT_ENV_NAMES=R_CAPTURE,R_CONTROL,R_TICKET_KEY,R_COOKIE_KEY,R_MASTER \
+              R_CAPTURE="$capture_token" R_CONTROL="$control_token" \
+              R_TICKET_KEY="$viewer_ticket_key" R_COOKIE_KEY="$viewer_cookie_key" \
+              R_MASTER="$master_key" python ops/r297_ci_redact.py "$runtime_log"; then
+              cat "$runtime_log" >&2
+            else
+              echo "RUNTIME_LOG_REDACTION_FAILED" >&2
+            fi
+            rm -f "$runtime_log"
           }
-          assert totals == {
-              "tests": 1691,
-              "failures": 0,
-              "errors": 0,
-              "skipped": 0,
-          }, totals
-          print("CI_PYTEST_RESULT=1691_PASS/0_SKIP/0_FAIL/0_ERROR")
+          cleanup() {
+            test "$cleanup_done" = 0 || return
+            cleanup_done=1
+            test -z "$auth_pid" || kill "$auth_pid" >/dev/null 2>&1 || true
+            timeout 1s docker rm --force "$container" >/dev/null 2>&1 || true
+            timeout 1s docker network rm "$network" >/dev/null 2>&1 || true
+            timeout 1s docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          diagnose_and_cleanup() {
+            exit_code=$?
+            set +e
+            if test "$exit_code" -ne 0 && test "$cancelled" = 0; then
+              echo "RUNTIME_FAILURE_STAGE=$runtime_stage"
+              timeout 1s docker ps --filter "name=^/${container}$" --format 'RUNTIME_CONTAINER={{.Status}} PORTS={{.Ports}}'
+              timeout 1s docker inspect --format '{{json .State}}' "$container"
+              timeout 1s docker stats --no-stream --format 'RUNTIME_CPU={{.CPUPerc}} MEMORY={{.MemUsage}}' "$container"
+              timeout 1s df -h / /var/lib/docker
+              redacted_runtime_logs
+            fi
+            cleanup
+          }
+          cancel_and_cleanup() {
+            exit_code=$1
+            trap - INT TERM
+            cancelled=1
+            cleanup
+            exit "$exit_code"
+          }
+          trap diagnose_and_cleanup EXIT
+          trap 'cancel_and_cleanup 130' INT
+          trap 'cancel_and_cleanup 143' TERM
+
+          capture_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          control_token="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          viewer_ticket_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          viewer_cookie_key="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          master_key="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
+          create_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          restore_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          first_ticket_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          second_ticket_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          revoke_operation_id="$(python -c 'import secrets; print(secrets.token_hex(16))')"
+          session_namespace="ci"
+          runtime_stage="missing-token"
+          echo "RUNTIME_STAGE=missing-token"
+          if docker run --rm "$S12_JD_RUNTIME_IMAGE" >/tmp/runtime-empty.log 2>&1; then exit 1; fi
+          for missing in JD_SESSION_NAMESPACE JD_BROWSER_CAPTURE_TOKEN JD_BROWSER_CONTROL_TOKEN JD_BROWSER_VIEWER_TICKET_SIGNING_KEY JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY JD_SESSION_MASTER_KEY; do
+            args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key")
+            case "$missing" in
+              JD_SESSION_NAMESPACE) args=(--env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_BROWSER_CAPTURE_TOKEN) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_BROWSER_CONTROL_TOKEN) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_BROWSER_VIEWER_TICKET_SIGNING_KEY) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_SESSION_MASTER_KEY=$master_key");;
+              JD_SESSION_MASTER_KEY) args=(--env "JD_SESSION_NAMESPACE=$session_namespace" --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" --env "JD_BROWSER_CONTROL_TOKEN=$control_token" --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key");;
+            esac
+            if docker run --rm "${args[@]}" "$S12_JD_RUNTIME_IMAGE" >/tmp/runtime-missing.log 2>&1; then exit 1; fi
+            grep -F "${missing}_REQUIRED" /tmp/runtime-missing.log >/dev/null
+          done
+          docker network create "$network" >/dev/null
+          docker volume create "$volume" >/dev/null
+          MOCK_CONTROL_TOKEN="$control_token" python - <<'PY' &
+          import json
+          import os
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path != '/r297-controlled-canary.html':
+                      self.send_response(404)
+                      self.end_headers()
+                      return
+                  content = b'<!doctype html><html><body><span data-metric="gmv">1</span></body></html>'
+                  self.send_response(200)
+                  self.send_header('content-type', 'text/html; charset=utf-8')
+                  self.send_header('content-length', str(len(content)))
+                  self.end_headers()
+                  self.wfile.write(content)
+              def do_POST(self):
+                  try:
+                      body = json.loads(self.rfile.read(int(self.headers.get('content-length', '0'))))
+                  except (ValueError, json.JSONDecodeError):
+                      body = None
+                  valid = (
+                      self.path == '/api/jd-workbench/internal/browser-session-authorize'
+                      and self.headers.get('x-internal-token') == os.environ['MOCK_CONTROL_TOKEN']
+                      and len(self.headers.get('x-owner-session-operation-id', '')) == 32
+                      and isinstance(body, dict)
+                      and set(body) == {'namespace', 'tenant_id', 'company_id', 'store_id', 'platform'}
+                      and body.get('namespace') == 'ci'
+                  )
+                  self.send_response(204 if valid else 403)
+                  self.end_headers()
+              def log_message(self, *_args):
+                  pass
+          HTTPServer(('0.0.0.0', 18787), Handler).serve_forever()
           PY
+          auth_pid=$!
+          runtime_stage="container-start"
+          echo "RUNTIME_STAGE=container-start"
+          docker run --detach \
+            --name "$container" \
+            --network "$network" \
+            --add-host host.docker.internal:host-gateway \
+            --cap-drop ALL \
+            --cap-add SYS_CHROOT \
+            --read-only \
+            --security-opt no-new-privileges:true \
+            --security-opt seccomp=services/jd-cloud-browser-runtime/seccomp_profile.json \
+            --shm-size=1g \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m,uid=10001,gid=10001,mode=1777 \
+            --tmpfs /tmp/.X11-unix:rw,nosuid,nodev,noexec,size=1m,uid=0,gid=0,mode=1777 \
+            --mount type=volume,source="$volume",target=/data/jd-session-archives \
+            --publish 127.0.0.1::8787 \
+            --env "JD_BROWSER_CAPTURE_TOKEN=$capture_token" \
+            --env "JD_BROWSER_CONTROL_TOKEN=$control_token" \
+            --env "JD_BROWSER_VIEWER_TICKET_SIGNING_KEY=$viewer_ticket_key" \
+            --env "JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY=$viewer_cookie_key" \
+            --env "JD_SESSION_MASTER_KEY=$master_key" \
+            --env "JD_SESSION_NAMESPACE=$session_namespace" \
+            --env APP_ENV=acceptance \
+            --env R297_CONTROLLED_CANARY=1 \
+            --env R297_CONTROLLED_CANARY_DASHBOARD_URL=http://host.docker.internal:18787/r297-controlled-canary.html \
+            --env JD_BROWSER_SESSION_AUTH_URL=http://host.docker.internal:18787/api/jd-workbench/internal/browser-session-authorize \
+            --env RUNTIME_API_PORT=8788 \
+            --env DISPLAY=:99 \
+            --env JD_PROFILE_ROOT=/tmp/jd-cloud-profiles \
+            --env JD_SESSION_ARCHIVE_ROOT=/data/jd-session-archives \
+            "$S12_JD_RUNTIME_IMAGE" >/dev/null
+
+          runtime_port="$(docker port "$container" 8787/tcp | awk -F: 'END {print $NF}')"
+          runtime_stage="health"
+          echo "RUNTIME_STAGE=health"
+          status=000
+          for _ in $(seq 1 60); do
+            status="$(curl --connect-timeout 3 --max-time 10 --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
+              --header "x-internal-token: $control_token" \
+              "http://127.0.0.1:$runtime_port/internal/jd-browser/health" || true)"
+            test "$status" = 200 && break
+            if test "$(docker inspect --format '{{.State.Running}}' "$container")" != true; then
+              echo "RUNTIME_EXITED_BEFORE_HEALTH=YES"
+              break
+            fi
+            sleep 1
+          done
+          echo "RUNTIME_HEALTH_STATUS=$status"
+          test "$status" = 200
+          echo "RUNTIME_HEALTH_STATUS=200"
+
+          runtime_stage="chromium-session"
+          echo "RUNTIME_STAGE=chromium-session"
+          session_status="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --output /tmp/runtime-session.json --write-out '%{http_code}' \
+            --header "content-type: application/json" \
+            --header "x-internal-token: $control_token" \
+            --header "x-owner-operation-id: $create_operation_id" \
+            --data '{"namespace":"ci","tenant_id":"1","company_id":"1","store_id":"1","platform":"jd"}' \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
+          if test "$session_status" != 200; then
+            docker logs "$container"
+            docker exec "$container" node --input-type=module -e '
+              import { chromium } from "playwright";
+              try {
+                const context = await chromium.launchPersistentContext("/tmp/chromium-diagnostic", {
+                  headless: false,
+                  chromiumSandbox: true
+                });
+                await context.close();
+              } catch (error) {
+                console.error(error);
+                process.exit(1);
+              }
+            '
+            exit 1
+          fi
+
+          process_pid() {
+            timeout 1s docker exec "$container" sh -c '
+              expected="$1"
+              for process in /proc/[0-9]*; do
+                test -r "$process/comm" || continue
+                test "$(cat "$process/comm")" = "$expected" || continue
+                printf "%s\n" "${process##*/}"
+                break
+              done
+            ' sh "$1"
+          }
+          xvfb_pid="$(process_pid Xvfb)"
+          chromium_pid="$(process_pid chrome)"
+          test -n "$xvfb_pid" && test -n "$chromium_pid"
+          echo "RUNTIME_XVFB_PID=$xvfb_pid"
+          echo "RUNTIME_CHROMIUM_PID=$chromium_pid"
+
+          runtime_uid="$(docker exec "$container" id -u)"
+          test "$runtime_uid" != 0
+          echo "RUNTIME_UID=$runtime_uid"
+          for forbidden in DATABASE_URL REDIS_URL POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD JWT_SECRET BOSS_INITIAL_PASSWORD; do
+            ! docker exec "$container" env | grep -q "^${forbidden}="
+          done
+          echo "RUNTIME_ENV_NAMES=DISPLAY,HOME,JD_BROWSER_CAPTURE_TOKEN,JD_BROWSER_CONTROL_TOKEN,JD_BROWSER_VIEWER_TICKET_SIGNING_KEY,JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY,JD_PROFILE_ROOT,JD_SESSION_ARCHIVE_ROOT,JD_SESSION_MASTER_KEY,RUNTIME_API_PORT"
+
+          runtime_stage="novnc-http"
+          echo "RUNTIME_STAGE=novnc-http"
+          unauth_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          forged_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header 'Cookie: jd_browser_session=forged' "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          echo "RUNTIME_NOVNC_UNAUTH_STATUS=$unauth_status"
+          echo "RUNTIME_NOVNC_FORGED_COOKIE_STATUS=$forged_status"
+          test "$unauth_status" = 401
+          test "$forged_status" = 401
+          if docker run --rm --network "$network" --entrypoint node "$S12_JD_RUNTIME_IMAGE" \
+            -e "fetch('http://$container:6080/vnc.html').then(()=>process.exit(1)).catch(()=>process.exit(0))"; then
+            echo "RUNTIME_SHARED_NETWORK_6080=REFUSED"
+          else
+            echo "RUNTIME_SHARED_NETWORK_6080=EXPOSED" >&2
+            exit 1
+          fi
+
+          ticket="$(curl --connect-timeout 3 --max-time 10 --silent --fail --header 'content-type: application/json' \
+            --header "x-internal-token: $control_token" --header "x-owner-operation-id: $first_ticket_operation_id" \
+            --data '{"session_id":"ci:1:1:1:jd"}' \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets" |
+            python -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
+          echo "RUNTIME_VIEWER_TICKET_ISSUED=YES"
+          cookie="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --dump-header - --output /dev/null \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange" |
+            awk -F': ' 'tolower($1)=="set-cookie" {sub(/\r$/, "", $2); print $2}')"
+          test -n "$cookie"
+          echo "RUNTIME_VIEWER_COOKIE_ISSUED=YES"
+          viewer_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          cross_store_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/2/vnc.html")"
+          replay_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
+          query_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange?ticket=forbidden")"
+          echo "RUNTIME_NOVNC_VIEWER_STATUS=$viewer_status"
+          echo "RUNTIME_NOVNC_CROSS_STORE_STATUS=$cross_store_status"
+          echo "RUNTIME_NOVNC_REPLAY_STATUS=$replay_status"
+          echo "RUNTIME_NOVNC_QUERY_STATUS=$query_status"
+          test "$viewer_status" = 200
+          test "$cross_store_status" = 401
+          test "$replay_status" = 401
+          test "$query_status" = 400
+          runtime_stage="novnc-websocket"
+          echo "RUNTIME_STAGE=novnc-websocket"
+          python - "$runtime_port" "$cookie" <<'PY'
+          import socket
+          import sys
+
+          port = int(sys.argv[1])
+          cookie = sys.argv[2]
+          with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+              request = (
+                  "GET /jd-browser/novnc/1/websockify HTTP/1.1\r\n"
+                  "Host: 127.0.0.1\r\n"
+                  f"Cookie: {cookie}\r\n"
+                  "Upgrade: websocket\r\n"
+                  "Connection: Upgrade\r\n"
+                  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                  "Sec-WebSocket-Version: 13\r\n"
+                  "Sec-WebSocket-Protocol: binary\r\n\r\n"
+              )
+              connection.sendall(request.encode("ascii"))
+              response = connection.recv(4096)
+          assert b" 101 " in response.split(b"\r\n", 1)[0], response[:200]
+          print("RUNTIME_NOVNC_WEBSOCKET=PASS")
+          PY
+
+          restart_step="RESTART_COMMAND"
+          restart_diagnostics() {
+            failure_status=$?
+            trap - ERR
+            echo "RUNTIME_RESTART_FAILED_STEP=$restart_step EXIT_CODE=$failure_status" >&2
+            timeout 1s docker inspect --format 'STATE={{.State.Status}} EXIT={{.State.ExitCode}} PID={{.State.Pid}} RESTARTS={{.RestartCount}}' "$container" >&2 || true
+            timeout 1s docker exec "$container" sh -c 'for process in /proc/[0-9]*; do test -r "$process/comm" && printf "%s %s\n" "${process##*/}" "$(cat "$process/comm")"; done' >&2 || true
+            timeout 1s docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles /data/jd-session-archives -maxdepth 3 -printf "%M %u:%g %s %p\n"' >&2 || true
+            for status_file in /tmp/runtime-health.json /tmp/runtime-session.json /tmp/runtime-restored.json; do
+              test ! -f "$status_file" || python -c '
+          import json, pathlib, re, sys
+          path = pathlib.Path(sys.argv[1])
+          try:
+              value = json.loads(path.read_text())
+          except Exception:
+              value = {"unparseable": True, "sha256_only": True}
+          def redact(item):
+              if isinstance(item, dict):
+                  return {key: "[REDACTED]" if re.search(r"(?i)(token|ticket|cookie|password|secret|key)", key) else redact(entry) for key, entry in item.items()}
+              if isinstance(item, list):
+                  return [redact(entry) for entry in item]
+              return item
+          print(f"STATUS_FILE={path.name} CONTENT={json.dumps(redact(value), sort_keys=True)}")
+          ' "$status_file" >&2
+            done
+            timeout 1s docker logs --tail 200 "$container" 2>&1 | R_CAPTURE="$capture_token" R_CONTROL="$control_token" R_TICKET_KEY="$viewer_ticket_key" R_COOKIE_KEY="$viewer_cookie_key" R_MASTER="$master_key" R_OLD_TICKET="${ticket:-}" R_NEW_TICKET="${new_ticket:-}" R_OLD_COOKIE="${cookie:-}" R_NEW_COOKIE="${new_cookie:-}" python -c '
+          import os, re, sys
+          text = sys.stdin.read()
+          for name in ("R_CAPTURE", "R_CONTROL", "R_TICKET_KEY", "R_COOKIE_KEY", "R_MASTER", "R_OLD_TICKET", "R_NEW_TICKET", "R_OLD_COOKIE", "R_NEW_COOKIE"):
+              value = os.environ.get(name)
+              if value:
+                  text = text.replace(value, "[REDACTED]")
+          text = re.sub(r"(?i)((?:token|ticket|cookie|password|secret|key)\s*[=:]\s*)\S+", r"\1[REDACTED]", text)
+          sys.stderr.write(text)
+          ' || true
+            exit "$failure_status"
+          }
+          wait_runtime_health() {
+            status=000
+            for _ in $(seq 1 60); do
+              status="$(curl --connect-timeout 3 --max-time 10 --silent --output /tmp/runtime-health.json --write-out '%{http_code}' \
+                --header "x-internal-token: $control_token" \
+                "http://127.0.0.1:$runtime_port/internal/jd-browser/health" || true)"
+              test "$status" = 200 && return 0
+              sleep 1
+            done
+            return 1
+          }
+          trap restart_diagnostics ERR
+          runtime_stage="restart-restore"
+          echo "RUNTIME_STAGE=restart-restore"
+
+          docker restart "$container" >/dev/null
+          echo "RESTART_COMMAND=PASS"
+          runtime_port="$(docker port "$container" 8787/tcp | awk -F: 'END {print $NF}')"
+          restart_step="HEALTH_READY"
+          wait_runtime_health
+          echo "HEALTH_READY=PASS HTTP_STATUS=$status"
+
+          restart_step="PROFILE_RESTORED"
+          restored_status="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --output /tmp/runtime-restored.json --write-out '%{http_code}' \
+            --header "content-type: application/json" \
+            --header "x-internal-token: $control_token" \
+            --header "x-owner-operation-id: $restore_operation_id" \
+            --data '{"namespace":"ci","tenant_id":"1","company_id":"1","store_id":"1","platform":"jd"}' \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions")"
+          test "$restored_status" = 200
+          test "$(python -c 'import json; print(str(json.load(open("/tmp/runtime-restored.json"))["restored"]).lower())')" = true
+          docker exec "$container" pgrep -x chrome >/dev/null
+          echo "PROFILE_RESTORED=PASS HTTP_STATUS=$restored_status"
+
+          restart_step="OLD_COOKIE_REJECTED"
+          old_cookie_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          test "$old_cookie_status" = 401
+          echo "OLD_COOKIE_REJECTED=PASS HTTP_STATUS=$old_cookie_status"
+
+          restart_step="OLD_TICKET_REPLAY_REJECTED"
+          old_ticket_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
+          test "$old_ticket_status" = 401
+          echo "OLD_TICKET_REPLAY_REJECTED=PASS HTTP_STATUS=$old_ticket_status"
+
+          restart_step="NEW_TICKET_ISSUED"
+          new_ticket_response="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --write-out $'\n%{http_code}' \
+            --header 'content-type: application/json' --header "x-internal-token: $control_token" \
+            --header "x-owner-operation-id: $second_ticket_operation_id" \
+            --data '{"session_id":"ci:1:1:1:jd"}' \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/tickets")"
+          new_ticket_status="${new_ticket_response##*$'\n'}"
+          test "$new_ticket_status" = 200
+          new_ticket_body="${new_ticket_response%$'\n'*}"
+          new_ticket="$(printf '%s' "$new_ticket_body" | python -c 'import json,sys; print(json.load(sys.stdin)["ticket"])')"
+          test -n "$new_ticket"
+          echo "NEW_TICKET_ISSUED=PASS HTTP_STATUS=$new_ticket_status"
+
+          restart_step="NEW_COOKIE_ACCEPTED"
+          new_cookie_response="$(curl --connect-timeout 3 --max-time 10 --silent --show-error --dump-header - --output /dev/null --write-out $'HTTP_STATUS:%{http_code}' \
+            --header 'content-type: application/json' --data "{\"ticket\":\"$new_ticket\"}" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/exchange")"
+          new_cookie_status="${new_cookie_response##*HTTP_STATUS:}"
+          test "$new_cookie_status" = 204
+          new_cookie="$(printf '%s' "$new_cookie_response" | awk -F': ' 'tolower($1)=="set-cookie" {sub(/\r$/, "", $2); print $2}')"
+          test -n "$new_cookie"
+          new_viewer_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $new_cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          test "$new_viewer_status" = 200
+          echo "NEW_COOKIE_ACCEPTED=PASS HTTP_STATUS=$new_viewer_status"
+
+          restart_step="REVOKE_PERSISTED"
+          revoke_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --request DELETE \
+            --header "x-internal-token: $control_token" \
+            --header "x-owner-operation-id: $revoke_operation_id" \
+            "http://127.0.0.1:$runtime_port/internal/jd-browser/sessions/ci%3A1%3A1%3A1%3Ajd")"
+          test "$revoke_status" = 200
+          docker restart "$container" >/dev/null
+          runtime_port="$(docker port "$container" 8787/tcp | awk -F: 'END {print $NF}')"
+          restart_step="SECOND_RESTART_HEALTH_READY"
+          wait_runtime_health
+          restart_step="REVOKE_PERSISTED"
+          echo "REVOKE_PERSISTED=PASS HTTP_STATUS=$revoke_status"
+
+          restart_step="SECOND_RESTART_OLD_COOKIE_REJECTED"
+          second_old_cookie_status="$(curl --connect-timeout 3 --max-time 10 --silent --output /dev/null --write-out '%{http_code}' --header "Cookie: $new_cookie" \
+            "http://127.0.0.1:$runtime_port/jd-browser/novnc/1/vnc.html")"
+          test "$second_old_cookie_status" = 401
+          echo "SECOND_RESTART_OLD_COOKIE_REJECTED=PASS HTTP_STATUS=$second_old_cookie_status"
+
+          restart_step="ARTIFACT_CLEANUP"
+          test -z "$(docker exec "$container" sh -c 'find /tmp/jd-cloud-profiles -type f -print')"
+          test -z "$(docker exec "$container" sh -c 'find /data/jd-session-archives -maxdepth 1 -type f -print')"
+          test -z "$(docker exec "$container" sh -c 'find /data/jd-session-archives/.used-viewer-tickets -type f -print')"
+          receipt_count="$(docker exec "$container" sh -c 'find /data/jd-session-archives/owner-operations -maxdepth 1 -type f -name "*.json" | wc -l')"
+          test "$receipt_count" = 5
+          for operation_id in "$create_operation_id" "$restore_operation_id" "$first_ticket_operation_id" "$second_ticket_operation_id" "$revoke_operation_id"; do
+            receipt="$(curl --connect-timeout 3 --max-time 10 --fail --silent \
+              --header "x-internal-token: $control_token" \
+              "http://127.0.0.1:$runtime_port/internal/jd-browser/operations/$operation_id")"
+            python -c 'import json,sys; value=json.loads(sys.argv[1]); assert value["operation_id"]==sys.argv[2] and value["status"]=="SUCCESS"' "$receipt" "$operation_id"
+          done
+          echo "RUNTIME_OWNER_OPERATION_RECEIPTS=$receipt_count"
+          test -z "$(docker exec "$container" pgrep -x chrome || true)"
+          echo "ARTIFACT_CLEANUP=PASS"
+          echo "RUNTIME_RESTART=PASS"
+          trap - ERR
+
+      - name: Verify R297 signed-event and read-only observer protocol
+        id: protocol_gate
+        env:
+          APP_ENV: test
+        run: |
+          python -m pytest -q \
+            tests/test_r297_evidence_event_protocol.py \
+            tests/test_r297_authenticated_observer.py \
+            tests/test_r297_windows_event_signer.py \
+            tests/test_r297_evidence_preflight.py
+
+      - name: Verify Runner redirects never reach an unapproved target
+        timeout-minutes: 3
+        run: |
+          docker run --rm --network none \
+            --entrypoint node \
+            --env NODE_PATH=/app/services/jd-cloud-browser-runtime/node_modules \
+            --mount type=bind,source="$PWD",target=/workspace,readonly \
+            "$S12_JD_RUNTIME_IMAGE" /workspace/tests/r297_runner_redirect_probe.cjs
+
+      - name: Generate R297 native pagehide evidence
+        timeout-minutes: 5
+        if: ${{ !cancelled() }}
+        run: |
+          evidence_dir="$RUNNER_TEMP/r297-native-pagehide"
+          mkdir -p "$evidence_dir"
+          chmod 0777 "$evidence_dir"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
+          docker run --rm \
+            --entrypoint node \
+            --env NODE_PATH=/app/services/jd-cloud-browser-runtime/node_modules \
+            --mount type=bind,source="$PWD",target=/workspace,readonly \
+            --mount type=bind,source="$evidence_dir",target=/evidence \
+            "$S12_JD_RUNTIME_IMAGE" \
+            /workspace/tests/r297_native_pagehide_evidence.cjs \
+            "$RELEASE_SOURCE_SHA" "$RELEASE_SOURCE_SHA" /evidence
+
+      - name: Upload R297 native pagehide evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-native-pagehide-${{ env.RELEASE_SOURCE_SHA }}
+          path: ${{ runner.temp }}/r297-native-pagehide/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Generate R297 real-process acceptance evidence
+        if: ${{ !cancelled() && steps.runtime_gate.outcome == 'success' && steps.protocol_gate.outcome == 'success' }}
+        timeout-minutes: 30
+        env:
+          APP_ENV: acceptance
+          R297_SIGNED_EVENT_BUNDLE: /tmp/r297-signed-event-bundle.json
+          R297_EVIDENCE_NAMESPACE: ${{ vars.R297_EVIDENCE_NAMESPACE }}
+          R297_EVIDENCE_TENANT_ID: ${{ vars.R297_EVIDENCE_TENANT_ID }}
+          R297_EVIDENCE_COMPANY_ID: ${{ vars.R297_EVIDENCE_COMPANY_ID }}
+          R297_EVIDENCE_STORE_ID: ${{ vars.R297_EVIDENCE_STORE_ID }}
+          R297_EVIDENCE_PLATFORM: jd
+        run: |
+          PYTHONPATH=. python ops/r297_process_acceptance.py /tmp/r297-process-acceptance \
+            --runtime-image "$S12_JD_RUNTIME_IMAGE" \
+            --signed-event-bundle "$R297_SIGNED_EVENT_BUNDLE"
+
+      - name: Upload R297 process acceptance evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-process-acceptance-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_RAW.jsonl
+            /tmp/r297-process-acceptance/R297_SENSITIVE_FIXTURE.json
+            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
+            /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+
+      - name: Run tests
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
+        timeout-minutes: 90
+        env:
+          R297_PROCESS_ACCEPTANCE_EVIDENCE: /tmp/r297-process-acceptance/R297_PROCESS_ACCEPTANCE_EVIDENCE.json
+          CI_PYTEST_IGNORE: tests/test_task_center_full_entrypoint_ownership.py
+          CI_PYTEST_MINIMUM: "1700"
+        run: |
+          bash -n ops/r297_workbench_deploy.sh
+          python -m ops.ci_pytest_gate /tmp/r297-pytest
+
+      - name: Upload complete pytest execution report
+        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-pytest-${{ github.event.pull_request.head.sha || github.sha }}
+          path: /tmp/r297-pytest/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Verify CI Redis queue and lock residue
         if: always()
@@ -193,7 +757,12 @@ jobs:
         run: |
           test -z "$(docker ps --all --quiet --filter "ancestor=$S12_BACKEND_IMAGE")"
           test -z "$(docker ps --all --quiet --filter "ancestor=$S12_WORKER_IMAGE")"
-          docker image rm "$S12_BACKEND_IMAGE" "$S12_WORKER_IMAGE"
+          test -z "$(docker ps --all --quiet --filter "ancestor=$S12_JD_RUNTIME_IMAGE")"
+          for image in "$S12_BACKEND_IMAGE" "$S12_WORKER_IMAGE" "$S12_JD_RUNTIME_IMAGE"; do
+            if docker image inspect "$image" >/dev/null 2>&1; then
+              docker image rm "$image"
+            fi
+          done
 
       - name: Validate production compose
         env:
@@ -202,6 +771,14 @@ jobs:
           test "$PRODUCTION_ENV_FILE" = ".env.production.example"
           test -f "$PRODUCTION_ENV_FILE"
           git ls-files --error-unmatch -- "$PRODUCTION_ENV_FILE" >/dev/null
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$RELEASE_SOURCE_SHA")"
+          export RELEASE_COMMIT="$RELEASE_SOURCE_SHA"
+          export JD_BROWSER_CAPTURE_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export JD_BROWSER_CONTROL_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export JD_BROWSER_VIEWER_TICKET_SIGNING_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export JD_BROWSER_VIEWER_COOKIE_SIGNING_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+          export JD_SESSION_MASTER_KEY="$(python -c 'import base64; print(base64.b64encode(bytes(range(32))).decode())')"
+          test -n "$SOURCE_DATE_EPOCH"
           for key in POSTGRES_DB POSTGRES_ADMIN_USER POSTGRES_ADMIN_PASSWORD REDIS_PASSWORD TLS_CERT_PATH TLS_KEY_PATH; do
             grep -Eq "^${key}=.+" "$PRODUCTION_ENV_FILE"
           done
@@ -212,3 +789,108 @@ jobs:
 
       - name: Build frontend image
         run: docker build -f Dockerfile.frontend -t tiantong-ai-cloud-frontend:${{ github.sha }} .
+
+  ownership-matrix-tests:
+    name: PostgreSQL ownership matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U ci -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping | grep PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      V2_ALPHA_POSTGRES_ADMIN_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
+      STORE_AUTHZ_POSTGRES_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
+      REDIS_URL: redis://127.0.0.1:6379/0
+      RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        id: matrix_dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Run complete PostgreSQL ownership matrix
+        timeout-minutes: 90
+        env:
+          CI_PYTEST_TARGET: tests/test_task_center_full_entrypoint_ownership.py
+          CI_PYTEST_MINIMUM: "500"
+        run: python -m ops.ci_pytest_gate /tmp/r297-ownership-matrix
+      - name: Upload ownership matrix execution report
+        if: ${{ always() && steps.matrix_dependencies.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}
+          path: /tmp/r297-ownership-matrix/
+          if-no-files-found: error
+          retention-days: 14
+
+  pytest-complete-gate:
+    name: Exact full-repository pytest coverage gate
+    needs: [test-and-build, ownership-matrix-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      CI_MAIN_JOB_RESULT: ${{ needs.test-and-build.result }}
+      CI_MATRIX_JOB_RESULT: ${{ needs.ownership-matrix-tests.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install collection dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Download main execution report
+        uses: actions/download-artifact@v8
+        with:
+          name: r297-pytest-${{ env.RELEASE_SOURCE_SHA }}
+          path: /tmp/r297-main-report
+      - name: Download ownership execution report
+        if: ${{ always() }}
+        uses: actions/download-artifact@v8
+        with:
+          name: r297-ownership-matrix-${{ env.RELEASE_SOURCE_SHA }}
+          path: /tmp/r297-matrix-report
+      - name: Require exact same-head collection union and both jobs successful
+        if: ${{ always() }}
+        run: python -m ops.ci_pytest_gate --aggregate /tmp/r297-full-coverage /tmp/r297-main-report /tmp/r297-matrix-report
+      - name: Upload exact coverage decision
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-full-coverage-${{ env.RELEASE_SOURCE_SHA }}
+          path: /tmp/r297-full-coverage/
+          if-no-files-found: error
+          retention-days: 14

@@ -32,6 +32,7 @@ PERMISSIONS = [
     ("menu.settings", "系统设置"),
     ("data.metrics.read", "读取经营数据"),
     ("data.metrics.write", "写入经营数据"),
+    ("jd_workbench.ingest", "配对并同步京东经营数据"),
     ("users.manage", "管理员工"),
     ("stores.manage", "管理店铺"),
     ("ai.tasks.read", "读取AI员工任务"),

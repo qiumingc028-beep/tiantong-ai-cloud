@@ -1,5 +1,3 @@
-import pytest
-
 from backend.models import EmployeeLog, JdSyncLog
 from backend.queue import QUEUE_NAME, enqueue_task, get_queue_status
 from backend.worker import SUPPORTED_TASK_TYPES, handle_task
@@ -61,21 +59,16 @@ def test_worker_writes_jd_and_employee_logs_for_ai_manager_task(monkeypatch, tes
 
 
 def test_worker_records_failure_reason_and_requeues(monkeypatch, test_db):
-    def fail_sync(db, store_id):
+    from backend import worker
+
+    def fail_sync(db, store_id, **_kwargs):
         raise RuntimeError("collector unavailable")
 
     monkeypatch.setattr("backend.worker.SessionLocal", test_db)
     monkeypatch.setattr("backend.worker.sync_jd_smart", fail_sync)
-    task = {
-        "task_id": "jd-worker-1",
-        "task_type": "sync_jd_smart",
-        "payload": {"store_id": 1},
-        "attempt": 0,
-        "max_retries": 3,
-    }
+    enqueue_task("sync_jd_smart", {"store_id": 1}, task_id="jd-worker-1")
 
-    with pytest.raises(RuntimeError):
-        handle_task(task)
+    assert worker.process_next_task() is True
 
     status = get_queue_status()
     db = test_db()
@@ -92,3 +85,52 @@ def test_worker_records_failure_reason_and_requeues(monkeypatch, test_db):
         assert status["recent"][0]["max_retries"] == 3
     finally:
         db.close()
+
+
+def test_successful_database_terminal_state_survives_redis_status_failure(monkeypatch, test_db):
+    from backend import worker
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    monkeypatch.setattr(worker, "SessionLocal", test_db)
+    monkeypatch.setattr(worker, "analyze_store_health", lambda _db: [])
+
+    def publish(task_id, status, *_args, **_kwargs):
+        if status == "success":
+            raise RedisConnectionError("expected status transport outage")
+
+    monkeypatch.setattr(worker, "update_task_status", publish)
+    task = {
+        "task_id": "ai-worker-redis-outage",
+        "task_type": "ai_store_manager_daily",
+        "payload": {},
+        "attempt": 0,
+        "max_retries": 3,
+    }
+
+    worker._handle_task_direct(task)
+
+    db = test_db()
+    try:
+        log = db.query(JdSyncLog).filter(JdSyncLog.task_id == task["task_id"]).one()
+        assert log.status == "success"
+        assert log.redis_notification_pending is True
+    finally:
+        db.close()
+
+
+def test_status_notification_failure_never_escapes_when_rollback_also_fails(monkeypatch):
+    from backend import worker
+
+    class BrokenNotificationSession:
+        def rollback(self):
+            raise RuntimeError("notification connection lost")
+
+    monkeypatch.setattr(
+        worker,
+        "_publish_staged_task_status",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("notification commit failed")),
+    )
+    task = {}
+
+    assert worker._publish_task_status_best_effort(BrokenNotificationSession(), 1, task) is False
+    assert task["_redis_notification_pending"] is True

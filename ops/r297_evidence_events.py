@@ -1,0 +1,933 @@
+"""Verify signed R297 client events without trusting client success claims."""
+
+from __future__ import annotations
+
+import base64
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import stat
+import subprocess
+from contextlib import contextmanager
+
+try:
+    import fcntl
+except ImportError:  # Windows signers do not consume the POSIX nonce ledger.
+    fcntl = None
+
+
+_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_NONCE_RE = re.compile(r"[A-Za-z0-9_-]{16,128}")
+_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+_TEST_TRUST_MANIFEST = Path(__file__).with_name("r297_evidence_trust_manifest.test.json")
+_TEST_TRUST_MANIFEST_SHA256 = "0eac4b3fc49f913f33762dbedbe41916c3ef50eb1128211d7d93281c78902fed"
+_PRODUCTION_TRUST_MANIFEST = (
+    Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "TiantongAI/r297-evidence-trust-manifest.json"
+    if os.name == "nt" else Path("/etc/tiantong/r297-evidence-trust-manifest.json")
+)
+_PRODUCTION_TRUST_MANIFEST_SIDECAR = Path(f"{_PRODUCTION_TRUST_MANIFEST}.sha256")
+_TEST_KEY_FINGERPRINTS = {
+    "0eddedd66e432bc8105bf196092793328ff2f9d83039d80223dd00faee9f4d84",
+    "f49dbfbcf14774d5449ba88417fd32b04a028f9911008abeea6d8adf7533c599",
+    "fc974bd3604d0c416b49c03639f9c80e6f0d98b1f6edb9519d9ecd3cf6157ce6",
+}
+_RECEIPT_RETENTION = timedelta(hours=12)
+_EVENT_ORDER = (
+    ("web_page_close", "page_event_receiver"),
+    ("authenticated_observer", "authenticated_observer"),
+    ("electron_exit", "windows_runner"),
+    ("authenticated_observer", "authenticated_observer"),
+)
+_ALLOWED_EVENTS_BY_ISSUER = {
+    "page_event_receiver": ["web_page_close"],
+    "authenticated_observer": ["authenticated_observer"],
+    "windows_runner": ["electron_exit"],
+}
+_SCOPE_FIELDS = {
+    "namespace", "tenant_id", "company_id", "store_id", "platform", "release_sha",
+    "run_id", "run_attempt", "challenge",
+}
+_FIELDS = {
+    *_SCOPE_FIELDS, "event_type", "issuer", "observed_at",
+    "sequence", "nonce", "key_id", "payload", "signature",
+}
+_MANIFEST_FIELDS = {"schema_version", "manifest_id", "environment", "keys"}
+_KEY_FIELDS = {
+    "issuer", "key_id", "algorithm", "allowed_event_types", "valid_from", "valid_until", "n", "e",
+}
+
+
+def _decode(value: str) -> bytes:
+    if not isinstance(value, str) or not value or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+        raise ValueError("invalid evidence signature")
+    try:
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except Exception as exc:
+        raise ValueError("invalid evidence signature") from exc
+
+
+def _canonical(event: dict) -> bytes:
+    unsigned = {key: value for key, value in event.items() if key != "signature"}
+    return json.dumps(unsigned, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+
+
+def signed_event_sha256(event: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+
+
+def write_sha256_bound_file(path: Path, content: bytes) -> str:
+    """Publish bytes with a sidecar commit marker and recover a body-only crash."""
+    if os.name == "nt":
+        from ops.r297_windows_file_security import _RecoveryIO, read_protected
+        # Never create a formal output directory in a caller-controlled location.
+        io = _RecoveryIO()
+        with io.lock(path.parent) as directory:
+            io.flush_directory(directory)
+            if path.exists() and read_protected(path, output=True) != content:
+                raise FileExistsError(path)
+            sidecar = Path(f"{path}.sha256")
+            if sidecar.exists():
+                read_protected(sidecar, output=True)
+            digest = _write_sha256_bound_file(path, content)
+            io.flush_directory(directory)
+            return digest
+    return _write_sha256_bound_file(path, content)
+
+
+def _write_sha256_bound_file(path: Path, content: bytes) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent_metadata = path.parent.stat()
+    if (
+        path.parent.is_symlink()
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or (os.name != "nt" and (
+            parent_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+        ))
+    ):
+        raise RuntimeError("evidence output directory permissions invalid")
+    sidecar = Path(f"{path}.sha256")
+    digest = hashlib.sha256(content).hexdigest()
+    if sidecar.exists():
+        # A committed pair remains exclusive; only our unfinished sidecar link
+        # can resume, after the body and both link identities have been checked.
+        if not path.exists():
+            raise FileExistsError(sidecar)
+        body = path.lstat()
+        metadata = sidecar.lstat()
+        if metadata.st_nlink == 2 and os.name == "nt":
+            raise RuntimeError("R297_WINDOWS_HARDLINK_RECOVERY_REQUIRES_TRUSTED_ACL")
+        if (
+            metadata.st_nlink == 2 and stat.S_ISREG(body.st_mode)
+            and body.st_nlink == 1 and stat.S_IMODE(body.st_mode) == 0o600
+            and body.st_uid == os.geteuid() and path.read_bytes() == content
+        ):
+            _recover_published_hardlink(sidecar, f"{digest}  {path.name}\n".encode("ascii"), metadata)
+            return digest
+        raise FileExistsError(sidecar)
+    if path.exists():
+        metadata = path.lstat()
+        if metadata.st_nlink == 2:
+            _recover_published_hardlink(path, content, metadata)
+            metadata = path.lstat()
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or (os.name != "nt" and (
+                metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+            ))
+            or path.read_bytes() != content
+        ):
+            raise FileExistsError(path)
+    else:
+        _replace_file(path, content)
+    _replace_file(sidecar, f"{digest}  {path.name}\n".encode("ascii"))
+    return digest
+
+
+def _recover_published_hardlink(path: Path, content: bytes, metadata: os.stat_result) -> None:
+    """Remove only the verified temporary link left by our exclusive publisher."""
+    if os.name == "nt":
+        raise RuntimeError("R297_WINDOWS_HARDLINK_RECOVERY_REQUIRES_TRUSTED_ACL")
+    if (
+        not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 2
+        or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o600
+        or path.lstat() != metadata or path.read_bytes() != content
+    ):
+        raise FileExistsError(path)
+    candidates = []
+    pattern = re.compile(rf"\.{re.escape(path.name)}\.[0-9a-f]{{16}}")
+    for candidate in path.parent.iterdir():
+        if not pattern.fullmatch(candidate.name):
+            continue
+        candidate_metadata = candidate.lstat()
+        if (
+            stat.S_ISREG(candidate_metadata.st_mode)
+            and candidate_metadata.st_ino == metadata.st_ino
+            and candidate_metadata.st_dev == metadata.st_dev
+            and candidate_metadata.st_uid == metadata.st_uid
+            and stat.S_IMODE(candidate_metadata.st_mode) == stat.S_IMODE(metadata.st_mode)
+            and candidate.read_bytes() == content
+        ):
+            candidates.append(candidate)
+    if len(candidates) != 1 or path.read_bytes() != content:
+        raise FileExistsError(path)
+    candidates[0].unlink()
+    if os.name != "nt":
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+
+
+def _replace_file(path: Path, content: bytes) -> None:
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
+    descriptor: int | None = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        handle = os.fdopen(descriptor, "wb")
+        descriptor = None
+        with handle:
+            if handle.write(content) != len(content):
+                raise OSError("short evidence write")
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Hard-link publication is exclusive: concurrent writers cannot replace
+        # either half of the digest-bound pair after their preflight checks.
+        os.link(temporary, path)
+        temporary.unlink()
+        if os.name != "nt":
+            directory_descriptor = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
+def _validate_freshness_receipt(event: dict, *, now: datetime, maximum_age: timedelta) -> None:
+    receipt = event.get("payload", {}).get("freshness_receipt")
+    if not isinstance(receipt, dict) or set(receipt) != {
+        "received_at", "freshness_verified", "maximum_age_seconds",
+    }:
+        raise ValueError("expired evidence event")
+    occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
+    received_at = _timestamp(receipt.get("received_at"), "invalid evidence receipt time")
+    if (
+        receipt.get("freshness_verified") is not True
+        or receipt.get("maximum_age_seconds") != int(maximum_age.total_seconds())
+        or received_at < occurred_at
+        or received_at - occurred_at > maximum_age
+        or received_at > now + timedelta(seconds=30)
+        or now - received_at > _RECEIPT_RETENTION
+    ):
+        raise ValueError("invalid evidence freshness receipt")
+
+
+def freshness_receipt(observed_at: datetime, received_at: datetime) -> dict:
+    observed_at = observed_at.astimezone(timezone.utc)
+    received_at = received_at.astimezone(timezone.utc)
+    if received_at < observed_at or received_at - observed_at > timedelta(minutes=5):
+        raise ValueError("evidence fact was not received within five minutes")
+    return {
+        "received_at": received_at.isoformat(),
+        "freshness_verified": True,
+        "maximum_age_seconds": 300,
+    }
+
+
+def validate_page_event_payload(payload: object) -> None:
+    required = {
+        "closed", "source", "artifact_evidence_sha256", "artifact_archive_sha256",
+        "artifact_id", "artifact_name", "workflow_run_id",
+    }
+    if (
+        not isinstance(payload, dict)
+        or frozenset(payload) not in {frozenset(required), frozenset(required | {"freshness_receipt"})}
+        or payload.get("closed") is not True
+        or payload.get("source") != "browser_pagehide"
+        or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("artifact_evidence_sha256", "")))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("artifact_archive_sha256", "")))
+        or type(payload.get("artifact_id")) is not int
+        or payload["artifact_id"] <= 0
+        or type(payload.get("workflow_run_id")) is not int
+        or payload["workflow_run_id"] <= 0
+        or not re.fullmatch(r"r297-native-pagehide-[A-Za-z0-9._-]+", str(payload.get("artifact_name", "")))
+    ):
+        raise ValueError("page close event invalid")
+
+
+def _read_protected_file(path: Path) -> bytes:
+    if os.name == "nt":
+        from ops.r297_windows_file_security import read_protected
+        return read_protected(path)
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o222:
+            raise RuntimeError("production evidence trust manifest is not immutable")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            return handle.read()
+    finally:
+        os.close(descriptor)
+
+
+def _timestamp(value: object, error: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(error) from exc
+    if parsed.tzinfo is None:
+        raise ValueError(error)
+    return parsed.astimezone(timezone.utc)
+
+
+def _scope_identity(value: object) -> bool:
+    return (
+        type(value) is int and value > 0
+        or isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value) is not None
+    )
+
+
+def _key_fingerprint(key: dict) -> str:
+    modulus = int.from_bytes(_decode(key.get("n")), "big")
+    exponent = int.from_bytes(_decode(key.get("e")), "big")
+    return hashlib.sha256(f"{modulus}:{exponent}".encode()).hexdigest()
+
+
+def _validate_trust_manifest(manifest: object, *, environment: str) -> dict:
+    if not isinstance(manifest, dict) or set(manifest) != _MANIFEST_FIELDS:
+        raise ValueError("evidence trust manifest schema mismatch")
+    if (
+        type(manifest.get("schema_version")) is not int
+        or manifest.get("schema_version") != 1
+        or manifest.get("environment") != environment
+        or not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", str(manifest.get("manifest_id", "")))
+    ):
+        raise ValueError("evidence trust manifest identity mismatch")
+    keys = manifest.get("keys")
+    expected_issuers = {issuer for _, issuer in _EVENT_ORDER}
+    if not isinstance(keys, list) or len(keys) != 3:
+        raise ValueError("evidence issuer keys not isolated")
+    by_issuer = {}
+    for key in keys:
+        if not isinstance(key, dict) or set(key) != _KEY_FIELDS:
+            raise ValueError("evidence trust key schema mismatch")
+        issuer = key.get("issuer")
+        if issuer in by_issuer or issuer not in expected_issuers:
+            raise ValueError("evidence issuer keys not isolated")
+        allowed = key.get("allowed_event_types")
+        if (
+            key.get("algorithm") != "RS256"
+            or not isinstance(allowed, list)
+            or not allowed
+            or allowed != _ALLOWED_EVENTS_BY_ISSUER[issuer]
+            or not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", str(key.get("key_id", "")))
+        ):
+            raise ValueError("evidence trust key policy invalid")
+        if _timestamp(key.get("valid_from"), "evidence trust key validity invalid") >= _timestamp(
+            key.get("valid_until"), "evidence trust key validity invalid"
+        ):
+            raise ValueError("evidence trust key validity invalid")
+        if environment in {"acceptance", "production"} and (
+            _key_fingerprint(key) in _TEST_KEY_FINGERPRINTS
+            or str(key.get("key_id", "")).endswith("-test")
+        ):
+            raise ValueError("test evidence key forbidden in production")
+        by_issuer[issuer] = key
+    if set(by_issuer) != expected_issuers or len({_key_fingerprint(key) for key in keys}) != 3:
+        raise ValueError("evidence issuer keys not isolated")
+    return manifest
+
+
+def load_trust_manifest(*, environment: str) -> tuple[dict, str]:
+    """Load the only trust anchor allowed for this runtime environment."""
+    environment = environment.strip().lower()
+    if environment in {"acceptance", "production"}:
+        path = _PRODUCTION_TRUST_MANIFEST
+        sidecar = _PRODUCTION_TRUST_MANIFEST_SIDECAR
+        manifest_bytes = _read_protected_file(path)
+        parts = _read_protected_file(sidecar).decode("ascii").strip().split()
+        if len(parts) != 2 or parts[1] != path.name or not re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+            raise RuntimeError("production evidence trust manifest sidecar invalid")
+        expected_digest = parts[0]
+    elif environment == "test":
+        path = _TEST_TRUST_MANIFEST
+        manifest_bytes = path.read_bytes()
+        expected_digest = _TEST_TRUST_MANIFEST_SHA256
+    else:
+        raise RuntimeError("evidence trust manifest environment is not configured")
+    digest = hashlib.sha256(manifest_bytes).hexdigest()
+    if digest != expected_digest:
+        raise RuntimeError("evidence trust manifest digest mismatch")
+    manifest = _validate_trust_manifest(json.loads(manifest_bytes.decode("utf-8")), environment=environment)
+    return manifest, digest
+
+
+def _private_key_variable(environment: str, issuer: str) -> str:
+    prefixes = {
+        "page_event_receiver": "R297_PAGE_EVENT_RECEIVER",
+        "authenticated_observer": "R297_OBSERVER",
+        "windows_runner": "R297_WINDOWS_RUNNER",
+    }
+    prefix = prefixes.get(issuer)
+    if prefix is None:
+        raise RuntimeError("evidence signer role invalid")
+    return f"{prefix}_{'TEST_' if environment == 'test' else ''}PRIVATE_KEY_PATH"
+
+
+@contextmanager
+def _open_private_key(environment: str, issuer: str):
+    variable = _private_key_variable(environment, issuer)
+    value = os.getenv(variable, "")
+    if not value:
+        label = "windows runner" if issuer == "windows_runner" else "observer"
+        raise RuntimeError(f"{label} private key missing")
+    if os.name == "nt":
+        from ops.r297_windows_file_security import protected_open
+        with protected_open(value, secret=True) as descriptor:
+            yield descriptor, value
+        return
+    descriptor = os.open(value, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    metadata = os.fstat(descriptor)
+    permissions_invalid = metadata.st_uid not in {0, os.geteuid()} or bool(metadata.st_mode & 0o077)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or permissions_invalid:
+        os.close(descriptor)
+        raise RuntimeError("evidence private key permissions invalid")
+    try:
+        yield descriptor, value
+    finally:
+        os.close(descriptor)
+
+
+def _private_integer(value: str) -> int:
+    return int.from_bytes(_decode(value), "big")
+
+
+def sign_event(event: dict, *, environment: str, manifest: dict, issuer: str) -> dict:
+    signing_key = next(key for key in manifest["keys"] if key["issuer"] == issuer)
+    event = {**event, "key_id": signing_key["key_id"]}
+    with _open_private_key(environment, issuer) as (descriptor, key_path):
+        if environment == "test":
+            private = json.loads(os.read(descriptor, os.fstat(descriptor).st_size).decode("utf-8"))
+            if (
+                private.get("environment") != "test"
+                or private.get("key_id") != signing_key["key_id"]
+                or private.get("n") != signing_key["n"]
+            ):
+                raise RuntimeError("evidence test private key mismatch")
+            digest = _DIGEST_INFO + hashlib.sha256(_canonical(event)).digest()
+            encoded = b"\x00\x01" + b"\xff" * (256 - len(digest) - 3) + b"\x00" + digest
+            signature = pow(
+                int.from_bytes(encoded, "big"), _private_integer(private["d"]),
+                _private_integer(private["n"]),
+            ).to_bytes(256, "big")
+        elif os.name == "nt":
+            # The key and every parent remain open, denying replacement and key
+            # mutation until OpenSSL finishes its read of this exact pathname.
+            result = subprocess.run(
+                ["openssl", "dgst", "-sha256", "-sign", key_path],
+                input=_canonical(event), capture_output=True, check=False,
+            )
+            if result.returncode:
+                raise RuntimeError("evidence signing failed")
+            signature = result.stdout
+        else:
+            result = subprocess.run(
+                ["openssl", "dgst", "-sha256", "-sign", f"/dev/fd/{descriptor}"],
+                input=_canonical(event), capture_output=True, check=False, pass_fds=(descriptor,),
+            )
+            if result.returncode:
+                raise RuntimeError("evidence signing failed")
+            signature = result.stdout
+    signed = {**event, "signature": base64.urlsafe_b64encode(signature).rstrip(b"=").decode()}
+    _verify_signature(signed, signing_key)
+    return signed
+
+
+def _verify_signature(event: dict, key: dict) -> None:
+    modulus = int.from_bytes(_decode(key.get("n")), "big")
+    exponent = int.from_bytes(_decode(key.get("e")), "big")
+    signature = _decode(event.get("signature"))
+    size = (modulus.bit_length() + 7) // 8
+    signature_value = int.from_bytes(signature, "big")
+    if (
+        size != 256
+        or modulus % 2 != 1
+        or exponent != 65537
+        or len(signature) != size
+        or signature_value >= modulus
+    ):
+        raise ValueError("invalid evidence signature")
+    encoded = pow(signature_value, exponent, modulus).to_bytes(size, "big")
+    digest_info = _DIGEST_INFO + hashlib.sha256(_canonical(event)).digest()
+    expected = b"\x00\x01" + b"\xff" * (size - len(digest_info) - 3) + b"\x00" + digest_info
+    if not secrets.compare_digest(encoded, expected):
+        raise ValueError("invalid evidence signature")
+
+
+def verify_signed_event(
+    event: dict, *, event_type: str, issuer: str, environment: str, now: datetime,
+    maximum_age: timedelta = timedelta(minutes=5),
+) -> tuple[dict, dict]:
+    """Verify one producer event against the fixed trust anchor and time window."""
+    if not isinstance(event, dict) or set(event) != _FIELDS:
+        raise ValueError("evidence event schema mismatch")
+    if event.get("event_type") != event_type or event.get("issuer") != issuer:
+        raise ValueError("evidence event role mismatch")
+    if any(not _scope_identity(event.get(field)) for field in _SCOPE_FIELDS - {"store_id", "platform", "release_sha"}):
+        raise ValueError("invalid evidence event scope")
+    if (
+        type(event.get("store_id")) is not int
+        or type(event.get("run_id")) is not str
+        or event["store_id"] <= 0
+        or not isinstance(event.get("platform"), str)
+        or re.fullmatch(r"[a-z0-9_-]{1,32}", event["platform"]) is None
+        or not _SHA_RE.fullmatch(str(event.get("release_sha", "")))
+        or type(event.get("run_attempt")) is not int
+        or event["run_attempt"] <= 0
+        or not isinstance(event.get("challenge"), str)
+        or _NONCE_RE.fullmatch(event["challenge"]) is None
+        or type(event.get("sequence")) is not int
+        or not isinstance(event.get("nonce"), str)
+        or _NONCE_RE.fullmatch(event["nonce"]) is None
+        or not isinstance(event.get("payload"), dict)
+    ):
+        raise ValueError("invalid evidence event scope")
+    occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
+    now = now.astimezone(timezone.utc)
+    if occurred_at > now + timedelta(seconds=30):
+        raise ValueError("future evidence event")
+    manifest, _ = load_trust_manifest(environment=environment)
+    key = next((candidate for candidate in manifest["keys"] if candidate["issuer"] == issuer), None)
+    if (
+        key is None
+        or event.get("key_id") != key["key_id"]
+        or event_type not in key["allowed_event_types"]
+        or not (_timestamp(key["valid_from"], "evidence trust key validity invalid") <= occurred_at < _timestamp(
+            key["valid_until"], "evidence trust key validity invalid"
+        ))
+    ):
+        raise ValueError("evidence issuer key missing")
+    if event_type in {"web_page_close", "electron_exit"} and "scheduler_continues" in event["payload"]:
+        raise ValueError("client scheduler claim forbidden")
+    if "freshness_receipt" in event["payload"]:
+        _validate_freshness_receipt(event, now=now, maximum_age=maximum_age)
+    if occurred_at < now - maximum_age:
+        raise ValueError("expired evidence event")
+    _verify_signature(event, key)
+    return manifest, key
+
+
+def _observer_result(event: dict, subject_event: dict, expected_store_id: int) -> dict:
+    payload = event["payload"]
+    if (
+        payload.get("subject_nonce") != subject_event["nonce"]
+        or payload.get("subject_event_sha256") != signed_event_sha256(subject_event)
+        or payload.get("scheduler_continues") is not True
+        or payload.get("observation_source") != "postgresql_scheduler_state"
+        or payload.get("database_read_only") is not True
+    ):
+        raise ValueError("observer subject mismatch")
+    before = payload.get("cloud_cycles_before")
+    after = payload.get("cloud_cycles_after")
+    eligible = payload.get("eligible_store_ids")
+    collected = payload.get("collected_store_ids_after")
+    if (
+        type(before) is not int
+        or type(after) is not int
+        or before < 0
+        or after <= before
+        or not isinstance(eligible, list)
+        or not isinstance(collected, list)
+        or any(type(store_id) is not int or store_id <= 0 for store_id in eligible + collected)
+        or expected_store_id not in eligible
+        or sorted(collected) != sorted(eligible)
+    ):
+        raise ValueError("observer scheduler evidence invalid")
+    return {
+        "cloud_cycles_before": before,
+        "cloud_cycles_after": after,
+        "eligible_store_ids": eligible,
+        "collected_store_ids_after": collected,
+        "observation_source": "postgresql_scheduler_state",
+        "database_read_only": True,
+    }
+
+
+def _nonce_ledger_descriptor(path: Path, flags: int) -> int:
+    try:
+        descriptor = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError as exc:
+        raise RuntimeError("evidence nonce ledger missing") from exc
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or metadata.st_nlink != 1
+    ):
+        os.close(descriptor)
+        raise RuntimeError("evidence nonce ledger permissions invalid")
+    return descriptor
+
+
+def validate_nonce_ledger(nonce_ledger: Path) -> None:
+    parent = nonce_ledger.parent
+    try:
+        parent_metadata = parent.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError("evidence nonce ledger missing") from exc
+    if (
+        parent.is_symlink()
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise RuntimeError("evidence nonce ledger permissions invalid")
+    lock_path = nonce_ledger.with_suffix(nonce_ledger.suffix + ".lock")
+    for path, flags in ((nonce_ledger, os.O_RDONLY), (lock_path, os.O_RDWR)):
+        descriptor = _nonce_ledger_descriptor(path, flags)
+        os.close(descriptor)
+
+
+def _load_nonce_bindings(nonce_ledger: Path) -> list[dict]:
+    descriptor = _nonce_ledger_descriptor(nonce_ledger, os.O_RDONLY)
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        try:
+            loaded = json.load(handle)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("evidence nonce ledger invalid") from exc
+    legacy_fields = _SCOPE_FIELDS | {"event_type", "key_id", "nonce"}
+    verified_fields = legacy_fields | {"event_sha256", "verification"}
+    if not isinstance(loaded, list) or not all(
+        isinstance(value, dict) and set(value) in (legacy_fields, verified_fields)
+        for value in loaded
+    ):
+        raise ValueError("evidence nonce ledger invalid")
+    return loaded
+
+
+def _nonce_verification(nonce_ledger: Path, events: list[dict], identity: dict, now: datetime) -> dict | None:
+    validate_nonce_ledger(nonce_ledger)
+    descriptor = _nonce_ledger_descriptor(Path(f"{nonce_ledger}.lock"), os.O_RDWR)
+    with os.fdopen(descriptor, "r+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+        loaded = _load_nonce_bindings(nonce_ledger)
+    matching = [item for item in loaded if (item["key_id"], item["nonce"]) in {
+        (event.get("key_id"), event.get("nonce")) for event in events
+    }]
+    if not matching:
+        return None
+    proof = matching[0].get("verification")
+    event_digests = {(event.get("key_id"), event.get("nonce")): signed_event_sha256(event) for event in events}
+    if len(matching) != len(events) or not isinstance(proof, dict) or any(
+        item.get("verification") != proof
+        or item.get("event_sha256") != event_digests[(item["key_id"], item["nonce"])] for item in matching
+    ):
+        raise ValueError("evidence receipt binding mismatch")
+    _validate_verification(proof, identity, now)
+    return proof
+
+
+def _validate_verification(proof: dict, identity: dict, now: datetime) -> None:
+    if not isinstance(proof, dict) or proof.get("identity") != identity or (
+        signed_event_sha256(proof.get("result")) != proof.get("result_sha256")
+    ) or (
+        not isinstance(proof.get("event_verified_at"), list) or len(proof["event_verified_at"]) != len(_EVENT_ORDER)
+    ):
+        raise ValueError("evidence receipt binding mismatch")
+    verified_at = _timestamp(proof.get("verified_at"), "invalid verification receipt time")
+    if verified_at > now + timedelta(seconds=30) or now - verified_at > _RECEIPT_RETENTION:
+        raise ValueError("evidence recovery period expired")
+
+
+def _record_nonces(
+    nonce_ledger: Path, bindings: list[dict], *, allow_exact_recovery: bool = False,
+) -> None:
+    if fcntl is None:
+        raise RuntimeError("evidence nonce ledger locking unavailable")
+    validate_nonce_ledger(nonce_ledger)
+    lock_path = nonce_ledger.with_suffix(nonce_ledger.suffix + ".lock")
+    lock_descriptor = _nonce_ledger_descriptor(lock_path, os.O_RDWR)
+    with os.fdopen(lock_descriptor, "r+", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        ledger_values: set[str] = set()
+        loaded = _load_nonce_bindings(nonce_ledger)
+        ledger_values.update(json.dumps(value, separators=(",", ":"), sort_keys=True) for value in loaded)
+        canonical_bindings = {
+            json.dumps(value, separators=(",", ":"), sort_keys=True) for value in bindings
+        }
+        if (
+            allow_exact_recovery and canonical_bindings and canonical_bindings.issubset(ledger_values)
+            and all("event_sha256" in value and "verification" in value for value in bindings)
+        ):
+            return
+        consumed_runs = {value["run_id"] for value in loaded}
+        requested_runs = {value["run_id"] for value in bindings}
+        if consumed_runs.intersection(requested_runs):
+            raise ValueError("replayed acceptance run")
+        if {(item["key_id"], item["nonce"]) for item in loaded}.intersection(
+            (item["key_id"], item["nonce"]) for item in bindings
+        ):
+            raise ValueError("replayed evidence nonce")
+        temporary = nonce_ledger.with_name(f".{nonce_ledger.name}.{secrets.token_hex(8)}")
+        updated = [json.loads(value) for value in sorted(ledger_values.union(canonical_bindings))]
+        content = (json.dumps(updated, sort_keys=True) + "\n").encode()
+        # Retain replay tombstones; capacity exhaustion must never enable reuse.
+        if len(content) > 8 * 1024 * 1024:
+            raise ValueError("evidence nonce ledger size limit exceeded")
+        temporary_descriptor = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600,
+        )
+        try:
+            remaining = memoryview(content)
+            while remaining:
+                written = os.write(temporary_descriptor, remaining)
+                if written <= 0:
+                    raise OSError("evidence nonce ledger short write")
+                remaining = remaining[written:]
+            os.fsync(temporary_descriptor)
+        finally:
+            os.close(temporary_descriptor)
+        try:
+            os.replace(temporary, nonce_ledger)
+            directory_descriptor = os.open(nonce_ledger.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def verify_acceptance_event_bundle(
+    bundle: dict, *, expected_scope: dict, now: datetime, nonce_ledger: Path,
+    maximum_age: timedelta = timedelta(minutes=5), consume_run: bool = True,
+    allow_nonce_recovery: bool = False, reserved_transaction_sha256: str | None = None,
+) -> dict:
+    if os.getenv("APP_ENV", "").strip().lower() in {"acceptance", "production"}:
+        from ops.r297_broker_client import broker_request
+        return broker_request({
+            "action": "verify" if consume_run or reserved_transaction_sha256 else "validate",
+            "bundle": bundle, "scope": expected_scope, "consume_run": consume_run,
+            "allow_nonce_recovery": allow_nonce_recovery,
+            "transaction_sha256": reserved_transaction_sha256,
+        })["verified"]
+    return _verify_acceptance_event_bundle_local(
+        bundle, expected_scope=expected_scope, now=now, nonce_ledger=nonce_ledger,
+        maximum_age=maximum_age, consume_run=consume_run,
+        allow_nonce_recovery=allow_nonce_recovery, reserved_transaction_sha256=reserved_transaction_sha256,
+    )
+
+
+def _verify_acceptance_event_bundle_local(
+    bundle: dict,
+    *,
+    expected_scope: dict,
+    now: datetime,
+    nonce_ledger: Path,
+    maximum_age: timedelta = timedelta(minutes=5),
+    consume_run: bool = True,
+    allow_nonce_recovery: bool = False,
+    reserved_transaction_sha256: str | None = None,
+    _run_ledger: Path | None = None,
+    _preview: bool = False,
+) -> dict:
+    """Return acceptance sections only after all four independently signed events verify."""
+    events = bundle.get("events") if isinstance(bundle, dict) else None
+    if not isinstance(events, list) or len(events) != len(_EVENT_ORDER):
+        raise ValueError("evidence event count mismatch")
+    if not isinstance(expected_scope, dict) or set(expected_scope) != _SCOPE_FIELDS:
+        raise ValueError("invalid expected evidence binding")
+    if (
+        not _SHA_RE.fullmatch(str(expected_scope.get("release_sha", "")))
+        or not _scope_identity(expected_scope.get("namespace"))
+        or not _scope_identity(expected_scope.get("run_id"))
+        or not _scope_identity(expected_scope.get("tenant_id"))
+        or not _scope_identity(expected_scope.get("company_id"))
+        or type(expected_scope.get("run_attempt")) is not int
+        or expected_scope["run_attempt"] <= 0
+        or not isinstance(expected_scope.get("challenge"), str)
+        or _NONCE_RE.fullmatch(expected_scope["challenge"]) is None
+        or type(expected_scope.get("store_id")) is not int
+        or expected_scope["store_id"] <= 0
+        or not isinstance(expected_scope.get("platform"), str)
+        or re.fullmatch(r"[a-z0-9_-]{1,32}", expected_scope["platform"]) is None
+    ):
+        raise ValueError("invalid expected evidence binding")
+    manifest, manifest_digest = load_trust_manifest(
+        environment=os.getenv("APP_ENV", "").strip().lower()
+    )
+    public_keys = {key["issuer"]: key for key in manifest["keys"]}
+    now = now.astimezone(timezone.utc)
+    if not all(isinstance(event, dict) for event in events):
+        raise ValueError("evidence event schema mismatch")
+    environment = os.getenv("APP_ENV", "").strip().lower()
+    run_ledger = str(_run_ledger) if _run_ledger is not None else os.getenv("R297_ACCEPTANCE_RUN_LEDGER", "")
+    formal = _run_ledger is not None or environment in {"acceptance", "production"}
+    transaction_sha256 = reserved_transaction_sha256 or signed_event_sha256(
+        {"bundle": bundle, "scope": expected_scope, "purpose": "verify_only"}
+    )
+    identity = {
+        "bundle_sha256": signed_event_sha256(bundle), "scope": expected_scope,
+        "event_sha256s": [signed_event_sha256(event) for event in events],
+        "transaction_sha256": transaction_sha256, "manifest_sha256": manifest_digest,
+    }
+    verification = None
+    receipts = []
+    if formal:
+        if not run_ledger:
+            raise RuntimeError("acceptance run ledger missing")
+        if Path(run_ledger).resolve() == nonce_ledger.resolve():
+            raise ValueError("acceptance run and nonce ledgers must differ")
+        from ops.r297_acceptance_run import read_acceptance_verification
+        context = read_acceptance_verification(
+            Path(run_ledger), expected_scope=expected_scope,
+            source_workflow_run_id=events[0].get("payload", {}).get("workflow_run_id"),
+            transaction_sha256=transaction_sha256, event_sha256s=identity["event_sha256s"], now=now,
+        )
+        verification, receipts = context["verified_bundle"], context["event_receipts"]
+    if verification is None and allow_nonce_recovery:
+        verification = _nonce_verification(nonce_ledger, events, identity, now)
+    if verification is not None:
+        _validate_verification(verification, identity, now)
+    replay_bindings: list[dict] = []
+    bundle_nonces: set[str] = set()
+    previous_time = None
+    for sequence, (event, (event_type, issuer)) in enumerate(zip(events, _EVENT_ORDER), 1):
+        if not isinstance(event, dict) or set(event) != _FIELDS:
+            raise ValueError("evidence event schema mismatch")
+        if event.get("event_type") != event_type or event.get("issuer") != issuer:
+            raise ValueError("evidence event role mismatch")
+        for scope_field in _SCOPE_FIELDS:
+            if (
+                type(event.get(scope_field)) is not type(expected_scope[scope_field])
+                or event.get(scope_field) != expected_scope[scope_field]
+            ):
+                raise ValueError(f"{scope_field} mismatch")
+        if type(event.get("sequence")) is not int or event.get("sequence") != sequence:
+            raise ValueError("event sequence mismatch")
+        nonce = event.get("nonce")
+        if not isinstance(nonce, str) or not _NONCE_RE.fullmatch(nonce) or nonce in bundle_nonces:
+            raise ValueError("replayed evidence nonce")
+        bundle_nonces.add(nonce)
+        replay_binding = {field: event[field] for field in _SCOPE_FIELDS}
+        replay_binding.update({"event_type": event_type, "key_id": event["key_id"], "nonce": nonce})
+        if replay_binding in replay_bindings:
+            raise ValueError("replayed evidence nonce")
+        replay_bindings.append(replay_binding)
+        occurred_at = _timestamp(event.get("observed_at"), "invalid evidence event time")
+        if occurred_at > now + timedelta(seconds=30):
+            raise ValueError("future evidence event")
+        if previous_time is not None and occurred_at <= previous_time:
+            raise ValueError("event time order mismatch")
+        previous_time = occurred_at
+        if not isinstance(event.get("payload"), dict):
+            raise ValueError("evidence event schema mismatch")
+        if event_type in {"web_page_close", "electron_exit"} and "scheduler_continues" in event["payload"]:
+            raise ValueError("client scheduler claim forbidden")
+        key = public_keys.get(issuer) if isinstance(public_keys, dict) else None
+        if (
+            not isinstance(key, dict)
+            or event.get("key_id") != key.get("key_id")
+            or event_type not in key.get("allowed_event_types", [])
+            or not (_timestamp(key["valid_from"], "evidence trust key validity invalid") <= occurred_at < _timestamp(
+                key["valid_until"], "evidence trust key validity invalid"
+            ))
+        ):
+            raise ValueError("evidence issuer key missing")
+        verification_time = now
+        if verification is not None:
+            verification_time = _timestamp(verification["event_verified_at"][sequence - 1], "invalid verification receipt time")
+        elif receipts:
+            verification_time = _timestamp(receipts[sequence - 1]["received_at"], "invalid verification receipt time")
+        if "freshness_receipt" in event["payload"]:
+            _validate_freshness_receipt(event, now=verification_time, maximum_age=maximum_age)
+        if occurred_at < verification_time - maximum_age:
+            raise ValueError("expired evidence event")
+        _verify_signature(event, key)
+
+    page, page_observer, electron, electron_observer = events
+    validate_page_event_payload(page["payload"])
+    process_id = electron["payload"].get("process_id")
+    if electron["payload"].get("exited") is not True or type(process_id) is not int or process_id <= 0:
+        raise ValueError("electron exit event invalid")
+    page_result = _observer_result(page_observer, page, expected_scope["store_id"])
+    electron_result = _observer_result(electron_observer, electron, expected_scope["store_id"])
+
+    result = {
+        "evidence_trust_manifest_id": manifest["manifest_id"],
+        "evidence_trust_manifest_sha256": manifest_digest,
+        "web_page_close": {"closed": True, **page_result},
+        "electron_exit": {"exited": True, "process_id": process_id, **electron_result},
+        "authenticated_observer": {
+            "issuer": "authenticated_observer", **expected_scope,
+            "verified_subject_count": 2,
+            "subject_nonces": [page["nonce"], electron["nonce"]],
+        },
+    }
+    if verification is None:
+        verification = {
+            "identity": identity, "verified_at": now.isoformat(),
+            "event_verified_at": [item["received_at"] for item in receipts] if receipts else [now.isoformat()] * len(events),
+            "result": result, "result_sha256": signed_event_sha256(result),
+        }
+    elif verification["result"] != result:
+        raise ValueError("evidence verification result changed")
+    replay_bindings = [
+        {**binding, "event_sha256": digest, "verification": verification}
+        for binding, digest in zip(replay_bindings, identity["event_sha256s"])
+    ]
+    if _preview:
+        return verification["result"]
+    if formal:
+        from ops.r297_acceptance_run import consume_acceptance_run, reserve_acceptance_run, validate_acceptance_run
+        page_event = next(event for event in events if event["event_type"] == "web_page_close")
+        run_arguments = {
+            "expected_scope": expected_scope,
+            "source_workflow_run_id": page_event["payload"]["workflow_run_id"],
+            "now": now,
+        }
+        if consume_run or reserved_transaction_sha256 is not None:
+            reserve_acceptance_run(
+                Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,
+                event_sha256s=[signed_event_sha256(event) for event in events],
+                require_event_receipts=any(
+                    _timestamp(event["observed_at"], "invalid evidence event time")
+                    < now - maximum_age for event in events
+                ),
+                verified_bundle=verification,
+            )
+        if consume_run:
+            consume_acceptance_run(
+                Path(run_ledger), **run_arguments, transaction_sha256=transaction_sha256,
+                commit_nonces=lambda: _record_nonces(
+                    nonce_ledger, replay_bindings, allow_exact_recovery=True,
+                ),
+            )
+        else:
+            run_arguments["transaction_sha256"] = reserved_transaction_sha256
+            validate_acceptance_run(Path(run_ledger), **run_arguments)
+    if not (formal and consume_run):
+        _record_nonces(
+            nonce_ledger, replay_bindings,
+            allow_exact_recovery=allow_nonce_recovery,
+        )
+
+    return verification["result"]

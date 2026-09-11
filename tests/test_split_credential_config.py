@@ -64,6 +64,12 @@ def test_legacy_redis_url_compatible(monkeypatch):
     assert Settings().REDIS_URL == "redis://:legacy-password@legacy-redis:6379/5"
 
 
+def test_legacy_redis_url_compatible_with_compose_service_password(monkeypatch):
+    reset_env(monkeypatch, REDIS_PASSWORD="compose-service-only-password")
+
+    assert Settings().REDIS_URL == "redis://:legacy-password@legacy-redis:6379/5"
+
+
 def test_postgresql_split_fields_build_database_url(monkeypatch):
     reset_env(
         monkeypatch,

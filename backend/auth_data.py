@@ -23,11 +23,12 @@ ROLE_LABELS = {
 }
 
 MENU_ITEMS = [
-    {"key": "dashboard", "label": "老板驾驶舱", "href": "/", "permission": "menu.dashboard"},
-    {"key": "import", "label": "店铺与数据", "href": "/import.html", "permission": "menu.import"},
-    {"key": "jd_data", "label": "经营中心", "href": "/jd-dashboard.html", "permission": "menu.jd_data"},
-    {"key": "ai_employees", "label": "AI员工名册", "href": "/ai-employees.html", "permission": "menu.ai_employees"},
-    {"key": "computer_executor", "label": "电脑执行中心", "href": "/computer-execution-center.html", "permission": "menu.computer_executor"},
+    {"key": "dashboard", "label": "经营概览", "href": "/", "permission": "menu.dashboard"},
+    {"key": "stores", "label": "店铺中心", "href": "/stores.html", "permission": "menu.stores"},
+    {"key": "import", "label": "数据导入", "href": "/import.html", "permission": "menu.import"},
+    {"key": "jd_data", "label": "经营驾驶舱", "href": "/jd-dashboard.html", "permission": "menu.jd_data"},
+    {"key": "ai_employees", "label": "AI员工", "href": "/ai-employees.html", "permission": "menu.ai_employees"},
+    {"key": "computer_executor", "label": "电脑执行", "href": "/computer-execution-center.html", "permission": "menu.computer_executor"},
     {"key": "settings", "label": "系统设置", "href": "/settings.html", "permission": "menu.settings"},
 ]
 

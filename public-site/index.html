@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="天统AI面向多店经营团队，建设京东多店经营工作台、云端驾驶舱与企业AI协作能力。">
+  <title>天统AI｜多店经营智能中台</title>
+  <style>
+    :root{--navy:#071b47;--blue:#155eef;--cyan:#4cc9f0;--ink:#162033;--muted:#65728a;--line:#dfe6f2;--paper:#fff;--wash:#f4f7fc;--green:#0c9b68;--shadow:0 22px 70px rgba(15,44,98,.12)}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;color:var(--ink);background:var(--paper);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.65}a{color:inherit;text-decoration:none}.wrap{width:min(1160px,calc(100% - 40px));margin:auto}
+    header{position:sticky;top:0;z-index:10;color:#fff;background:rgba(7,27,71,.96);backdrop-filter:blur(14px);border-bottom:1px solid rgba(255,255,255,.12)}.nav{height:72px;display:flex;align-items:center;justify-content:space-between}.brand{display:flex;align-items:center;gap:12px;font-weight:800;letter-spacing:.04em}.mark{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(145deg,var(--cyan),var(--blue));box-shadow:0 10px 28px rgba(21,94,239,.45)}.links{display:flex;align-items:center;gap:26px;font-size:14px}.nav-cta{padding:10px 18px;border:1px solid rgba(255,255,255,.45);border-radius:10px}
+    .hero{overflow:hidden;color:#fff;background:radial-gradient(circle at 78% 28%,rgba(76,201,240,.28),transparent 28%),radial-gradient(circle at 65% 75%,rgba(21,94,239,.32),transparent 33%),linear-gradient(135deg,#061538 0%,#0b2d70 62%,#0d4aa7 100%)}.hero-grid{min-height:650px;display:grid;grid-template-columns:1.08fr .92fr;gap:70px;align-items:center;padding:86px 0 96px}.eyebrow{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid rgba(255,255,255,.25);border-radius:999px;background:rgba(255,255,255,.08);font-size:13px}.dot{width:8px;height:8px;border-radius:50%;background:#47e3a2;box-shadow:0 0 0 5px rgba(71,227,162,.12)}h1{font-size:clamp(42px,6vw,72px);line-height:1.08;margin:24px 0 20px;letter-spacing:-.04em}.lead{max-width:650px;color:#dce8ff;font-size:19px}.actions{display:flex;gap:14px;margin-top:34px;flex-wrap:wrap}.btn{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 22px;border-radius:12px;font-weight:700}.btn-primary{background:#fff;color:#0b3b8f;box-shadow:0 14px 36px rgba(0,0,0,.18)}.btn-ghost{border:1px solid rgba(255,255,255,.32);background:rgba(255,255,255,.07)}.status{margin-top:34px;color:#bcd0f7;font-size:13px}.visual{position:relative}.panel{padding:25px;border:1px solid rgba(255,255,255,.18);border-radius:24px;background:linear-gradient(145deg,rgba(255,255,255,.16),rgba(255,255,255,.06));box-shadow:0 30px 80px rgba(0,0,0,.28);backdrop-filter:blur(18px)}.panel-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.mode{font-size:12px;padding:6px 9px;border-radius:8px;background:rgba(71,227,162,.15);color:#7ef0bc}.store{display:grid;grid-template-columns:36px 1fr auto;align-items:center;gap:12px;padding:14px 0;border-top:1px solid rgba(255,255,255,.12)}.store:first-of-type{border-top:0}.avatar{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:rgba(255,255,255,.13);font-weight:800}.store small{display:block;color:#a9bee9}.state{font-size:12px;color:#7ef0bc}.state.wait{color:#ffd27a}
+    section{padding:92px 0}.section-head{max-width:760px;margin-bottom:42px}.kicker{color:var(--blue);font-weight:800;font-size:13px;letter-spacing:.14em;text-transform:uppercase}.section-head h2{margin:8px 0 12px;font-size:clamp(30px,4vw,46px);line-height:1.2}.section-head p{color:var(--muted);font-size:17px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}.card{padding:30px;border:1px solid var(--line);border-radius:20px;background:#fff;box-shadow:0 8px 30px rgba(16,42,86,.05)}.icon{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;color:#fff;background:linear-gradient(145deg,var(--blue),#6e8cff);font-size:20px}.card h3{margin:22px 0 10px}.card p{margin:0;color:var(--muted)}.soft{background:var(--wash)}
+    .split{display:grid;grid-template-columns:1fr 1fr;gap:70px;align-items:center}.checklist{display:grid;gap:16px}.check{display:grid;grid-template-columns:26px 1fr;gap:12px}.tick{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;color:#fff;background:var(--green);font-size:13px}.check strong{display:block}.check span{color:var(--muted);font-size:14px}.security{padding:38px;border-radius:24px;color:#fff;background:linear-gradient(145deg,var(--navy),#123a83);box-shadow:var(--shadow)}.security h3{font-size:28px;margin:0 0 18px}.security-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.security-item{padding:14px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.06);font-size:14px}
+    .cta{padding:52px;border-radius:28px;display:flex;align-items:center;justify-content:space-between;gap:30px;color:#fff;background:linear-gradient(120deg,#0a2863,#155eef);box-shadow:var(--shadow)}.cta h2{font-size:34px;margin:0 0 8px}.cta p{margin:0;color:#d9e6ff}.tag{display:inline-flex;margin-top:16px;padding:6px 10px;border-radius:8px;background:rgba(255,210,122,.14);color:#ffe1a3;font-size:13px}
+    footer{padding:34px 0;color:#77839a;border-top:1px solid var(--line);font-size:13px}.footer-row{display:flex;justify-content:space-between;gap:20px}.footer-links{display:flex;gap:20px}
+    @media(max-width:860px){.links a:not(.nav-cta){display:none}.hero-grid,.split{grid-template-columns:1fr}.hero-grid{padding-top:64px}.visual{max-width:600px}.cards{grid-template-columns:1fr}.cta{align-items:flex-start;flex-direction:column}.security-grid{grid-template-columns:1fr}}
+    @media(max-width:520px){.wrap{width:min(100% - 28px,1160px)}.nav{height:64px}.brand span:last-child{font-size:14px}.hero-grid{min-height:auto;padding:54px 0 70px;gap:48px}.lead{font-size:16px}.actions .btn{width:100%}section{padding:68px 0}.card{padding:24px}.cta{padding:30px}.footer-row{flex-direction:column}.security{padding:26px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap nav">
+      <a class="brand" href="/"><span class="mark">天</span><span>天统AI</span></a>
+      <nav class="links" aria-label="主要导航">
+        <a href="#product">产品方向</a><a href="#security">安全边界</a><a href="#progress">当前进度</a>
+        <a class="nav-cta" href="https://internal.tiantongai.com">内部系统</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap hero-grid">
+        <div>
+          <div class="eyebrow"><span class="dot"></span>面向真实经营场景持续建设</div>
+          <h1>让多店经营<br>更清晰、更安全</h1>
+          <p class="lead">天统AI围绕京东多店经营，建设桌面工作台、云端驾驶舱与企业AI协作能力，让店铺状态、经营数据和异常处理形成可核验的闭环。</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="https://internal.tiantongai.com">进入内部经营系统</a>
+            <a class="btn btn-ghost" href="#product">了解产品方向</a>
+          </div>
+          <div class="status">桌面客户端处于内部测试阶段 · 不提供公开注册</div>
+        </div>
+        <div class="visual" aria-label="京东多店工作台结构示意">
+          <div class="panel">
+            <div class="panel-top"><strong>京东多店经营工作台</strong><span class="mode">只读采集模式</span></div>
+            <div class="store"><span class="avatar">京</span><span>店铺独立会话<small>独立Profile · 人工登录</small></span><span class="state">隔离</span></div>
+            <div class="store"><span class="avatar">数</span><span>标准化经营数据<small>销售 · 订单 · 库存 · 退款</small></span><span class="state">只读</span></div>
+            <div class="store"><span class="avatar">云</span><span>云端驾驶舱<small>来源与同步时间可追溯</small></span><span class="state wait">内测中</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="product">
+      <div class="wrap">
+        <div class="section-head"><div class="kicker">Product direction</div><h2>围绕经营闭环，而不是堆叠页面</h2><p>优先打通员工真实使用路径：登录店铺、只读识别、标准化同步、老板查看与异常处理。</p></div>
+        <div class="cards">
+          <article class="card"><div class="icon">店</div><h3>京东多店工作台</h3><p>在员工Windows电脑运行。每家店使用独立持久化会话，由员工在真实京麦页面手工完成登录。</p></article>
+          <article class="card"><div class="icon">数</div><h3>云端经营驾驶舱</h3><p>汇总经过白名单过滤的标准化经营数据，并展示数据来源、采集时间、同步状态与异常信息。</p></article>
+          <article class="card"><div class="icon">协</div><h3>企业AI协作</h3><p>围绕任务、知识、流程和权限提供内部协作能力，服务真实业务，不以空壳AI员工数量作为目标。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="security" class="soft">
+      <div class="wrap split">
+        <div>
+          <div class="section-head"><div class="kicker">Security first</div><h2>把安全边界写进产品</h2><p>京东数据接入坚持员工授权、只读优先和最小数据原则。登录凭证留在真实页面与本地隔离会话中。</p></div>
+          <div class="checklist">
+            <div class="check"><span class="tick">✓</span><div><strong>每店会话隔离</strong><span>切换店铺不共用Cookie、账号或业务数据。</span></div></div>
+            <div class="check"><span class="tick">✓</span><div><strong>业务写入禁止</strong><span>不修改订单、价格、库存、售后或推广设置。</span></div></div>
+            <div class="check"><span class="tick">✓</span><div><strong>敏感信息不上传</strong><span>不上传密码、短信验证码、Cookie或Token。</span></div></div>
+          </div>
+        </div>
+        <aside class="security">
+          <h3>只接收必要经营字段</h3>
+          <div class="security-grid">
+            <div class="security-item">店铺与经营主体</div><div class="security-item">销售与订单汇总</div>
+            <div class="security-item">商品、SKU与库存</div><div class="security-item">退款与物流状态</div>
+            <div class="security-item">推广费用与ROI</div><div class="security-item">来源、周期与采集时间</div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="progress">
+      <div class="wrap">
+        <div class="cta">
+          <div><h2>内部经营系统独立运行</h2><p>对外官网与内部数据系统分开部署。内部系统仅供授权员工与管理人员使用。</p><span class="tag">京东桌面客户端：内部测试中</span></div>
+          <a class="btn btn-primary" href="https://internal.tiantongai.com">打开 internal.tiantongai.com</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap footer-row"><span>© 2026 天统AI</span><span class="footer-links"><a href="https://tiantongai.com">官方网站</a><a href="https://internal.tiantongai.com">内部系统</a></span></div>
+  </footer>
+</body>
+</html>

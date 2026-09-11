@@ -1,0 +1,602 @@
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+FRONTEND = ROOT / "frontend"
+
+
+def test_owner_login_client_uses_only_store_scoped_backend_routes():
+    script = r"""
+const assert = require('node:assert/strict');
+const login = require('./frontend/r297-owner-login.js');
+
+for (const status of [307, 308]) {
+  let calls = 0;
+  const request = login.createSameOriginRequest(async (path, options) => {
+    calls += 1;
+    assert.equal(path, '/api/jd-workbench/stores/7/login-ticket');
+    assert.equal(options.redirect, 'error');
+    assert.equal(options.referrerPolicy, 'no-referrer');
+    return {status, redirected: false, url: 'https://internal.example/api/jd-workbench/stores/7/login-ticket'};
+  }, {origin: 'https://internal.example'});
+  await assert.rejects(request('/api/jd-workbench/stores/7/login-ticket', {
+    method: 'POST', credentials: 'include', body: JSON.stringify({ticket: 'secret'})
+  }), /重定向/);
+  assert.equal(calls, 1, `${status}不得转发ticket请求`);
+}
+let crossOriginCalls = 0;
+const sameOriginRequest = login.createSameOriginRequest(async (path, options) => {
+  crossOriginCalls += 1;
+  return {status: 200, redirected: false, url: `https://internal.example${path}`, options};
+}, {origin: 'https://internal.example'});
+await assert.rejects(sameOriginRequest('https://outside.example/api/me', {
+  credentials: 'include', headers: {Authorization: 'secret'}
+}), /跨域/);
+assert.equal(crossOriginCalls, 0, '跨域鉴权请求不得发出');
+await assert.rejects(sameOriginRequest('https://internal.example//outside.example/collect', {
+  method: 'POST', headers: {Authorization: 'public-test-sentinel'}, body: 'public-test-body'
+}), /跨域/);
+assert.equal(crossOriginCalls, 0, '同源URL的双斜杠路径不得重新解释为外域请求');
+assert.equal((await sameOriginRequest('/api/me', {credentials: 'include'})).status, 200);
+const redirectedClient = login.createClient(login.createSameOriginRequest(async path => ({
+  status: 307, redirected: false, url: `https://internal.example${path}`
+}), {origin: 'https://internal.example'}));
+await assert.rejects(redirectedClient.ticket(7), /重定向.*保护登录信息/);
+
+const calls = [];
+const responses = [
+  [200, {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600}],
+  [200, {store_id: 7, status: 'ACTIVE'}],
+  [200, {ticket: 'one-time-secret', expires_in: 60}],
+  [200, {ok: true, store_id: 7, status: 'REVOKED'}]
+];
+const client = login.createClient(async (path, options = {}) => {
+  calls.push({path, options});
+  const [status, body] = responses.shift();
+  return {status, json: async () => body};
+});
+assert.deepEqual(await client.create(7), {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600});
+assert.deepEqual(await client.status(7), {store_id: 7, status: 'ACTIVE'});
+assert.deepEqual(await client.ticket(7), {ticket: 'one-time-secret', expires_in: 60});
+assert.deepEqual(await client.close(7), {store_id: 7, status: 'REVOKED'});
+assert.deepEqual(calls.map(call => [call.path, call.options.method || 'GET']), [
+  ['/api/jd-workbench/stores/7/login-session', 'POST'],
+  ['/api/jd-workbench/stores/7/login-session', 'GET'],
+  ['/api/jd-workbench/stores/7/login-ticket', 'POST'],
+  ['/api/jd-workbench/stores/7/login-session', 'DELETE']
+]);
+assert.deepEqual(calls.filter(call => call.options.method === 'POST').map(call => JSON.parse(call.options.body)), [{}, {}]);
+assert.ok(calls.filter(call => !call.options.method || call.options.method === 'DELETE').every(call => !('body' in call.options)));
+await assert.rejects(client.create('session-from-user'), /店铺标识无效/);
+await assert.rejects(client.create(true), /店铺标识无效/);
+assert.equal(login.isOwner({role_code: 'owner'}), true);
+assert.equal(login.isOwner({role_code: 'admin'}), false);
+assert.equal(login.isOwner({role_code: 'operator'}), false);
+assert.deepEqual(login.sessionState(7, {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600}), {store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600});
+assert.throws(() => login.sessionState(7, {store_id: 8, status: 'ONLINE'}), /店铺作用域不匹配/);
+assert.throws(() => login.sessionState(7, {store_id: '7', status: 'ACTIVE'}), /店铺作用域不匹配/);
+assert.throws(() => login.sessionState(7, {store_id: 7, status: 'UNKNOWN_FROM_RUNTIME'}), /登录状态响应无效/);
+assert.throws(() => login.sessionState(7, {store_id: 7, status: 'active'}), /登录状态响应无效/);
+
+const requestOnce = (status, body) => async () => ({status, json: async () => body});
+for (const status of ['EXPIRED', 'HUMAN_ACTION_REQUIRED']) {
+  assert.deepEqual(await login.createClient(requestOnce(200, {store_id: 7, status})).status(7), {store_id: 7, status});
+  assert.notEqual(login.statusView(status).code, 'INVALID');
+}
+const closeController = new AbortController();
+assert.deepEqual(await login.createClient(async (_path, options) => {
+  assert.equal(options.signal, closeController.signal);
+  return {status: 200, json: async () => ({ok: true, store_id: 7, status: 'REVOKED'})};
+}).close(7, closeController.signal), {store_id: 7, status: 'REVOKED'});
+await assert.rejects(login.createClient(requestOnce(201, {})).create(7), /HTTP状态无效/);
+for (const expires_in of [true, 0, -1, 121, 1.5]) {
+  await assert.rejects(login.createClient(requestOnce(200, {ticket: 'x', expires_in})).ticket(7), /登录凭证响应无效/);
+}
+assert.deepEqual(await login.createClient(requestOnce(200, {ticket: 'x', expires_in: 120})).ticket(7), {ticket: 'x', expires_in: 120});
+for (const expires_in of [true, 0, -1, 601, 1.5]) {
+  await assert.rejects(login.createClient(requestOnce(200, {store_id: 7, status: 'LOGIN_REQUIRED', expires_in})).create(7), /登录会话响应无效/);
+}
+await assert.rejects(login.createClient(requestOnce(200, {session_id: 'legacy', store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 600})).create(7), /登录会话响应无效/);
+await assert.rejects(login.createClient(requestOnce(200, {ticket: 'x', expires_in: 60, extra: true})).ticket(7), /登录凭证响应无效/);
+await assert.rejects(login.createClient(requestOnce(202, {})).close(7), /HTTP状态无效/);
+await assert.rejects(login.createClient(requestOnce(200, {ok: false, store_id: 7, status: 'REVOKED'})).close(7), /销毁响应无效/);
+await assert.rejects(login.createClient(requestOnce(204, null)).close(7), /HTTP状态无效/);
+await assert.rejects(login.createClient(async () => { throw new TypeError('Failed to fetch'); }).status(7), /网络连接失败，请稍后重试/);
+
+const exchanges = [];
+const viewerPath = await login.redeemTicket(async (path, options) => {
+  exchanges.push({path, options});
+  return {ok: true, status: 204};
+}, 7, {ticket: 'one-time-secret', expires_in: 60});
+assert.equal(viewerPath, '/jd-browser/novnc/7/vnc.html');
+assert.equal(exchanges[0].path, '/jd-browser/novnc/7/exchange');
+assert.equal(exchanges[0].options.method, 'POST');
+assert.equal(exchanges[0].options.credentials, 'include');
+assert.equal(exchanges[0].options.referrerPolicy, 'no-referrer');
+assert.deepEqual(JSON.parse(exchanges[0].options.body), {ticket: 'one-time-secret'});
+assert.ok(!exchanges[0].path.includes('?'));
+
+for (const status of [400, 401, 403, 409, 410]) {
+  await assert.rejects(
+    login.redeemTicket(async () => ({ok: false, status}), 7, {ticket: 'rejected', expires_in: 1}),
+    /登录凭证|无权|冲突/
+  );
+}
+await assert.rejects(
+  login.redeemTicket(async () => ({ok: true, status: 200}), 7, {ticket: 'wrong-status', expires_in: 60}),
+  /兑换响应无效/
+);
+await assert.rejects(
+  login.redeemTicket(async () => { throw new TypeError('Failed to fetch'); }, 7, {ticket: 'network', expires_in: 60}),
+  /网络连接失败，请稍后重试/
+);
+"""
+    subprocess.run(
+        ["node", "-e", f"(async()=>{{{script}}})().catch(error=>{{console.error(error);process.exit(1)}})"],
+        cwd=ROOT,
+        check=True,
+    )
+
+
+def test_owner_login_real_environment_preflight_fails_closed():
+    script = r"""
+const assert = require('node:assert/strict');
+const login = require('./frontend/r297-owner-login.js');
+
+const owner = {role_code: 'owner'};
+const store = {id: 7, platform: 'jd', active: true};
+const healthy = async path => {
+  assert.equal(path, '/api/health');
+  return {status: 200, json: async () => ({status: 'running', database: true, redis: true})};
+};
+const activeClient = {status: async id => ({store_id: id, status: 'ACTIVE'})};
+const preflightController = new AbortController();
+let healthSignal;
+let statusSignal;
+const signalAwareHealth = async (path, options) => {
+  healthSignal = options.signal;
+  return healthy(path);
+};
+const signalAwareClient = {status: async (id, signal) => { statusSignal = signal; return {store_id: id, status: 'ACTIVE'}; }};
+
+let createOptions;
+const signalAwareApi = login.createClient(async (_path, options) => {
+  createOptions = options;
+  return {status: 200, json: async () => ({store_id: 7, status: 'LOGIN_REQUIRED', expires_in: 60})};
+});
+await signalAwareApi.create(7, preflightController.signal);
+assert.equal(createOptions.signal, preflightController.signal);
+assert.equal(createOptions.method, 'POST');
+
+assert.deepEqual(await login.runPreflight({
+  request: healthy, user: owner, store, client: activeClient,
+  location: {protocol: 'https:'}, secureContext: true
+}), {
+  backend_https: true, tls_trusted: true, owner_identity: true,
+  store_authorized: true, runtime_healthy: true, store_id: 7
+});
+await login.runPreflight({
+  request: signalAwareHealth, user: owner, store, client: signalAwareClient,
+  signal: preflightController.signal, location: {protocol: 'https:'}, secureContext: true
+});
+assert.equal(healthSignal, preflightController.signal);
+assert.equal(statusSignal, preflightController.signal);
+
+for (const options of [
+  {request: healthy, user: owner, store, client: activeClient, location: {protocol: 'http:'}, secureContext: true},
+  {request: healthy, user: owner, store, client: activeClient, location: {protocol: 'https:'}, secureContext: false},
+  {request: healthy, user: {role_code: 'admin'}, store, client: activeClient, location: {protocol: 'https:'}, secureContext: true},
+  {request: healthy, user: owner, store: {...store, platform: 'tmall'}, client: activeClient, location: {protocol: 'https:'}, secureContext: true},
+  {request: healthy, user: owner, store: {...store, active: false}, client: activeClient, location: {protocol: 'https:'}, secureContext: true}
+]) await assert.rejects(login.runPreflight(options), /HTTPS|TLS|Owner|京东|停用/);
+
+await assert.rejects(login.runPreflight({
+  request: async () => ({status: 503, json: async () => ({})}), user: owner, store,
+  client: activeClient, location: {protocol: 'https:'}, secureContext: true
+}), /Backend健康检查失败/);
+await assert.rejects(login.runPreflight({
+  request: async () => ({status: 200, json: async () => ({status: 'running', database: true, redis: false})}),
+  user: owner, store, client: activeClient, location: {protocol: 'https:'}, secureContext: true
+}), /Backend依赖未就绪/);
+for (const status of [403, 503]) await assert.rejects(login.runPreflight({
+  request: healthy, user: owner, store,
+  client: {status: async () => { const error = new Error('runtime'); error.status = status; throw error; }},
+  location: {protocol: 'https:'}, secureContext: true
+}), status === 403 ? /店铺授权预检失败/ : /Runtime健康检查失败/);
+
+const sockets = [];
+class SocketHarness {
+  addEventListener(type, handler) { this[`_${type}`] = handler; }
+  removeEventListener(type, handler) { if (this[`_${type}`] === handler) delete this[`_${type}`]; }
+}
+class OpenSocket extends SocketHarness {
+  constructor(url, protocol) { super(); this.url = url; this.protocol = protocol; sockets.push(this); queueMicrotask(() => this._open()); }
+  close() { this.closed = true; }
+}
+assert.deepEqual(await login.verifyNoVncWebSocket({
+  WebSocketCtor: OpenSocket, location: {protocol: 'https:', host: 'internal.example'}, storeId: 7,
+  setTimer: () => 1, clearTimer: () => {}
+}), {store_id: 7, websocket: 'connected'});
+assert.equal(sockets[0].url, 'wss://internal.example/jd-browser/novnc/7/websockify');
+assert.equal(sockets[0].protocol, 'binary');
+assert.equal(sockets[0].url.includes('?'), false);
+assert.equal(sockets[0].closed, true);
+
+class FailedSocket extends SocketHarness {
+  constructor() { super(); queueMicrotask(() => this._error()); }
+  close() { this.closed = true; }
+}
+await assert.rejects(login.verifyNoVncWebSocket({
+  WebSocketCtor: FailedSocket, location: {protocol: 'https:', host: 'internal.example'}, storeId: 7,
+  setTimer: () => 1, clearTimer: () => {}
+}), /WebSocket连接失败/);
+
+let abortedSocketCount = 0;
+class MustNotOpenSocket { constructor() { abortedSocketCount += 1; } }
+const alreadyAborted = new AbortController();
+alreadyAborted.abort();
+await assert.rejects(login.verifyNoVncWebSocket({
+  WebSocketCtor: MustNotOpenSocket, location: {protocol: 'https:', host: 'internal.example'}, storeId: 7,
+  signal: alreadyAborted.signal
+}), /连接已取消/);
+assert.equal(abortedSocketCount, 0);
+
+let pendingClosed = 0;
+let clearedTimer = 0;
+class PendingSocket extends SocketHarness { close() { pendingClosed += 1; } }
+const pendingController = new AbortController();
+const pendingSocket = login.verifyNoVncWebSocket({
+  WebSocketCtor: PendingSocket, location: {protocol: 'https:', host: 'internal.example'}, storeId: 7,
+  signal: pendingController.signal, setTimer: () => 9, clearTimer: id => { assert.equal(id, 9); clearedTimer += 1; }
+});
+pendingController.abort();
+await assert.rejects(pendingSocket, /连接已取消/);
+assert.equal(pendingClosed, 1);
+assert.equal(clearedTimer, 1);
+"""
+    subprocess.run(
+        ["node", "-e", f"(async()=>{{{script}}})().catch(error=>{{console.error(error);process.exit(1)}})"],
+        cwd=ROOT,
+        check=True,
+    )
+
+
+def test_owner_login_statuses_errors_and_polling_fail_closed():
+    script = r"""
+const assert = require('node:assert/strict');
+const login = require('./frontend/r297-owner-login.js');
+
+const labels = {
+  UNKNOWN: '尚未查询',
+  OFFLINE: '未登录', ACTIVE: '等待扫码', LOGIN_REQUIRED: '等待扫码', CAPTCHA_REQUIRED: '验证码',
+  SMS_REQUIRED: '短信验证', RISK_CONTROL: '风控', ONLINE: '登录成功',
+  LOGIN_EXPIRED: '登录失效', TICKET_EXPIRED: 'ticket过期',
+  AUTHORIZATION_REVOKED: '授权撤销', REVOKED: '授权撤销',
+  SESSION_DESTROYED: '会话销毁', RUNTIME_UNAVAILABLE: '云端登录服务暂不可用',
+  SYNC_RECOVERED: '自动同步恢复', ERROR: '同步失败'
+};
+for (const [status, label] of Object.entries(labels)) assert.equal(login.statusView(status).label, label);
+assert.equal(login.statusView('UNKNOWN_FROM_RUNTIME').label, '登录状态异常');
+assert.equal(login.statusView('UNKNOWN_FROM_RUNTIME').terminal, true);
+assert.equal(login.errorMessage({status: 403}), '无权管理该店铺的云端登录会话');
+assert.equal(login.errorMessage({status: 503}), '云端登录服务暂不可用');
+
+const operationGate = login.createOperationGate();
+const slowCreate = operationGate.begin();
+const fastClose = operationGate.begin();
+assert.equal(operationGate.isCurrent(slowCreate), false);
+assert.equal(operationGate.isCurrent(fastClose), true);
+
+let forbiddenFetches = 0;
+const deniedPoller = login.createPoller({
+  fetchStatus: async () => { forbiddenFetches += 1; },
+  onStatus: () => { throw new Error('权限失效后不得渲染'); },
+  onError: () => { throw new Error('权限失效后不得报业务错误'); },
+  isAllowed: () => false
+});
+await deniedPoller.start(7);
+assert.equal(forbiddenFetches, 0);
+assert.equal(deniedPoller.active(), false);
+
+const failingPoller = login.createPoller({
+  fetchStatus: async () => { throw new Error('失败'); },
+  onStatus: () => {},
+  onError: () => { throw new Error('错误处理也失败'); }
+});
+await assert.rejects(failingPoller.start(7), /错误处理也失败/);
+assert.equal(failingPoller.active(), false);
+
+const scheduled = [];
+const seen = [];
+let responses = [{status: 'LOGIN_REQUIRED'}, {status: 'ONLINE'}];
+const poller = login.createPoller({
+  fetchStatus: async storeId => ({store_id: storeId, ...responses.shift()}),
+  onStatus: value => seen.push(value),
+  onError: error => { throw error; },
+  setTimer: callback => { scheduled.push(callback); return callback; },
+  clearTimer: callback => { const index = scheduled.indexOf(callback); if (index >= 0) scheduled.splice(index, 1); },
+  intervalMs: 1
+});
+await poller.start(7);
+assert.equal(scheduled.length, 1);
+await scheduled.shift()();
+assert.deepEqual(seen.map(value => value.status), ['LOGIN_REQUIRED', 'ONLINE']);
+assert.equal(poller.active(), false);
+
+let resolveOld;
+const crossStore = [];
+const crossPoller = login.createPoller({
+  fetchStatus: storeId => storeId === 1 ? new Promise(resolve => { resolveOld = resolve; }) : Promise.resolve({store_id: 2, status: 'ONLINE'}),
+  onStatus: value => crossStore.push(value.store_id),
+  onError: error => { throw error; },
+  setTimer: () => 1,
+  clearTimer: () => {}
+});
+const oldRequest = crossPoller.start(1);
+await crossPoller.start(2);
+resolveOld({store_id: 1, status: 'ONLINE'});
+await oldRequest;
+assert.deepEqual(crossStore, [2]);
+
+const pending = [];
+const reentrant = login.createPoller({
+  fetchStatus: (_id, signal) => new Promise(resolve => pending.push({resolve, signal})),
+  onStatus: () => {}, onError: error => { throw error; },
+  setTimer: () => 1, clearTimer: () => {}
+});
+const first = reentrant.start(7);
+const second = reentrant.start(7);
+pending[0].resolve({store_id: 7, status: 'ACTIVE'});
+await first;
+assert.equal(reentrant.active(), true);
+assert.equal(pending[1].signal.aborted, false);
+pending[1].resolve({store_id: 7, status: 'REVOKED'});
+await second;
+
+let pendingPollSignal;
+let resolvePendingPoll;
+const pendingPoller = login.createPoller({
+  fetchStatus: (_storeId, signal) => { pendingPollSignal = signal; return new Promise(resolve => { resolvePendingPoll = resolve; }); },
+  onStatus: () => { throw new Error('离页后不得渲染轮询结果'); },
+  onError: () => { throw new Error('取消不得显示业务错误'); }
+});
+const pendingPollRequest = pendingPoller.start(7);
+assert.equal(pendingPollSignal.aborted, false);
+pendingPoller.stop();
+assert.equal(pendingPollSignal.aborted, true);
+resolvePendingPoll({store_id: 7, status: 'ONLINE'});
+await pendingPollRequest;
+assert.equal(pendingPoller.active(), false);
+
+let focused = 0;
+let closed = 0;
+const viewer = {closed: false, focus: () => { focused += 1; }, close: () => { closed += 1; viewer.closed = true; }};
+const windows = login.createWindowRegistry();
+windows.track(7, viewer);
+assert.equal(windows.focus(7), true);
+assert.equal(focused, 1);
+assert.equal(windows.focus(8), false);
+let pollerClosed = 0;
+const busy = new Set([7]);
+const pendingGate = login.createOperationGate();
+const pendingToken = pendingGate.begin();
+const abortControllers = new Map([[7, new AbortController()]]);
+login.closePageResources({
+  operationGates: new Map([[7, pendingGate]]),
+  abortControllers,
+  busy,
+  pollers: new Map([[7, {stop: () => { pollerClosed += 1; }}]]),
+  windows
+});
+assert.equal(pendingGate.isCurrent(pendingToken), false);
+assert.equal(pollerClosed, 1);
+assert.equal(closed, 1);
+assert.equal(busy.size, 0);
+assert.equal(abortControllers.size, 0);
+assert.equal(windows.size(), 0);
+
+let resolveTicket;
+let exchangeCalls = 0;
+const lateGate = login.createOperationGate();
+const lateToken = lateGate.begin();
+const lateController = new AbortController();
+const lateWindows = login.createWindowRegistry();
+lateWindows.track(7, {closed: false, focus() {}, close() { this.closed = true; }});
+const lateOpen = login.openViewer({
+  client: {ticket: () => new Promise(resolve => { resolveTicket = resolve; })},
+  request: async () => { exchangeCalls += 1; return {status: 204}; },
+  storeId: 7,
+  signal: lateController.signal,
+  isActive: () => lateGate.isCurrent(lateToken)
+});
+login.closePageResources({
+  operationGates: new Map([[7, lateGate]]),
+  abortControllers: new Map([[7, lateController]]),
+  busy: new Set([7]), pollers: new Map(), windows: lateWindows
+});
+resolveTicket({ticket: 'late-secret', expires_in: 60});
+assert.equal(await lateOpen, null);
+assert.equal(exchangeCalls, 0);
+assert.equal(lateWindows.size(), 0);
+
+const emitted = [];
+const reporter = login.createPageCloseReporter({observer: payload => emitted.push(JSON.parse(payload)), now: () => '2026-09-04T00:00:00.000Z'});
+assert.equal(reporter.report({type: 'pagehide', isTrusted: false}, [7]), false);
+assert.deepEqual(emitted, []);
+assert.deepEqual(login.PAGE_CLOSE_OBSERVER_CONTRACT, {
+  binding: '__tiantongR297AuthenticatedObserver',
+  raw_fields: ['event', 'observed_at', 'store_id', 'release_sha'],
+  observer_fields: ['authenticated_observer', 'scheduler_continues']
+});
+"""
+    subprocess.run(
+        ["node", "-e", f"(async()=>{{{script}}})().catch(error=>{{console.error(error);process.exit(1)}})"],
+        cwd=ROOT,
+        check=True,
+    )
+
+
+def test_store_page_exposes_owner_only_controls_without_secret_persistence():
+    page = (FRONTEND / "stores.html").read_text(encoding="utf-8")
+    module = (FRONTEND / "r297-owner-login.js").read_text(encoding="utf-8")
+    dashboard = (FRONTEND / "jd-dashboard.html").read_text(encoding="utf-8")
+    combined = page + module
+
+    assert 'src="/r297-owner-login.js"' in page
+    assert "R297OwnerLogin.isOwner(currentUser)" in page
+    assert "store.platform!=='jd'" in page
+    assert "if(!store.active)return" in page
+    assert "['ACTIVE','HUMAN_ACTION_REQUIRED'].includes(status.code)" in page
+    assert "R297OwnerLogin.openViewer(" in page
+    assert "secureRequest=R297OwnerLogin.createSameOriginRequest(fetch,location)" in page
+    assert "R297OwnerLogin.createClient(secureRequest)" in page
+    assert "request:secureRequest" in page
+    assert "request:fetch" not in page
+    assert "await fetch('/api" not in page
+    assert "R297OwnerLogin.runPreflight(" in page
+    assert "R297OwnerLogin.verifyNoVncWebSocket(" in page
+    assert "secureContext:isSecureContext" in page
+    assert "window.open('about:blank'" in page
+    assert "viewerWindow.location.replace(viewerPath)" in page
+    assert "if(loginWindows.focus(id))return" in page
+    assert "loginWindows.track(id,viewerWindow)" in page
+    assert page.index("loginWindows.track(id,viewerWindow)") < page.index("R297OwnerLogin.openViewer(")
+    assert '<button class="danger"${busy}' in page
+    assert page.count("loginBusy.has(id)") == 3
+    assert "ownerLoginClient.status(id,signal)" in page
+    assert page.count("ownerLoginClient.status(") == 1
+    assert "loadOwnerLoginStates" not in page
+    assert "isAllowed:()=>R297OwnerLogin.isOwner(currentUser)&&document.getElementById('stores')!==null" in page
+    assert "addEventListener('pagehide',stopLoginPolling)" in page
+    assert "R297OwnerLogin.closePageResources(" in page
+    assert "event instanceof root.PageTransitionEvent" in module
+    assert "getReleaseSha:()=>releaseSha" in page
+    assert "h.release.commit" in page
+    for label in ("京东登录", "重新验证", "打开受控验证窗口", "关闭会话"):
+        assert label in page
+    assert "R297StoreView.loadStoreDirectory(api)" in page
+    assert "/api/stores" not in page
+    assert "/api/stores" not in dashboard
+    assert "/internal/jd-browser/" not in combined
+    assert "session_id" not in combined
+    assert "scheduler_continues:true" not in combined
+    assert "authenticated_observer:true" not in combined
+    assert "localStorage" not in module
+    assert "sessionStorage" not in module
+    assert "console." not in module
+    assert "ticket=" not in combined
+    assert "URLSearchParams" not in module
+    assert "云端登录服务暂不可用" in page
+    assert "mock" not in combined.lower()
+
+
+def test_runtime_diagnostic_script_stays_inside_yaml_run_block():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    step = workflow.split("- name: Verify JD cloud browser runtime container", 1)[1].split("\n      - name:", 1)[0]
+    script = step.split("run: |\n", 1)[1]
+    assert all(not line.strip() or line.startswith("          ") for line in script.splitlines())
+
+
+def test_runtime_container_ci_check_has_timeout_and_safe_stage_diagnostics():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    runtime_step = workflow.split("- name: Verify JD cloud browser runtime container", 1)[1].split("- name: Run tests", 1)[0]
+
+    assert "timeout-minutes: 10" in runtime_step
+    for stage in (
+        "missing-token",
+        "container-start",
+        "health",
+        "chromium-session",
+        "novnc-http",
+        "novnc-websocket",
+        "restart-restore",
+    ):
+        assert f"RUNTIME_STAGE={stage}" in runtime_step
+    assert "RUNTIME_FAILURE_STAGE=" in runtime_step
+    assert "trap 'cancel_and_cleanup 130' INT" in runtime_step
+    assert "trap 'cancel_and_cleanup 143' TERM" in runtime_step
+    assert "trap - INT TERM" in runtime_step
+    assert "cancelled=1" in runtime_step
+    assert "cleanup_done=1" in runtime_step
+    assert "timeout 1s docker inspect --format '{{json .State}}'" in runtime_step
+    assert "timeout 1s docker stats --no-stream" in runtime_step
+    assert "RUNTIME_EXITED_BEFORE_HEALTH" in runtime_step
+    assert "docker inspect --format '{{.State.Running}}'" in runtime_step
+    assert "docker logs --tail 200" in runtime_step
+    assert 'echo "RUNTIME_LOG_REDACTION_FAILED"' in runtime_step
+    assert runtime_step.index('python ops/r297_ci_redact.py "$runtime_log"; then') < runtime_step.index('cat "$runtime_log"')
+    assert "RUNTIME_HEALTH_STATUS=$status" in runtime_step
+    container_run = runtime_step.split("docker run --detach", 1)[1].split('"$S12_JD_RUNTIME_IMAGE" >/dev/null', 1)[0]
+    assert '--env APP_ENV=acceptance' in container_run
+    assert '--env R297_CONTROLLED_CANARY=1' in container_run
+    assert 'R297_CONTROLLED_CANARY_DASHBOARD_URL=http://host.docker.internal:18787/' in container_run
+    assert 'JD_BROWSER_SESSION_AUTH_URL=http://host.docker.internal:18787/' in container_run
+    for operation in (
+        "create_operation_id", "restore_operation_id", "first_ticket_operation_id",
+        "second_ticket_operation_id", "revoke_operation_id",
+    ):
+        assert f'x-owner-operation-id: ${operation}' in runtime_step
+    assert "RUNTIME_OWNER_OPERATION_RECEIPTS=" in runtime_step
+    assert "internal/jd-browser/operations/$operation_id" in runtime_step
+    assert 'value["status"]=="SUCCESS"' in runtime_step
+    assert "JSON.parse(fs.readFileSync" not in runtime_step
+    assert 'test "$receipt_count" = 5' in runtime_step
+    runtime_start = Path("services/jd-cloud-browser-runtime/start-runtime.sh").read_text()
+    assert "RUNTIME_COMPONENT_EXIT=" in runtime_start
+    assert "wait -n -p exited_pid" in runtime_start
+    allowed_inspects = (
+        "timeout 1s docker inspect --format '{{json .State}}'",
+        "timeout 1s docker inspect --format 'STATE={{.State.Status}} EXIT={{.State.ExitCode}} PID={{.State.Pid}} RESTARTS={{.RestartCount}}'",
+        "docker inspect --format '{{.State.Running}}'",
+    )
+    remaining = runtime_step
+    for command in allowed_inspects:
+        assert command in remaining
+        remaining = remaining.replace(command, "")
+    assert "docker inspect" not in remaining
+    assert runtime_step.count("timeout 1s docker ") >= 7
+
+    with tempfile.TemporaryDirectory() as directory:
+        marker = Path(directory) / "cleanup"
+        started = time.monotonic()
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "marker=$1; cancelled=0; cleanup(){ printf cleanup > \"$marker\"; }; "
+                "on_exit(){ trap - INT TERM; test \"$cancelled\" = 1 || sleep 20; cleanup; }; "
+                "on_signal(){ trap - INT TERM; cancelled=1; cleanup; exit 143; }; "
+                "trap on_exit EXIT; trap on_signal TERM; kill -TERM $$",
+                "bash",
+                str(marker),
+            ],
+            check=False,
+        )
+        elapsed = time.monotonic() - started
+        assert result.returncode == 143
+        assert elapsed < 2
+        assert marker.read_text(encoding="utf-8") == "cleanup"
+
+    with tempfile.TemporaryDirectory() as directory:
+        marker = Path(directory) / "cleanup-during-exit"
+        started = time.monotonic()
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "marker=$1; cancelled=0; cleanup(){ printf cleanup > \"$marker\"; }; "
+                "on_exit(){ test \"$cancelled\" = 1 || sleep 1; cleanup; }; "
+                "on_signal(){ trap - INT TERM; cancelled=1; cleanup; exit 143; }; "
+                "trap on_exit EXIT; trap on_signal TERM; (sleep 0.1; kill -TERM $$) & exit 1",
+                "bash",
+                str(marker),
+            ],
+            check=False,
+        )
+        elapsed = time.monotonic() - started
+        assert result.returncode == 143
+        assert elapsed < 2
+        assert marker.read_text(encoding="utf-8") == "cleanup"

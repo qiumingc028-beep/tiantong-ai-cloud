@@ -286,11 +286,12 @@ def test_owner_menu_returns_all_authorized_uat_pages(client, owner_headers, test
 
     assert response.status_code == 200
     assert [(item["label"], item["href"]) for item in response.json()["menus"]] == [
-        ("老板驾驶舱", "/"),
-        ("店铺与数据", "/import.html"),
-        ("经营中心", "/jd-dashboard.html"),
-        ("AI员工名册", "/ai-employees.html"),
-        ("电脑执行中心", "/computer-execution-center.html"),
+        ("经营概览", "/"),
+        ("店铺中心", "/stores.html"),
+        ("数据导入", "/import.html"),
+        ("经营驾驶舱", "/jd-dashboard.html"),
+        ("AI员工", "/ai-employees.html"),
+        ("电脑执行", "/computer-execution-center.html"),
         ("系统设置", "/settings.html"),
     ]
     permissions = [item["permission"] for item in response.json()["menus"]]

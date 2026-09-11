@@ -6,5 +6,6 @@ __pycache__/
 *.log
 .DS_Store
 node_modules/
+desktop/jd-workbench/dist/
 docs/SSH_FIX_REPORT.md
 artifacts/wheelhouse/**/*.whl

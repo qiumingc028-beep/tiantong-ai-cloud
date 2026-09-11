@@ -61,6 +61,17 @@ def test_account_center_crud_import_export_and_sensitive_filtering(client, test_
     )
     assert blocked.status_code == 400
 
+    blocked_plain_password = client.post(
+        "/api/accounts",
+        headers=headers,
+        json={
+            "store_code": "JD998",
+            "store_name": "Blocked Password Store",
+            "plain_password": "do-not-save",
+        },
+    )
+    assert blocked_plain_password.status_code == 400
+
     created = client.post(
         "/api/accounts",
         headers=headers,
@@ -73,7 +84,6 @@ def test_account_center_crud_import_export_and_sensitive_filtering(client, test_
             "login_account": "jd_user",
             "cookie_status": "正常",
             "account_status": "正常",
-            "plain_password": "plain-secret",
             "notes": "status only",
             "tags": "key",
         },
@@ -84,9 +94,7 @@ def test_account_center_crud_import_export_and_sensitive_filtering(client, test_
     db = test_db()
     try:
         note = db.query(StoreAccountNote).filter(StoreAccountNote.store_id == account_id).one()
-        assert note.encrypted_password
-        assert note.encrypted_password != "plain-secret"
-        assert note.encrypted_password.startswith("pbkdf2_sha256$")
+        assert note.encrypted_password is None
     finally:
         db.close()
 

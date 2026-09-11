@@ -4,10 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..auth import require_permission_user
+from ..config import get_settings
 from ..database import get_db
 from ..models import JdAccount, JdSyncLog, Store
 from ..queue import enqueue_task, get_queue_status
 from ..services.ai_store_manager import analyze_store_health
+from ..store_authorization import authorized_store_condition, authorized_stores, require_authorized_store
 
 
 router = APIRouter()
@@ -17,36 +19,46 @@ SYNC_TASK_TYPES = ["sync_jd_smart", "sync_jzt", "sync_jd_orders", "sync_jd_produ
 
 @router.get("/api/jd/accounts")
 def list_jd_accounts(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
-    rows = db.query(JdAccount).order_by(JdAccount.id.asc()).all()
+    user = require_permission_user(request, db, "menu.jd_data")
+    rows = (
+        db.query(JdAccount)
+        .join(Store, Store.id == JdAccount.store_id)
+        .filter(authorized_store_condition(user))
+        .order_by(JdAccount.id.asc())
+        .all()
+    )
     return [account_to_dict(row) for row in rows]
 
 
 @router.post("/api/jd/accounts")
 async def create_jd_account(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
+    user = require_permission_user(request, db, "menu.jd_data")
     data = await request.json()
+    allowed_fields = {"store_id", "account_name", "account_type", "platform"}
+    if not isinstance(data, dict) or set(data) - allowed_fields:
+        raise HTTPException(status_code=400, detail="R291禁止上传京东登录凭据或会话材料")
     store_id = data.get("store_id")
     account_name = data.get("account_name", "").strip()
     account_type = data.get("account_type", "").strip() or data.get("platform", "").strip()
     if account_type not in {"jd_smart", "jzt"}:
         raise HTTPException(status_code=400, detail="account_type 只能是 jd_smart 或 jzt")
-    if not store_id or not db.get(Store, store_id):
-        raise HTTPException(status_code=404, detail="店铺不存在")
+    if not store_id:
+        raise HTTPException(status_code=400, detail="店铺不能为空")
+    store = require_authorized_store(db, user, store_id=store_id, write=True)
     if not account_name:
         raise HTTPException(status_code=400, detail="账号名称不能为空")
     account = JdAccount(
-        store_id=store_id,
+        store_id=store.id,
         platform=data.get("platform", "jd").strip() or "jd",
         account_type=account_type,
         account_name=account_name,
-        login_username=data.get("login_username", "").strip(),
-        login_status=data.get("login_status", "unknown").strip(),
-        cookie_status=data.get("cookie_status", "unknown").strip(),
-        auth_status=data.get("auth_status", "pending").strip(),
-        access_token=data.get("access_token"),
-        refresh_token=data.get("refresh_token"),
-        remark=data.get("remark"),
+        login_username=None,
+        login_status="unknown",
+        cookie_status="unknown",
+        auth_status="pending",
+        access_token=None,
+        refresh_token=None,
+        remark=None,
         active=True,
     )
     db.add(account)
@@ -57,17 +69,20 @@ async def create_jd_account(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/api/jd/sync/store/{store_id}")
 def enqueue_store_sync(store_id: int, request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
-    if not db.get(Store, store_id):
-        raise HTTPException(status_code=404, detail="店铺不存在")
-    queued = enqueue_store_tasks(store_id)
+    user = require_permission_user(request, db, "menu.jd_data")
+    store = require_authorized_store(db, user, store_id=store_id, write=True)
+    if get_settings().IS_PRODUCTION:
+        raise HTTPException(status_code=410, detail="旧版京东采集已停用，请使用R291只读同步")
+    queued = enqueue_store_tasks(store.id)
     return {"ok": True, "store_id": store_id, "queued": queued}
 
 
 @router.post("/api/jd/sync/all")
 def enqueue_all_store_sync(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
-    stores = db.query(Store).filter(Store.platform == "jd", Store.active.is_(True)).all()
+    user = require_permission_user(request, db, "menu.jd_data")
+    if get_settings().IS_PRODUCTION:
+        raise HTTPException(status_code=410, detail="旧版京东采集已停用，请使用R291只读同步")
+    stores = authorized_stores(db, user, write=True).filter(Store.platform == "jd").all()
     queued = []
     for store in stores:
         queued.extend(enqueue_store_tasks(store.id))
@@ -76,10 +91,17 @@ def enqueue_all_store_sync(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/api/jd/sync/status")
 def jd_sync_status(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
-    logs = db.query(JdSyncLog).order_by(JdSyncLog.id.desc()).limit(50).all()
+    user = require_permission_user(request, db, "menu.jd_data")
+    logs = (
+        db.query(JdSyncLog)
+        .join(Store, Store.id == JdSyncLog.store_id)
+        .filter(authorized_store_condition(user))
+        .order_by(JdSyncLog.id.desc())
+        .limit(50)
+        .all()
+    )
     return {
-        "queue": get_queue_status(50),
+        "queue": {"disabled": True} if get_settings().IS_PRODUCTION else get_queue_status(50),
         "logs": [sync_log_to_dict(log) for log in logs],
     }
 

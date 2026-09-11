@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from ..auth import require_permission_user
 from ..database import get_db
 from ..models import JdIntegration, Store
+from ..store_authorization import authorized_store_condition, require_authorized_store
 
 
 router = APIRouter()
@@ -11,33 +12,42 @@ router = APIRouter()
 
 @router.get("/api/jd/integrations")
 def list_jd_integrations(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
-    rows = db.query(JdIntegration).options(joinedload(JdIntegration.store)).order_by(JdIntegration.id.asc()).all()
+    user = require_permission_user(request, db, "menu.jd_data")
+    rows = (
+        db.query(JdIntegration)
+        .join(Store, Store.id == JdIntegration.store_id)
+        .filter(authorized_store_condition(user))
+        .options(joinedload(JdIntegration.store))
+        .order_by(JdIntegration.id.asc())
+        .all()
+    )
     return [integration_to_dict(i) for i in rows]
 
 
 @router.post("/api/jd/integrations")
 async def create_jd_integration(request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
+    user = require_permission_user(request, db, "menu.jd_data")
     data = await request.json()
+    allowed_fields = {"store_id", "source_type", "connection_mode", "merchant_id", "notes"}
+    if not isinstance(data, dict) or set(data) - allowed_fields:
+        raise HTTPException(status_code=400, detail="R291禁止上传京东密钥、Token或会话材料")
     store_id = data.get("store_id")
     source_type = data.get("source_type", "").strip()
     connection_mode = data.get("connection_mode", "").strip()
     if not store_id or not source_type or not connection_mode:
         raise HTTPException(status_code=400, detail="店铺、数据来源、接入方式不能为空")
-    if not db.get(Store, store_id):
-        raise HTTPException(status_code=404, detail="店铺不存在")
+    store = require_authorized_store(db, user, store_id=store_id, write=True)
     if source_type not in ["jd_sz", "jd_jzt", "jd_open", "manual_import", "browser_auto"]:
         raise HTTPException(status_code=400, detail="数据来源不正确")
     if connection_mode not in ["official_api", "browser_auto", "excel_import", "pending"]:
         raise HTTPException(status_code=400, detail="接入方式不正确")
 
     integration = JdIntegration(
-        store_id=store_id,
+        store_id=store.id,
         source_type=source_type,
         connection_mode=connection_mode,
         merchant_id=data.get("merchant_id", "").strip(),
-        app_key=data.get("app_key", "").strip(),
+        app_key=None,
         notes=data.get("notes", "").strip(),
         status="pending",
         active=True,
@@ -50,12 +60,17 @@ async def create_jd_integration(request: Request, db: Session = Depends(get_db))
 
 @router.post("/api/jd/integrations/{integration_id}/status")
 async def update_jd_integration_status(integration_id: int, request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
+    user = require_permission_user(request, db, "menu.jd_data")
     data = await request.json()
     status = data.get("status", "").strip()
     if status not in ["pending", "authorized", "error", "disabled"]:
         raise HTTPException(status_code=400, detail="状态不正确")
-    integration = db.get(JdIntegration, integration_id)
+    integration = (
+        db.query(JdIntegration)
+        .join(Store, Store.id == JdIntegration.store_id)
+        .filter(JdIntegration.id == integration_id, authorized_store_condition(user, write=True))
+        .one_or_none()
+    )
     if not integration:
         raise HTTPException(status_code=404, detail="接入记录不存在")
     integration.status = status
@@ -65,8 +80,13 @@ async def update_jd_integration_status(integration_id: int, request: Request, db
 
 @router.post("/api/jd/integrations/{integration_id}/toggle")
 def toggle_jd_integration(integration_id: int, request: Request, db: Session = Depends(get_db)):
-    require_permission_user(request, db, "menu.jd_data")
-    integration = db.get(JdIntegration, integration_id)
+    user = require_permission_user(request, db, "menu.jd_data")
+    integration = (
+        db.query(JdIntegration)
+        .join(Store, Store.id == JdIntegration.store_id)
+        .filter(JdIntegration.id == integration_id, authorized_store_condition(user, write=True))
+        .one_or_none()
+    )
     if not integration:
         raise HTTPException(status_code=404, detail="接入记录不存在")
     integration.active = not integration.active
@@ -83,7 +103,6 @@ def integration_to_dict(i: JdIntegration):
         "source_type": i.source_type,
         "connection_mode": i.connection_mode,
         "merchant_id": i.merchant_id,
-        "app_key": i.app_key,
         "status": i.status,
         "notes": i.notes,
         "active": i.active,
