@@ -236,11 +236,15 @@ def _primary_error_matches_exits(primary_error: object, exits: object) -> bool:
         if primary_error.startswith(prefix):
             value = exits.get(stage)
             if primary_error == prefix + "TIMEOUT":
-                return value is None
+                return _timeout_exit_valid(value)
             if primary_error == prefix + "FAILED":
                 return type(value) is int and value != 0
             return False
     return True
+
+
+def _timeout_exit_valid(value: object) -> bool:
+    return value in {None, -signal.SIGTERM, -signal.SIGKILL}
 
 
 def _terminal_error_matches_exits(terminal_error: object, exits: object) -> bool:
@@ -249,9 +253,8 @@ def _terminal_error_matches_exits(terminal_error: object, exits: object) -> bool
     if terminal_error == "PYTEST_SUPERVISOR_CANCELLED":
         return True
     match = re.fullmatch(r"PYTEST_(MAIN|OWNERSHIP|AGGREGATE)_TIMEOUT", terminal_error or "")
-    return bool(match and isinstance(exits, dict) and exits.get(match.group(1).lower()) in {
-        None, -signal.SIGTERM, -signal.SIGKILL,
-    })
+    return bool(match and isinstance(exits, dict)
+                and _timeout_exit_valid(exits.get(match.group(1).lower())))
 
 
 def _partition_publication_eligible(primary_error: object, terminal_error: object) -> bool:

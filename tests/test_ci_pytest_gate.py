@@ -305,13 +305,20 @@ def test_anonymous_identity_detects_same_count_replacement_after_redaction():
     assert gate._node_identities(original) != gate._node_identities(replaced)
 
 
-def test_actions_requires_ephemeral_identity_key(monkeypatch):
-    from ops import ci_pytest_gate as gate
-
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.delenv("CI_PYTEST_IDENTITY_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="CI_PYTEST_IDENTITY_KEY_MISSING"):
-        gate._node_identities(["tests/test_one.py::test_one"])
+def test_actions_requires_ephemeral_identity_key():
+    env = dict(os.environ, GITHUB_ACTIONS="true")
+    env.pop("CI_PYTEST_IDENTITY_KEY", None)
+    result = subprocess.run(
+        [sys.executable, "-c", (
+            "from ops import ci_pytest_gate as gate\n"
+            "try: gate._node_identities(['tests/test_one.py::test_one'])\n"
+            "except RuntimeError as exc: raise SystemExit(0 if str(exc) == "
+            "'CI_PYTEST_IDENTITY_KEY_MISSING' else 2)\n"
+            "raise SystemExit(1)\n"
+        )],
+        env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0
 
 
 def test_real_plugin_execution_manifest_survives_nested_progress_tests(tmp_path):
@@ -1433,6 +1440,17 @@ def test_terminal_supervisor_error_never_qualifies_ownership_publication(
         gate._validate_publication(
             specs[1][1], head="a" * 40, run_id="123", run_attempt="1",
         )
+
+
+@pytest.mark.parametrize("exit_code", [None, -signal.SIGTERM, -signal.SIGKILL])
+def test_timeout_errors_accept_only_unfinished_or_supervisor_terminated_stage(exit_code):
+    from ops import ci_pytest_gate as gate
+    exits = {"main": exit_code, "ownership": 0, "aggregate": 0}
+    assert gate._primary_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits)
+    assert gate._terminal_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits)
+    exits["main"] = 1
+    assert not gate._primary_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits)
+    assert not gate._terminal_error_matches_exits("PYTEST_MAIN_TIMEOUT", exits)
 
 
 def test_later_terminal_error_blocks_all_partitions_without_replacing_first_error(
