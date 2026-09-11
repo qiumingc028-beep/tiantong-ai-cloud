@@ -51,9 +51,22 @@ def test_r297_windows_gate_has_complete_trigger_and_artifact_contract():
     assert "tiantong-ai-jd-workbench-r297-build-" in workflow
     assert workflow.count("${{ github.run_id }}-${{ github.run_attempt }}") >= 4
     for path in (
+        "backend/__init__.py",
+        "backend/services/__init__.py",
         "ops/r297_windows_file_security.py",
         "ops/r297_windows_recovery_probe.py",
         "ops/install_r297_trusted_windows_observer.ps1",
+        "ops/install_r297_trusted_linux_host.sh",
+        "ops/provision_r297_observer_database.sh",
+        "ops/r297_authenticated_observer.py",
+        "ops/r297_evidence_broker.py",
+        "ops/r297_broker_client.py",
+        "ops/r297_event_receipt.py",
+        "ops/r297_evidence_storage.py",
+        "ops/r297_evidence_role_service.py",
+        "ops/r297_role_client.py",
+        "ops/r297_evidence_bundle.py",
+        "ops/r297_trusted_orchestrator.py",
         "tests/test_r297_windows_file_security.py",
         "tests/test_r297_windows_recovery.py",
         "tests/r297_windows_native_boundary.ps1",
@@ -137,7 +150,13 @@ def test_candidate_workflow_fails_before_windows_signing_key_is_exposed():
     assert "R297_TRUSTED_WINDOWS_CONTROLLER_PATH" in candidate
     assert "R297_TRUSTED_WINDOWS_CONTROLLER_SHA256" in candidate
     assert "R297_TRUSTED_WINDOWS_CONTROLLER_SID" in candidate
+    assert "R297_TRUSTED_WINDOWS_CONTROLLER_TASK_NAME" in candidate
+    assert "R297_TRUSTED_WINDOWS_REQUEST_ROOT" in candidate
     assert "R297_TRUSTED_SIGNER_SHA" in candidate
+    assert "& $controller" not in candidate
+    assert "Start-ScheduledTask" in candidate
+    assert "Get-ScheduledTaskInfo" in candidate
+    assert "R297_FORMAL_CONTROLLER_TASK_IDENTITY_MISMATCH" in candidate
 
 
 def test_windows_build_is_secretless_and_publishes_before_independent_formal_gate():
@@ -178,7 +197,7 @@ def test_windows_build_is_secretless_and_publishes_before_independent_formal_gat
     assert "R297_FORMAL_RESULT_BINDING_INVALID" in formal
     assert "R297_FORMAL_RESULT_RUN_ALREADY_EXISTS" in formal
     assert "R297_FORMAL_RESULT_PARENT_REPLACE_ACCESS" in formal
-    assert formal.index("$preflightPaths") < formal.index("& $controller `")
+    assert formal.index("$preflightPaths") < formal.index("Start-ScheduledTask")
     assert "${{ github.run_id }}-${{ github.run_attempt }}/formal-result.json" in formal
     assert "path: ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}\n" not in formal
     assert "./ops/r297_windows_acceptance.ps1" not in formal
@@ -215,6 +234,7 @@ def test_r297_windows_acceptance_run_id_is_per_dispatch_not_static_environment_s
 
 def test_windows_native_job_runs_windows_only_boundaries_without_protected_environment():
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     native = workflow.split("  windows-native-recovery-tests:", 1)[1].split(
         "  formal-windows-acceptance:", 1
     )[0]
@@ -226,6 +246,11 @@ def test_windows_native_job_runs_windows_only_boundaries_without_protected_envir
     assert "tests/test_r297_trusted_windows_observer.py" in native
     assert "tests/test_r297_trusted_host_installers.py" in native
     assert "R297_NATIVE_POWER_LOSS_REBOOT=NOT_TESTED" in native
+    assert "R297_EVIDENCE_CLASS=TEST_ONLY" in native
+    assert "R297_FORMAL_EVIDENCE=false" in native
+    assert "name: test-only-r297-windows-native-recovery-" in native
+    assert "r297-windows-native-classification.txt" in native
+    assert "tzdata==2026.3" in requirements
     assert "--junitxml" in native
     assert "ops/r297_ci_redact.py" in native
     assert "if (Test-Path -LiteralPath $junit)" in native
