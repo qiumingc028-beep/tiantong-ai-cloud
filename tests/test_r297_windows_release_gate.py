@@ -228,6 +228,7 @@ def test_windows_native_job_runs_windows_only_boundaries_without_protected_envir
     assert "R297_NATIVE_POWER_LOSS_REBOOT=NOT_TESTED" in native
     assert "--junitxml" in native
     assert "ops/r297_ci_redact.py" in native
+    assert "if (Test-Path -LiteralPath $junit)" in native
     assert "if-no-files-found: error" in native
 
 
