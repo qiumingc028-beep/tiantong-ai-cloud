@@ -17,6 +17,8 @@ class FilesystemChecks:
     def __init__(self):
         self.events = []
         self.fail_flush = False
+        self._next_descriptor = 0
+        self._paths = {}
 
     @contextmanager
     def lock(self, parent):
@@ -24,22 +26,24 @@ class FilesystemChecks:
 
     @contextmanager
     def open(self, path, *, delete=False):
-        descriptor = os.open(path, os.O_RDONLY)
+        self._next_descriptor += 1
+        descriptor = self._next_descriptor
+        self._paths[descriptor] = Path(path)
         try:
             yield descriptor
         finally:
-            os.close(descriptor)
+            self._paths.pop(descriptor)
 
     def identity(self, descriptor):
-        value = os.fstat(descriptor)
+        value = self._paths[descriptor].stat()
         return (value.st_dev, value.st_ino, 0, value.st_nlink)
 
     def read(self, descriptor):
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        return os.read(descriptor, 2 * 1024 * 1024 + 1)
+        return self._paths[descriptor].read_bytes()
 
     def remove(self, descriptor, path):
-        assert os.fstat(descriptor).st_ino == path.stat().st_ino
+        inode = self._paths[descriptor].stat().st_ino
+        assert inode == path.stat().st_ino
         self.events.append("remove")
         path.unlink()
 

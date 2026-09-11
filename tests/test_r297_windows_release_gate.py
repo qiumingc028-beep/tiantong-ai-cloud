@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,6 +10,7 @@ ACCEPTANCE_SCRIPT = ROOT / "ops" / "r297_windows_acceptance.ps1"
 EVENT_SIGNER = ROOT / "ops" / "r297_windows_event_signer.py"
 TRUSTED_OBSERVER = ROOT / "ops" / "r297_trusted_windows_observer.py"
 NATIVE_BOUNDARY = ROOT / "tests" / "r297_windows_native_boundary.ps1"
+ATTRIBUTES = ROOT / ".gitattributes"
 
 
 def test_r297_windows_gate_packages_only_the_official_workbench():
@@ -237,6 +239,23 @@ def test_windows_native_reports_publish_only_after_stable_atomic_finalization():
     assert "r297-windows-native-stage" not in upload
 
 
+def test_windows_test_trust_manifest_checkout_bytes_are_lf_pinned():
+    from ops import r297_evidence_events
+
+    rule = "ops/r297_evidence_trust_manifest.test.json text eol=lf"
+    assert rule in ATTRIBUTES.read_text(encoding="utf-8").splitlines()
+    assert hashlib.sha256(
+        r297_evidence_events._TEST_TRUST_MANIFEST.read_bytes()
+    ).hexdigest() == r297_evidence_events._TEST_TRUST_MANIFEST_SHA256
+
+
+def test_linux_import_closure_node_is_routed_out_of_windows_native_file():
+    windows_file = (ROOT / "tests" / "test_r297_trusted_host_installers.py").read_text(encoding="utf-8")
+    linux_file = (ROOT / "tests" / "test_r297_trusted_linux_host_installers.py").read_text(encoding="utf-8")
+    assert "test_linux_fixed_sha_install_has_complete_import_closure" not in windows_file
+    assert "test_linux_fixed_sha_install_has_complete_import_closure" in linux_file
+
+
 def test_trusted_windows_observer_is_fixed_source_and_does_not_execute_candidate():
     source = TRUSTED_OBSERVER.read_text(encoding="utf-8")
     assert "R297_TRUSTED_SIGNER_SHA" in source
@@ -313,6 +332,9 @@ def test_native_boundary_probe_uses_real_windows_accounts_acl_handles_and_hardli
     assert "R297_NATIVE_ACL_NEGATIVE=PASS" in source
     assert "R297_NATIVE_HANDLE_DELETE_DENIAL=PASS" in source
     assert "R297_NATIVE_HARDLINK=PASS" in source
+    assert "R297_NATIVE_PROTECTED_RECOVERY=PASS" in source
+    assert "R297_NATIVE_UNSAFE_RECOVERY_REJECTED=PASS" in source
+    assert "from ops.r297_windows_file_security import recover_bound_file" in source
     assert source.index("if ($primaryErrorCode)") < source.index("if ($cleanupErrorCode)")
     assert "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode" in source
     assert "R297_NATIVE_PROBE_FAILED" in source
