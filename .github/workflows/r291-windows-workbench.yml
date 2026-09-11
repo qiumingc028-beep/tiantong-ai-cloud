@@ -32,6 +32,19 @@ on:
       - ops/r297_windows_recovery_probe.py
       - ops/install_r297_trusted_windows_observer.ps1
       - ops/install_r297_windows_relay_receipt.ps1
+      - ops/install_r297_trusted_linux_host.sh
+      - ops/provision_r297_observer_database.sh
+      - ops/r297_authenticated_observer.py
+      - ops/r297_evidence_broker.py
+      - ops/r297_broker_client.py
+      - ops/r297_event_receipt.py
+      - ops/r297_evidence_storage.py
+      - ops/r297_evidence_role_service.py
+      - ops/r297_role_client.py
+      - ops/r297_evidence_bundle.py
+      - ops/r297_trusted_orchestrator.py
+      - backend/__init__.py
+      - backend/services/__init__.py
       - backend/services/jd_runtime_contract.py
       - requirements.txt
       - tests/test_r297_windows_file_security.py
@@ -64,6 +77,19 @@ on:
       - ops/r297_windows_recovery_probe.py
       - ops/install_r297_trusted_windows_observer.ps1
       - ops/install_r297_windows_relay_receipt.ps1
+      - ops/install_r297_trusted_linux_host.sh
+      - ops/provision_r297_observer_database.sh
+      - ops/r297_authenticated_observer.py
+      - ops/r297_evidence_broker.py
+      - ops/r297_broker_client.py
+      - ops/r297_event_receipt.py
+      - ops/r297_evidence_storage.py
+      - ops/r297_evidence_role_service.py
+      - ops/r297_role_client.py
+      - ops/r297_evidence_bundle.py
+      - ops/r297_trusted_orchestrator.py
+      - backend/__init__.py
+      - backend/services/__init__.py
       - backend/services/jd_runtime_contract.py
       - requirements.txt
       - tests/test_r297_windows_file_security.py
@@ -216,6 +242,9 @@ jobs:
       - name: Run native ACL handle and hardlink boundary probe
         shell: pwsh
         run: |
+          $classification = Join-Path $env:RUNNER_TEMP 'r297-windows-native-classification.txt'
+          [IO.File]::WriteAllText($classification, "R297_EVIDENCE_CLASS=TEST_ONLY`nR297_FORMAL_EVIDENCE=false`n", [Text.UTF8Encoding]::new($false))
+          Get-Content -LiteralPath $classification
           ./tests/r297_windows_native_boundary.ps1
           Write-Output 'R297_NATIVE_POWER_LOSS_REBOOT=NOT_TESTED'
 
@@ -257,10 +286,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: r297-windows-native-recovery-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: test-only-r297-windows-native-recovery-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/r297-windows-native-pytest.log
             ${{ runner.temp }}/r297-windows-native-junit.xml
+            ${{ runner.temp }}/r297-windows-native-classification.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -291,6 +321,8 @@ jobs:
           R297_TRUSTED_WINDOWS_CONTROLLER_PATH: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_PATH }}
           R297_TRUSTED_WINDOWS_CONTROLLER_SHA256: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_SHA256 }}
           R297_TRUSTED_WINDOWS_CONTROLLER_SID: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_SID }}
+          R297_TRUSTED_WINDOWS_CONTROLLER_SERVICE_NAME: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_SERVICE_NAME }}
+          R297_TRUSTED_WINDOWS_CONTROLLER_PIPE_NAME: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_PIPE_NAME }}
           R297_TRUSTED_WINDOWS_RESULT_ROOT: ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}
           R297_TRUSTED_SIGNER_SHA: ${{ vars.R297_TRUSTED_SIGNER_SHA }}
         run: |
@@ -312,7 +344,42 @@ jobs:
           $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
           $runnerSids = @($identity.User.Value) + @($identity.Groups | ForEach-Object Value)
           if ($runnerSids -contains $controllerSid) { throw 'R297_FORMAL_IDENTITY_COLLISION' }
+          if ($env:R297_TRUSTED_WINDOWS_CONTROLLER_SERVICE_NAME -notmatch '^[A-Za-z0-9._-]{1,128}$' -or
+              $env:R297_TRUSTED_WINDOWS_CONTROLLER_PIPE_NAME -notmatch '^[A-Za-z0-9._-]{1,128}$') {
+            throw 'R297_FORMAL_CONTROLLER_SERVICE_NAME_INVALID'
+          }
+          $serviceName = $env:R297_TRUSTED_WINDOWS_CONTROLLER_SERVICE_NAME
+          $escapedServiceName = $serviceName.Replace("'", "''")
+          $controllerService = Get-CimInstance -ClassName Win32_Service -Filter "Name='$escapedServiceName'"
+          if ($null -eq $controllerService -or $controllerService.State -cne 'Running') {
+            throw 'R297_FORMAL_CONTROLLER_SERVICE_NOT_RUNNING'
+          }
+          $serviceSid = $controllerService.StartName
+          try {
+            if ($serviceSid -notmatch '^S-1-') {
+              $serviceSid = ([Security.Principal.NTAccount]$serviceSid).Translate([Security.Principal.SecurityIdentifier]).Value
+            }
+          } catch { throw 'R297_FORMAL_CONTROLLER_SERVICE_IDENTITY_INVALID' }
+          if ($serviceSid -cne $controllerSid) { throw 'R297_FORMAL_CONTROLLER_SERVICE_IDENTITY_MISMATCH' }
+          $localAdministrator = @(Get-LocalUser | Where-Object { $_.SID.Value -match '-500$' })
+          if ($localAdministrator.Count -ne 1) { throw 'R297_FORMAL_LOCAL_ACCOUNT_DOMAIN_UNAVAILABLE' }
+          $machineSid = $localAdministrator[0].SID.AccountDomainSid.Value
+          if (-not $controllerSid.StartsWith("$machineSid-", [StringComparison]::Ordinal)) {
+            throw 'R297_FORMAL_CONTROLLER_LOCAL_ACCOUNT_REQUIRED'
+          }
+          $administratorMembers = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop |
+            ForEach-Object { $_.SID.Value })
+          if ($administratorMembers -contains $controllerSid) {
+            throw 'R297_FORMAL_CONTROLLER_SERVICE_MUST_NOT_BE_ADMIN'
+          }
+          $pipeName = $env:R297_TRUSTED_WINDOWS_CONTROLLER_PIPE_NAME
+          $expectedServiceCommand = "`"$controller`" --service --pipe `"$pipeName`""
+          if ($controllerService.PathName -cne $expectedServiceCommand) {
+            throw 'R297_FORMAL_CONTROLLER_SERVICE_COMMAND_MISMATCH'
+          }
           $trustedInstaller = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+          $protectedOwners = @('S-1-5-18','S-1-5-32-544',$trustedInstaller)
+          $trustedWriters = @($protectedOwners) + $controllerSid
           $protectedPaths = @($controller)
           $parent = Split-Path $controller -Parent
           while ($parent.StartsWith($programFiles.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
@@ -328,7 +395,7 @@ jobs:
             $acl = Get-Acl -LiteralPath $path
             $owner = $acl.Owner
             try { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-            if (@('S-1-5-18','S-1-5-32-544',$trustedInstaller) -notcontains $owner) {
+            if ($protectedOwners -notcontains $owner) {
               throw 'R297_FORMAL_CONTROLLER_OWNER_INVALID'
             }
             foreach ($entry in $acl.Access) {
@@ -344,7 +411,7 @@ jobs:
                 [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
                 [Security.AccessControl.FileSystemRights]::TakeOwnership)
               if (([int]$entry.FileSystemRights -band $write) -ne 0 -and
-                  @('S-1-5-18','S-1-5-32-544',$trustedInstaller) -notcontains $sid) {
+                  $protectedOwners -notcontains $sid) {
                 throw 'R297_FORMAL_CONTROLLER_WRITABLE_BY_CANDIDATE'
               }
             }
@@ -375,7 +442,7 @@ jobs:
             $acl = Get-Acl -LiteralPath $path
             $owner = $acl.Owner
             try { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-            if (@('S-1-5-18','S-1-5-32-544',$trustedInstaller) -notcontains $owner) {
+            if ($trustedWriters -notcontains $owner) {
               throw 'R297_FORMAL_RESULT_OWNER_INVALID'
             }
             foreach ($entry in $acl.Access) {
@@ -383,7 +450,7 @@ jobs:
               try { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
               catch { throw 'R297_FORMAL_RESULT_ACL_INVALID' }
               if (([int]$entry.FileSystemRights -band $write) -ne 0 -and
-                  @('S-1-5-18','S-1-5-32-544',$trustedInstaller) -notcontains $sid) {
+                  $trustedWriters -notcontains $sid) {
                 throw 'R297_FORMAL_RESULT_WRITABLE_BY_CANDIDATE'
               }
             }
@@ -395,7 +462,7 @@ jobs:
           $programDataAcl = Get-Acl -LiteralPath $env:ProgramData
           $programDataOwner = $programDataAcl.Owner
           try { $programDataOwner = ([Security.Principal.NTAccount]$programDataOwner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-          if (@('S-1-5-18','S-1-5-32-544',$trustedInstaller) -notcontains $programDataOwner) {
+          if ($protectedOwners -notcontains $programDataOwner) {
             throw 'R297_FORMAL_RESULT_OWNER_INVALID'
           }
           $replaceRights = [int]([Security.AccessControl.FileSystemRights]::Delete -bor
@@ -413,17 +480,57 @@ jobs:
           }
           $resultRoot = Join-Path $resultBase "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           if (Test-Path -LiteralPath $resultRoot) { throw 'R297_FORMAL_RESULT_RUN_ALREADY_EXISTS' }
-          $log = Join-Path $env:RUNNER_TEMP 'r297-protected-controller.log'
+          $request = [ordered]@{
+            schema_version = 1
+            release_sha = $env:RELEASE_SOURCE_SHA
+            source_workflow_run_id = [long]'${{ inputs.pagehide_workflow_run_id }}'
+            source_workflow_run_attempt = [long]'${{ inputs.pagehide_workflow_run_attempt }}'
+            workflow_run_id = [long]$env:GITHUB_RUN_ID
+            workflow_run_attempt = [long]$env:GITHUB_RUN_ATTEMPT
+            artifact_directory = [IO.Path]::GetFullPath((Resolve-Path 'desktop/jd-workbench/dist'))
+            result_directory = [IO.Path]::GetFullPath($resultRoot)
+          }
+          $requestJson = $request | ConvertTo-Json -Compress
+          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes($requestJson)
+          $requestDigest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($requestBytes)).ToLowerInvariant()
+          $pipe = [IO.Pipes.NamedPipeClientStream]::new(
+            '.', $pipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::WriteThrough)
           try {
-            & $controller `
-              --release-sha $env:RELEASE_SOURCE_SHA `
-              --source-workflow-run-id '${{ inputs.pagehide_workflow_run_id }}' `
-              --source-workflow-run-attempt '${{ inputs.pagehide_workflow_run_attempt }}' `
-              --artifact-directory (Resolve-Path 'desktop/jd-workbench/dist') `
-              --result-directory $resultRoot *> $log
-            if ($LASTEXITCODE -ne 0) { throw 'R297_FORMAL_CONTROLLER_BLOCK' }
-          } finally {
-            Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
+            $pipe.Connect(10000)
+            $writer = [IO.StreamWriter]::new($pipe, [Text.UTF8Encoding]::new($false), 4096, $true)
+            $reader = [IO.StreamReader]::new($pipe, [Text.UTF8Encoding]::new($false), $false, 4096, $true)
+            $writer.WriteLine($requestJson)
+            $writer.Flush()
+            $ackTask = $reader.ReadLineAsync()
+            if (-not $ackTask.Wait([TimeSpan]::FromSeconds(10))) {
+              throw 'R297_FORMAL_CONTROLLER_ACK_TIMEOUT'
+            }
+            $ack = $ackTask.Result | ConvertFrom-Json
+          } finally { $pipe.Dispose() }
+          $ackFields = @('schema_version','result','request_sha256','workflow_run_id','workflow_run_attempt')
+          if ($null -eq $ack -or
+              (Compare-Object @($ack.psobject.Properties.Name | Sort-Object) @($ackFields | Sort-Object)) -or
+              $ack.schema_version -ne 1 -or $ack.result -cne 'ACCEPTED' -or
+              $ack.request_sha256 -cne $requestDigest -or
+              [long]$ack.workflow_run_id -ne [long]$env:GITHUB_RUN_ID -or
+              [long]$ack.workflow_run_attempt -ne [long]$env:GITHUB_RUN_ATTEMPT) {
+            throw 'R297_FORMAL_CONTROLLER_ACK_INVALID'
+          }
+          $serviceDeadline = [DateTime]::UtcNow.AddMinutes(35)
+          $completionPath = Join-Path $resultRoot 'formal-complete.json'
+          $completionSidecar = "$completionPath.sha256"
+          while ((-not (Test-Path -LiteralPath $completionPath -PathType Leaf) -or
+                  -not (Test-Path -LiteralPath $completionSidecar -PathType Leaf)) -and
+                 [DateTime]::UtcNow -lt $serviceDeadline) {
+            Start-Sleep -Seconds 2
+            $controllerService = Get-CimInstance -ClassName Win32_Service -Filter "Name='$escapedServiceName'"
+            if ($null -eq $controllerService -or $controllerService.State -cne 'Running') {
+              throw 'R297_FORMAL_CONTROLLER_SERVICE_STOPPED'
+            }
+          }
+          if (-not (Test-Path -LiteralPath $completionPath -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $completionSidecar -PathType Leaf)) {
+            throw 'R297_FORMAL_CONTROLLER_TIMEOUT'
           }
           $resultRoot = [IO.Path]::GetFullPath($resultRoot)
           $resultPaths = @($resultRoot)
@@ -441,7 +548,7 @@ jobs:
             $acl = Get-Acl -LiteralPath $path
             $owner = $acl.Owner
             try { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-            if (@('S-1-5-18','S-1-5-32-544',$trustedInstaller) -notcontains $owner) {
+            if ($trustedWriters -notcontains $owner) {
               throw 'R297_FORMAL_RESULT_OWNER_INVALID'
             }
             foreach ($entry in $acl.Access) {
@@ -449,7 +556,7 @@ jobs:
               try { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
               catch { throw 'R297_FORMAL_RESULT_ACL_INVALID' }
               if (([int]$entry.FileSystemRights -band $write) -ne 0 -and
-                  @('S-1-5-18','S-1-5-32-544',$trustedInstaller) -notcontains $sid) {
+                  $trustedWriters -notcontains $sid) {
                 throw 'R297_FORMAL_RESULT_WRITABLE_BY_CANDIDATE'
               }
             }
@@ -458,8 +565,9 @@ jobs:
             'formal-result.json', 'signed-event-bundle.json',
             'r297-process-evidence.json', 'r297-windows-evidence.json'
           )
+          $publishedFiles = @($expectedFiles) + 'formal-complete.json'
           $digests = @{}
-          foreach ($name in $expectedFiles) {
+          foreach ($name in $publishedFiles) {
             $body = Join-Path $resultRoot $name
             $sidecar = "$body.sha256"
             foreach ($path in @($body,$sidecar)) {
@@ -474,7 +582,7 @@ jobs:
               $acl = Get-Acl -LiteralPath $path
               $owner = $acl.Owner
               try { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-              if (@('S-1-5-18','S-1-5-32-544',$trustedInstaller) -notcontains $owner) {
+              if ($trustedWriters -notcontains $owner) {
                 throw 'R297_FORMAL_RESULT_OWNER_INVALID'
               }
               foreach ($entry in $acl.Access) {
@@ -482,7 +590,7 @@ jobs:
                 try { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
                 catch { throw 'R297_FORMAL_RESULT_ACL_INVALID' }
                 if (([int]$entry.FileSystemRights -band $write) -ne 0 -and
-                    @('S-1-5-18','S-1-5-32-544',$trustedInstaller) -notcontains $sid) {
+                    $trustedWriters -notcontains $sid) {
                   throw 'R297_FORMAL_RESULT_WRITABLE_BY_CANDIDATE'
                 }
               }
@@ -515,6 +623,20 @@ jobs:
               $result.windows_evidence_sha256 -cne $digests['r297-windows-evidence.json']) {
             throw 'R297_FORMAL_RESULT_BINDING_INVALID'
           }
+          $completion = Get-Content -Raw -LiteralPath $completionPath | ConvertFrom-Json
+          $completionFields = @('schema_version','result','request_sha256','workflow_run_id','workflow_run_attempt','files')
+          if ($null -eq $completion -or
+              (Compare-Object @($completion.psobject.Properties.Name | Sort-Object) @($completionFields | Sort-Object)) -or
+              $completion.schema_version -ne 1 -or $completion.result -cne 'COMPLETE' -or
+              $completion.request_sha256 -cne $requestDigest -or
+              [long]$completion.workflow_run_id -ne [long]$env:GITHUB_RUN_ID -or
+              [long]$completion.workflow_run_attempt -ne [long]$env:GITHUB_RUN_ATTEMPT -or
+              (Compare-Object @($completion.files.psobject.Properties.Name | Sort-Object) @($expectedFiles | Sort-Object))) {
+            throw 'R297_FORMAL_COMPLETION_INVALID'
+          }
+          foreach ($name in $expectedFiles) {
+            if ($completion.files.$name -cne $digests[$name]) { throw 'R297_FORMAL_COMPLETION_INVALID' }
+          }
 
       - name: Upload same-run protected result
         uses: actions/upload-artifact@v7
@@ -529,5 +651,7 @@ jobs:
             ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/r297-process-evidence.json.sha256
             ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/r297-windows-evidence.json
             ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/r297-windows-evidence.json.sha256
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/formal-complete.json
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/formal-complete.json.sha256
           if-no-files-found: error
           retention-days: 14

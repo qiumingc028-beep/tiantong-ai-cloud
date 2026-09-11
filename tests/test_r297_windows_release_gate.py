@@ -150,13 +150,19 @@ def test_candidate_workflow_fails_before_windows_signing_key_is_exposed():
     assert "R297_TRUSTED_WINDOWS_CONTROLLER_PATH" in candidate
     assert "R297_TRUSTED_WINDOWS_CONTROLLER_SHA256" in candidate
     assert "R297_TRUSTED_WINDOWS_CONTROLLER_SID" in candidate
-    assert "R297_TRUSTED_WINDOWS_CONTROLLER_TASK_NAME" in candidate
-    assert "R297_TRUSTED_WINDOWS_REQUEST_ROOT" in candidate
+    assert "R297_TRUSTED_WINDOWS_CONTROLLER_SERVICE_NAME" in candidate
+    assert "R297_TRUSTED_WINDOWS_CONTROLLER_PIPE_NAME" in candidate
     assert "R297_TRUSTED_SIGNER_SHA" in candidate
     assert "& $controller" not in candidate
-    assert "Start-ScheduledTask" in candidate
-    assert "Get-ScheduledTaskInfo" in candidate
-    assert "R297_FORMAL_CONTROLLER_TASK_IDENTITY_MISMATCH" in candidate
+    assert "Start-ScheduledTask" not in candidate
+    assert "Get-CimInstance -ClassName Win32_Service" in candidate
+    assert "NamedPipeClientStream" in candidate
+    assert "R297_FORMAL_CONTROLLER_SERVICE_IDENTITY_MISMATCH" in candidate
+    assert "R297_FORMAL_CONTROLLER_SERVICE_MUST_NOT_BE_ADMIN" in candidate
+    assert "R297_FORMAL_CONTROLLER_LOCAL_ACCOUNT_REQUIRED" in candidate
+    assert "AccountDomainSid" in candidate
+    assert "R297_FORMAL_CONTROLLER_ACK_INVALID" in candidate
+    assert "request_sha256" in candidate
 
 
 def test_windows_build_is_secretless_and_publishes_before_independent_formal_gate():
@@ -197,7 +203,11 @@ def test_windows_build_is_secretless_and_publishes_before_independent_formal_gat
     assert "R297_FORMAL_RESULT_BINDING_INVALID" in formal
     assert "R297_FORMAL_RESULT_RUN_ALREADY_EXISTS" in formal
     assert "R297_FORMAL_RESULT_PARENT_REPLACE_ACCESS" in formal
-    assert formal.index("$preflightPaths") < formal.index("Start-ScheduledTask")
+    assert "formal-complete.json" in formal
+    assert "R297_FORMAL_COMPLETION_INVALID" in formal
+    assert "request_sha256" in formal
+    assert "$trustedWriters" in formal
+    assert formal.index("$preflightPaths") < formal.index("NamedPipeClientStream")
     assert "${{ github.run_id }}-${{ github.run_attempt }}/formal-result.json" in formal
     assert "path: ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}\n" not in formal
     assert "./ops/r297_windows_acceptance.ps1" not in formal
