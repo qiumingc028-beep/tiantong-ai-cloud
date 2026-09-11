@@ -440,9 +440,10 @@ def test_partition_cleanup_terminates_and_reaps_its_process_group(tmp_path):
     child_pid = tmp_path / "child.pid"
     script = (
         "import pathlib,signal,subprocess,sys,time;"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
         "child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)']);"
         f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid));"
-        "signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"
+        "time.sleep(60)"
     )
     process = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
     try:
@@ -453,6 +454,7 @@ def test_partition_cleanup_terminates_and_reaps_its_process_group(tmp_path):
         records = [{
             "name": "partition", "process": process, "pid": process.pid,
             "pgid": os.getpgid(process.pid), "owns_group": True,
+            "process_identity": gate._process_identity(process.pid),
         }]
         gate._terminate_processes(records, grace_seconds=0.05)
         assert process.returncode == -signal.SIGKILL
@@ -561,15 +563,26 @@ def test_partition_start_failure_reaps_already_started_group(tmp_path, monkeypat
 def test_partition_supervisor_handles_term_and_reaps_both_groups(tmp_path, monkeypatch):
     from ops import ci_pytest_gate as gate
 
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "k" * 64)
     real_popen = subprocess.Popen
     started = []
     both_started = threading.Event()
 
     def start(command, **kwargs):
+        ready = tmp_path / f"ready-{len(started)}"
         process = real_popen(
-            [sys.executable, "-c", "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"],
+            [sys.executable, "-c", (
+                "import pathlib,signal,time;"
+                "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+                f"pathlib.Path({str(ready)!r}).write_text('ready');"
+                "time.sleep(60)"
+            )],
             start_new_session=kwargs["start_new_session"],
         )
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.is_file()
         started.append(process)
         if len(started) == 2:
             both_started.set()
@@ -875,13 +888,18 @@ def test_supervisor_deadline_reaps_descendants_and_preserves_timeout_code(tmp_pa
     child_pid = tmp_path / "child.pid"
     script = (
         "import pathlib,signal,subprocess,sys,time;"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
         "child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)']);"
         f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid));"
-        "signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"
+        "time.sleep(60)"
     )
     records = []
     record = gate._start_managed_process(stage, [sys.executable, "-c", script], dict(os.environ), records)
     try:
+        deadline = time.monotonic() + 5
+        while not child_pid.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert child_pid.is_file()
         with pytest.raises(gate._SupervisorFailure, match=f"PYTEST_{stage.upper()}_TIMEOUT"):
             gate._wait_managed([record], {stage: 0.05})
         gate._terminate_processes(records, grace_seconds=0.05)
@@ -1185,6 +1203,32 @@ def test_cleanup_signals_only_while_unreaped_leader_still_owns_pgid(monkeypatch)
 
     assert signals == [(123, signal.SIGTERM), (123, signal.SIGKILL)]
     assert process.waited and record["reaped"] is True
+
+
+def test_cleanup_never_kills_a_reused_linux_process_group(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    class Process:
+        def wait(self, timeout=None): return 0
+
+    record = {
+        "name": "main", "process": Process(), "pid": 123, "pgid": 123,
+        "process_identity": "old", "owns_group": True,
+    }
+    ownership = iter([True, False])
+    members = iter([{(123, "old")}, {(999, "new")}])
+    signals = []
+    clock = iter([0, 0, 0, 2])
+    monkeypatch.setattr(gate.sys, "platform", "linux")
+    monkeypatch.setattr(gate, "_owned_process_group", lambda _record: next(ownership))
+    monkeypatch.setattr(gate, "_linux_group_members", lambda _pgid: next(members))
+    monkeypatch.setattr(gate, "_group_alive", lambda _pgid: True)
+    monkeypatch.setattr(gate.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(gate.os, "killpg", lambda pgid, signum: signals.append((pgid, signum)))
+
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_REAP_FAILED"):
+        gate._terminate_processes([record], grace_seconds=0)
+    assert signals == [(123, signal.SIGTERM)]
 
 
 def test_reaped_process_group_is_not_targeted_twice(monkeypatch):

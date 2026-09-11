@@ -402,7 +402,22 @@ def _partition_environments(cache_root: Path) -> tuple[dict, dict, dict]:
     return main, ownership, aggregate
 
 
+def _linux_group_members(pgid: int) -> set[tuple[int, str]]:
+    members = set()
+    for status_path in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            value = status_path.read_text(encoding="utf-8")
+            fields = value[value.rfind(")") + 2:].split()
+            if int(fields[2]) == pgid and fields[0] != "Z":
+                members.add((int(status_path.parent.name), fields[19]))
+        except (OSError, ValueError, IndexError):
+            continue
+    return members
+
+
 def _group_alive(pgid: int) -> bool:
+    if sys.platform.startswith("linux"):
+        return bool(_linux_group_members(pgid))
     try:
         os.killpg(pgid, 0)
         return True
@@ -454,6 +469,11 @@ def _terminate_processes(records: list[dict], *, grace_seconds: float = 5.0) -> 
     unowned = [record for record in active if not _owned_process_group(record)]
     if unowned:
         raise RuntimeError("PYTEST_PROCESS_REAP_FAILED")
+    owned_groups = {record["pgid"] for record in active}
+    original_members = (
+        {pgid: _linux_group_members(pgid) for pgid in owned_groups}
+        if sys.platform.startswith("linux") else {}
+    )
     for record in active:
         try:
             os.killpg(record["pgid"], signal.SIGTERM)
@@ -463,7 +483,9 @@ def _terminate_processes(records: list[dict], *, grace_seconds: float = 5.0) -> 
     while active and time.monotonic() < deadline:
         time.sleep(0.02)
     for record in active:
-        if _owned_process_group(record):
+        if (_owned_process_group(record)
+            or (sys.platform.startswith("linux") and original_members[record["pgid"]]
+                & _linux_group_members(record["pgid"]))):
             try:
                 os.killpg(record["pgid"], signal.SIGKILL)
             except ProcessLookupError:
@@ -474,6 +496,12 @@ def _terminate_processes(records: list[dict], *, grace_seconds: float = 5.0) -> 
             record["exit_code"] = int(record["process"].wait(timeout=1))
             record["reaped"] = True
         except subprocess.TimeoutExpired:
+            reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
+    if sys.platform.startswith("linux"):
+        deadline = time.monotonic() + 1
+        while any(_group_alive(pgid) for pgid in owned_groups) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if any(_group_alive(pgid) for pgid in owned_groups):
             reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
     if reap_error is not None:
         raise reap_error
@@ -1060,7 +1088,7 @@ def _partitions_main() -> int:
             with open(output_path, "a", encoding="utf-8") as stream:
                 stream.write("publication_ready=false\n")
         print("CI_PYTEST_SUPERVISOR=BLOCK (PYTEST_PUBLICATION_FAILED)")
-        return 1
+        return result or 1
     return 0 if final == "PASS" else result or 1
 
 
