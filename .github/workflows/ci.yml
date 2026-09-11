@@ -741,6 +741,7 @@ jobs:
 
 
       - name: Run tests
+        id: pytest_gate
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
         timeout-minutes: 90
         env:
@@ -756,36 +757,46 @@ jobs:
           export R297_REDACT_EXACT_ENV_NAMES=CI_PYTEST_IDENTITY_KEY
           trap 'unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES' EXIT
           bash -n ops/r297_workbench_deploy.sh || exit 1
+          set +e
           python -m ops.ci_pytest_gate --partitions \
-            /tmp/r297-pytest /tmp/r297-ownership-matrix /tmp/r297-full-coverage
+            /tmp/r297-pytest /tmp/r297-ownership-matrix /tmp/r297-full-coverage \
+            --publish /tmp/r297-publish-pytest /tmp/r297-publish-ownership /tmp/r297-publish-full-coverage
           result=$?
+          set -e
+          if python -m ops.ci_pytest_gate --validate-publication \
+            /tmp/r297-publish-pytest /tmp/r297-publish-ownership /tmp/r297-publish-full-coverage; then
+            echo "publication_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publication_ready=false" >> "$GITHUB_OUTPUT"
+            test "$result" -ne 0 || result=1
+          fi
           unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES
           exit "$result"
 
       - name: Upload complete pytest execution report
-        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
+        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' && steps.pytest_gate.outputs.publication_ready == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: r297-pytest-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
-          path: /tmp/r297-pytest/
+          path: /tmp/r297-publish-pytest/
           if-no-files-found: error
           retention-days: 14
 
       - name: Upload ownership matrix execution report
-        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
+        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' && steps.pytest_gate.outputs.publication_ready == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: r297-ownership-matrix-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
-          path: /tmp/r297-ownership-matrix/
+          path: /tmp/r297-publish-ownership/
           if-no-files-found: error
           retention-days: 14
 
       - name: Upload exact coverage decision
-        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' }}
+        if: ${{ always() && steps.dependencies.outcome == 'success' && steps.postgres_probe.outcome == 'success' && steps.pytest_gate.outputs.publication_ready == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: r297-full-coverage-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
-          path: /tmp/r297-full-coverage/
+          path: /tmp/r297-publish-full-coverage/
           if-no-files-found: error
           retention-days: 14
 

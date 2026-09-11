@@ -29,6 +29,12 @@ def _partition_artifacts(root, nodes, *, head="a" * 40, result=0):
     (root / "status.json").write_text(json.dumps({"result": "COMPLETE", "exitstatus": result}))
     (root / "progress.jsonl").write_text("".join(json.dumps({"nodeid_sha256": identity, "phase": "teardown", "outcome": "passed"}) + "\n" for identity in _ids(nodes)))
     (root / "junit.xml").write_text(f'<testsuite tests="{len(nodes)}" failures="0" errors="0" skipped="0"/>')
+    (root / "publication.json").write_text(json.dumps({
+        "head": head, "run_id": "123", "run_attempt": "1", "result": "PASS",
+        "artifact_result": "PASS", "primary_error": None, "cleanup_error": None,
+        "publication_error": None,
+        "stage_exit_codes": {"main": 0, "ownership": 0, "aggregate": 0},
+    }))
 
 
 @pytest.mark.parametrize("defect", [None, "missing", "overlap", "wrong_head", "wrong_attempt", "failed", "cancelled", "missing_report", "wrong_executed"])
@@ -363,6 +369,12 @@ def test_optimized_validator_rejects_invalid_artifact(tmp_path, mode):
             "head": "a" * 40, "run_id": "123", "run_attempt": "1", "result": "PASS",
             "collected": 1, "executed": 1, "overlap": 0, "missing": 0,
         }))
+        (output / "publication.json").write_text(json.dumps({
+            "head": "a" * 40, "run_id": "123", "run_attempt": "1", "result": "PASS",
+            "artifact_result": "PASS", "primary_error": None, "cleanup_error": None,
+            "publication_error": None,
+            "stage_exit_codes": {"main": 0, "ownership": 0, "aggregate": 0},
+        }))
         command = [sys.executable, "-O", "-m", "ops.ci_pytest_gate", "--validate-aggregate", str(output)]
     result = subprocess.run(command, env=env, capture_output=True, text=True)
     assert result.returncode != 0
@@ -376,11 +388,20 @@ def test_optimized_validators_accept_same_attempt_valid_artifacts(tmp_path):
     run = json.loads((partition / "run.json").read_text())
     run["run_attempt"] = "2"
     (partition / "run.json").write_text(json.dumps(run))
+    publication = json.loads((partition / "publication.json").read_text())
+    publication["run_attempt"] = "2"
+    (partition / "publication.json").write_text(json.dumps(publication))
     aggregate = tmp_path / "aggregate"
     aggregate.mkdir()
     (aggregate / "aggregate.json").write_text(json.dumps({
         "head": "a" * 40, "run_id": "123", "run_attempt": "2", "result": "PASS",
         "collected": 1, "executed": 1, "overlap": 0, "missing": 0,
+    }))
+    (aggregate / "publication.json").write_text(json.dumps({
+        "head": "a" * 40, "run_id": "123", "run_attempt": "2", "result": "PASS",
+        "artifact_result": "PASS", "primary_error": None, "cleanup_error": None,
+        "publication_error": None,
+        "stage_exit_codes": {"main": 0, "ownership": 0, "aggregate": 0},
     }))
     for command in (
         [sys.executable, "-O", "-m", "ops.ci_pytest_gate", "--validate-partition", str(partition), "1"],
@@ -497,11 +518,12 @@ def test_partition_start_failure_reaps_already_started_group(tmp_path, monkeypat
     monkeypatch.setattr(gate.sys, "argv", [
         "gate", "--partitions", str(tmp_path / "main"), str(tmp_path / "ownership"), str(tmp_path / "aggregate"),
     ])
-    with pytest.raises(OSError, match="second partition start failure"):
-        gate._partitions_main()
+    assert gate._partitions_main() == 1
     assert started[0].poll() is not None
     state = json.loads((tmp_path / "aggregate" / "processes.json").read_text())
     assert state["phase"] == "failed" and state["processes"][0]["exit_code"] is not None
+    receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
+    assert receipt["primary_error"] == "PYTEST_SUPERVISOR_OS_ERROR"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="CI partition supervisor runs on ubuntu")
@@ -548,3 +570,350 @@ def test_progress_does_not_use_product_fault_injected_fsync(tmp_path, monkeypatc
     monkeypatch.setattr(gate.os, "fsync", fail)
     gate.pytest_runtest_logreport(SimpleNamespace(nodeid="test_failure", when="teardown", outcome="passed", duration=0.1))
     assert (tmp_path / "progress.jsonl").is_file()
+
+
+def test_workflow_uploads_only_supervisor_published_artifacts():
+    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml").read_text()
+    assert "/tmp/r297-publish-pytest/" in workflow
+    assert "/tmp/r297-publish-ownership/" in workflow
+    assert "/tmp/r297-publish-full-coverage/" in workflow
+    for unsafe in (
+        "path: /tmp/r297-pytest/",
+        "path: /tmp/r297-ownership-matrix/",
+        "path: /tmp/r297-full-coverage/",
+    ):
+        assert unsafe not in workflow
+    assert "id: pytest_gate" in workflow
+    assert "--validate-publication" in workflow
+    assert workflow.count("steps.pytest_gate.outputs.publication_ready == 'true'") == 3
+
+
+def test_polluted_work_output_can_only_publish_fixed_block_receipt(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    key = "identity-key-" + "x" * 52
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", key)
+    source = tmp_path / "work"
+    source.mkdir()
+    (source / "pytest.log").write_text(key)
+    published = tmp_path / "published"
+
+    result = gate.publish_outputs(
+        [(source, published, {"pytest.log"})],
+        identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
+        result="PASS",
+        primary_error=None,
+        cleanup_error=None,
+        stage_exit_codes={"main": 0, "ownership": 0, "aggregate": 0},
+    )
+
+    assert result == "BLOCK"
+    assert {path.name for path in published.iterdir()} == {"publication.json"}
+    receipt = json.loads((published / "publication.json").read_text())
+    assert receipt["result"] == "BLOCK"
+    assert receipt["primary_error"] == "CI_PYTEST_IDENTITY_ARTIFACT_LEAK"
+    assert key not in (published / "publication.json").read_text()
+
+
+def test_normal_failure_publishes_scanned_fixed_reports_without_pass(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "identity-key-" + "x" * 52)
+    source = tmp_path / "work"
+    source.mkdir()
+    (source / "pytest.log").write_text("safe failure summary")
+    (source / "junit.xml").write_text('<testsuite tests="1" failures="1"/>')
+    published = tmp_path / "published"
+    assert gate.publish_outputs(
+        [(source, published, {"pytest.log", "junit.xml"})],
+        identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
+        result="BLOCK", primary_error="PYTEST_MAIN_FAILED", cleanup_error=None,
+        stage_exit_codes={"main": 1, "ownership": 0, "aggregate": 1},
+    ) == "BLOCK"
+    assert {path.name for path in published.iterdir()} == {"pytest.log", "junit.xml", "publication.json"}
+    assert json.loads((published / "publication.json").read_text())["result"] == "BLOCK"
+
+
+def test_aggregate_validator_rejects_intermediate_pass_without_final_publication(tmp_path):
+    from ops import ci_pytest_gate as gate
+
+    output = tmp_path / "aggregate"
+    output.mkdir()
+    (output / "aggregate.json").write_text(json.dumps({
+        "head": "a" * 40, "run_id": "123", "run_attempt": "2", "result": "PASS",
+        "collected": 1, "executed": 1, "overlap": 0, "missing": 0,
+    }))
+    with pytest.raises(ValueError, match="PYTEST_PUBLICATION_INVALID"):
+        gate.validate_aggregate_output(output, head="a" * 40, run_id="123", run_attempt="2")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="CI partition supervisor runs on ubuntu")
+@pytest.mark.parametrize("stage", ["main", "ownership", "aggregate"])
+def test_supervisor_deadline_reaps_descendants_and_preserves_timeout_code(tmp_path, stage):
+    from ops import ci_pytest_gate as gate
+
+    child_pid = tmp_path / "child.pid"
+    script = (
+        "import pathlib,signal,subprocess,sys,time;"
+        "child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)']);"
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid));"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"
+    )
+    records = []
+    record = gate._start_managed_process(stage, [sys.executable, "-c", script], dict(os.environ), records)
+    try:
+        with pytest.raises(gate._SupervisorFailure, match=f"PYTEST_{stage.upper()}_TIMEOUT"):
+            gate._wait_managed([record], {stage: 0.05})
+        gate._terminate_processes(records, grace_seconds=0.05)
+        assert record["process"].returncode == -signal.SIGKILL
+        assert not gate._group_alive(record["pgid"])
+    finally:
+        if record["process"].poll() is None:
+            os.killpg(record["pgid"], signal.SIGKILL)
+            record["process"].wait()
+
+
+def test_publication_keeps_primary_failure_when_cleanup_also_fails(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "identity-key-" + "x" * 52)
+    source = tmp_path / "work"
+    source.mkdir()
+    (source / "run.json").write_text("{}")
+    published = tmp_path / "published"
+    gate.publish_outputs(
+        [(source, published, {"run.json"})],
+        identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
+        result="BLOCK",
+        primary_error="PYTEST_MAIN_TIMEOUT",
+        cleanup_error="PYTEST_PROCESS_REAP_FAILED",
+        stage_exit_codes={"main": None, "ownership": 1, "aggregate": None},
+    )
+    receipt = json.loads((published / "publication.json").read_text())
+    assert receipt["primary_error"] == "PYTEST_MAIN_TIMEOUT"
+    assert receipt["cleanup_error"] == "PYTEST_PROCESS_REAP_FAILED"
+    assert receipt["result"] == "BLOCK"
+
+
+def test_aggregate_fixed_set_includes_the_collected_manifest(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "identity-key-" + "x" * 52)
+    source = tmp_path / "work"
+    source.mkdir()
+    for name in gate._AGGREGATE_FILES:
+        (source / name).write_text("{}")
+    (source / "full-collected-nodeids.json").write_text("[]")
+    published = tmp_path / "published"
+    result = gate.publish_outputs(
+        [(source, published, gate._AGGREGATE_FILES)],
+        identity={"head": "a" * 40, "run_id": "123", "run_attempt": "2"},
+        result="PASS", primary_error=None, cleanup_error=None,
+        stage_exit_codes={"main": 0, "ownership": 0, "aggregate": 0},
+    )
+    assert result == "PASS"
+    assert (published / "full-collected-nodeids.json").is_file()
+
+
+def test_unexpected_exception_keeps_its_safe_type_without_message():
+    from ops import ci_pytest_gate as gate
+
+    assert gate._error_code(OSError("password=SHOULD_NOT_APPEAR")) == "PYTEST_SUPERVISOR_OS_ERROR"
+
+
+def test_cache_cleanup_error_is_recorded_without_replacing_first_stage_failure(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("RELEASE_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "x" * 64)
+    calls = []
+
+    class Process:
+        def __init__(self, returncode):
+            self.pid = 51000 + len(calls)
+            self.returncode = returncode
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    def popen(command, **_kwargs):
+        name = "aggregate" if "--aggregate" in command else ("main" if not calls else "ownership")
+        output = Path(command[4] if name == "aggregate" else command[-1])
+        output.mkdir(parents=True, exist_ok=True)
+        calls.append(name)
+        return Process(1 if name == "main" else 0)
+
+    class CacheDirectory:
+        name = str(tmp_path / "cache")
+
+        def __init__(self, **_kwargs):
+            Path(self.name).mkdir()
+
+        def cleanup(self):
+            raise RuntimeError("PYTEST_CACHE_CLEANUP_FAILED")
+
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    monkeypatch.setattr(gate.tempfile, "TemporaryDirectory", CacheDirectory)
+    monkeypatch.setattr(gate, "_terminate_processes", lambda *_args, **_kwargs: None)
+    outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
+    monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])
+
+    assert gate.main() == 1
+    receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
+    assert receipt["primary_error"] == "PYTEST_MAIN_FAILED"
+    assert receipt["cleanup_error"] == "PYTEST_CACHE_CLEANUP_FAILED"
+    assert {path.name for path in (tmp_path / "aggregate-publish").iterdir()} == {"publication.json"}
+
+
+def test_publication_validator_rejects_cross_stage_state_mismatch(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "identity-key-" + "x" * 52)
+    outputs = []
+    for index in range(3):
+        output = tmp_path / str(index)
+        output.mkdir()
+        (output / "publication.json").write_text(json.dumps({
+            "head": "a" * 40, "run_id": "123", "run_attempt": "2",
+            "result": "BLOCK", "artifact_result": "BLOCK",
+            "primary_error": "PYTEST_MAIN_FAILED",
+            "cleanup_error": None, "publication_error": None,
+            "stage_exit_codes": {"main": 1, "ownership": 0, "aggregate": index},
+        }))
+        outputs.append(output)
+    with pytest.raises(ValueError, match="PYTEST_PUBLICATION_STATE_MISMATCH"):
+        gate.validate_publication_outputs(outputs, head="a" * 40, run_id="123", run_attempt="2")
+
+
+def test_timeout_does_not_replace_an_earlier_stage_failure():
+    from ops import ci_pytest_gate as gate
+
+    class Process:
+        def __init__(self, value): self.value = value
+        def poll(self): return self.value
+
+    started = time.monotonic() - 1
+    records = [
+        {"name": "main", "process": Process(1), "started_at": started},
+        {"name": "ownership", "process": Process(None), "started_at": started},
+    ]
+    with pytest.raises(gate._SupervisorFailure, match="PYTEST_MAIN_FAILED"):
+        gate._wait_managed(records, {"main": 0.01, "ownership": 0.01})
+
+
+def test_reaped_process_group_is_not_targeted_twice(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    class Process:
+        def __init__(self): self.waits = 0
+        def poll(self): return 0
+        def wait(self, timeout=None): self.waits += 1; return 0
+
+    process = Process()
+    record = {"name": "main", "process": process, "pid": 1, "pgid": 1}
+    monkeypatch.setattr(gate, "_group_alive", lambda _pgid: False)
+    gate._terminate_processes([record], grace_seconds=0)
+    gate._terminate_processes([record], grace_seconds=0)
+    assert process.waits == 1 and record["reaped"] is True
+
+
+def test_partition_failure_survives_process_reap_failure(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("RELEASE_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "x" * 64)
+    calls = []
+
+    class Process:
+        def __init__(self, returncode):
+            self.pid = 52000 + len(calls)
+            self.returncode = returncode
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    def popen(command, **_kwargs):
+        output = Path(command[-1])
+        output.mkdir(parents=True, exist_ok=True)
+        calls.append(output.name)
+        return Process(1 if len(calls) == 1 else 0)
+
+    def fail_reap(*_args, **_kwargs):
+        raise RuntimeError("PYTEST_PROCESS_REAP_FAILED")
+
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    monkeypatch.setattr(gate, "_terminate_processes", fail_reap)
+    outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
+    monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])
+
+    assert gate.main() == 1
+    receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
+    assert receipt["primary_error"] == "PYTEST_MAIN_FAILED"
+    assert receipt["cleanup_error"] == "PYTEST_PROCESS_REAP_FAILED"
+
+
+def test_publication_validator_rejects_inconsistent_pass_receipt(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "identity-key-" + "x" * 52)
+    outputs = []
+    for index in range(3):
+        output = tmp_path / str(index)
+        output.mkdir()
+        (output / "publication.json").write_text(json.dumps({
+            "head": "a" * 40, "run_id": "123", "run_attempt": "2",
+            "result": "PASS", "artifact_result": "PASS",
+            "primary_error": "PYTEST_MAIN_FAILED", "cleanup_error": None,
+            "publication_error": None,
+            "stage_exit_codes": {"main": 1, "ownership": 0, "aggregate": 0},
+        }))
+        outputs.append(output)
+    with pytest.raises(ValueError, match="PYTEST_PUBLICATION_INVALID"):
+        gate.validate_publication_outputs(outputs, head="a" * 40, run_id="123", run_attempt="2")
+
+
+def test_signal_does_not_replace_an_earlier_stage_failure(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("RELEASE_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "x" * 64)
+    calls = []
+
+    class Process:
+        def __init__(self, returncode):
+            self.pid = 53000 + len(calls)
+            self.returncode = returncode
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    def popen(command, **_kwargs):
+        output = Path(command[-1])
+        output.mkdir(parents=True, exist_ok=True)
+        calls.append(output.name)
+        return Process(1 if len(calls) == 1 else None)
+
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    monkeypatch.setattr(gate, "_wait_managed", lambda *_args, **_kwargs: (_ for _ in ()).throw(gate._SignalExit(signal.SIGTERM)))
+    monkeypatch.setattr(gate, "_terminate_processes", lambda *_args, **_kwargs: None)
+    outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
+    monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])
+
+    assert gate.main() != 0
+    receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
+    assert receipt["primary_error"] == "PYTEST_MAIN_FAILED"

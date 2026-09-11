@@ -10,6 +10,8 @@ from os import fsync as _progress_fsync
 from pathlib import Path
 import re
 import signal
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,6 +27,12 @@ _OUTCOME_PRIORITY = {"passed": 0, "skipped": 1, "failed": 2}
 _PROGRESS_ROOT: Path | None = None
 _LOCAL_IDENTITY_KEY = b"r297-local-pytest-identity-only"
 _PROCESS_TERM_GRACE_SECONDS = 5.0
+_SUPERVISOR_TIMEOUTS = {"main": 75 * 60.0, "ownership": 75 * 60.0, "aggregate": 10 * 60.0}
+_PARTITION_FILES = {
+    "collected-nodeids.json", "collected-nodeids.display.json", "junit.xml",
+    "progress.jsonl", "pytest.log", "run.json", "status.json",
+}
+_AGGREGATE_FILES = {"aggregate.json", "collection.log", "full-collected-nodeids.json", "processes.json"}
 
 
 def _progress_path(name: str) -> Path | None:
@@ -143,7 +151,10 @@ def validate_report(report: Path, manifest: Path, *, minimum: int = 1846) -> dic
     return totals
 
 
-def validate_partition_output(output: Path, *, head: str, run_id: str, run_attempt: str, minimum: int) -> list[str]:
+def validate_partition_output(output: Path, *, head: str, run_id: str, run_attempt: str,
+                              minimum: int, published: bool = True) -> list[str]:
+    if published:
+        _validate_publication(output, head=head, run_id=run_id, run_attempt=run_attempt)
     expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt, "exit_code": 0}
     run = json.loads((output / "run.json").read_text(encoding="utf-8"))
     if not isinstance(run, dict) or any(type(run.get(key)) is not type(value) or run.get(key) != value
@@ -174,7 +185,7 @@ def validate_partitions(full_manifest: Path, outputs: list[Path], *, head: str, 
     combined = set()
     for output in outputs:
         nodes = validate_partition_output(
-            output, head=head, run_id=run_id, run_attempt=run_attempt, minimum=1,
+            output, head=head, run_id=run_id, run_attempt=run_attempt, minimum=1, published=False,
         )
         if combined.intersection(nodes):
             raise ValueError("PYTEST_PARTITION_OVERLAP")
@@ -184,7 +195,10 @@ def validate_partitions(full_manifest: Path, outputs: list[Path], *, head: str, 
     return {"collected": len(full), "executed": len(combined), "overlap": 0, "missing": 0}
 
 
-def validate_aggregate_output(output: Path, *, head: str, run_id: str, run_attempt: str) -> dict:
+def validate_aggregate_output(output: Path, *, head: str, run_id: str, run_attempt: str,
+                              published: bool = True) -> dict:
+    if published:
+        _validate_publication(output, head=head, run_id=run_id, run_attempt=run_attempt)
     result = json.loads((output / "aggregate.json").read_text(encoding="utf-8"))
     expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt, "result": "PASS"}
     if not isinstance(result, dict) or any(result.get(key) != value for key, value in expected.items()):
@@ -194,6 +208,68 @@ def validate_aggregate_output(output: Path, *, head: str, run_id: str, run_attem
         or counts["collected"] != counts["executed"] or counts["overlap"] != 0 or counts["missing"] != 0):
         raise ValueError("PYTEST_AGGREGATE_COVERAGE_INVALID")
     return result
+
+
+def _read_publication(output: Path) -> dict:
+    try:
+        publication = json.loads((output / "publication.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("PYTEST_PUBLICATION_INVALID") from exc
+    if not isinstance(publication, dict):
+        raise ValueError("PYTEST_PUBLICATION_INVALID")
+    return publication
+
+
+def _validate_publication(output: Path, *, head: str, run_id: str, run_attempt: str) -> None:
+    publication = _read_publication(output)
+    expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt, "result": "PASS"}
+    exits = publication.get("stage_exit_codes")
+    if (any(publication.get(key) != value for key, value in expected.items())
+        or publication.get("artifact_result") != "PASS"
+        or any(publication.get(key) is not None for key in ("primary_error", "cleanup_error", "publication_error"))
+        or not isinstance(exits, dict) or set(exits) != {"main", "ownership", "aggregate"}
+        or any(type(value) is not int or value != 0 for value in exits.values())):
+        raise ValueError("PYTEST_PUBLICATION_INVALID")
+
+
+def validate_publication_outputs(outputs: list[Path], *, head: str, run_id: str, run_attempt: str) -> None:
+    if len(outputs) != 3:
+        raise ValueError("PYTEST_PUBLICATION_INVALID")
+    specs = (
+        (outputs[0], _PARTITION_FILES),
+        (outputs[1], _PARTITION_FILES),
+        (outputs[2], _AGGREGATE_FILES),
+    )
+    publications = []
+    for output, allowed in specs:
+        publication = _read_publication(output)
+        expected = {"head": head, "run_id": run_id, "run_attempt": run_attempt}
+        if (publication.get("result") not in {"PASS", "BLOCK"}
+            or publication.get("artifact_result") != publication.get("result")
+            or any(publication.get(key) != value for key, value in expected.items())
+            or not {path.name for path in output.iterdir()}.issubset(allowed | {"publication.json"})):
+            raise ValueError("PYTEST_PUBLICATION_INVALID")
+        for key in ("primary_error", "cleanup_error", "publication_error"):
+            value = publication.get(key)
+            if value is not None and not re.fullmatch(r"(?:CI_)?PYTEST_[A-Z_]+", value):
+                raise ValueError("PYTEST_PUBLICATION_INVALID")
+        exits = publication.get("stage_exit_codes")
+        if (not isinstance(exits, dict) or set(exits) != {"main", "ownership", "aggregate"}
+            or any(value is not None and type(value) is not int for value in exits.values())):
+            raise ValueError("PYTEST_PUBLICATION_INVALID")
+        if publication.get("result") == "PASS" and (
+            any(publication.get(key) is not None for key in ("primary_error", "cleanup_error", "publication_error"))
+            or any(type(value) is not int or value != 0 for value in exits.values())
+        ):
+            raise ValueError("PYTEST_PUBLICATION_INVALID")
+        if (publication.get("cleanup_error") or publication.get("publication_error")) and {
+            path.name for path in output.iterdir()
+        } != {"publication.json"}:
+            raise ValueError("PYTEST_PUBLICATION_UNSAFE_BLOCK")
+        publications.append(publication)
+    if any(publication != publications[0] for publication in publications[1:]):
+        raise ValueError("PYTEST_PUBLICATION_STATE_MISMATCH")
+    _scan_identity_key(outputs)
 
 
 def _run_identity() -> dict:
@@ -233,32 +309,73 @@ def _group_alive(pgid: int) -> bool:
 
 
 def _terminate_processes(records: list[dict], *, grace_seconds: float = 5.0) -> None:
-    for record in records:
+    active = [record for record in records if not record.get("reaped")]
+    for record in active:
         record["process"].poll()
-    for record in records:
+    for record in active:
         if _group_alive(record["pgid"]):
             try:
                 os.killpg(record["pgid"], signal.SIGTERM)
             except ProcessLookupError:
                 pass
     deadline = time.monotonic() + grace_seconds
-    while any(_group_alive(record["pgid"]) for record in records) and time.monotonic() < deadline:
-        for record in records:
+    while any(_group_alive(record["pgid"]) for record in active) and time.monotonic() < deadline:
+        for record in active:
             record["process"].poll()
         time.sleep(0.02)
-    for record in records:
+    for record in active:
         record["process"].poll()
-    for record in records:
+    for record in active:
         if _group_alive(record["pgid"]):
             try:
                 os.killpg(record["pgid"], signal.SIGKILL)
             except ProcessLookupError:
                 pass
-    for record in records:
+    reap_error = None
+    for record in active:
         try:
             record["process"].wait(timeout=1)
         except subprocess.TimeoutExpired:
-            raise RuntimeError("PYTEST_PROCESS_REAP_FAILED") from None
+            reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
+    deadline = time.monotonic() + 1.0
+    while any(_group_alive(record["pgid"]) for record in active) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    for record in active:
+        if _group_alive(record["pgid"]):
+            reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
+        else:
+            record["reaped"] = True
+    if reap_error is not None:
+        raise reap_error
+
+
+class _SupervisorFailure(Exception):
+    pass
+
+
+def _first_stage_failure(records: list[dict]) -> str | None:
+    failed = [record for record in records if record["process"].poll() not in (None, 0)]
+    if not failed:
+        return None
+    first = min(failed, key=lambda record: record.get("finished_at", float("inf")))
+    return f"PYTEST_{first['name'].upper()}_FAILED"
+
+
+def _wait_managed(records: list[dict], timeouts: dict[str, float]) -> list[int]:
+    while True:
+        exits = [record["process"].poll() for record in records]
+        now = time.monotonic()
+        for record, exit_code in zip(records, exits):
+            if exit_code is not None and "finished_at" not in record:
+                record["finished_at"] = now
+        if all(value is not None for value in exits):
+            return [int(value) for value in exits]
+        for record, exit_code in zip(records, exits):
+            if exit_code is None and now - record["started_at"] >= timeouts[record["name"]]:
+                if failure := _first_stage_failure(records):
+                    raise _SupervisorFailure(failure)
+                raise _SupervisorFailure(f"PYTEST_{record['name'].upper()}_TIMEOUT")
+        time.sleep(0.05)
 
 
 def _write_process_state(path: Path, records: list[dict], phase: str) -> None:
@@ -284,6 +401,97 @@ def _scan_identity_key(outputs: list[Path]) -> None:
                 raise RuntimeError("CI_PYTEST_IDENTITY_ARTIFACT_LEAK")
 
 
+def _error_code(exc: BaseException) -> str:
+    value = str(exc)
+    if re.fullmatch(r"(?:CI_)?PYTEST_[A-Z_]+", value):
+        return value
+    if isinstance(exc, OSError):
+        return "PYTEST_SUPERVISOR_OS_ERROR"
+    return "PYTEST_SUPERVISOR_INTERNAL_ERROR"
+
+
+def _stable_file_bytes(path: Path) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise RuntimeError("PYTEST_ARTIFACT_NOT_REGULAR")
+        chunks = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns)
+    if identity(before) != identity(after) or sum(map(len, chunks)) != before.st_size:
+        raise RuntimeError("PYTEST_ARTIFACT_UNSTABLE")
+    return b"".join(chunks)
+
+
+def _publication_payload(identity: dict, result: str, primary_error: str | None,
+                         cleanup_error: str | None, publication_error: str | None,
+                         stage_exit_codes: dict[str, int | None]) -> dict:
+    return {
+        **identity, "result": result, "artifact_result": result,
+        "primary_error": primary_error, "error": primary_error or publication_error,
+        "cleanup_error": cleanup_error, "publication_error": publication_error,
+        "stage_exit_codes": stage_exit_codes,
+    }
+
+
+def publish_outputs(specs: list[tuple[Path, Path, set[str]]], *, identity: dict, result: str,
+                    primary_error: str | None, cleanup_error: str | None,
+                    stage_exit_codes: dict[str, int | None]) -> str:
+    """Publish only stable, scanned files after all writers have stopped."""
+    key = os.environ.get("CI_PYTEST_IDENTITY_KEY", "")
+    scan_error = None
+    staged: list[tuple[Path, Path]] = []
+    try:
+        if cleanup_error:
+            raise RuntimeError("PYTEST_PUBLICATION_REAP_UNPROVEN")
+        if len(key) < 43:
+            raise RuntimeError("CI_PYTEST_IDENTITY_KEY_MISSING")
+        _scan_identity_key([source for source, _, _ in specs])
+        needles = (key.encode(), base64.b64encode(key.encode()), key.encode().hex().encode())
+        for source, target, allowed in specs:
+            if target.exists():
+                raise RuntimeError("PYTEST_PUBLISH_TARGET_NOT_FRESH")
+            source_names = {path.name for path in source.iterdir()}
+            if not source_names.issubset(allowed):
+                raise RuntimeError("PYTEST_ARTIFACT_FILE_SET_INVALID")
+            stage = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
+            staged.append((stage, target))
+            for name in sorted(source_names):
+                payload = _stable_file_bytes(source / name)
+                if any(needle in payload for needle in needles):
+                    raise RuntimeError("CI_PYTEST_IDENTITY_ARTIFACT_LEAK")
+                (stage / name).write_bytes(payload)
+    except (OSError, RuntimeError) as exc:
+        scan_error = _error_code(exc)
+        for stage, _ in staged:
+            shutil.rmtree(stage, ignore_errors=True)
+    else:
+        final_result = "PASS" if result == "PASS" and not primary_error and not cleanup_error else "BLOCK"
+        payload = _publication_payload(identity, final_result, primary_error, cleanup_error, None, stage_exit_codes)
+        for stage, target in staged:
+            (stage / "publication.json").write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            os.replace(stage, target)
+        return final_result
+    payload = _publication_payload(identity, "BLOCK", primary_error or scan_error, cleanup_error,
+                                   scan_error, stage_exit_codes)
+    for _, target, _ in specs:
+        try:
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+            elif target.exists():
+                shutil.rmtree(target)
+            target.mkdir(parents=True)
+            (target / "publication.json").write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+    return "BLOCK"
+
+
 class _SignalExit(Exception):
     def __init__(self, signum: int):
         self.signum = signum
@@ -300,7 +508,8 @@ def _start_managed_process(name: str, command: list[str], environment: dict, rec
         for signum in previous_handlers:
             signal.signal(signum, defer)
         process = subprocess.Popen(command, env=environment, start_new_session=True)
-        record = {"name": name, "process": process, "pid": process.pid, "pgid": process.pid}
+        record = {"name": name, "process": process, "pid": process.pid, "pgid": process.pid,
+                  "started_at": time.monotonic()}
         records.append(record)
     finally:
         for signum, handler in previous_handlers.items():
@@ -312,6 +521,13 @@ def _start_managed_process(name: str, command: list[str], environment: dict, rec
 
 def _partitions_main() -> int:
     main_output, ownership_output, aggregate_output = map(Path, sys.argv[2:5])
+    if len(sys.argv) >= 9 and sys.argv[5] == "--publish":
+        publish_main, publish_ownership, publish_aggregate = map(Path, sys.argv[6:9])
+    else:
+        publish_main, publish_ownership, publish_aggregate = (
+            output.with_name(output.name + "-publish")
+            for output in (main_output, ownership_output, aggregate_output)
+        )
     process_state = aggregate_output / "processes.json"
     records: list[dict] = []
     previous_handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
@@ -323,8 +539,12 @@ def _partitions_main() -> int:
         signal.signal(signum, interrupted)
     result = 1
     phase = "failed"
-    cache_directory = tempfile.TemporaryDirectory(prefix="r297-pytest-caches-")
+    primary_error = None
+    cleanup_error = None
+    stage_exits = {"main": None, "ownership": None, "aggregate": None}
+    cache_directory = None
     try:
+        cache_directory = tempfile.TemporaryDirectory(prefix="r297-pytest-caches-")
         main_env, ownership_env, aggregate_env = _partition_environments(Path(cache_directory.name))
         for name, output, environment in (
             ("main", main_output, main_env), ("ownership", ownership_output, ownership_env),
@@ -336,7 +556,14 @@ def _partitions_main() -> int:
                 records,
             )
             _write_process_state(process_state, records, "running")
-        exits = [record["process"].wait() for record in records]
+        exits = _wait_managed(records, _SUPERVISOR_TIMEOUTS)
+        stage_exits.update(main=exits[0], ownership=exits[1])
+        primary_error = _first_stage_failure(records)
+        try:
+            _terminate_processes(records, grace_seconds=_PROCESS_TERM_GRACE_SECONDS)
+        except Exception as exc:
+            cleanup_error = cleanup_error or _error_code(exc)
+            raise
         aggregate_env.update(
             CI_MAIN_JOB_RESULT="success" if exits[0] == 0 else "failure",
             CI_MATRIX_JOB_RESULT="success" if exits[1] == 0 else "failure",
@@ -349,42 +576,79 @@ def _partitions_main() -> int:
             records,
         )
         _write_process_state(process_state, records, "aggregating")
-        aggregate_exit = aggregate_record["process"].wait()
-        _scan_identity_key([main_output, ownership_output, aggregate_output])
+        aggregate_exit = _wait_managed([aggregate_record], _SUPERVISOR_TIMEOUTS)[0]
+        stage_exits["aggregate"] = aggregate_exit
         result = 0 if exits == [0, 0] and aggregate_exit == 0 else 1
+        if result:
+            primary_error = primary_error or _first_stage_failure(records)
         phase = "complete"
     except _SignalExit as exc:
         result = 128 + exc.signum
+        primary_error = primary_error or _first_stage_failure(records) or "PYTEST_SUPERVISOR_CANCELLED"
         phase = "cancelled"
+    except (OSError, RuntimeError, _SupervisorFailure) as exc:
+        primary_error = primary_error or _error_code(exc)
+        result = 1
+        phase = "failed"
     finally:
-        cleanup_error = None
         try:
             for signum in previous_handlers:
                 signal.signal(signum, signal.SIG_IGN)
-            try:
-                _terminate_processes(records, grace_seconds=_PROCESS_TERM_GRACE_SECONDS)
-            except Exception as exc:
-                cleanup_error = exc
-                phase = "cleanup_failed"
-            finally:
-                cache_directory.cleanup()
-            _write_process_state(process_state, records, phase)
-            if cleanup_error is not None:
-                raise cleanup_error
+            for cleanup in (
+                lambda: _terminate_processes(records, grace_seconds=_PROCESS_TERM_GRACE_SECONDS),
+                lambda: cache_directory.cleanup() if cache_directory is not None else None,
+                lambda: _write_process_state(process_state, records, phase),
+            ):
+                try:
+                    cleanup()
+                except Exception as exc:
+                    cleanup_error = cleanup_error or _error_code(exc)
+                    phase = "cleanup_failed"
         finally:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
-    return result
+    for record in records:
+        stage_exits[record["name"]] = record["process"].poll()
+    if result == 0 and cleanup_error is None:
+        try:
+            totals = validate_partitions(
+                aggregate_output / "full-collected-nodeids.json",
+                [main_output, ownership_output], **_run_identity(),
+            )
+            aggregate = validate_aggregate_output(
+                aggregate_output, published=False, **_run_identity(),
+            )
+            if any(aggregate.get(key) != value for key, value in totals.items()):
+                raise ValueError("PYTEST_AGGREGATE_COVERAGE_INVALID")
+        except (OSError, ValueError, KeyError, TypeError, ET.ParseError) as exc:
+            primary_error = _error_code(exc)
+            result = 1
+    try:
+        final = publish_outputs(
+            [
+                (main_output, publish_main, _PARTITION_FILES),
+                (ownership_output, publish_ownership, _PARTITION_FILES),
+                (aggregate_output, publish_aggregate, _AGGREGATE_FILES),
+            ],
+            identity=_run_identity(), result="PASS" if result == 0 else "BLOCK",
+            primary_error=primary_error, cleanup_error=cleanup_error, stage_exit_codes=stage_exits,
+        )
+    except Exception:
+        print("CI_PYTEST_SUPERVISOR=BLOCK (PYTEST_PUBLICATION_FAILED)")
+        return 1
+    return 0 if final == "PASS" else result or 1
 
 
 def _validation_main(kind: str) -> int:
     identity = _run_identity()
     try:
-        if kind == "--validate-partition":
+        if kind == "--validate-publication":
+            validate_publication_outputs([Path(path) for path in sys.argv[2:5]], **identity)
+        elif kind == "--validate-partition":
             validate_partition_output(Path(sys.argv[2]), minimum=int(sys.argv[3]), **identity)
         else:
             validate_aggregate_output(Path(sys.argv[2]), **identity)
-    except (OSError, ValueError, KeyError, TypeError, ET.ParseError) as exc:
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError, ET.ParseError) as exc:
         code = str(exc) if re.fullmatch(r"PYTEST_[A-Z_]+", str(exc)) else type(exc).__name__
         print(f"CI_PYTEST_VALIDATION=BLOCK ({code})")
         return 1
@@ -430,7 +694,7 @@ def _aggregate_main() -> int:
 def main() -> int:
     if sys.argv[1] == "--partitions":
         return _partitions_main()
-    if sys.argv[1] in {"--validate-partition", "--validate-aggregate"}:
+    if sys.argv[1] in {"--validate-publication", "--validate-partition", "--validate-aggregate"}:
         return _validation_main(sys.argv[1])
     if sys.argv[1] == "--aggregate":
         return _aggregate_main()
