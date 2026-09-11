@@ -241,6 +241,8 @@ jobs:
           }
 
       - name: Run native ACL handle and hardlink boundary probe
+        id: native_boundary
+        continue-on-error: true
         shell: pwsh
         run: |
           ./tests/r297_windows_native_boundary.ps1
@@ -251,6 +253,7 @@ jobs:
         shell: pwsh
         env:
           ASSET_STORAGE_ROOT: ${{ runner.temp }}\r297-assets
+          R297_NATIVE_BOUNDARY_OUTCOME: ${{ steps.native_boundary.outcome }}
         run: |
           $stepOutput = $env:GITHUB_OUTPUT
           Remove-Item Env:GITHUB_OUTPUT
@@ -271,7 +274,10 @@ jobs:
               tests/test_r297_windows_file_security.py `
               tests/test_r297_windows_recovery.py `
               tests/test_r297_trusted_windows_observer.py `
-              tests/test_r297_trusted_host_installers.py `
+              tests/test_r297_trusted_host_installers.py::test_windows_producer_permissions_reach_children_with_inheritance_disabled `
+              tests/test_r297_trusted_host_installers.py::test_windows_installer_separates_candidate_from_fixed_observer `
+              tests/test_r297_trusted_host_installers.py::test_windows_relay_receipt_is_admin_installed_into_protected_root `
+              tests/test_r297_trusted_host_installers.py::test_windows_installer_rejects_acl_bypass_privileges_and_stale_logons `
               --junitxml=$junit *> $log
             $testExit = $LASTEXITCODE
             python ops/r297_ci_redact.py $log
@@ -301,7 +307,8 @@ jobs:
             try { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop }
             catch { $cleanupError = 'R297_NATIVE_REPORT_CLEANUP_FAILED' }
           }
-          $finalExit = if ($testExit -eq 0 -and $publicationError -eq 'NONE' -and $cleanupError -eq 'NONE') { 0 } else { 1 }
+          $boundaryResult = if ($env:R297_NATIVE_BOUNDARY_OUTCOME -ceq 'success') { 'PASS' } else { 'BLOCK' }
+          $finalExit = if ($testExit -eq 0 -and $boundaryResult -eq 'PASS' -and $publicationError -eq 'NONE' -and $cleanupError -eq 'NONE') { 0 } else { 1 }
           $safeReportError = if ($publicationError -ne 'NONE') { $publicationError } else { $cleanupError }
           try {
             [void](New-Item -ItemType Directory -Path $stage -ErrorAction Stop)
@@ -311,9 +318,16 @@ jobs:
             } else {
               [IO.File]::WriteAllText((Join-Path $stage 'pytest.log'), "$safeReportError`n", [Text.UTF8Encoding]::new($false))
               [IO.File]::WriteAllText((Join-Path $stage 'junit.xml'), "<testsuite tests=`"1`" failures=`"1`"><testcase name=`"publication`"><failure>$safeReportError</failure></testcase></testsuite>", [Text.UTF8Encoding]::new($false))
+              try {
+                [xml]$synthetic = [IO.File]::ReadAllText((Join-Path $stage 'junit.xml'))
+                if ($synthetic.testsuite.tests -cne '1' -or $synthetic.testsuite.failures -cne '1' -or
+                    $synthetic.testsuite.testcase.failure.InnerText -cne $safeReportError) {
+                  throw 'invalid'
+                }
+              } catch { throw 'R297_NATIVE_SYNTHETIC_JUNIT_INVALID' }
             }
             [IO.File]::WriteAllText((Join-Path $stage 'classification.txt'), "R297_EVIDENCE_CLASS=TEST_ONLY`nR297_FORMAL_EVIDENCE=false`n", [Text.UTF8Encoding]::new($false))
-            [IO.File]::WriteAllText((Join-Path $stage 'result.txt'), "R297_NATIVE_SOURCE_SHA=$env:RELEASE_SOURCE_SHA`nR297_NATIVE_RUN_ID=${{ github.run_id }}`nR297_NATIVE_RUN_ATTEMPT=${{ github.run_attempt }}`nR297_NATIVE_TEST_EXIT=$testExit`nR297_NATIVE_PUBLICATION_ERROR=$publicationError`nR297_NATIVE_CLEANUP_ERROR=$cleanupError`n", [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText((Join-Path $stage 'result.txt'), "R297_NATIVE_SOURCE_SHA=$env:RELEASE_SOURCE_SHA`nR297_NATIVE_RUN_ID=${{ github.run_id }}`nR297_NATIVE_RUN_ATTEMPT=${{ github.run_attempt }}`nR297_NATIVE_BOUNDARY_RESULT=$boundaryResult`nR297_NATIVE_TEST_EXIT=$testExit`nR297_NATIVE_PUBLICATION_ERROR=$publicationError`nR297_NATIVE_CLEANUP_ERROR=$cleanupError`n", [Text.UTF8Encoding]::new($false))
             [IO.Directory]::Move($stage, $publish)
           } catch {
             $finalExit = 1
@@ -322,13 +336,22 @@ jobs:
             try { if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop } }
             catch { $cleanupError = 'R297_NATIVE_REPORT_CLEANUP_FAILED' }
           }
-          "publish_path=$publish" | Out-File -FilePath $stepOutput -Encoding utf8 -Append
-          if (Test-Path -LiteralPath (Join-Path $publish 'pytest.log')) { Get-Content -LiteralPath (Join-Path $publish 'pytest.log') }
-          else { Write-Output $publicationError }
+          $publishedNames = if (Test-Path -LiteralPath $publish -PathType Container) {
+            @((Get-ChildItem -LiteralPath $publish -File | ForEach-Object Name | Sort-Object))
+          } else { @() }
+          if (($publishedNames -join ',') -ceq 'classification.txt,junit.xml,pytest.log,result.txt') {
+            "publish_path=$publish" | Out-File -FilePath $stepOutput -Encoding utf8 -Append
+            "publication_ready=true" | Out-File -FilePath $stepOutput -Encoding utf8 -Append
+            Get-Content -LiteralPath (Join-Path $publish 'pytest.log')
+          } else {
+            "publication_ready=false" | Out-File -FilePath $stepOutput -Encoding utf8 -Append
+            Write-Output $publicationError
+            $finalExit = 1
+          }
           exit $finalExit
 
       - name: Upload sanitized native Windows reports
-        if: always()
+        if: ${{ always() && steps.native_reports.outputs.publication_ready == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: test-only-r297-windows-native-recovery-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

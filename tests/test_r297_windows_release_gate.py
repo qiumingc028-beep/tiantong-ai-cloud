@@ -233,8 +233,31 @@ def test_windows_native_reports_publish_only_after_stable_atomic_finalization():
     assert "$safeReportError = if ($publicationError -ne 'NONE') { $publicationError } else { $cleanupError }" in native
     assert "if ($publicationError -eq 'NONE' -and $cleanupError -eq 'NONE')" in native
     assert "steps.native_reports.outputs.publish_path" in upload
+    assert "steps.native_reports.outputs.publication_ready == 'true'" in upload
     assert "r297-windows-native-work" not in upload
     assert "r297-windows-native-stage" not in upload
+    assert "publication_ready=true" in native
+    assert "publication_ready=false" in native
+    assert "R297_NATIVE_SYNTHETIC_JUNIT_INVALID" in native
+
+
+def test_windows_native_boundary_failure_is_reported_and_linux_only_test_is_not_selected():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    native = workflow.split("  windows-native-recovery-tests:", 1)[1].split(
+        "  formal-windows-acceptance:", 1
+    )[0]
+    assert "id: native_boundary" in native
+    assert "continue-on-error: true" in native
+    assert "R297_NATIVE_BOUNDARY_OUTCOME: ${{ steps.native_boundary.outcome }}" in native
+    assert "R297_NATIVE_BOUNDARY_RESULT=$boundaryResult" in native
+    assert "tests/test_r297_trusted_host_installers.py `" not in native
+    for nodeid in (
+        "test_windows_producer_permissions_reach_children_with_inheritance_disabled",
+        "test_windows_installer_separates_candidate_from_fixed_observer",
+        "test_windows_relay_receipt_is_admin_installed_into_protected_root",
+        "test_windows_installer_rejects_acl_bypass_privileges_and_stale_logons",
+    ):
+        assert f"tests/test_r297_trusted_host_installers.py::{nodeid}" in native
 
 
 def test_trusted_windows_observer_is_fixed_source_and_does_not_execute_candidate():
