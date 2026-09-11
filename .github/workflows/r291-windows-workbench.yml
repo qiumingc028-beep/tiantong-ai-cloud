@@ -231,12 +231,22 @@ jobs:
             tests/test_r297_trusted_host_installers.py `
             --junitxml=$junit *> $log
           $status = $LASTEXITCODE
-          python ops/r297_ci_redact.py $log $junit
+          python ops/r297_ci_redact.py $log
           if ($LASTEXITCODE -ne 0) {
-            Remove-Item -LiteralPath $log,$junit -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
             [IO.File]::WriteAllText($log, "R297_NATIVE_REPORT_REDACTION_FAILED`n")
-            [IO.File]::WriteAllText($junit, '<testsuite tests="1" failures="1"><testcase name="redaction"><failure>R297_NATIVE_REPORT_REDACTION_FAILED</failure></testcase></testsuite>')
-            exit 1
+            $status = 1
+          }
+          if (Test-Path -LiteralPath $junit) {
+            python ops/r297_ci_redact.py $junit
+            if ($LASTEXITCODE -ne 0) {
+              Remove-Item -LiteralPath $junit -Force -ErrorAction SilentlyContinue
+              [IO.File]::WriteAllText($junit, '<testsuite tests="1" failures="1"><testcase name="redaction"><failure>R297_NATIVE_REPORT_REDACTION_FAILED</failure></testcase></testsuite>')
+              $status = 1
+            }
+          } else {
+            [IO.File]::WriteAllText($junit, '<testsuite tests="1" failures="1"><testcase name="pytest"><failure>R297_NATIVE_JUNIT_MISSING</failure></testcase></testsuite>')
+            $status = 1
           }
           Get-Content -LiteralPath $log
           exit $status
