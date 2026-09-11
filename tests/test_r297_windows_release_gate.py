@@ -37,6 +37,7 @@ def test_r297_windows_gate_has_complete_trigger_and_artifact_contract():
     assert "      - main" in workflow
     assert "codex/r297-jd-multistore-autosync" in workflow
     assert "      - codex/r297-cloud-integration" in workflow
+    assert "      - codex/r297-windows-workflow-wiring-r2" in workflow
     assert "codex/r291-windows-installer" not in workflow
     assert "ELECTRON_RUN_AS_NODE" in workflow
     assert "fs.writeFileSync" in workflow
@@ -280,3 +281,7 @@ def test_native_boundary_probe_uses_real_windows_accounts_acl_handles_and_hardli
     assert "R297_NATIVE_ACL_NEGATIVE=PASS" in source
     assert "R297_NATIVE_HANDLE_DELETE_DENIAL=PASS" in source
     assert "R297_NATIVE_HARDLINK=PASS" in source
+    assert source.index("if ($primaryErrorCode)") < source.index("if ($cleanupErrorCode)")
+    assert "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode" in source
+    assert "R297_NATIVE_PROBE_FAILED" in source
+    assert "} finally {\n  try {" in source

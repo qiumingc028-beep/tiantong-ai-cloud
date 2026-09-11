@@ -61,6 +61,7 @@ on:
       - codex/r297-takeover-infra-evidence-r2
       - codex/r297-takeover-infra-evidence-r3
       - codex/r297-windows-workflow-wiring-r1
+      - codex/r297-windows-workflow-wiring-r2
     paths:
       - desktop/jd-workbench/**
       - tests/test_r291_jd_workbench_client_static.py

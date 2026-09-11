@@ -11,6 +11,14 @@ $candidateName = "r297cand$suffix".Substring(0, 20)
 $password = ConvertTo-SecureString (([guid]::NewGuid().ToString('N')) + '!Aa1') -AsPlainText -Force
 $root = Join-Path $env:RUNNER_TEMP "r297-native-$suffix"
 $results = @()
+$primaryErrorCode = $null
+$cleanupErrorCode = $null
+$knownErrorCodes = @(
+  'R297_NATIVE_CANDIDATE_BOUNDARY_FAILED',
+  'R297_NATIVE_OBSERVER_BOUNDARY_FAILED',
+  'R297_NATIVE_DELETE_UNEXPECTED_SUCCESS',
+  'R297_NATIVE_HARDLINK_COUNT_INVALID'
+)
 
 function Set-BoundaryAcl([string]$Path, [string]$ObserverSid, [bool]$ObserverModify) {
   $acl = New-Object Security.AccessControl.DirectorySecurity
@@ -80,14 +88,31 @@ try {
   if ($links.Count -ne 2) { throw 'R297_NATIVE_HARDLINK_COUNT_INVALID' }
   Remove-Item -LiteralPath $peer -Force
   $results += 'R297_NATIVE_HARDLINK=PASS'
+} catch {
+  $errorCode = [string]$_.Exception.Message
+  $primaryErrorCode = if ($knownErrorCodes -contains $errorCode) {
+    $errorCode
+  } else {
+    'R297_NATIVE_PROBE_FAILED'
+  }
 } finally {
-  Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
-  Remove-LocalUser -Name $observerName -ErrorAction SilentlyContinue
-  Remove-LocalUser -Name $candidateName -ErrorAction SilentlyContinue
-  if ((Test-Path -LiteralPath $root) -or
-      (Get-LocalUser -Name $observerName -ErrorAction SilentlyContinue) -or
-      (Get-LocalUser -Name $candidateName -ErrorAction SilentlyContinue)) {
-    throw 'R297_NATIVE_FIXTURE_CLEANUP_FAILED'
+  try {
+    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-LocalUser -Name $observerName -ErrorAction SilentlyContinue
+    Remove-LocalUser -Name $candidateName -ErrorAction SilentlyContinue
+    if ((Test-Path -LiteralPath $root) -or
+        (Get-LocalUser -Name $observerName -ErrorAction SilentlyContinue) -or
+        (Get-LocalUser -Name $candidateName -ErrorAction SilentlyContinue)) {
+      $cleanupErrorCode = 'R297_NATIVE_FIXTURE_CLEANUP_FAILED'
+    }
+  } catch {
+    $cleanupErrorCode = 'R297_NATIVE_FIXTURE_CLEANUP_FAILED'
   }
 }
+
+if ($primaryErrorCode) {
+  if ($cleanupErrorCode) { Write-Output "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode" }
+  throw $primaryErrorCode
+}
+if ($cleanupErrorCode) { throw $cleanupErrorCode }
 $results | ForEach-Object { Write-Output $_ }
