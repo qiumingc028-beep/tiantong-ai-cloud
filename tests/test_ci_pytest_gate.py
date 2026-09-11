@@ -1162,7 +1162,7 @@ def test_timeout_does_not_replace_an_earlier_stage_failure():
 def test_live_child_identity_read_failure_is_not_skipped(monkeypatch):
     from ops import ci_pytest_gate as gate
 
-    monkeypatch.setattr(gate, "_linux_child_pids", lambda _parent: {123})
+    monkeypatch.setattr(gate, "_linux_child_pids", lambda _parent, **_kwargs: {123})
     monkeypatch.setattr(gate, "_process_parent_identity", lambda _pid: None)
     monkeypatch.setattr(gate.time, "sleep", lambda _seconds: None)
     with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
@@ -1258,6 +1258,28 @@ def test_cleanup_never_kills_a_reused_linux_process_group(monkeypatch):
     assert signals == [(123, signal.SIGTERM)]
 
 
+def test_lost_leader_ownership_never_uses_member_snapshot_to_kill_group(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    class Process:
+        def wait(self, timeout=None): return 0
+
+    record = {
+        "name": "main", "process": Process(), "pid": 123, "pgid": 123,
+        "process_identity": "leader", "owns_group": True,
+    }
+    ownership = iter([True, False])
+    signals = []
+    monkeypatch.setattr(gate.sys, "platform", "linux")
+    monkeypatch.setattr(gate, "_owned_process_group", lambda _record: next(ownership))
+    monkeypatch.setattr(gate, "_linux_group_members", lambda _pgid: {(456, "member")})
+    monkeypatch.setattr(gate, "_group_alive", lambda _pgid: False)
+    monkeypatch.setattr(gate.os, "killpg", lambda pgid, signum: signals.append((pgid, signum)))
+
+    gate._terminate_processes([record], grace_seconds=0)
+    assert signals == [(123, signal.SIGTERM)]
+
+
 def test_reaped_process_group_is_not_targeted_twice(monkeypatch):
     from ops import ci_pytest_gate as gate
 
@@ -1288,6 +1310,87 @@ def test_reaped_leader_still_triggers_adopted_child_cleanup(monkeypatch):
     )
     gate._terminate_processes([record], grace_seconds=0.25)
     assert calls == [([record], 0.25)]
+
+
+def test_unproven_postbaseline_child_is_rejected(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    record = {
+        "name": "main", "pid": 10, "process_identity": "leader",
+        "subreaper_baseline": {}, "managed_descendants": {},
+    }
+    snapshots = iter([{10: "leader", 99: "unrelated"}, {}])
+    signals = []
+    monkeypatch.setattr(
+        gate, "_direct_child_identities", lambda _parent, **_kwargs: next(snapshots),
+    )
+    monkeypatch.setattr(
+        gate, "_signal_owned_pid",
+        lambda pid, identity, signum: signals.append((pid, identity, signum)),
+    )
+    monkeypatch.setattr(gate, "_reap_adopted_child", lambda *_args: None)
+
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
+        gate._terminate_adopted_children([record], grace_seconds=0)
+    assert signals == []
+
+
+def test_adopted_cleanup_bounds_wide_snapshot_before_signalling(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    limits = []
+    signals = []
+
+    def reject_wide_snapshot(_parent, **kwargs):
+        limits.append(kwargs)
+        raise gate._ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
+
+    monkeypatch.setattr(gate, "_direct_child_identities", reject_wide_snapshot)
+    monkeypatch.setattr(
+        gate, "_signal_owned_pid", lambda *args: signals.append(args),
+    )
+
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
+        gate._terminate_adopted_children([], grace_seconds=0)
+    assert limits and limits[0]["deadline"] is not None
+    assert limits[0]["max_children"] == gate._PROCESS_TREE_MAX_NODES
+    assert signals == []
+
+
+def test_managed_descendant_tracking_has_a_fixed_node_budget(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    record = {
+        "name": "main", "pid": 10, "process_identity": "10",
+        "managed_descendants": {},
+    }
+    monkeypatch.setattr(gate, "_PROCESS_TREE_MAX_NODES", 3)
+    monkeypatch.setattr(
+        gate, "_process_parent_identity", lambda pid: (os.getpid(), str(pid)),
+    )
+    monkeypatch.setattr(gate, "_process_identity", lambda pid: str(pid))
+    monkeypatch.setattr(
+        gate, "_direct_child_identities",
+        lambda pid, **_kwargs: {pid + 1: str(pid + 1)},
+    )
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 0)
+
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
+        gate._remember_managed_descendants([record], deadline=1)
+
+
+def test_direct_child_snapshot_rejects_wide_fanout_before_identity_reads(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    identity_reads = []
+    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: "11 12 13 14")
+    monkeypatch.setattr(
+        gate, "_process_parent_identity", lambda pid: identity_reads.append(pid),
+    )
+
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
+        gate._direct_child_identities(10, deadline=float("inf"), max_children=3)
+    assert identity_reads == []
 
 
 def test_partition_failure_survives_process_reap_failure(tmp_path, monkeypatch):
@@ -1333,14 +1436,15 @@ def test_partition_failure_survives_process_reap_failure(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("cancel_cleanup_call", "exit_codes", "expected_primary"),
+    ("cancel_cleanup_call", "cancel_state_write", "exit_codes", "expected_primary"),
     [
-        (1, [0, 0], "PYTEST_SUPERVISOR_CANCELLED"),
-        (2, [1, 0, 0], "PYTEST_MAIN_FAILED"),
+        (1, False, [0, 0], "PYTEST_SUPERVISOR_CANCELLED"),
+        (2, False, [1, 0, 0], "PYTEST_MAIN_FAILED"),
+        (None, True, [0, 0, 0], "PYTEST_SUPERVISOR_CANCELLED"),
     ],
 )
 def test_cleanup_phase_cancellation_is_recorded_after_safe_cleanup(
-    tmp_path, monkeypatch, cancel_cleanup_call, exit_codes, expected_primary,
+    tmp_path, monkeypatch, cancel_cleanup_call, cancel_state_write, exit_codes, expected_primary,
 ):
     from ops import ci_pytest_gate as gate
 
@@ -1380,10 +1484,18 @@ def test_cleanup_phase_cancellation_is_recorded_after_safe_cleanup(
         if cleanup_calls == cancel_cleanup_call:
             os.kill(os.getpid(), signal.SIGTERM)
 
+    original_write_process_state = gate._write_process_state
+
+    def cancel_during_final_state_write(path, records, phase):
+        if cancel_state_write and phase == "complete":
+            os.kill(os.getpid(), signal.SIGTERM)
+        original_write_process_state(path, records, phase)
+
     monkeypatch.setattr(gate.subprocess, "Popen", popen)
     monkeypatch.setattr(gate, "_process_identity", lambda pid: str(pid))
     monkeypatch.setattr(gate, "_observe_process_exit", observe)
     monkeypatch.setattr(gate, "_terminate_processes", cancel_during_cleanup)
+    monkeypatch.setattr(gate, "_write_process_state", cancel_during_final_state_write)
     outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
     monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])
 
@@ -1393,6 +1505,10 @@ def test_cleanup_phase_cancellation_is_recorded_after_safe_cleanup(
     assert receipt["terminal_error"] == "PYTEST_SUPERVISOR_CANCELLED"
     assert receipt["cleanup_error"] is None
     assert receipt["supervision_complete"] is False
+    process_state = json.loads((outputs[2] / "processes.json").read_text())
+    assert process_state["phase"] == "cancelled"
+    for item in process_state["processes"]:
+        assert item["exit_code"] == receipt["stage_exit_codes"][item["name"]]
 
 
 def test_identity_scan_rejects_uppercase_hex(tmp_path, monkeypatch):
@@ -1565,6 +1681,64 @@ def test_published_block_can_still_qualify_successful_ownership(tmp_path, monkey
     assert gate.validate_partition_output(
         output, minimum=1, **gate._run_identity()
     ) == [gate._node_identities(["tests/test_owner.py::test_ok"])[0]]
+
+
+@pytest.mark.parametrize("main_exit", [-signal.SIGTERM, -signal.SIGKILL])
+def test_signal_terminated_stage_blocks_other_partition_qualification(
+    tmp_path, monkeypatch, main_exit,
+):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "k" * 64)
+    identity = {"head": "a" * 40, "run_id": "123", "run_attempt": "1"}
+    specs = []
+    for index, allowed in enumerate((
+        gate._PARTITION_FILES, gate._PARTITION_FILES, gate._AGGREGATE_FILES,
+    )):
+        source = tmp_path / f"work-{index}"
+        target = tmp_path / f"publish-{index}"
+        source.mkdir()
+        (source / next(iter(allowed))).write_text("safe")
+        specs.append((source, target, allowed))
+    exits = {"main": main_exit, "ownership": 0, "aggregate": 1}
+
+    assert gate.publish_outputs(
+        specs, identity=identity, result="BLOCK", primary_error="PYTEST_MAIN_FAILED",
+        terminal_error=None, cleanup_error=None, stage_exit_codes=exits,
+        supervision_complete=True,
+    ) == "BLOCK"
+    receipts = [json.loads((target / "publication.json").read_text()) for _, target, _ in specs]
+    assert [receipt["partition_result"] for receipt in receipts] == ["BLOCK"] * 3
+    gate.validate_publication_outputs(
+        [target for _, target, _ in specs], **identity,
+    )
+
+
+@pytest.mark.parametrize("main_exit", [-signal.SIGTERM, -signal.SIGKILL])
+def test_validator_rejects_partition_pass_after_signal_termination(
+    tmp_path, monkeypatch, main_exit,
+):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "k" * 64)
+    output = tmp_path / "ownership"
+    _partition_artifacts(output, ["tests/test_owner.py::test_ok"])
+    digests = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in output.iterdir() if path.name != "publication.json"
+    }
+    publication = {
+        **gate._run_identity(), "partition": "ownership", "result": "PASS",
+        "partition_result": "PASS", "overall_result": "BLOCK", "artifact_result": "PASS",
+        "artifact_sha256": digests, "primary_error": "PYTEST_MAIN_FAILED",
+        "terminal_error": None, "cleanup_error": None, "publication_error": None,
+        "supervision_complete": True,
+        "stage_exit_codes": {"main": main_exit, "ownership": 0, "aggregate": 1},
+    }
+    (output / "publication.json").write_text(json.dumps(publication))
+
+    with pytest.raises(ValueError, match="PYTEST_PUBLICATION_INVALID"):
+        gate._validate_publication(output, **gate._run_identity())
 
 
 @pytest.mark.parametrize("primary_error,terminal_error,exits", [

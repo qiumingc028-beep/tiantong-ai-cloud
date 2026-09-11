@@ -28,6 +28,8 @@ _OUTCOME_PRIORITY = {"passed": 0, "skipped": 1, "failed": 2}
 _PROGRESS_ROOT: Path | None = None
 _LOCAL_IDENTITY_KEY = b"r297-local-pytest-identity-only"
 _PROCESS_TERM_GRACE_SECONDS = 5.0
+_PROCESS_TREE_SCAN_SECONDS = 1.0
+_PROCESS_TREE_MAX_NODES = 4096
 _SUPERVISOR_TIMEOUTS = {"main": 75 * 60.0, "ownership": 75 * 60.0, "aggregate": 10 * 60.0}
 _PR_SET_CHILD_SUBREAPER = 36
 _PARTITION_FILES = {
@@ -272,7 +274,7 @@ def _partition_publication_eligible(
 ) -> bool:
     return _supervision_state_valid(supervision_complete, exits) and supervision_complete is True and terminal_error is None and primary_error != "PYTEST_SUPERVISOR_CANCELLED" and not (
         isinstance(primary_error, str) and primary_error.endswith("_TIMEOUT")
-    )
+    ) and all(value >= 0 for value in exits.values())
 
 
 def _validate_publication(output: Path, *, head: str, run_id: str, run_attempt: str) -> None:
@@ -473,10 +475,21 @@ def _enable_child_subreaper() -> bool:
     return True
 
 
-def _linux_child_pids(parent_pid: int) -> set[int]:
+class _ProcessTreeScanLimit(RuntimeError):
+    pass
+
+
+def _linux_child_pids(
+    parent_pid: int, *, deadline: float | None = None, max_children: int | None = None,
+) -> set[int]:
     try:
         value = Path(f"/proc/{parent_pid}/task/{parent_pid}/children").read_text(encoding="ascii")
-        return {int(pid) for pid in value.split()}
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
+        children = value.split()
+        if max_children is not None and len(children) > max_children:
+            raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
+        return {int(pid) for pid in children}
     except (OSError, ValueError) as exc:
         raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN") from exc
 
@@ -495,37 +508,90 @@ def _process_parent_identity(pid: int) -> tuple[int, str] | None:
         raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN") from exc
 
 
-def _direct_child_identities(parent_pid: int) -> dict[int, str]:
+def _direct_child_identities(
+    parent_pid: int, *, deadline: float | None = None, max_children: int | None = None,
+) -> dict[int, str]:
     children = {}
-    for pid in _linux_child_pids(parent_pid):
+    child_pids = _linux_child_pids(
+        parent_pid, deadline=deadline, max_children=max_children,
+    )
+    for pid in child_pids:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
         info = None
         for _ in range(3):
             info = _process_parent_identity(pid)
             if info is not None:
                 break
-            if pid not in _linux_child_pids(parent_pid):
+            if pid not in _linux_child_pids(
+                parent_pid, deadline=deadline, max_children=max_children,
+            ):
                 break
             time.sleep(0.005)
         if info is None:
-            if pid in _linux_child_pids(parent_pid):
+            if pid in _linux_child_pids(
+                parent_pid, deadline=deadline, max_children=max_children,
+            ):
                 raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
             continue
         actual_parent, identity = info
         if actual_parent != parent_pid:
-            if pid in _linux_child_pids(parent_pid):
+            if pid in _linux_child_pids(
+                parent_pid, deadline=deadline, max_children=max_children,
+            ):
                 raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
             continue
         children[pid] = identity
     return children
 
 
-def _adopted_managed_children(records: list[dict]) -> dict[int, str]:
+def _adopted_managed_children(
+    records: list[dict], *, deadline: float | None = None,
+) -> dict[int, str]:
     baseline = records[0].get("subreaper_baseline", {}) if records else {}
     managed = {(record["pid"], record.get("process_identity")) for record in records}
-    return {
-        pid: identity for pid, identity in _direct_child_identities(os.getpid()).items()
+    proven = records[0].get("managed_descendants", {}) if records else {}
+    current = {
+        pid: identity for pid, identity in _direct_child_identities(
+            os.getpid(), deadline=deadline, max_children=_PROCESS_TREE_MAX_NODES,
+        ).items()
         if baseline.get(pid) != identity and (pid, identity) not in managed
     }
+    if any(proven.get(pid) != identity for pid, identity in current.items()):
+        raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
+    return current
+
+
+def _remember_managed_descendants(records: list[dict], *, deadline: float | None = None) -> None:
+    if not records:
+        return
+    if deadline is None:
+        deadline = time.monotonic() + _PROCESS_TREE_SCAN_SECONDS
+    proven = records[0].setdefault("managed_descendants", {})
+    pending = list(proven.items())
+    for record in records:
+        identity = record.get("process_identity")
+        parent = _process_parent_identity(record["pid"])
+        if parent == (os.getpid(), identity):
+            pending.append((record["pid"], identity))
+    seen = set()
+    while pending:
+        if len(seen) >= _PROCESS_TREE_MAX_NODES or time.monotonic() >= deadline:
+            raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
+        pid, identity = pending.pop()
+        if identity is None or (pid, identity) in seen:
+            continue
+        seen.add((pid, identity))
+        if _process_identity(pid) != identity:
+            continue
+        remaining = _PROCESS_TREE_MAX_NODES - len(seen) - len(pending)
+        if remaining <= 0:
+            raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
+        for child_pid, child_identity in _direct_child_identities(
+            pid, deadline=deadline, max_children=remaining,
+        ).items():
+            proven[child_pid] = child_identity
+            pending.append((child_pid, child_identity))
 
 
 def _signal_owned_pid(pid: int, identity: str, signum: int) -> None:
@@ -548,28 +614,38 @@ def _reap_adopted_child(pid: int, identity: str) -> None:
 
 
 def _terminate_adopted_children(records: list[dict], *, grace_seconds: float) -> None:
-    deadline = time.monotonic() + grace_seconds
+    deadline = time.monotonic() + max(grace_seconds, _PROCESS_TREE_SCAN_SECONDS)
     signalled = set()
     while True:
-        children = _adopted_managed_children(records)
+        try:
+            children = _adopted_managed_children(records, deadline=deadline)
+        except _ProcessTreeScanLimit:
+            if time.monotonic() >= deadline:
+                break
+            raise
+        if not children:
+            return
         for pid, identity in children.items():
             if (pid, identity) not in signalled:
                 _signal_owned_pid(pid, identity, signal.SIGTERM)
                 signalled.add((pid, identity))
             _reap_adopted_child(pid, identity)
-        if not _adopted_managed_children(records):
-            return
         if time.monotonic() >= deadline:
             break
         time.sleep(0.02)
     deadline = time.monotonic() + 1.0
     while True:
-        children = _adopted_managed_children(records)
+        try:
+            children = _adopted_managed_children(records, deadline=deadline)
+        except _ProcessTreeScanLimit:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("PYTEST_PROCESS_REAP_FAILED") from None
+            raise
+        if not children:
+            return
         for pid, identity in children.items():
             _signal_owned_pid(pid, identity, signal.SIGKILL)
             _reap_adopted_child(pid, identity)
-        if not _adopted_managed_children(records):
-            return
         if time.monotonic() >= deadline:
             raise RuntimeError("PYTEST_PROCESS_REAP_FAILED")
         time.sleep(0.02)
@@ -613,15 +689,15 @@ def _owned_process_group(record: dict) -> bool:
 
 
 def _terminate_processes(records: list[dict], *, grace_seconds: float = 5.0) -> None:
+    if sys.platform.startswith("linux") and records and records[0].get("subreaper"):
+        _remember_managed_descendants(
+            records, deadline=time.monotonic() + _PROCESS_TREE_SCAN_SECONDS,
+        )
     active = [record for record in records if not record.get("reaped")]
     unowned = [record for record in active if not _owned_process_group(record)]
     if unowned:
         raise RuntimeError("PYTEST_PROCESS_REAP_FAILED")
     owned_groups = {record["pgid"] for record in active}
-    original_members = (
-        {pgid: _linux_group_members(pgid) for pgid in owned_groups}
-        if sys.platform.startswith("linux") else {}
-    )
     for record in active:
         try:
             os.killpg(record["pgid"], signal.SIGTERM)
@@ -631,9 +707,7 @@ def _terminate_processes(records: list[dict], *, grace_seconds: float = 5.0) -> 
     while active and time.monotonic() < deadline:
         time.sleep(0.02)
     for record in active:
-        if (_owned_process_group(record)
-            or (sys.platform.startswith("linux") and original_members[record["pgid"]]
-                & _linux_group_members(record["pgid"]))):
+        if _owned_process_group(record):
             try:
                 os.killpg(record["pgid"], signal.SIGKILL)
             except ProcessLookupError:
@@ -645,17 +719,17 @@ def _terminate_processes(records: list[dict], *, grace_seconds: float = 5.0) -> 
             record["reaped"] = True
         except subprocess.TimeoutExpired:
             reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
+    if records and records[0].get("subreaper"):
+        try:
+            _terminate_adopted_children(records, grace_seconds=grace_seconds)
+        except RuntimeError as exc:
+            reap_error = reap_error or exc
     if sys.platform.startswith("linux"):
         deadline = time.monotonic() + 1
         while any(_group_alive(pgid) for pgid in owned_groups) and time.monotonic() < deadline:
             time.sleep(0.02)
         if any(_group_alive(pgid) for pgid in owned_groups):
             reap_error = reap_error or RuntimeError("PYTEST_PROCESS_REAP_FAILED")
-    if records and records[0].get("subreaper"):
-        try:
-            _terminate_adopted_children(records, grace_seconds=grace_seconds)
-        except RuntimeError as exc:
-            reap_error = reap_error or exc
     if reap_error is not None:
         raise reap_error
 
@@ -694,6 +768,29 @@ def _wait_managed(records: list[dict], timeouts: dict[str, float]) -> list[int]:
                     _first_stage_failure(records) or timeout_error,
                     terminal_error=timeout_error,
                 )
+        if sys.platform.startswith("linux") and records and records[0].get("subreaper"):
+            try:
+                _remember_managed_descendants(
+                    records,
+                    deadline=min(
+                        now + _PROCESS_TREE_SCAN_SECONDS,
+                        *(record["started_at"] + timeouts[record["name"]] for record in records),
+                    ),
+                )
+            except _ProcessTreeScanLimit:
+                now = time.monotonic()
+                expired = next((
+                    record for record, exit_code in zip(records, exits)
+                    if exit_code is None
+                    and now - record["started_at"] >= timeouts[record["name"]]
+                ), None)
+                if expired is None:
+                    raise
+                timeout_error = f"PYTEST_{expired['name'].upper()}_TIMEOUT"
+                raise _SupervisorFailure(
+                    _first_stage_failure(records) or timeout_error,
+                    terminal_error=timeout_error,
+                ) from None
         time.sleep(0.05)
 
 
@@ -1100,9 +1197,14 @@ def _start_managed_process(name: str, command: list[str], environment: dict, rec
         if records:
             subreaper = records[0].get("subreaper", False)
             subreaper_baseline = records[0].get("subreaper_baseline", {})
+            managed_descendants = records[0].get("managed_descendants", {})
         else:
             subreaper = _enable_child_subreaper()
-            subreaper_baseline = _direct_child_identities(os.getpid()) if subreaper else {}
+            subreaper_baseline = _direct_child_identities(
+                os.getpid(), deadline=time.monotonic() + _PROCESS_TREE_SCAN_SECONDS,
+                max_children=_PROCESS_TREE_MAX_NODES,
+            ) if subreaper else {}
+            managed_descendants = {}
         process = subprocess.Popen(command, env=environment, start_new_session=True)
         process_identity = _process_identity(process.pid)
         if process_identity is None:
@@ -1111,7 +1213,8 @@ def _start_managed_process(name: str, command: list[str], environment: dict, rec
         record = {"name": name, "process": process, "pid": process.pid, "pgid": process.pid,
                   "process_identity": process_identity, "started_at": time.monotonic(),
                   "owns_group": True, "subreaper": subreaper,
-                  "subreaper_baseline": subreaper_baseline}
+                  "subreaper_baseline": subreaper_baseline,
+                  "managed_descendants": managed_descendants}
         records.append(record)
     finally:
         for signum, handler in previous_handlers.items():
@@ -1212,30 +1315,57 @@ def _partitions_main() -> int:
         def defer_cleanup_signal(signum, _frame):
             deferred_cleanup_signals.append(signum)
 
+        blocked_mask = None
         try:
             for signum in previous_handlers:
                 signal.signal(signum, defer_cleanup_signal)
             for cleanup in (
                 lambda: _terminate_processes(records, grace_seconds=_PROCESS_TERM_GRACE_SECONDS),
                 lambda: cache_directory.cleanup() if cache_directory is not None else None,
-                lambda: _write_process_state(process_state, records, phase),
             ):
                 try:
                     cleanup()
                 except Exception as exc:
                     cleanup_error = cleanup_error or _error_code(exc)
                     phase = "cleanup_failed"
+            if hasattr(signal, "pthread_sigmask"):
+                blocked_mask = signal.pthread_sigmask(
+                    signal.SIG_BLOCK, set(previous_handlers),
+                )
+            if deferred_cleanup_signals:
+                result = 128 + deferred_cleanup_signals[0]
+                primary_error = primary_error or "PYTEST_SUPERVISOR_CANCELLED"
+                terminal_error = "PYTEST_SUPERVISOR_CANCELLED"
+                supervision_complete = False
+                phase = "cancelled"
+            for record in records:
+                stage_exits[record["name"]] = record.get("exit_code")
+            handled_signals = len(deferred_cleanup_signals)
+            try:
+                _write_process_state(process_state, records, phase)
+            except Exception as exc:
+                cleanup_error = cleanup_error or _error_code(exc)
+                phase = "cleanup_failed"
+            if blocked_mask is not None:
+                pending = signal.sigpending().intersection(previous_handlers)
+                while pending:
+                    deferred_cleanup_signals.append(signal.sigwait(pending))
+                    pending = signal.sigpending().intersection(previous_handlers)
+            if len(deferred_cleanup_signals) > handled_signals:
+                result = 128 + deferred_cleanup_signals[0]
+                primary_error = primary_error or "PYTEST_SUPERVISOR_CANCELLED"
+                terminal_error = "PYTEST_SUPERVISOR_CANCELLED"
+                supervision_complete = False
+                phase = "cancelled"
+                try:
+                    _write_process_state(process_state, records, phase)
+                except Exception as exc:
+                    cleanup_error = cleanup_error or _error_code(exc)
         finally:
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
-    if deferred_cleanup_signals:
-        result = 128 + deferred_cleanup_signals[0]
-        primary_error = primary_error or "PYTEST_SUPERVISOR_CANCELLED"
-        terminal_error = "PYTEST_SUPERVISOR_CANCELLED"
-        supervision_complete = False
-        phase = "cancelled"
-    for record in records:
-        stage_exits[record["name"]] = record.get("exit_code")
+            if blocked_mask is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, blocked_mask)
     if result == 0 and cleanup_error is None:
         try:
             totals = validate_partitions(
