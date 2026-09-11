@@ -10,6 +10,9 @@ $observerName = "r297obs$suffix".Substring(0, 20)
 $candidateName = "r297cand$suffix".Substring(0, 20)
 $password = ConvertTo-SecureString (([guid]::NewGuid().ToString('N')) + '!Aa1') -AsPlainText -Force
 $root = Join-Path $env:RUNNER_TEMP "r297-native-$suffix"
+$protectedBase = 'C:\ProgramData\TiantongAI\R297TrustedWindowsObserver'
+$protectedRoot = Join-Path $protectedBase 'protected'
+$createdProtectedBase = $false
 $results = @()
 $primaryErrorCode = $null
 $cleanupErrorCode = $null
@@ -17,7 +20,10 @@ $knownErrorCodes = @(
   'R297_NATIVE_CANDIDATE_BOUNDARY_FAILED',
   'R297_NATIVE_OBSERVER_BOUNDARY_FAILED',
   'R297_NATIVE_DELETE_UNEXPECTED_SUCCESS',
-  'R297_NATIVE_HARDLINK_COUNT_INVALID'
+  'R297_NATIVE_HARDLINK_COUNT_INVALID',
+  'R297_NATIVE_PROTECTED_RECOVERY_FAILED',
+  'R297_NATIVE_UNSAFE_RECOVERY_ACCEPTED',
+  'R297_NATIVE_PROTECTED_FIXTURE_COLLISION'
 )
 
 function Set-BoundaryAcl([string]$Path, [string]$ObserverSid, [bool]$ObserverModify) {
@@ -33,6 +39,17 @@ function Set-BoundaryAcl([string]$Path, [string]$ObserverSid, [bool]$ObserverMod
   $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
     [Security.Principal.SecurityIdentifier]::new($ObserverSid), $rights,
     'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+  Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function Set-PolicyAcl([string]$Path) {
+  $acl = New-Object Security.AccessControl.FileSecurity
+  $acl.SetAccessRuleProtection($true, $false)
+  $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+  foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+      [Security.Principal.SecurityIdentifier]::new($sid), 'FullControl', 'Allow'))
+  }
   Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
@@ -88,6 +105,83 @@ try {
   if ($links.Count -ne 2) { throw 'R297_NATIVE_HARDLINK_COUNT_INVALID' }
   Remove-Item -LiteralPath $peer -Force
   $results += 'R297_NATIVE_HARDLINK=PASS'
+
+  if (Test-Path -LiteralPath $protectedBase) {
+    throw 'R297_NATIVE_PROTECTED_FIXTURE_COLLISION'
+  }
+  [void](New-Item -ItemType Directory -Path $protectedRoot -Force)
+  $createdProtectedBase = $true
+  Set-BoundaryAcl $protectedBase $observerSid $false
+  Set-BoundaryAcl $protectedRoot $observerSid $false
+  $policy = Join-Path $protectedRoot 'file-policy.json'
+  [IO.File]::WriteAllText(
+    $policy,
+    (@{ schema_version = 1; observer_sid = $observerSid; candidate_sid = (Get-LocalUser -Name $candidateName).SID.Value } | ConvertTo-Json -Compress),
+    [Text.UTF8Encoding]::new($false)
+  )
+  Set-PolicyAcl $policy
+
+  $recoveryRoot = Join-Path $protectedRoot 'outbox'
+  [void](New-Item -ItemType Directory -Path $recoveryRoot)
+  Set-BoundaryAcl $recoveryRoot $observerSid $true
+  $recoveryBody = Join-Path $recoveryRoot 'native-recovery.json'
+  $recoveryPeer = Join-Path $recoveryRoot '.native-recovery.json.0123456789abcdef'
+  [IO.File]::WriteAllText($recoveryBody, '{"native":true}', [Text.UTF8Encoding]::new($false))
+  New-Item -ItemType HardLink -Path $recoveryPeer -Target $recoveryBody | Out-Null
+  $env:R297_NATIVE_RECOVERY_BODY = $recoveryBody
+  $recoveryScript = @'
+import os
+from pathlib import Path
+from ops.r297_windows_file_security import recover_bound_file
+
+path = Path(os.environ["R297_NATIVE_RECOVERY_BODY"])
+expected = path.read_bytes()
+
+def validate(value):
+    if value != expected:
+        raise RuntimeError("native recovery bytes changed")
+
+if recover_bound_file(path, validate=validate) != expected:
+    raise RuntimeError("native recovery returned different bytes")
+if path.with_name(".native-recovery.json.0123456789abcdef").exists():
+    raise RuntimeError("native recovery left the temporary hardlink")
+'@
+  python -c $recoveryScript
+  if ($LASTEXITCODE -ne 0) { throw 'R297_NATIVE_PROTECTED_RECOVERY_FAILED' }
+  $results += 'R297_NATIVE_PROTECTED_RECOVERY=PASS'
+
+  $unsafe = Join-Path $recoveryRoot 'unsafe'
+  [void](New-Item -ItemType Directory -Path $unsafe)
+  Set-BoundaryAcl $unsafe $observerSid $true
+  $unsafeAcl = Get-Acl -LiteralPath $unsafe
+  $unsafeAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+    [Security.Principal.SecurityIdentifier]::new((Get-LocalUser -Name $candidateName).SID.Value),
+    'Modify', 'Allow'))
+  Set-Acl -LiteralPath $unsafe -AclObject $unsafeAcl
+  $unsafeBody = Join-Path $unsafe 'unsafe.json'
+  $unsafePeer = Join-Path $unsafe '.unsafe.json.0123456789abcdef'
+  [IO.File]::WriteAllText($unsafeBody, '{"native":false}', [Text.UTF8Encoding]::new($false))
+  New-Item -ItemType HardLink -Path $unsafePeer -Target $unsafeBody | Out-Null
+  $env:R297_NATIVE_UNSAFE_BODY = $unsafeBody
+  $unsafeScript = @'
+import os
+from pathlib import Path
+from ops.r297_windows_file_security import recover_bound_file
+
+path = Path(os.environ["R297_NATIVE_UNSAFE_BODY"])
+try:
+    recover_bound_file(path, validate=lambda value: None)
+except RuntimeError as error:
+    if str(error) != "R297_WINDOWS_UNAUTHORIZED_WRITE_ACE":
+        raise
+else:
+    raise RuntimeError("unsafe recovery accepted")
+if not path.with_name(".unsafe.json.0123456789abcdef").exists():
+    raise RuntimeError("unsafe recovery removed the temporary hardlink")
+'@
+  python -c $unsafeScript
+  if ($LASTEXITCODE -ne 0) { throw 'R297_NATIVE_UNSAFE_RECOVERY_ACCEPTED' }
+  $results += 'R297_NATIVE_UNSAFE_RECOVERY_REJECTED=PASS'
 } catch {
   $errorCode = [string]$_.Exception.Message
   $primaryErrorCode = if ($knownErrorCodes -contains $errorCode) {
@@ -98,9 +192,12 @@ try {
 } finally {
   try {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    if ($createdProtectedBase) {
+      Remove-Item -LiteralPath $protectedBase -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Remove-LocalUser -Name $observerName -ErrorAction SilentlyContinue
     Remove-LocalUser -Name $candidateName -ErrorAction SilentlyContinue
-    if ((Test-Path -LiteralPath $root) -or
+    if ((Test-Path -LiteralPath $root) -or ($createdProtectedBase -and (Test-Path -LiteralPath $protectedBase)) -or
         (Get-LocalUser -Name $observerName -ErrorAction SilentlyContinue) -or
         (Get-LocalUser -Name $candidateName -ErrorAction SilentlyContinue)) {
       $cleanupErrorCode = 'R297_NATIVE_FIXTURE_CLEANUP_FAILED'
