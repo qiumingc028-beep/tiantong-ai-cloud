@@ -230,6 +230,10 @@ def test_windows_native_job_runs_windows_only_boundaries_without_protected_envir
     assert "ops/r297_ci_redact.py" in native
     assert "if (Test-Path -LiteralPath $junit)" in native
     assert "if-no-files-found: error" in native
+    job_env, steps = native.split("    steps:", 1)
+    assert "ASSET_STORAGE_ROOT" not in job_env
+    recovery = steps.split("      - name: Run complete Windows recovery regressions", 1)[1]
+    assert "ASSET_STORAGE_ROOT: ${{ runner.temp }}\\r297-assets" in recovery.split("      - name:", 1)[0]
 
 
 def test_native_boundary_probe_uses_real_windows_accounts_acl_handles_and_hardlinks():
