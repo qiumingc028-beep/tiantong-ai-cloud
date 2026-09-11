@@ -444,24 +444,25 @@ def test_partition_cleanup_terminates_and_reaps_its_process_group(tmp_path):
     script = (
         "import pathlib,signal,subprocess,sys,time;"
         "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
-        "child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)']);"
+        "child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)'],start_new_session=True);"
         f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid));"
         "time.sleep(60)"
     )
-    process = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
+    records = []
+    record = gate._start_managed_process(
+        "partition", [sys.executable, "-c", script], dict(os.environ), records,
+    )
+    process = record["process"]
     try:
         deadline = time.monotonic() + 5
         while not child_pid.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
         descendant = int(child_pid.read_text())
-        records = [{
-            "name": "partition", "process": process, "pid": process.pid,
-            "pgid": os.getpgid(process.pid), "owns_group": True,
-            "process_identity": gate._process_identity(process.pid),
-        }]
+        assert os.getpgid(descendant) != record["pgid"]
         gate._terminate_processes(records, grace_seconds=0.05)
         assert process.returncode == -signal.SIGKILL
         assert descendant != process.pid
+        assert gate._process_identity(descendant) is None
         assert not gate._group_alive(records[0]["pgid"])
     finally:
         if process.poll() is None:
@@ -1153,8 +1154,19 @@ def test_timeout_does_not_replace_an_earlier_stage_failure():
         {"name": "main", "process": Process(1), "started_at": started},
         {"name": "ownership", "process": Process(None), "started_at": started},
     ]
-    with pytest.raises(gate._SupervisorFailure, match="PYTEST_MAIN_FAILED"):
+    with pytest.raises(gate._SupervisorFailure, match="PYTEST_MAIN_FAILED") as caught:
         gate._wait_managed(records, {"main": 0.01, "ownership": 0.01})
+    assert caught.value.terminal_error == "PYTEST_OWNERSHIP_TIMEOUT"
+
+
+def test_live_child_identity_read_failure_is_not_skipped(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setattr(gate, "_linux_child_pids", lambda _parent: {123})
+    monkeypatch.setattr(gate, "_process_parent_identity", lambda _pid: None)
+    monkeypatch.setattr(gate.time, "sleep", lambda _seconds: None)
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
+        gate._direct_child_identities(os.getpid())
 
 
 @pytest.mark.skipif(os.name == "nt", reason="CI partition supervisor runs on ubuntu")
@@ -1262,6 +1274,22 @@ def test_reaped_process_group_is_not_targeted_twice(monkeypatch):
     assert process.waits == 0 and record["reaped"] is True
 
 
+def test_reaped_leader_still_triggers_adopted_child_cleanup(monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    record = {
+        "name": "main", "pid": 1, "pgid": 1, "reaped": True,
+        "subreaper": True, "subreaper_baseline": {},
+    }
+    calls = []
+    monkeypatch.setattr(
+        gate, "_terminate_adopted_children",
+        lambda records, grace_seconds: calls.append((records, grace_seconds)),
+    )
+    gate._terminate_processes([record], grace_seconds=0.25)
+    assert calls == [([record], 0.25)]
+
+
 def test_partition_failure_survives_process_reap_failure(tmp_path, monkeypatch):
     from ops import ci_pytest_gate as gate
 
@@ -1302,6 +1330,69 @@ def test_partition_failure_survives_process_reap_failure(tmp_path, monkeypatch):
     receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
     assert receipt["primary_error"] == "PYTEST_MAIN_FAILED"
     assert receipt["cleanup_error"] == "PYTEST_PROCESS_REAP_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("cancel_cleanup_call", "exit_codes", "expected_primary"),
+    [
+        (1, [0, 0], "PYTEST_SUPERVISOR_CANCELLED"),
+        (2, [1, 0, 0], "PYTEST_MAIN_FAILED"),
+    ],
+)
+def test_cleanup_phase_cancellation_is_recorded_after_safe_cleanup(
+    tmp_path, monkeypatch, cancel_cleanup_call, exit_codes, expected_primary,
+):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("RELEASE_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "x" * 64)
+    started = []
+
+    class Process:
+        def __init__(self, returncode):
+            self.pid = 53000 + len(started)
+            self.returncode = returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    def popen(command, **_kwargs):
+        if "--aggregate" in command:
+            output = Path(command[command.index("--aggregate") + 1])
+        else:
+            output = Path(command[-1])
+        output.mkdir(parents=True, exist_ok=True)
+        process = Process(exit_codes[len(started)])
+        started.append(process)
+        return process
+
+    def observe(record):
+        record["exit_code"] = record["process"].returncode
+        return record["exit_code"]
+
+    cleanup_calls = 0
+
+    def cancel_during_cleanup(*_args, **_kwargs):
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        if cleanup_calls == cancel_cleanup_call:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    monkeypatch.setattr(gate, "_process_identity", lambda pid: str(pid))
+    monkeypatch.setattr(gate, "_observe_process_exit", observe)
+    monkeypatch.setattr(gate, "_terminate_processes", cancel_during_cleanup)
+    outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
+    monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])
+
+    assert gate.main() == 128 + signal.SIGTERM
+    receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
+    assert receipt["primary_error"] == expected_primary
+    assert receipt["terminal_error"] == "PYTEST_SUPERVISOR_CANCELLED"
+    assert receipt["cleanup_error"] is None
+    assert receipt["supervision_complete"] is False
 
 
 def test_identity_scan_rejects_uppercase_hex(tmp_path, monkeypatch):
