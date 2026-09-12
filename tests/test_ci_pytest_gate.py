@@ -1476,6 +1476,31 @@ def test_managed_descendant_tracking_has_a_fixed_node_budget(monkeypatch):
         gate._remember_managed_descendants([record], deadline=1)
 
 
+def test_managed_descendant_tracking_rejects_reused_parent_before_proving_children(
+    monkeypatch,
+):
+    from ops import ci_pytest_gate as gate
+
+    record = {
+        "name": "main", "pid": 10, "process_identity": "leader",
+        "managed_descendants": {},
+    }
+    parent_identities = iter(["leader", "reused"])
+    monkeypatch.setattr(
+        gate, "_process_parent_identity", lambda _pid: (os.getpid(), "leader"),
+    )
+    monkeypatch.setattr(gate, "_process_identity", lambda _pid: next(parent_identities))
+    monkeypatch.setattr(
+        gate, "_direct_child_identities",
+        lambda _pid, **_kwargs: {99: "unrelated"},
+    )
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 0)
+
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
+        gate._remember_managed_descendants([record], deadline=1)
+    assert record["managed_descendants"] == {}
+
+
 def test_direct_child_snapshot_rejects_wide_fanout_before_identity_reads(monkeypatch):
     from ops import ci_pytest_gate as gate
 
@@ -1606,6 +1631,67 @@ def test_cleanup_phase_cancellation_is_recorded_after_safe_cleanup(
     assert process_state["phase"] == "cancelled"
     for item in process_state["processes"]:
         assert item["exit_code"] == receipt["stage_exit_codes"][item["name"]]
+
+
+def test_cancellation_after_supervision_completes_resets_receipt_state(tmp_path, monkeypatch):
+    from ops import ci_pytest_gate as gate
+
+    monkeypatch.setenv("RELEASE_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("CI_PYTEST_IDENTITY_KEY", "x" * 64)
+    started = []
+
+    class Process:
+        def __init__(self):
+            self.pid = 56000 + len(started)
+
+    def popen(command, **_kwargs):
+        output = (
+            Path(command[command.index("--aggregate") + 1])
+            if "--aggregate" in command else Path(command[-1])
+        )
+        output.mkdir(parents=True, exist_ok=True)
+        process = Process()
+        started.append(process)
+        return process
+
+    def wait_managed(records, _timeouts):
+        for record in records:
+            record["exit_code"] = 0
+        return [0] * len(records)
+
+    def cancel_at_window(frame, event, _arg):
+        if (event == "line" and frame.f_code is gate._partitions_main.__code__
+            and frame.f_locals.get("supervision_complete") is True
+            and frame.f_locals.get("phase") != "complete"):
+            raise gate._SignalExit(signal.SIGTERM)
+        return cancel_at_window
+
+    monkeypatch.setattr(gate.subprocess, "Popen", popen)
+    monkeypatch.setattr(gate, "_enable_child_subreaper", lambda: False)
+    monkeypatch.setattr(gate, "_process_identity", lambda pid: str(pid))
+    monkeypatch.setattr(gate, "_wait_managed", wait_managed)
+    monkeypatch.setattr(gate, "_terminate_processes", lambda *_args, **_kwargs: None)
+    outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
+    monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])
+
+    sys.settrace(cancel_at_window)
+    try:
+        assert gate.main() == 128 + signal.SIGTERM
+    finally:
+        sys.settrace(None)
+    receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
+    assert receipt["primary_error"] == "PYTEST_SUPERVISOR_CANCELLED"
+    assert receipt["terminal_error"] == "PYTEST_SUPERVISOR_CANCELLED"
+    assert receipt["cleanup_error"] is None
+    assert receipt["supervision_complete"] is False
+    assert receipt["partition_result"] == "BLOCK"
+    assert json.loads((outputs[2] / "processes.json").read_text())["phase"] == "cancelled"
+    gate.validate_publication_outputs(
+        [output.with_name(output.name + "-publish") for output in outputs],
+        head="a" * 40, run_id="123", run_attempt="1",
+    )
 
 
 def test_identity_scan_rejects_uppercase_hex(tmp_path, monkeypatch):

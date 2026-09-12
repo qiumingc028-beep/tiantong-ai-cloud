@@ -604,9 +604,12 @@ def _remember_managed_descendants(records: list[dict], *, deadline: float | None
         remaining = _PROCESS_TREE_MAX_NODES - len(seen) - len(pending)
         if remaining <= 0:
             raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
-        for child_pid, child_identity in _direct_child_identities(
+        children = _direct_child_identities(
             pid, deadline=deadline, max_children=remaining,
-        ).items():
+        )
+        if _process_identity(pid) != identity:
+            raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
+        for child_pid, child_identity in children.items():
             proven[child_pid] = child_identity
             pending.append((child_pid, child_identity))
 
@@ -1322,6 +1325,7 @@ def _partitions_main() -> int:
         result = 128 + exc.signum
         primary_error = primary_error or _recorded_stage_failure(records) or "PYTEST_SUPERVISOR_CANCELLED"
         terminal_error = "PYTEST_SUPERVISOR_CANCELLED"
+        supervision_complete = False
         phase = "cancelled"
     except _CleanupFailure:
         result = 1
