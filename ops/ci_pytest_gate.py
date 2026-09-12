@@ -511,6 +511,8 @@ def _linux_child_pids(
         if max_children is not None and len(children) > max_children:
             raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
         return {int(pid) for pid in children}
+    except FileNotFoundError:
+        return set()
     except (OSError, ValueError) as exc:
         raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN") from exc
 
@@ -611,7 +613,10 @@ def _remember_managed_descendants(records: list[dict], *, deadline: float | None
         children = _direct_child_identities(
             pid, deadline=deadline, max_children=remaining,
         )
-        if _process_identity(pid) != identity:
+        current_identity = _process_identity(pid)
+        if current_identity is None and not children:
+            continue
+        if current_identity != identity:
             raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
         for child_pid, child_identity in children.items():
             proven[child_pid] = child_identity

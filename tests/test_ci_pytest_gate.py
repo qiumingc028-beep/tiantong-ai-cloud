@@ -1516,6 +1516,54 @@ def test_managed_descendant_tracking_rejects_reused_parent_before_proving_childr
     assert record["managed_descendants"] == {}
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="CI partition supervisor runs on ubuntu")
+def test_managed_descendant_normal_exit_after_identity_check_is_not_unproven(
+    tmp_path, monkeypatch,
+):
+    from ops import ci_pytest_gate as gate
+
+    child_pid_path = tmp_path / "child.pid"
+    script = (
+        "import pathlib,subprocess,sys,time;"
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+        f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid));"
+        "child.wait();time.sleep(60)"
+    )
+    records = []
+    record = gate._start_managed_process(
+        "main", [sys.executable, "-c", script], dict(os.environ), records,
+    )
+    original_identity = gate._process_identity
+    try:
+        deadline = time.monotonic() + 5
+        while not child_pid_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        child_pid = int(child_pid_path.read_text())
+        child_identity = original_identity(child_pid)
+        assert child_identity is not None
+        record["managed_descendants"][child_pid] = child_identity
+        triggered = []
+
+        def exit_after_identity_check(pid):
+            value = original_identity(pid)
+            if pid == child_pid and value == child_identity and not triggered:
+                triggered.append(pid)
+                os.kill(pid, signal.SIGTERM)
+                gone_by = time.monotonic() + 2
+                while original_identity(pid) is not None and time.monotonic() < gone_by:
+                    time.sleep(0.001)
+            return value
+
+        with monkeypatch.context() as context:
+            context.setattr(gate, "_process_identity", exit_after_identity_check)
+            gate._remember_managed_descendants(
+                records, deadline=time.monotonic() + 2,
+            )
+        assert triggered == [child_pid]
+    finally:
+        gate._terminate_processes(records, grace_seconds=0.1)
+
+
 def test_direct_child_snapshot_rejects_wide_fanout_before_identity_reads(monkeypatch):
     from ops import ci_pytest_gate as gate
 
