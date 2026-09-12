@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from backend.security.tian_shen.audit import read_audit_records
+from backend.security.tian_shen.audit import HISTORY_WINDOW, matches_audit_event, read_audit_records
 
 
 def predict_risk(
@@ -16,7 +16,7 @@ def predict_risk(
     route_payload = route if isinstance(route, dict) else {}
     policy_data = policy if isinstance(policy, dict) else {}
     text = event_text(event, route_payload)
-    records = audit_records if audit_records is not None else read_audit_records(limit=200)
+    records = audit_records if audit_records is not None else read_audit_records(limit=HISTORY_WINDOW, event=event)
 
     red_keywords = [str(keyword).lower() for keyword in (policy_data.get("red") or {}).get("keywords", [])]
     yellow_keywords = [str(keyword).lower() for keyword in (policy_data.get("yellow") or {}).get("keywords", [])]
@@ -58,14 +58,8 @@ def predict_risk(
 
 
 def count_historical_blocks(event: dict[str, Any], records: list[dict[str, Any]]) -> int:
-    payload = event.get("payload")
-    command = event.get("command")
-    if not command and isinstance(payload, dict):
-        command = payload.get("command")
-    if not command:
-        command = event.get("action") or ""
-    source = str(event.get("source") or "unknown")
-    return sum(1 for row in records if row.get("source") == source and row.get("command") == command and not row.get("allowed"))
+    matching = [row for row in records if matches_audit_event(row, event)]
+    return sum(row.get("allowed") is False for row in matching[-HISTORY_WINDOW:])
 
 
 def event_text(event: dict[str, Any], route: dict[str, Any]) -> str:

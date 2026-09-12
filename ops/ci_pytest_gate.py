@@ -435,6 +435,8 @@ def _partition_environments(cache_root: Path) -> tuple[dict, dict, dict]:
                      CI_PYTEST_MINIMUM="500", CI_PYTEST_CACHE_DIR=str(cache_root / "ownership"))
     ownership.pop("CI_PYTEST_IGNORE", None)
     aggregate = dict(base, CI_PYTEST_CACHE_DIR=str(cache_root / "aggregate"))
+    for name, environment in (("main", main), ("ownership", ownership), ("aggregate", aggregate)):
+        environment["TIAN_SHEN_AUDIT_LOG"] = str(cache_root / name / "tian-shen-audit.jsonl")
     for name in ("CI_PYTEST_TARGET", "CI_PYTEST_IGNORE", "CI_PYTEST_MINIMUM"):
         aggregate.pop(name, None)
     return main, ownership, aggregate

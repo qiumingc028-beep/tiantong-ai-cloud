@@ -512,6 +512,9 @@ def test_partition_environments_isolate_databases_redis_caches_and_outputs(tmp_p
     caches = {main["CI_PYTEST_CACHE_DIR"], ownership["CI_PYTEST_CACHE_DIR"], aggregate["CI_PYTEST_CACHE_DIR"]}
     assert len(caches) == 3
     assert all(Path(path).parent == tmp_path for path in caches)
+    audit_paths = [Path(env["TIAN_SHEN_AUDIT_LOG"]) for env in (main, ownership, aggregate)]
+    assert len(set(audit_paths)) == 3
+    assert audit_paths == [tmp_path / name / "tian-shen-audit.jsonl" for name in ("main", "ownership", "aggregate")]
 
 
 @pytest.mark.parametrize("encoding", ["raw", "base64", "hex", "mixed_hex"])
