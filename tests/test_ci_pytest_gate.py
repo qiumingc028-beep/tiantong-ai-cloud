@@ -1676,11 +1676,12 @@ def test_cancellation_after_supervision_completes_resets_receipt_state(tmp_path,
     outputs = [tmp_path / name for name in ("main", "ownership", "aggregate")]
     monkeypatch.setattr(gate.sys, "argv", ["gate", "--partitions", *map(str, outputs)])
 
+    previous_trace = sys.gettrace()
     sys.settrace(cancel_at_window)
     try:
         assert gate.main() == 128 + signal.SIGTERM
     finally:
-        sys.settrace(None)
+        sys.settrace(previous_trace)
     receipt = json.loads((tmp_path / "aggregate-publish" / "publication.json").read_text())
     assert receipt["primary_error"] == "PYTEST_SUPERVISOR_CANCELLED"
     assert receipt["terminal_error"] == "PYTEST_SUPERVISOR_CANCELLED"
