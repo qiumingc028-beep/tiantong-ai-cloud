@@ -69,6 +69,10 @@ rollback_unit_switch() {
     local rollback_failed=0
     set +e
     for service in "${services[@]}"; do
+      systemctl stop "$service" >/dev/null 2>&1 || true
+      systemctl is-active --quiet "$service" && rollback_failed=1
+    done
+    for service in "${services[@]}"; do
       if [[ ${had_unit[$service]} == 1 ]]; then
         install -o root -g root -m 0644 "$unit_backup/$service" "/etc/systemd/system/$service" || rollback_failed=1
         cmp -s "$unit_backup/$service" "/etc/systemd/system/$service" || rollback_failed=1

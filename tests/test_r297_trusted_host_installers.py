@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,7 @@ def test_windows_producer_permissions_reach_children_with_inheritance_disabled()
         assert f'& icacls ${path} /grant "$TrustedObserverAccount`:(OI)(CI){rights}" /T /C' in WINDOWS
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX import closure requires fcntl")
 def test_linux_fixed_sha_install_has_complete_import_closure(tmp_path):
     import re
     import shutil
@@ -76,6 +80,8 @@ def test_linux_upgrade_stages_all_units_and_rolls_back_failed_switch():
     assert "R297_BROKER_LEDGER_PAIR_INCOMPLETE" in LINUX
     assert "runs_present != $nonces_present" in LINUX
     assert "sha256sum" in LINUX
+    rollback = LINUX.split("rollback_unit_switch()", 1)[1].split("trap rollback_unit_switch EXIT", 1)[0]
+    assert rollback.index('systemctl stop "$service"') < rollback.index('if [[ ${had_unit[$service]} == 1 ]]')
 
 
 def test_windows_installer_separates_candidate_from_fixed_observer():
