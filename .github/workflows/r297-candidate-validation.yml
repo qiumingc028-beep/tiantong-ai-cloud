@@ -41,7 +41,6 @@ jobs:
       V2_ALPHA_POSTGRES_ADMIN_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
       STORE_AUTHZ_POSTGRES_URL: postgresql+psycopg2://ci:ci@127.0.0.1:5432/postgres
       REDIS_URL: redis://127.0.0.1:6379/0
-      CI_PYTEST_COLLECTION_MANIFEST: /tmp/r297-postgres/collected-nodeids.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,12 +62,26 @@ jobs:
           PGPASSWORD: ci
         run: bash ops/r297_database_restore_contract_test.sh
       - name: Run complete selected contracts against PostgreSQL 16
+        id: postgres_tests
         timeout-minutes: 25
         run: |
+          set +x
+          trap 'unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
           test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA"
-          mkdir -p /tmp/r297-postgres
+          if ! CI_PYTEST_IDENTITY_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))' 2>/dev/null)" || [[ ${#CI_PYTEST_IDENTITY_KEY} -lt 64 ]]; then
+            echo "CI_PYTEST_IDENTITY_KEY_MISSING"
+            exit 1
+          fi
+          echo "::add-mask::$CI_PYTEST_IDENTITY_KEY"
+          export CI_PYTEST_IDENTITY_KEY
+          export R297_REDACT_EXACT_ENV_NAMES=CI_PYTEST_IDENTITY_KEY
+          work="$(mktemp -d /tmp/r297-postgres-work.XXXXXX)"
+          export CI_PYTEST_COLLECTION_MANIFEST="$work/collected-nodeids.json"
+          set +e
           python -m pytest -q --tb=short --show-capture=no \
-            -p ops.ci_pytest_gate --junitxml=/tmp/r297-postgres/junit.xml \
+            -p ops.ci_pytest_gate --junitxml="$work/junit.xml" \
             tests/test_r297_acceptance_status.py \
             tests/test_r297_owner_audit_saga_contract.py \
             tests/test_r297_owner_operation_causality.py \
@@ -84,20 +97,63 @@ jobs:
             tests/test_r297_jd_collector_business_idempotency.py \
             tests/test_r297_reliable_queue_postgresql.py \
             tests/test_r297_jd_workbench_hash_uniqueness_migration.py \
-            tests/test_r297_jd_business_uniqueness_migration.py
-          python - <<'PY'
+            tests/test_r297_jd_business_uniqueness_migration.py >"$work/pytest.log" 2>&1
+          result=$?
+          set -e
+          # Only normal pytest completion may publish; cancellation/internal errors stay private.
+          if [[ "$result" != 0 && "$result" != 1 ]]; then
+            echo "POSTGRES_TEST_EXECUTION_INCOMPLETE"
+            exit "$result"
+          fi
+          publish="$(mktemp -d /tmp/r297-postgres-publish.XXXXXX)"
+          set +e
+          python - "$work" "$publish" <<'PY'
+          import sys
           from pathlib import Path
-          from ops.ci_pytest_gate import validate_report
-          result = validate_report(Path('/tmp/r297-postgres/junit.xml'),
-                                   Path('/tmp/r297-postgres/collected-nodeids.json'), minimum=1)
-          print('POSTGRES_TARGETED_CONTRACTS=' + str(result))
-          print('RELEASE_APPROVAL=NOT_GRANTED')
+          from ops.ci_pytest_gate import _scan_identity_key, _stable_file_bytes, validate_report
+          from ops.r297_ci_redact import redact
+          try:
+              work, publish = map(Path, sys.argv[1:])
+              names = {'junit.xml', 'pytest.log', 'collected-nodeids.json', 'collected-nodeids.display.json'}
+              if {p.name for p in work.iterdir()} != names or any(publish.iterdir()):
+                  raise ValueError('unexpected file set')
+              for name in names:
+                  # No symlink reads, and no raw content enters the upload directory.
+                  _stable_file_bytes(work / name)
+                  redact(work / name)
+              _scan_identity_key([work])
+              validation_exit = 0
+              try:
+                  validate_report(work / 'junit.xml', work / 'collected-nodeids.json', minimum=1)
+              except ValueError as exc:
+                  if str(exc) != 'PYTEST_NOT_ALL_PASS':
+                      raise
+                  # Distinct from Python's default startup/import failure code 1.
+                  validation_exit = 10
+              for name in names:
+                  (publish / name).write_bytes(_stable_file_bytes(work / name))
+              _scan_identity_key([publish])
+          except BaseException:
+              print('POSTGRES_REPORT_PUBLICATION_FAILED')
+              raise SystemExit(2) from None
+          raise SystemExit(validation_exit)
           PY
+          validation_result=$?
+          set -e
+          if [[ "$validation_result" != 0 && "$validation_result" != 10 ]]; then
+            exit 1
+          fi
+          if [[ "$validation_result" == 10 ]]; then result=1; fi
+          unset CI_PYTEST_IDENTITY_KEY R297_REDACT_EXACT_ENV_NAMES
+          echo "publish_path=$publish" >> "$GITHUB_OUTPUT"
+          echo "publication_ready=true" >> "$GITHUB_OUTPUT"
+          echo 'RELEASE_APPROVAL=NOT_GRANTED'
+          exit "$result"
       - name: Upload actual database test results
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.postgres_tests.outputs.publication_ready == 'true' && steps.postgres_tests.outputs.publish_path != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: r297-postgres-${{ env.RELEASE_SOURCE_SHA }}
-          path: /tmp/r297-postgres/
+          name: r297-postgres-${{ env.RELEASE_SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.postgres_tests.outputs.publish_path }}
           if-no-files-found: error
           retention-days: 14
