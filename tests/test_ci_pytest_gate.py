@@ -1564,6 +1564,133 @@ def test_managed_descendant_normal_exit_after_identity_check_is_not_unproven(
         gate._terminate_processes(records, grace_seconds=0.1)
 
 
+@pytest.mark.parametrize("post_identity", ["original", "reused"])
+def test_children_enoent_with_live_identity_is_rejected(monkeypatch, post_identity):
+    from ops import ci_pytest_gate as gate
+
+    record = {"pid": 10, "process_identity": "leader",
+              "managed_descendants": {20: "original"}}
+    identities = iter(["original", post_identity])
+    monkeypatch.setattr(gate, "_process_parent_identity", lambda _pid: None)
+    monkeypatch.setattr(gate, "_process_identity", lambda _pid: next(identities))
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 0)
+
+    def missing_children(_path, **_kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(Path, "read_text", missing_children)
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
+        gate._remember_managed_descendants([record], deadline=1)
+    assert record["managed_descendants"] == {20: "original"}
+
+
+@pytest.mark.parametrize("entry", ["baseline", "adopted_cleanup"])
+def test_children_enoent_never_completes_baseline_or_adopted_cleanup(monkeypatch, entry):
+    from ops import ci_pytest_gate as gate
+
+    signals = []
+    monkeypatch.setattr(gate.os, "kill", lambda *args: signals.append(args))
+    monkeypatch.setattr(gate.os, "killpg", lambda *args: signals.append(args))
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 0)
+
+    def missing_children(_path, **_kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(Path, "read_text", missing_children)
+    record = {"pid": 10, "process_identity": "leader", "managed_descendants": {}}
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
+        if entry == "baseline":
+            gate._direct_child_identities(os.getpid(), deadline=1)
+        else:
+            gate._terminate_adopted_children([record], grace_seconds=0)
+    assert signals == []
+    assert record["managed_descendants"] == {}
+
+
+@pytest.mark.parametrize("late_at", ["read", "identity", None])
+def test_children_enoent_tolerance_obeys_deadline(monkeypatch, late_at):
+    from ops import ci_pytest_gate as gate
+
+    record = {"pid": 10, "process_identity": "leader",
+              "managed_descendants": {20: "original"}}
+    clock = [0]
+    identities = iter(["original", None])
+
+    def identity(_pid):
+        value = next(identities)
+        if value is None and late_at == "identity":
+            clock[0] = 2
+        return value
+
+    def missing_children(_path, **_kwargs):
+        if late_at == "read":
+            clock[0] = 2
+        raise FileNotFoundError
+
+    monkeypatch.setattr(gate, "_process_parent_identity", lambda _pid: None)
+    monkeypatch.setattr(gate, "_process_identity", identity)
+    monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(Path, "read_text", missing_children)
+    if late_at is None:
+        gate._remember_managed_descendants([record], deadline=1)
+    else:
+        with pytest.raises(gate._ProcessTreeScanLimit):
+            gate._remember_managed_descendants([record], deadline=1)
+    assert record["managed_descendants"] == {20: "original"}
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
+def test_children_read_exception_after_deadline_is_scan_limit(monkeypatch, error):
+    from ops import ci_pytest_gate as gate
+
+    def unavailable(_path, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(Path, "read_text", unavailable)
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 2)
+    with pytest.raises(gate._ProcessTreeScanLimit):
+        gate._linux_child_pids(20, deadline=1)
+
+
+@pytest.mark.parametrize("case", ["unproven_leader", "unreadable_identity", "partial_snapshot"])
+def test_children_enoent_never_discards_unproven_state(monkeypatch, case):
+    from ops import ci_pytest_gate as gate
+
+    descendants = {} if case == "unproven_leader" else {20: "original"}
+    record = {"pid": 20, "process_identity": "original", "managed_descendants": descendants}
+    original = descendants.copy()
+    identities = iter(["original", None])
+    monkeypatch.setattr(gate, "_process_identity", lambda _pid: next(identities))
+    monkeypatch.setattr(gate.time, "monotonic", lambda: 0)
+    reads = []
+
+    def proc_read(path, **_kwargs):
+        name = str(path)
+        reads.append(name)
+        if name == "/proc/20/stat":
+            if reads.count(name) > 1:
+                if case == "unreadable_identity":
+                    raise PermissionError
+                raise FileNotFoundError
+            return "20 (parent) S " + str(os.getpid()) + " " + "0 " * 17 + "original"
+        if name == "/proc/20/task/20/children":
+            if case == "partial_snapshot" and reads.count(name) == 1:
+                return "1 2"
+            raise FileNotFoundError
+        if name == "/proc/1/stat":
+            return "1 (child) S 20 " + "0 " * 17 + "child-start"
+        raise FileNotFoundError
+
+    signals = []
+    monkeypatch.setattr(Path, "read_text", proc_read)
+    monkeypatch.setattr(gate.os, "kill", lambda *args: signals.append(args))
+    monkeypatch.setattr(gate.os, "killpg", lambda *args: signals.append(args))
+    with pytest.raises(RuntimeError, match="PYTEST_PROCESS_OWNERSHIP_UNPROVEN"):
+        gate._remember_managed_descendants([record], deadline=1)
+    assert descendants == original
+    assert signals == []
+
+
 def test_direct_child_snapshot_rejects_wide_fanout_before_identity_reads(monkeypatch):
     from ops import ci_pytest_gate as gate
 

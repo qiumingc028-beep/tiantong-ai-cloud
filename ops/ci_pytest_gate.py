@@ -500,6 +500,10 @@ class _ProcessTreeScanLimit(RuntimeError):
     pass
 
 
+class _ProcessTreeInitialReadMissing(RuntimeError):
+    pass
+
+
 def _linux_child_pids(
     parent_pid: int, *, deadline: float | None = None, max_children: int | None = None,
 ) -> set[int]:
@@ -511,9 +515,9 @@ def _linux_child_pids(
         if max_children is not None and len(children) > max_children:
             raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
         return {int(pid) for pid in children}
-    except FileNotFoundError:
-        return set()
     except (OSError, ValueError) as exc:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN") from exc
         raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN") from exc
 
 
@@ -535,9 +539,16 @@ def _direct_child_identities(
     parent_pid: int, *, deadline: float | None = None, max_children: int | None = None,
 ) -> dict[int, str]:
     children = {}
-    child_pids = _linux_child_pids(
-        parent_pid, deadline=deadline, max_children=max_children,
-    )
+    try:
+        child_pids = _linux_child_pids(
+            parent_pid, deadline=deadline, max_children=max_children,
+        )
+    except _ProcessTreeScanLimit:
+        raise
+    except RuntimeError as exc:
+        if isinstance(exc.__cause__, FileNotFoundError):
+            raise _ProcessTreeInitialReadMissing("PYTEST_PROCESS_OWNERSHIP_UNPROVEN") from exc
+        raise
     for pid in child_pids:
         if deadline is not None and time.monotonic() >= deadline:
             raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
@@ -610,11 +621,24 @@ def _remember_managed_descendants(records: list[dict], *, deadline: float | None
         remaining = _PROCESS_TREE_MAX_NODES - len(seen) - len(pending)
         if remaining <= 0:
             raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
-        children = _direct_child_identities(
-            pid, deadline=deadline, max_children=remaining,
-        )
+        try:
+            children = _direct_child_identities(
+                pid, deadline=deadline, max_children=remaining,
+            )
+        except _ProcessTreeInitialReadMissing:
+            if time.monotonic() >= deadline:
+                raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN") from None
+            if (proven.get(pid) == identity and _process_identity(pid) is None
+                    and _process_parent_identity(pid) is None):
+                if time.monotonic() >= deadline:
+                    raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN") from None
+                continue
+            raise
         current_identity = _process_identity(pid)
-        if current_identity is None and not children:
+        if (current_identity is None and not children and proven.get(pid) == identity
+                and _process_parent_identity(pid) is None):
+            if time.monotonic() >= deadline:
+                raise _ProcessTreeScanLimit("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
             continue
         if current_identity != identity:
             raise RuntimeError("PYTEST_PROCESS_OWNERSHIP_UNPROVEN")
