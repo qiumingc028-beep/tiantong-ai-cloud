@@ -79,8 +79,14 @@ jobs:
           export R297_REDACT_EXACT_ENV_NAMES=CI_PYTEST_IDENTITY_KEY
           work="$(mktemp -d /tmp/r297-postgres-work.XXXXXX)"
           export CI_PYTEST_COLLECTION_MANIFEST="$work/collected-nodeids.json"
+          isolate=()
+          if [[ "$EUID" != 0 ]]; then
+            isolate=(sudo -n --preserve-env=APP_ENV,RELEASE_SOURCE_SHA,V2_ALPHA_POSTGRES_ADMIN_URL,STORE_AUTHZ_POSTGRES_URL,REDIS_URL,CI_PYTEST_IDENTITY_KEY,R297_REDACT_EXACT_ENV_NAMES,CI_PYTEST_COLLECTION_MANIFEST,GITHUB_ACTIONS,PYTHONPATH,PYTHONDONTWRITEBYTECODE,PYTEST_DISABLE_PLUGIN_AUTOLOAD)
+          fi
           set +e
-          python -m pytest -q --tb=short --show-capture=no \
+          env -u GITHUB_OUTPUT -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_STEP_SUMMARY \
+            "${isolate[@]}" "$(command -v python)" ops/r297_candidate_pytest.py "$work" \
+            -m pytest -q --tb=short --show-capture=no \
             -p ops.ci_pytest_gate --junitxml="$work/junit.xml" \
             tests/test_r297_acceptance_status.py \
             tests/test_r297_owner_audit_saga_contract.py \
@@ -107,32 +113,66 @@ jobs:
           fi
           publish="$(mktemp -d /tmp/r297-postgres-publish.XXXXXX)"
           set +e
-          python - "$work" "$publish" <<'PY'
+          env -u GITHUB_OUTPUT -u GITHUB_ENV -u GITHUB_PATH -u GITHUB_STEP_SUMMARY \
+            python - "$work" "$publish" <<'PY'
           import sys
+          import os
+          from contextlib import ExitStack
+          from io import BytesIO
           from pathlib import Path
-          from ops.ci_pytest_gate import _scan_identity_key, _stable_file_bytes, validate_report
-          from ops.r297_ci_redact import redact
+          from ops.ci_pytest_gate import (
+              _contains_identity_key, _stable_file_bytes, validate_report,
+              _open_owned_directory, _close_owned_directory, _write_owned_file, _path_identity,
+          )
+          from ops.r297_ci_redact import redact_content
           try:
               work, publish = map(Path, sys.argv[1:])
               names = {'junit.xml', 'pytest.log', 'collected-nodeids.json', 'collected-nodeids.display.json'}
-              if {p.name for p in work.iterdir()} != names or any(publish.iterdir()):
-                  raise ValueError('unexpected file set')
-              for name in names:
-                  # No symlink reads, and no raw content enters the upload directory.
-                  _stable_file_bytes(work / name)
-                  redact(work / name)
-              _scan_identity_key([work])
-              validation_exit = 0
-              try:
-                  validate_report(work / 'junit.xml', work / 'collected-nodeids.json', minimum=1)
-              except ValueError as exc:
-                  if str(exc) != 'PYTEST_NOT_ALL_PASS':
-                      raise
-                  # Distinct from Python's default startup/import failure code 1.
-                  validation_exit = 10
-              for name in names:
-                  (publish / name).write_bytes(_stable_file_bytes(work / name))
-              _scan_identity_key([publish])
+              with ExitStack() as handles:
+                  source = _open_owned_directory(work)
+                  handles.callback(_close_owned_directory, source)
+                  target = _open_owned_directory(publish)
+                  handles.callback(_close_owned_directory, target)
+                  if set(os.listdir(source['fd'])) != names or os.listdir(target['fd']):
+                      raise ValueError('unexpected file set')
+                  # Pin the source directory; each file is opened once with O_NOFOLLOW.
+                  snapshot = {name: _stable_file_bytes(Path(f"/proc/self/fd/{source['fd']}/{name}"))
+                              for name in sorted(names)}
+                  safe = {name: redact_content(payload.decode('utf-8', errors='replace')).encode('utf-8')
+                          for name, payload in snapshot.items()}
+                  if any(_contains_identity_key(payload) for payload in safe.values()):
+                      raise ValueError('identity contamination')
+
+                  class ManifestSnapshot:
+                      # Adapt immutable bytes to the existing validator's read_text interface.
+                      def read_text(self, **kwargs):
+                          return safe['collected-nodeids.json'].decode('utf-8')
+
+                  validation_exit = 0
+                  try:
+                      validate_report(BytesIO(safe['junit.xml']), ManifestSnapshot(), minimum=1)
+                  except ValueError as exc:
+                      if str(exc) != 'PYTEST_NOT_ALL_PASS':
+                          raise
+                      # Distinct from Python's default startup/import failure code 1.
+                      validation_exit = 10
+                  for name, payload in safe.items():
+                      _write_owned_file(target, name, payload)
+                  # The publication must still be the files and exact bytes just checked.
+                  if (_path_identity(publish) != target['identity']
+                          or set(os.listdir(target['fd'])) != names):
+                      raise ValueError('publication directory changed')
+                  for name, payload in safe.items():
+                      item = os.stat(name, dir_fd=target['fd'], follow_symlinks=False)
+                      if ((item.st_dev, item.st_ino, item.st_mode) != target['files'][name]
+                              or _stable_file_bytes(Path(f"/proc/self/fd/{target['fd']}/{name}")) != payload):
+                          raise ValueError('publication content changed')
+                      after = os.stat(name, dir_fd=target['fd'], follow_symlinks=False)
+                      stamp = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+                      if stamp(after) != stamp(item):
+                          raise ValueError('publication identity changed')
+                  if _path_identity(publish) != target['identity']:
+                      raise ValueError('publication directory changed')
           except BaseException:
               print('POSTGRES_REPORT_PUBLICATION_FAILED')
               raise SystemExit(2) from None

@@ -81,13 +81,12 @@ def _redact_text(value: str) -> str:
     return value
 
 
-def redact(path: Path) -> None:
-    value = path.read_text(encoding="utf-8", errors="replace")
+def redact_content(value: str) -> str:
+    """Sanitize one captured document without reopening its source path."""
     try:
         root = ET.fromstring(value)
     except ET.ParseError:
-        path.write_text(_redact_text(value), encoding="utf-8")
-        return
+        return _redact_text(value)
 
     for element in root.iter():
         element.attrib.update({key: _redact_text(item) for key, item in element.attrib.items()})
@@ -95,7 +94,11 @@ def redact(path: Path) -> None:
             element.text = _redact_text(element.text)
         if element.tail:
             element.tail = _redact_text(element.tail)
-    ET.ElementTree(root).write(path, encoding="unicode")
+    return ET.tostring(root, encoding="unicode")
+
+
+def redact(path: Path) -> None:
+    path.write_text(redact_content(path.read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
 
 
 def main() -> int:
