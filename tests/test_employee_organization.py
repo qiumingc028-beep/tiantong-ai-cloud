@@ -159,6 +159,39 @@ def test_ceo_dashboard_includes_ai_employee_organization_board(client, owner_hea
     assert board["safety"]["can_auto_change_organization"] is False
 
 
+def test_dashboard_permission_history_uses_authenticated_scope_and_keeps_audits(
+    client, owner_headers, admin_headers, test_db, monkeypatch, tmp_path,
+):
+    from backend.security.tian_shen.audit import read_audit_records
+
+    monkeypatch.setenv("TIAN_SHEN_AUDIT_LOG", str(tmp_path / "dashboard-audit.jsonl"))
+    with test_db() as db:
+        db.add_all(AiEmployee(employee_code=f"pub045_{index}", employee_name=f"PUB045 {index}",
+                             legion="测试军团", duty="只读回归", status="active", is_legacy=False,
+                             sort_order=100 + index) for index in range(2))
+        db.commit()
+    responses = []
+    for headers in (owner_headers, admin_headers, owner_headers):
+        client.cookies.clear()
+        responses.append(client.get("/api/ceo-dashboard/summary", headers=headers))
+    assert all(response.status_code == 200 for response in responses)
+    rows = [response.json()["ai_employee_organization_board"]["organization_permissions"]
+            for response in responses]
+    assert len(rows[0]) == len(rows[1]) == len(rows[2]) == 4
+    histories = [[row["permission_change_gate"]["tian_brain"]["historical_blocks"] for row in items]
+                 for items in rows]
+    # Summary and its nested command dashboard each retain their permission audit.
+    assert histories == [[0, 1, 2, 3], [0, 1, 2, 3], [8, 9, 10, 11]]
+    audits = read_audit_records()
+    assert len(audits) == 24
+    assert all(row["allowed"] is False for row in audits)
+    owner_scope, admin_scope = audits[0]["audit_scope"], audits[8]["audit_scope"]
+    assert owner_scope is not None and admin_scope is not None
+    assert owner_scope["requester_id"] != admin_scope["requester_id"]
+    assert all(row["audit_scope"] == owner_scope for row in audits[:8] + audits[16:])
+    assert all(row["audit_scope"] == admin_scope for row in audits[8:16])
+
+
 def test_employee_organization_center_does_not_write_database(client, owner_headers, test_db):
     seed_organization_employees(test_db)
     db = _owner_db(test_db)

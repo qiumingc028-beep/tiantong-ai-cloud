@@ -7,6 +7,8 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    CheckConstraint,
+    Index,
     Integer,
     Numeric,
     String,
@@ -14,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -99,6 +102,7 @@ class Store(Base):
     __tablename__ = "stores"
     __table_args__ = (
         UniqueConstraint("tenant_id", "store_code", name="uq_stores_tenant_store_code"),
+        UniqueConstraint("tenant_id", "company_id", "id", name="uq_stores_tenant_company_id"),
         ForeignKeyConstraint(
             ["tenant_id", "company_id"],
             ["companies.tenant_id", "companies.id"],
@@ -439,19 +443,55 @@ class JdAccount(Base):
 
 class JdSyncLog(Base):
     __tablename__ = "jd_sync_logs"
+    __table_args__ = (
+        UniqueConstraint("task_id", "attempt", name="uq_jd_sync_logs_task_attempt"),
+        Index(
+            "uq_jd_sync_logs_store_window_task_type",
+            "store_id",
+            "sync_window_started_at",
+            "task_type",
+            unique=True,
+            postgresql_where=text("attempt = 0 AND source = 'cloud_scheduler'"),
+            sqlite_where=text("attempt = 0 AND source = 'cloud_scheduler'"),
+        ),
+        CheckConstraint(
+            "store_id IS NULL OR (tenant_id IS NOT NULL AND company_id IS NOT NULL AND sync_window_started_at IS NOT NULL)",
+            name="ck_jd_sync_logs_store_scope_complete",
+        ),
+        CheckConstraint(
+            "NOT redis_notification_pending OR redis_notification_payload IS NOT NULL",
+            name="ck_jd_sync_logs_notification_payload",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "store_id"],
+            ["stores.tenant_id", "stores.company_id", "stores.id"],
+            name="fk_jd_sync_logs_tenant_company_store",
+            ondelete="SET NULL",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int | None] = mapped_column(Integer)
+    company_id: Mapped[int | None] = mapped_column(Integer)
     store_id: Mapped[int | None] = mapped_column(ForeignKey("stores.id", ondelete="SET NULL"))
     account_id: Mapped[int | None] = mapped_column(ForeignKey("jd_accounts.id", ondelete="SET NULL"))
     task_id: Mapped[str | None] = mapped_column(String(100), index=True)
     task_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source: Mapped[str | None] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     message: Mapped[str | None] = mapped_column(Text)
     attempt: Mapped[int] = mapped_column(Integer, default=0)
+    claim_generation: Mapped[int | None] = mapped_column(Integer)
+    redis_notification_pending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    redis_notification_payload: Mapped[str | None] = mapped_column(Text)
+    sync_window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    store: Mapped[Store | None] = relationship()
+    store: Mapped[Store | None] = relationship(
+        primaryjoin="JdSyncLog.store_id == Store.id",
+        foreign_keys="[JdSyncLog.store_id]",
+    )
     account: Mapped[JdAccount | None] = relationship()
 
 
@@ -481,14 +521,198 @@ class JdDailyMetric(Base):
     store: Mapped[Store] = relationship()
 
 
+class JdWorkbenchPairingCode(Base):
+    """One-time desktop pairing code. Only a keyed digest is persisted."""
+
+    __tablename__ = "jd_workbench_pairing_codes"
+    __table_args__ = (
+        UniqueConstraint("code_hash", name="uq_jd_workbench_pairing_codes_code_hash"),
+    )
+
+    pairing_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class JdWorkbenchDevice(Base):
+    """Revocable R291 desktop identity, separate from browser/user sessions."""
+
+    __tablename__ = "jd_workbench_devices"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_jd_workbench_devices_token_hash"),
+    )
+
+    device_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    public_key_n: Mapped[str] = mapped_column(String(512), nullable=False)
+    public_key_e: Mapped[int] = mapped_column(Integer, nullable=False)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    device_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    client_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PAIRED")
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class JdWorkbenchStoreStatus(Base):
+    """Non-sensitive per-store session and collection state reported by a device."""
+
+    __tablename__ = "jd_workbench_store_statuses"
+    __table_args__ = (
+        UniqueConstraint("device_id", "store_id", name="uq_jd_workbench_store_status_device_store"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[str] = mapped_column(
+        ForeignKey("jd_workbench_devices.device_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="OFFLINE")
+    reason_code: Mapped[str | None] = mapped_column(String(64))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class JdWorkbenchSyncPolicy(Base):
+    """Cloud-owned R297 schedule shared by every authorized desktop device."""
+
+    __tablename__ = "jd_workbench_sync_policies"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "store_id", name="uq_jd_workbench_sync_policy_tenant_store"),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "store_id"],
+            ["stores.tenant_id", "stores.company_id", "stores.id"],
+            name="fk_jd_workbench_sync_policies_tenant_company_store",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    active_task_id: Mapped[str | None] = mapped_column(String(36), unique=True)
+    queue_state: Mapped[str | None] = mapped_column(String(16))
+    lease_worker_id: Mapped[str | None] = mapped_column(String(120))
+    lease_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    visibility_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sync_window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class JdWorkbenchSyncBatch(Base):
+    """Immutable, tenant-scoped idempotency envelope for normalized JD data."""
+
+    __tablename__ = "jd_workbench_sync_batches"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "store_id",
+            "dataset_type",
+            "idempotency_key",
+            name="uq_jd_workbench_sync_batch_idempotency",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "store_id"],
+            ["stores.tenant_id", "stores.company_id", "stores.id"],
+            name="fk_jd_workbench_sync_batches_tenant_company_store",
+            ondelete="RESTRICT",
+        ),
+    )
+
+    batch_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    device_id: Mapped[str] = mapped_column(
+        ForeignKey("jd_workbench_devices.device_id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="RESTRICT"), nullable=False, index=True)
+    store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="RESTRICT"), nullable=False, index=True)
+    subject_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    dataset_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_period: Mapped[str] = mapped_column(String(64), nullable=False)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    client_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    record_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACCEPTED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class JdWorkbenchRecord(Base):
+    """Whitelisted normalized values only; raw pages and login material are forbidden."""
+
+    __tablename__ = "jd_workbench_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "store_id",
+            "dataset_type",
+            "source_period",
+            "source_record_key",
+            name="uq_jd_workbench_record_scope_source",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "store_id"],
+            ["stores.tenant_id", "stores.company_id", "stores.id"],
+            name="fk_jd_workbench_records_tenant_company_store",
+            ondelete="RESTRICT",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    batch_id: Mapped[str] = mapped_column(
+        ForeignKey("jd_workbench_sync_batches.batch_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="RESTRICT"), nullable=False, index=True)
+    store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="RESTRICT"), nullable=False, index=True)
+    subject_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    dataset_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_period: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_record_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    values_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class JdAd(Base):
     __tablename__ = "jd_ads"
+    __table_args__ = (
+        UniqueConstraint("store_id", "stat_date", "campaign_id", name="uq_jd_ads_store_date_campaign"),
+        CheckConstraint("length(trim(campaign_id)) > 0", name="ck_jd_ads_campaign_id_not_blank"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
     account_id: Mapped[int | None] = mapped_column(ForeignKey("jd_accounts.id", ondelete="SET NULL"))
     stat_date: Mapped[datetime] = mapped_column(Date, nullable=False)
-    campaign_id: Mapped[str | None] = mapped_column(String(100))
+    campaign_id: Mapped[str] = mapped_column(String(100), nullable=False)
     campaign_name: Mapped[str | None] = mapped_column(String(200))
     ad_spend: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     clicks: Mapped[int] = mapped_column(Integer, default=0)
@@ -520,6 +744,10 @@ class JdOrder(Base):
 
 class JdProduct(Base):
     __tablename__ = "jd_products"
+    __table_args__ = (
+        UniqueConstraint("store_id", "stat_date", "sku_id", name="uq_jd_products_store_date_sku"),
+        CheckConstraint("length(trim(sku_id)) > 0", name="ck_jd_products_sku_id_not_blank"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)

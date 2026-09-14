@@ -1140,12 +1140,6 @@ def _run_list_case(case, client, boss_headers, test_db):
             ("keyed", "freshness", "data_key", "audit_center", "last_updated"),
         },
     }
-    volatile_integer_paths = {
-        "PUB-045": (
-            ("ai_employee_organization_board", "organization_permissions", 0, "permission_change_gate", "tian_brain", "historical_blocks"),
-            ("ai_employee_organization_board", "organization_permissions", 1, "permission_change_gate", "tian_brain", "historical_blocks"),
-        ),
-    }
 
     def pop_metadata(payload, spec):
         kind = spec[0]
@@ -1184,17 +1178,6 @@ def _run_list_case(case, client, boss_headers, test_db):
             parsed_values.append(parsed)
         return parsed_values
 
-    def pop_exact_path(payload, path):
-        target = payload
-        for key in path[:-1]:
-            if isinstance(key, int):
-                assert isinstance(target, list) and 0 <= key < len(target)
-            else:
-                assert isinstance(target, dict) and key in target
-            target = target[key]
-        assert isinstance(target, dict) and path[-1] in target
-        return target.pop(path[-1])
-
     graph = _create_owner_graph(client, boss_headers, test_db)
     before_started_at = datetime.now(timezone.utc)
     before_response = _http(client, case, boss_headers, graph)
@@ -1227,11 +1210,41 @@ def _run_list_case(case, client, boss_headers, test_db):
             or (before[0] is not None and after[0] is not None and before[0] != after[0])
             for before, after in zip(before_values, after_values)
         )
-    for path in volatile_integer_paths.get(case["public_entrypoint_id"], ()):
-        before_value = pop_exact_path(before_payload, path)
-        after_value = pop_exact_path(after_payload, path)
-        assert type(before_value) is int and before_value >= 0
-        assert type(after_value) is int and after_value >= before_value
+    if case["public_entrypoint_id"] == "PUB-045":
+        from backend.security.tian_shen.audit import read_audit_records
+
+        before_rows = before_payload["ai_employee_organization_board"]["organization_permissions"]
+        after_rows = after_payload["ai_employee_organization_board"]["organization_permissions"]
+        with test_db() as db:
+            employee_count = db.query(AiEmployee).filter(AiEmployee.is_legacy.is_(False)).count()
+        assert employee_count > 0
+        assert len(before_rows) == len(after_rows) == employee_count
+        assert [row["employee_code"] for row in before_rows] == [row["employee_code"] for row in after_rows]
+        for index, (before_row, after_row) in enumerate(zip(before_rows, after_rows)):
+            # Two organization builds per summary; every review remains audited.
+            for row, expected_count in ((before_row, min(index, 200)),
+                                        (after_row, min(index + 2 * employee_count, 200))):
+                brain = row["permission_change_gate"]["tian_brain"]
+                count = brain.pop("historical_blocks")
+                assert type(count) is int and count == expected_count
+                # Permission-change preview is RED; its first recorded block adds
+                # the history signal and raises its score from 90 to capped 100.
+                score = brain.pop("risk_score")
+                assert type(score) is int and score == (90 if expected_count == 0 else 100)
+                assert brain["predicted_level"] == "RED"
+                assert brain["signals"].count("historical_blocks") == int(expected_count > 0)
+                if expected_count > 0:
+                    brain["signals"].remove("historical_blocks")
+        audits = read_audit_records()
+        assert len(audits) == 4 * employee_count
+        assert all(row["allowed"] is False for row in audits)
+        assert all(row["source"] == "employee_organization" and row["command"] == "review_permission_change"
+                   for row in audits)
+        assert all(row["audit_scope"]["tenant_id"] == owner_scope[1]
+                   and row["audit_scope"]["company_id"] == owner_scope[2]
+                   and row["audit_scope"]["requester_id"] == owner_scope[0]
+                   and json.loads(row["audit_scope"]["store_scope_key"]) == {"store_ids": [owner_scope[3]]}
+                   for row in audits)
     assert after_payload == before_payload
 
 
@@ -1455,7 +1468,9 @@ def _run_control_plane_case(case, client, test_db):
 
 
 @pytest.mark.parametrize("case", TASKCENTER_PUBLIC_CASES, ids=lambda case: case["parameter_id"])
-def test_r109_taskcenter_public_entrypoint_dynamic(case, postgres_alpha_runtime):
+def test_r109_taskcenter_public_entrypoint_dynamic(case, postgres_alpha_runtime, monkeypatch, tmp_path):
+    if case["public_entrypoint_id"] == "PUB-045":
+        monkeypatch.setenv("TIAN_SHEN_AUDIT_LOG", str(tmp_path / "pub045-audit.jsonl"))
     client, boss_headers, test_db = postgres_alpha_runtime
     if case["action_kind"] in {"TARGETED_READ", "TARGETED_MUTATION"}:
         _run_targeted_case(case, client, boss_headers, test_db)

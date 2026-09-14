@@ -1,4 +1,7 @@
+import asyncio
+import contextlib
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +13,7 @@ require_service_role("backend")
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import text
 
 from .core.orchestrator import handle_event as orchestrator_handle_event
@@ -22,7 +26,7 @@ from .agent_runtime.executors.computer.actions import models as computer_action_
 from .alpha_workflow import models as alpha_workflow_models  # noqa: F401
 from .routers import auto_dispatch
 from .brain_execution import router as brain_execution_router
-from .routers import account_center, agent_runtime, ai_capabilities, ai_employee_ecosystem, ai_employee_growth, ai_employee_growth_system, ai_employee_health, ai_employee_skills, ai_employees, ai_execution, ai_product_assets, ai_workforce, approval_center, brain_tool_router, business_loop, ceo_dashboard, computer_executor_v2, deploy_center, device_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_evolution, employee_execution, employee_workspace, enterprise_brain_console, execution_engine, jd_collection, jd_integrations, knowledge_center, knowledge_center_v2, metrics, model_routing, observability, orchestrator, orchestrator_hotfix, orchestrator_task_links, release_center, research_runtime, reviews, skill_plugin_center, skill_plugin_research, skills_engine_v2, sop_skill_center, stores, task_center, tiancang, tool_center, tool_permissions, tool_router, users
+from .routers import account_center, agent_runtime, ai_capabilities, ai_employee_ecosystem, ai_employee_growth, ai_employee_growth_system, ai_employee_health, ai_employee_skills, ai_employees, ai_execution, ai_product_assets, ai_workforce, approval_center, brain_tool_router, business_loop, ceo_dashboard, computer_executor_v2, deploy_center, device_center, dual_engine_business, employee_activity_log, employee_activity_trace, employee_capabilities, employee_evolution, employee_execution, employee_workspace, enterprise_brain_console, execution_engine, jd_collection, jd_integrations, jd_workbench, knowledge_center, knowledge_center_v2, metrics, model_routing, observability, orchestrator, orchestrator_hotfix, orchestrator_task_links, release_center, research_runtime, reviews, skill_plugin_center, skill_plugin_research, skills_engine_v2, sop_skill_center, stores, task_center, tiancang, tool_center, tool_permissions, tool_router, users
 from .routers import alpha_workflow, computer_workflows
 from .skills_engine import models as skills_engine_models  # noqa: F401
 from .device_center import models as device_center_models  # noqa: F401
@@ -102,8 +106,48 @@ def startup():
         ensure_default_scenarios(db)
         ensure_default_alert_rules(db)
         ensure_default_circuit_breakers(db)
+        try:
+            jd_workbench.reconcile_pending_owner_action_audits(db)
+        except Exception as exc:
+            db.rollback()
+            logger.warning("owner_action_audit_startup_warning: %s", type(exc).__name__)
     finally:
         db.close()
+
+
+OWNER_AUDIT_POLL_SECONDS = 30
+
+
+def _recover_owner_audits_once():
+    # The Backend owns the control credential; the capture Worker does not.
+    db = SessionLocal()
+    try:
+        jd_workbench.reconcile_pending_owner_action_audits(db)
+    except Exception:
+        db.rollback()
+        logger.warning("owner_audit_recovery_retry_pending")
+    finally:
+        db.close()
+
+
+async def _owner_audit_recovery_loop():
+    while True:
+        await asyncio.sleep(OWNER_AUDIT_POLL_SECONDS)
+        await run_in_threadpool(_recover_owner_audits_once)
+
+
+@app.on_event("startup")
+async def start_owner_audit_recovery():
+    app.state.owner_audit_recovery_task = asyncio.create_task(_owner_audit_recovery_loop())
+
+
+@app.on_event("shutdown")
+async def stop_owner_audit_recovery():
+    task = getattr(app.state, "owner_audit_recovery_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 app.include_router(users.router)
@@ -112,6 +156,7 @@ app.include_router(ai_product_assets.router)
 app.include_router(account_center.router)
 app.include_router(jd_integrations.router)
 app.include_router(jd_collection.router)
+app.include_router(jd_workbench.router)
 app.include_router(metrics.router)
 app.include_router(ai_employees.router)
 app.include_router(tool_center.router)
@@ -233,6 +278,11 @@ def build_health_payload():
         "database": database["ok"],
         "redis": redis["ok"],
         "worker": worker["ok"],
+        "release": {
+            "version": APPLICATION_VERSION,
+            "commit": os.getenv("DEPLOY_COMMIT") or None,
+            "build_time": os.getenv("BUILD_TIME") or None,
+        },
         "time": datetime.now(timezone.utc).isoformat(),
     }
 

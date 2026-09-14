@@ -1,14 +1,25 @@
+import contextlib
 import logging
 import json
 import os
+import socket
+import threading
 import time
-from datetime import date, datetime, timezone
+import uuid
+from datetime import date, datetime, timezone, timedelta
 
 from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from .config import require_service_role
+from .config import get_settings, require_service_role
+from .agent_runtime import models as agent_runtime_models  # noqa: F401
+from .agent_runtime.executors.computer.actions import models as computer_action_models  # noqa: F401
+from .alpha_workflow import models as alpha_workflow_models  # noqa: F401
+from .device_center import models as device_center_models  # noqa: F401
+from .observability import models as observability_models  # noqa: F401
+from .skills_engine import models as skills_engine_models  # noqa: F401
 
 from .ai_employees import DEFAULT_COLLECTOR_EMPLOYEE, DEFAULT_STRATEGY_EMPLOYEE, FLOW_EMPLOYEE_CODES, FLOW_TASK_TYPES, employee_name, normalize_employee_code
 from .core.orchestrator import handle_event
@@ -17,14 +28,28 @@ from .brain_execution.worker import process_next_execution as process_next_brain
 from .brain_orchestrator.planner import resolve_graph_ownership
 from .execution_engine import process_next_execution_task
 from .logging_config import configure_json_logging
-from .models import EmployeeLog, JdSyncLog, TaskCenterResult, TaskCenterTask, User
+from .models import EmployeeLog, JdSyncLog, JdWorkbenchSyncPolicy, JdWorkbenchStoreStatus, Store, TaskCenterResult, TaskCenterTask, User
+from .models import JdWorkbenchDevice
+from sqlalchemy import and_, or_
 from .task_center_ownership import (
     bind_task_ownership_from_task,
     owned_task_from_context_or_none,
     task_ownership_context,
 )
 from .queue_worker import process_next_event
-from .queue import dequeue_task, enqueue_task, requeue_task, update_task_status
+from .queue import (
+    PROCESSING_QUEUE_NAME,
+    ack_task,
+    claim_task,
+    discard_processing_task,
+    enqueue_task,
+    ensure_task_delivery,
+    heartbeat_task,
+    nack_task,
+    reap_expired_tasks,
+    retry_claimed_task,
+    update_task_status,
+)
 from .services.ai_store_manager import analyze_store_health
 from .services.jd_collectors import (
     JdCollectorError,
@@ -54,6 +79,706 @@ SUPPORTED_TASK_TYPES = {
 }
 SPRINT17_QUEUE_TYPE = "sprint17_ai_task"
 SPRINT18_QUEUE_TYPE = "sprint18_business_loop"
+JD_WORKBENCH_LEASE_PREFIX = "tiantong:jd-workbench:lease:"
+JD_RETRY_BACKOFF_SECONDS = (30, 120, 300, 900, 1800)
+JD_TASK_VISIBILITY_SECONDS = max(5, int(os.getenv("JD_TASK_VISIBILITY_SECONDS", "120")))
+JD_SCHEDULER_POLL_SECONDS = max(1, int(os.getenv("JD_SCHEDULER_POLL_SECONDS", "30")))
+
+
+def _worker_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def _sync_window(now: datetime, interval_seconds: int) -> datetime:
+    start = int(now.timestamp()) // interval_seconds * interval_seconds
+    return datetime.fromtimestamp(start, tz=timezone.utc)
+
+
+def _clear_policy_lease(policy: JdWorkbenchSyncPolicy) -> None:
+    policy.active_task_id = None
+    policy.queue_state = None
+    policy.lease_worker_id = None
+    policy.lease_started_at = None
+    policy.lease_heartbeat_at = None
+    policy.visibility_deadline = None
+
+
+def _status_rows(db, policy: JdWorkbenchSyncPolicy, *, include_blocked=False):
+    from .routers.jd_workbench import HUMAN_REASON_CODES, has_jd_recovery_proof
+
+    rows = db.query(JdWorkbenchStoreStatus).join(
+        JdWorkbenchDevice,
+        JdWorkbenchDevice.device_id == JdWorkbenchStoreStatus.device_id,
+    ).filter(
+        JdWorkbenchStoreStatus.store_id == policy.store_id,
+        JdWorkbenchDevice.tenant_id == policy.tenant_id,
+        JdWorkbenchDevice.company_id == policy.company_id,
+        JdWorkbenchDevice.revoked_at.is_(None),
+    ).all()
+    if include_blocked:
+        return rows
+    # Every scheduler/reaper/completion writer uses this seam. A prior success
+    # or a still-running capture cannot erase a newer human-action failure.
+    now = datetime.now(timezone.utc)
+    return [row for row in rows if not (row.status == "HUMAN_ACTION_REQUIRED" or row.reason_code in HUMAN_REASON_CODES)
+            or has_jd_recovery_proof(db, policy, row.last_error_at, now)]
+
+
+def run_jd_workbench_scheduler(now=None):
+    """Cloud-owned five-minute scheduler; desktop presence is not required."""
+    now = now or datetime.now(timezone.utc)
+    scheduled = 0
+    lookup = SessionLocal()
+    try:
+        policy_ids = [row[0] for row in lookup.query(JdWorkbenchSyncPolicy.id).filter(JdWorkbenchSyncPolicy.enabled.is_(True)).all()]
+    finally:
+        lookup.close()
+    for policy_id in policy_ids:
+        db = SessionLocal()
+        try:
+            policy = db.query(JdWorkbenchSyncPolicy).filter(
+                JdWorkbenchSyncPolicy.id == policy_id,
+                JdWorkbenchSyncPolicy.enabled.is_(True),
+            ).with_for_update(skip_locked=True).one_or_none()
+            if policy is None:
+                continue
+            statuses = _status_rows(db, policy)
+            scheduling_rows = _status_rows(db, policy, include_blocked=True)
+            status = scheduling_rows[0] if scheduling_rows else None
+            if status and status.next_sync_at and status.next_sync_at > now:
+                continue
+            if policy.active_task_id:
+                # PostgreSQL is authoritative; only the generation-fenced reaper
+                # may recover an expired processing claim.
+                continue
+            window_started_at = _sync_window(now, policy.interval_seconds)
+            previous_attempt = db.query(JdSyncLog).filter(
+                JdSyncLog.tenant_id == policy.tenant_id,
+                JdSyncLog.company_id == policy.company_id,
+                JdSyncLog.store_id == policy.store_id,
+                JdSyncLog.sync_window_started_at == window_started_at,
+                JdSyncLog.task_type == "sync_jd_smart",
+            ).order_by(JdSyncLog.attempt.desc()).first()
+            if previous_attempt and previous_attempt.status == "success":
+                _clear_policy_lease(policy)
+                for status_row in statuses:
+                    status_row.status = "IDLE"
+                    status_row.reason_code = None
+                    status_row.last_sync_at = previous_attempt.finished_at or now
+                    status_row.retry_count = 0
+                    status_row.last_error_at = None
+                db.commit()
+                continue
+            task_id = previous_attempt.task_id if previous_attempt else str(uuid.uuid4())
+            attempt = previous_attempt.attempt + 1 if previous_attempt else 0
+            policy.active_task_id = task_id
+            policy.queue_state = "ready"
+            policy.visibility_deadline = now + timedelta(seconds=JD_TASK_VISIBILITY_SECONDS)
+            policy.sync_window_started_at = window_started_at
+            for status_row in scheduling_rows:
+                if status_row in statuses:
+                    status_row.status = "IDLE"
+                status_row.last_attempt_at = now
+                status_row.next_sync_at = now + timedelta(seconds=policy.interval_seconds)
+            db.commit()
+            try:
+                enqueue_task(
+                    "sync_jd_smart",
+                    {
+                        "tenant_id": policy.tenant_id,
+                        "company_id": policy.company_id,
+                        "store_id": policy.store_id,
+                        "source": "cloud_scheduler",
+                        "scheduled_at": now.isoformat(),
+                        "sync_window_started_at": window_started_at.isoformat(),
+                    },
+                    max_retries=5,
+                    task_id=task_id,
+                    attempt=attempt,
+                )
+            except Exception:
+                # Compensate the lease and state so a queue outage cannot strand a store.
+                try:
+                    _clear_policy_lease(policy)
+                    for status_row in statuses:
+                        status_row.status = "ERROR"
+                        status_row.reason_code = "QUEUE_UNAVAILABLE"
+                        status_row.next_sync_at = now + timedelta(seconds=JD_RETRY_BACKOFF_SECONDS[0])
+                        status_row.retry_count = min(status_row.retry_count + 1, len(JD_RETRY_BACKOFF_SECONDS))
+                    db.commit()
+                finally:
+                    raise
+            scheduled += 1
+        finally:
+            db.close()
+    return scheduled
+
+
+def _claim_jd_workbench_task(task: dict, worker_id: str, now: datetime) -> str:
+    db = SessionLocal()
+    try:
+        completed = db.query(JdSyncLog.id, JdSyncLog.claim_generation).filter(
+            JdSyncLog.task_id == task["task_id"],
+            JdSyncLog.attempt == int(task.get("attempt", 0)),
+            JdSyncLog.status == "success",
+        ).one_or_none()
+    finally:
+        db.close()
+    if completed:
+        task["db_claim_generation"] = completed[1]
+        _clear_completed_jd_workbench_policy(task, now)
+        return "completed"
+    if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
+        return "claimed"
+    payload = task["payload"]
+    db = SessionLocal()
+    try:
+        query = db.query(JdWorkbenchSyncPolicy).filter(
+            JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+            JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+            JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+        )
+        policy = query.with_for_update(skip_locked=True).one_or_none()
+        if policy is None:
+            db.rollback()
+            return "nack" if query.with_entities(JdWorkbenchSyncPolicy.id).one_or_none() else "discard"
+        if policy.active_task_id != task["task_id"]:
+            db.rollback()
+            return "discard"
+        latest = db.query(JdSyncLog).filter(
+            JdSyncLog.task_id == policy.active_task_id,
+        ).order_by(JdSyncLog.attempt.desc()).first()
+        if latest and latest.status == "success":
+            db.rollback()
+            return "discard"
+        expected_attempt = (
+            latest.attempt
+            if latest and latest.status == "running"
+            else latest.attempt + 1
+            if latest
+            else 0
+        )
+        if int(task.get("attempt", 0)) != expected_attempt:
+            db.rollback()
+            return "discard"
+        if policy.queue_state != "ready":
+            db.rollback()
+            return "nack"
+        policy.queue_state = "processing"
+        policy.lease_worker_id = worker_id
+        policy.claim_generation += 1
+        task["db_claim_generation"] = policy.claim_generation
+        policy.lease_started_at = now
+        policy.lease_heartbeat_at = now
+        policy.visibility_deadline = now + timedelta(seconds=JD_TASK_VISIBILITY_SECONDS)
+        for status in _status_rows(db, policy):
+            status.status = "SYNCING"
+            status.last_attempt_at = now
+        db.commit()
+        return "claimed"
+    except (KeyError, TypeError, ValueError, IntegrityError):
+        db.rollback()
+        return "discard"
+    finally:
+        db.close()
+
+
+def _clear_completed_jd_workbench_policy(task: dict, now: datetime) -> bool:
+    """Converge a cloud policy after PostgreSQL proves the attempt completed."""
+    if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
+        return False
+    payload = task["payload"]
+    if task.get("db_claim_generation") is None:
+        return False
+    db = SessionLocal()
+    try:
+        policy = db.query(JdWorkbenchSyncPolicy).filter(
+            JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+            JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+            JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+            JdWorkbenchSyncPolicy.claim_generation == int(task["db_claim_generation"]),
+        ).with_for_update().one_or_none()
+        if policy is None:
+            db.rollback()
+            return False
+        if policy.active_task_id is None and policy.queue_state is None:
+            db.rollback()
+            return True
+        if policy.active_task_id != task["task_id"]:
+            db.rollback()
+            return False
+        statuses = _status_rows(db, policy)
+        _clear_policy_lease(policy)
+        for status in statuses:
+            status.status = "IDLE"
+            status.reason_code = None
+            status.last_sync_at = now
+            status.retry_count = 0
+            status.last_error_at = None
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def _clear_failed_jd_workbench_policy(task: dict, now: datetime) -> bool:
+    """Converge a failed cloud task after its terminal log commit."""
+    if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
+        return False
+    payload = task["payload"]
+    db = SessionLocal()
+    try:
+        policy = db.query(JdWorkbenchSyncPolicy).filter(
+            JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+            JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+            JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+            JdWorkbenchSyncPolicy.claim_generation == int(task.get("db_claim_generation", -1)),
+        ).with_for_update().one_or_none()
+        if policy is None:
+            db.rollback()
+            return False
+        if policy.active_task_id is None and policy.queue_state is None:
+            db.rollback()
+            return True
+        if policy.active_task_id != task["task_id"]:
+            db.rollback()
+            return False
+        statuses = _status_rows(db, policy)
+        _clear_policy_lease(policy)
+        attempt = min(int(task.get("attempt", 0)) + 1, len(JD_RETRY_BACKOFF_SECONDS))
+        for status in statuses:
+            status.status = "ERROR"
+            status.reason_code = "COLLECTOR_FAILED"
+            status.retry_count = attempt
+            status.last_error_at = now
+            status.next_sync_at = now + timedelta(seconds=JD_RETRY_BACKOFF_SECONDS[attempt - 1])
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def _finish_jd_workbench_task(task: dict, worker_id: str, *, success: bool, now: datetime) -> bool:
+    if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
+        return True
+    payload = task["payload"]
+    db = SessionLocal()
+    redis = get_redis()
+    try:
+        policy = db.query(JdWorkbenchSyncPolicy).filter(
+            JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+            JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+            JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+            JdWorkbenchSyncPolicy.lease_worker_id == worker_id,
+            JdWorkbenchSyncPolicy.claim_generation == int(task.get("db_claim_generation", -1)),
+            JdWorkbenchSyncPolicy.queue_state == "processing",
+        ).with_for_update().one_or_none()
+        if policy is None or policy.active_task_id != task["task_id"]:
+            db.rollback()
+            return False
+        statuses = _status_rows(db, policy)
+        _clear_policy_lease(policy)
+        if success:
+            for status in statuses:
+                status.status = "IDLE"
+                status.reason_code = None
+                status.last_sync_at = now
+                status.retry_count = 0
+                status.last_error_at = None
+        else:
+            attempt = min(int(task.get("attempt", 0)) + 1, len(JD_RETRY_BACKOFF_SECONDS))
+            delay = JD_RETRY_BACKOFF_SECONDS[attempt - 1]
+            for status in statuses:
+                status.status = "ERROR"
+                status.reason_code = "COLLECTOR_FAILED"
+                status.retry_count = attempt
+                status.last_error_at = now
+                status.next_sync_at = now + timedelta(seconds=delay)
+        db.commit()
+        try:
+            redis.delete(f"{JD_WORKBENCH_LEASE_PREFIX}{policy.tenant_id}:{policy.store_id}")
+        except RedisError as exc:
+            logger.warning("jd_workbench_lease_cleanup_pending task_id=%s error=%s", task["task_id"], type(exc).__name__)
+        return True
+    finally:
+        db.close()
+
+
+def _heartbeat_jd_workbench_task(task: dict, worker_id: str, now: datetime) -> bool:
+    if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
+        return True
+    payload = task["payload"]
+    db = SessionLocal()
+    try:
+        updated = db.query(JdWorkbenchSyncPolicy).filter(
+            JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+            JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+            JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+            JdWorkbenchSyncPolicy.active_task_id == task["task_id"],
+            JdWorkbenchSyncPolicy.lease_worker_id == worker_id,
+            JdWorkbenchSyncPolicy.claim_generation == int(task.get("db_claim_generation", -1)),
+            JdWorkbenchSyncPolicy.queue_state == "processing",
+        ).update({
+            JdWorkbenchSyncPolicy.lease_heartbeat_at: now,
+            JdWorkbenchSyncPolicy.visibility_deadline: now + timedelta(seconds=JD_TASK_VISIBILITY_SECONDS),
+        }, synchronize_session=False)
+        db.commit()
+        return updated == 1
+    finally:
+        db.close()
+
+
+def _assert_jd_workbench_claim_owned(db, task: dict, worker_id: str) -> None:
+    """Fence the business commit with the authoritative PostgreSQL claim."""
+    payload = task["payload"]
+    owned = db.query(JdWorkbenchSyncPolicy.id).filter(
+        JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+        JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+        JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+        JdWorkbenchSyncPolicy.active_task_id == task["task_id"],
+        JdWorkbenchSyncPolicy.lease_worker_id == worker_id,
+        JdWorkbenchSyncPolicy.claim_generation == int(task.get("db_claim_generation", -1)),
+        JdWorkbenchSyncPolicy.queue_state == "processing",
+        JdWorkbenchSyncPolicy.visibility_deadline > datetime.now(timezone.utc),
+    ).with_for_update().one_or_none()
+    if owned is None:
+        raise JdCollectorError("任务租约已失效")
+
+
+def _recover_jd_workbench_task(task: dict, now: datetime) -> bool:
+    if task.get("task_type") != "sync_jd_smart" or task.get("payload", {}).get("source") != "cloud_scheduler":
+        db = SessionLocal()
+        try:
+            terminal = db.query(JdSyncLog.id).filter(
+                JdSyncLog.task_id == task["task_id"],
+                JdSyncLog.attempt == int(task.get("attempt", 0)),
+                or_(
+                    JdSyncLog.status == "success",
+                    and_(
+                        JdSyncLog.status == "failed",
+                        JdSyncLog.attempt >= int(task.get("max_retries", 3)),
+                    ),
+                ),
+            ).one_or_none()
+            return False if terminal else None
+        finally:
+            db.close()
+    payload = task["payload"]
+    db = SessionLocal()
+    try:
+        policy = db.query(JdWorkbenchSyncPolicy).filter(
+            JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+            JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+            JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+        ).with_for_update().one_or_none()
+        if policy is None or policy.active_task_id != task["task_id"]:
+            db.rollback()
+            return False
+        if policy.queue_state == "ready":
+            db.rollback()
+            return True
+        if (
+            policy.queue_state != "processing"
+            or policy.visibility_deadline is None
+            or policy.visibility_deadline > now
+        ):
+            db.rollback()
+            return False
+        policy.queue_state = "ready"
+        policy.lease_worker_id = None
+        policy.lease_started_at = None
+        policy.lease_heartbeat_at = None
+        policy.visibility_deadline = None
+        for status in _status_rows(db, policy):
+            status.status = "IDLE"
+            status.reason_code = None
+            status.next_sync_at = now
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def reap_jd_workbench_tasks(now=None) -> int:
+    """Recover expired cloud claims from PostgreSQL, even after Redis loss."""
+    now = now or datetime.now(timezone.utc)
+    lookup = SessionLocal()
+    try:
+        policy_ids = [row[0] for row in lookup.query(JdWorkbenchSyncPolicy.id).filter(
+            JdWorkbenchSyncPolicy.active_task_id.is_not(None),
+            or_(
+                JdWorkbenchSyncPolicy.queue_state == "ready",
+                and_(
+                    JdWorkbenchSyncPolicy.queue_state == "processing",
+                    JdWorkbenchSyncPolicy.visibility_deadline.is_not(None),
+                    JdWorkbenchSyncPolicy.visibility_deadline <= now,
+                ),
+            ),
+        ).all()]
+    finally:
+        lookup.close()
+
+    recovered = 0
+    for policy_id in policy_ids:
+        db = SessionLocal()
+        task = None
+        try:
+            policy = db.query(JdWorkbenchSyncPolicy).filter(
+                JdWorkbenchSyncPolicy.id == policy_id,
+                JdWorkbenchSyncPolicy.active_task_id.is_not(None),
+            ).with_for_update(skip_locked=True).one_or_none()
+            if policy is None:
+                continue
+            expired = (
+                policy.queue_state == "processing"
+                and policy.visibility_deadline is not None
+                and policy.visibility_deadline <= now
+            )
+            if policy.queue_state != "ready" and not expired:
+                db.rollback()
+                continue
+            latest = db.query(JdSyncLog).filter(
+                JdSyncLog.task_id == policy.active_task_id,
+            ).order_by(JdSyncLog.attempt.desc()).first()
+            if latest and latest.status == "success":
+                _clear_policy_lease(policy)
+                for status in _status_rows(db, policy):
+                    status.status = "IDLE"
+                    status.reason_code = None
+                    status.last_sync_at = latest.finished_at or now
+                    status.retry_count = 0
+                    status.last_error_at = None
+                db.commit()
+                continue
+            if (
+                latest
+                and latest.status == "failed"
+                and latest.claim_generation == policy.claim_generation
+            ):
+                statuses = _status_rows(db, policy)
+                _clear_policy_lease(policy)
+                attempt = min(latest.attempt + 1, len(JD_RETRY_BACKOFF_SECONDS))
+                for status in statuses:
+                    status.status = "ERROR"
+                    status.reason_code = "COLLECTOR_FAILED"
+                    status.retry_count = attempt
+                    status.last_error_at = now
+                    status.next_sync_at = now + timedelta(
+                        seconds=JD_RETRY_BACKOFF_SECONDS[attempt - 1]
+                    )
+                db.commit()
+                continue
+            attempt = latest.attempt if latest and latest.status == "running" else (
+                latest.attempt + 1 if latest else 0
+            )
+            if expired:
+                policy.queue_state = "ready"
+                policy.lease_worker_id = None
+                policy.lease_started_at = None
+                policy.lease_heartbeat_at = None
+                policy.visibility_deadline = None
+                for status in _status_rows(db, policy):
+                    status.status = "IDLE"
+                    status.reason_code = None
+                    status.next_sync_at = now
+            sync_window_started_at = policy.sync_window_started_at or _sync_window(
+                now,
+                policy.interval_seconds,
+            )
+            policy.sync_window_started_at = sync_window_started_at
+            task = {
+                "task_id": policy.active_task_id,
+                "task_type": "sync_jd_smart",
+                "payload": {
+                    "tenant_id": policy.tenant_id,
+                    "company_id": policy.company_id,
+                    "store_id": policy.store_id,
+                    "source": "cloud_scheduler",
+                    "scheduled_at": now.isoformat(),
+                    "sync_window_started_at": sync_window_started_at.isoformat(),
+                },
+                "attempt": attempt,
+                "max_retries": 5,
+                "claim_generation": policy.claim_generation,
+            }
+            db.commit()
+        finally:
+            db.close()
+        if task is not None and ensure_task_delivery(task, now=now):
+            recovered += 1
+    non_cloud = reap_expired_tasks(
+        now=now,
+        before_requeue=lambda task: (
+            False
+            if task.get("task_type") == "sync_jd_smart"
+            and task.get("payload", {}).get("source") == "cloud_scheduler"
+            else _recover_jd_workbench_task(task, now)
+        ),
+    )
+    return recovered + len(non_cloud)
+
+
+def reconcile_completed_jd_workbench_tasks() -> int:
+    """Remove Redis residue for task attempts already committed in PostgreSQL."""
+    _reconcile_pending_task_statuses()
+    redis = get_redis()
+    reconciled = 0
+    for raw in redis.lrange(PROCESSING_QUEUE_NAME, 0, -1):
+        task = json.loads(raw)
+        cloud = (
+            task.get("task_type") == "sync_jd_smart"
+            and task.get("payload", {}).get("source") == "cloud_scheduler"
+        )
+        abandoned = False
+        db = SessionLocal()
+        try:
+            terminal = db.query(JdSyncLog).filter(
+                JdSyncLog.task_id == task["task_id"],
+                JdSyncLog.attempt == int(task.get("attempt", 0)),
+            ).one_or_none()
+            status = terminal.status if terminal else None
+            claim_generation = terminal.claim_generation if terminal else None
+            notification_pending = terminal.redis_notification_pending if terminal else False
+            if terminal is None and cloud:
+                payload = task["payload"]
+                active_task_id = db.query(JdWorkbenchSyncPolicy.active_task_id).filter(
+                    JdWorkbenchSyncPolicy.tenant_id == int(payload["tenant_id"]),
+                    JdWorkbenchSyncPolicy.company_id == int(payload["company_id"]),
+                    JdWorkbenchSyncPolicy.store_id == int(payload["store_id"]),
+                ).scalar()
+                abandoned = active_task_id != task["task_id"]
+        finally:
+            db.close()
+        if not terminal:
+            if abandoned and discard_processing_task(task, raw):
+                reconciled += 1
+            continue
+        if notification_pending:
+            continue
+        fenced_task = {**task, "db_claim_generation": claim_generation}
+        if status == "success":
+            if cloud and not _clear_completed_jd_workbench_policy(fenced_task, datetime.now(timezone.utc)):
+                continue
+        elif status == "failed" and cloud:
+            if not _clear_failed_jd_workbench_policy(fenced_task, datetime.now(timezone.utc)):
+                continue
+        elif status != "failed" or int(task.get("attempt", 0)) < int(task.get("max_retries", 3)):
+            continue
+        if discard_processing_task(task, raw):
+            reconciled += 1
+    return reconciled
+
+
+def _reconcile_pending_task_statuses() -> int:
+    """Republish status notifications from PostgreSQL even after Redis state loss."""
+    published = 0
+    lookup = SessionLocal()
+    try:
+        pending_ids = [row[0] for row in lookup.query(JdSyncLog.id).filter(
+            JdSyncLog.redis_notification_pending.is_(True),
+            JdSyncLog.status.in_(("running", "success", "failed")),
+        ).order_by(JdSyncLog.id).limit(100).all()]
+    finally:
+        lookup.close()
+    for log_id in pending_ids:
+        db = SessionLocal()
+        try:
+            if _publish_staged_task_status(db, log_id):
+                published += 1
+        finally:
+            db.close()
+    return published
+
+
+def _stage_task_status(log: JdSyncLog, task: dict, status: str, message: str) -> None:
+    log.redis_notification_pending = True
+    log.redis_notification_payload = json.dumps({
+        "task_id": task["task_id"],
+        "status": status,
+        "task_type": task["task_type"],
+        "payload": task.get("payload", {}),
+        "message": message,
+        "attempt": int(task.get("attempt", 0)),
+        "max_retries": int(task.get("max_retries", 3)),
+    }, ensure_ascii=False, sort_keys=True)
+    task["_redis_notification_pending"] = True
+
+
+def _publish_staged_task_status(db, log_id: int, task: dict | None = None) -> bool:
+    """Publish Redis status without allowing transport failure to rewrite DB truth."""
+    log = db.query(JdSyncLog).filter(
+        JdSyncLog.id == log_id,
+        JdSyncLog.redis_notification_pending.is_(True),
+    ).with_for_update(skip_locked=True).one_or_none()
+    if log is None:
+        if task is not None:
+            task["_redis_notification_pending"] = False
+            return True
+        return False
+    try:
+        envelope = json.loads(log.redis_notification_payload or "")
+        if not {"task_id", "status", "task_type"}.issubset(envelope):
+            raise ValueError("missing required task status fields")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        db.rollback()
+        logger.error("task_status_notification_invalid log_id=%s", log_id)
+        return False
+    try:
+        update_task_status(**envelope)
+    except RedisError as exc:
+        db.rollback()
+        if task is not None:
+            task["_redis_notification_pending"] = True
+        logger.warning(
+            "task_status_notification_pending task_id=%s status=%s error=%s",
+            log.task_id, log.status, type(exc).__name__,
+        )
+        return False
+    log.redis_notification_pending = False
+    log.redis_notification_payload = None
+    db.add(log)
+    db.commit()
+    if task is not None:
+        task["_redis_notification_pending"] = False
+    return True
+
+
+def _publish_task_status_best_effort(db, log_id: int, task: dict) -> bool:
+    """Keep transport/readback failures outside the business transaction outcome."""
+    try:
+        return _publish_staged_task_status(db, log_id, task)
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            db.rollback()
+        task["_redis_notification_pending"] = True
+        logger.warning(
+            "task_status_notification_pending log_id=%s error=%s",
+            log_id, type(exc).__name__,
+        )
+        return False
+
+
+class _TaskHeartbeat:
+    def __init__(self, task: dict, worker_id: str):
+        self.task = task
+        self.worker_id = worker_id
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, name=f"queue-heartbeat-{task['task_id']}", daemon=True)
+
+    def _run(self):
+        while not self.stop.wait(JD_TASK_VISIBILITY_SECONDS / 3):
+            if not _heartbeat_jd_workbench_task(self.task, self.worker_id, datetime.now(timezone.utc)):
+                return
+            if not heartbeat_task(self.task, self.worker_id, visibility_timeout=JD_TASK_VISIBILITY_SECONDS):
+                return
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_args):
+        self.stop.set()
+        self.thread.join(timeout=1)
 
 
 def update_worker_heartbeat():
@@ -199,16 +924,18 @@ def run_daily_scheduler():
 
 
 def handle_task(task):
-    queued = handle_event(
+    result = handle_event(
         {
             "source": "worker",
             "target": "worker.task",
             "action": "process_worker_task",
             "payload": task,
+            "force_sync": True,
         }
     )
-    process_next_event(timeout=1, raise_errors=True)
-    return queued
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error") or "任务执行被阻止")
+    return result
 
 
 def _handle_task_direct(task):
@@ -217,26 +944,70 @@ def _handle_task_direct(task):
     payload = task.get("payload", {})
     attempt = int(task.get("attempt", 0))
     max_retries = int(task.get("max_retries", 3))
+    cloud_scheduled = task_type == "sync_jd_smart" and payload.get("source") == "cloud_scheduler"
     db = SessionLocal()
     if task_type in {SPRINT17_QUEUE_TYPE, SPRINT18_QUEUE_TYPE}:
         center_id = int(payload["task_center_id"])
         if owned_task_from_context_or_none(db, task_id=center_id, ownership=payload.get("ownership")) is None:
             db.close()
             raise RuntimeError("task ownership is missing or inconsistent")
-    log = JdSyncLog(
-        store_id=payload.get("store_id"),
-        task_id=task_id,
-        task_type=task_type,
-        status="running",
-        attempt=attempt,
-        started_at=datetime.now(timezone.utc),
-    )
-    db.add(log)
+    log = db.query(JdSyncLog).filter(
+        JdSyncLog.task_id == task_id,
+        JdSyncLog.attempt == attempt,
+    ).one_or_none()
+    if log is None:
+        store_id = payload.get("store_id")
+        tenant_id = payload.get("tenant_id")
+        company_id = payload.get("company_id")
+        if store_id is not None and (tenant_id is None or company_id is None):
+            store_scope = db.query(Store.tenant_id, Store.company_id).filter(Store.id == int(store_id)).one()
+            tenant_id, company_id = store_scope
+        sync_window = payload.get("sync_window_started_at")
+        if isinstance(sync_window, str):
+            sync_window = datetime.fromisoformat(sync_window.replace("Z", "+00:00"))
+        if store_id is not None and sync_window is None:
+            sync_window = _sync_window(datetime.now(timezone.utc), 300)
+        log = JdSyncLog(
+            tenant_id=tenant_id,
+            company_id=company_id,
+            store_id=store_id,
+            sync_window_started_at=sync_window,
+            claim_generation=task.get("db_claim_generation"),
+            task_id=task_id,
+            task_type=task_type,
+            source=payload.get("source"),
+            attempt=attempt,
+        )
+        db.add(log)
+    if cloud_scheduled:
+        # Fence the initial running-log write as well as the later business commit.
+        try:
+            _assert_jd_workbench_claim_owned(db, task, task["_worker_id"])
+        except Exception:
+            db.rollback()
+            db.close()
+            raise
+    log.claim_generation = task.get("db_claim_generation")
+    log.status = "running"
+    log.started_at = datetime.now(timezone.utc)
+    log.finished_at = None
+    _stage_task_status(log, task, "running", "任务执行中")
     db.commit()
-    update_task_status(task_id, "running", task_type, payload, message="任务执行中", attempt=attempt, max_retries=max_retries)
+    _publish_task_status_best_effort(db, log.id, task)
     try:
         if task_type == "sync_jd_smart":
-            result = sync_jd_smart(db, int(payload["store_id"]))
+            cloud = payload.get("source") == "cloud_scheduler"
+            def prepare_smart_commit():
+                if cloud:
+                    _assert_jd_workbench_claim_owned(db, task, task["_worker_id"])
+                _stage_task_status(log, task, "success", "任务执行成功")
+
+            result = sync_jd_smart(
+                db,
+                int(payload["store_id"]),
+                completion_log=log,
+                before_commit=prepare_smart_commit,
+            )
         elif task_type == "sync_jzt":
             result = sync_jzt(db, int(payload["store_id"]))
         elif task_type == "sync_jd_orders":
@@ -252,24 +1023,33 @@ def _handle_task_direct(task):
             result = execute_sprint18_business_loop(db, task)
         else:
             raise RuntimeError(f"未知任务类型: {task_type}")
-        log.status = "success"
-        log.message = str(result)
-        log.finished_at = datetime.now(timezone.utc)
-        db.commit()
-        update_task_status(task_id, "success", task_type, payload, message="任务执行成功", attempt=attempt, max_retries=max_retries)
+        if task_type != "sync_jd_smart":
+            log.status = "success"
+            log.message = str(result)
+            log.finished_at = datetime.now(timezone.utc)
+            _stage_task_status(log, task, "success", "任务执行成功")
+            db.commit()
+        _publish_task_status_best_effort(db, log.id, task)
     except Exception as exc:
         db.rollback()
+        if cloud_scheduled:
+            # A stale worker must not overwrite the log owned by a newer claim.
+            _assert_jd_workbench_claim_owned(db, task, task["_worker_id"])
         log.status = "failed"
         log.message = str(exc)
         log.finished_at = datetime.now(timezone.utc)
+        terminal_failure = cloud_scheduled or attempt >= max_retries
+        if terminal_failure:
+            _stage_task_status(log, task, "failed", str(exc))
+        else:
+            log.redis_notification_pending = False
+            log.redis_notification_payload = None
         db.add(log)
         if task_type == "ai_store_manager_daily":
             write_employee_log(db, task_type, "failed", {"error": str(exc)}, attempt, max_retries)
         db.commit()
-        if attempt < max_retries:
-            requeue_task(task, f"执行失败，准备重试: {exc}")
-        else:
-            update_task_status(task_id, "failed", task_type, payload, message=str(exc), attempt=attempt, max_retries=max_retries)
+        if terminal_failure:
+            _publish_task_status_best_effort(db, log.id, task)
         raise
     finally:
         db.close()
@@ -649,10 +1429,37 @@ def write_employee_log(db, task_type: str, status: str, detail: dict, attempt: i
     )
 
 
+def reconcile_owner_action_audits() -> int:
+    if not get_settings().JD_BROWSER_CONTROL_TOKEN:
+        return 0
+    db = SessionLocal()
+    try:
+        from .routers.jd_workbench import reconcile_pending_owner_action_audits
+
+        return reconcile_pending_owner_action_audits(db)
+    except Exception as exc:
+        db.rollback()
+        logger.warning("owner_action_audit_reconcile_warning: %s", type(exc).__name__)
+        return 0
+    finally:
+        db.close()
+
+
+def run_jd_workbench_maintenance() -> None:
+    reconcile_completed_jd_workbench_tasks()
+    reap_jd_workbench_tasks()
+    run_jd_workbench_scheduler()
+    reconcile_owner_action_audits()
+
+
 def main():
     require_service_role("worker")
+    last_jd_schedule = 0.0
     while True:
         update_worker_heartbeat()
+        if time.monotonic() - last_jd_schedule >= JD_SCHEDULER_POLL_SECONDS:
+            run_jd_workbench_maintenance()
+            last_jd_schedule = time.monotonic()
         run_daily_scheduler()
         if not process_next_tian_shang_worker_execution() and not process_next_employee_execution() and not process_next_brain_runtime_execution():
             process_next_task()
@@ -690,7 +1497,7 @@ def process_next_employee_execution():
 def process_next_brain_runtime_execution():
     db = SessionLocal()
     try:
-        result = process_next_brain_execution(db, timeout=1)
+        result = process_next_brain_execution(db, timeout=1, worker_id=f"brain-{_worker_id()}")
         return bool(result.get("processed"))
     except (RedisTimeoutError, RedisConnectionError) as exc:
         logger.warning("brain_execution_queue_warning: %s: %s", type(exc).__name__, exc)
@@ -703,20 +1510,48 @@ def process_next_brain_runtime_execution():
 
 
 def process_next_task():
+    worker_id = _worker_id()
     try:
-        task = dequeue_task(timeout=5)
+        task = claim_task(worker_id=worker_id, timeout=5, visibility_timeout=JD_TASK_VISIBILITY_SECONDS)
     except (RedisTimeoutError, RedisConnectionError) as exc:
         logger.warning("redis_queue_warning: %s: %s", type(exc).__name__, exc)
         time.sleep(2)
         return False
     if not task:
         return False
+    raw = task.pop("_processing_raw")
+    claim_result = _claim_jd_workbench_task(task, worker_id, datetime.now(timezone.utc))
+    if claim_result == "nack":
+        nack_task(task, worker_id, raw)
+        return True
+    if claim_result in {"completed", "discard"}:
+        ack_task(task, worker_id, raw)
+        return True
+    success = False
+    task_error = None
+    task["_worker_id"] = worker_id
+    logger.info("worker_task_claimed task_id=%s worker_id=%s", task["task_id"], worker_id)
     try:
-        handle_task(task)
+        with _TaskHeartbeat(task, worker_id):
+            handle_task(task)
+        success = True
     except JdCollectorError as exc:
+        task_error = exc
         logger.warning("collector_task_incomplete: %s", exc)
     except Exception as exc:
+        task_error = exc
         logger.exception("worker_task_failed: %s", exc)
+    finally:
+        cloud = task.get("task_type") == "sync_jd_smart" and task.get("payload", {}).get("source") == "cloud_scheduler"
+        if not success and not cloud and int(task.get("attempt", 0)) < int(task.get("max_retries", 3)):
+            retry_claimed_task(task, worker_id, raw, f"执行失败，准备重试: {task_error}")
+        else:
+            finished = _finish_jd_workbench_task(task, worker_id, success=success, now=datetime.now(timezone.utc))
+            if finished and not task.get("_redis_notification_pending"):
+                try:
+                    ack_task(task, worker_id, raw)
+                except RedisError as exc:
+                    logger.warning("task_ack_pending task_id=%s error=%s", task["task_id"], type(exc).__name__)
     return True
 
 

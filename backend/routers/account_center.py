@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
 from sqlalchemy.orm import Session, joinedload
 
-from ..auth import hash_password, require_permission_user
+from ..auth import require_permission_user
 from ..database import get_db
 from ..models import (
     AccountTemplate,
@@ -104,7 +104,7 @@ def list_accounts(
 async def create_account(request: Request, db: Session = Depends(get_db)):
     user = require_account_user(request, db)
     data = await request.json()
-    reject_forbidden_sensitive_payload(data, allow_plain_password=True)
+    reject_forbidden_sensitive_payload(data)
     store_code = clean(data.get("store_code") or data.get("店铺编号"))
     store_name = clean(data.get("store_name") or data.get("店铺名称"))
     if not store_code or not store_name:
@@ -132,7 +132,7 @@ async def create_account(request: Request, db: Session = Depends(get_db)):
 async def update_account(account_id: int, request: Request, db: Session = Depends(get_db)):
     user = require_account_user(request, db)
     data = await request.json()
-    reject_forbidden_sensitive_payload(data, allow_plain_password=True)
+    reject_forbidden_sensitive_payload(data)
     store = require_authorized_store(db, user, store_id=account_id, write=True, active_only=False)
 
     store_code = clean(data.get("store_code") or data.get("店铺编号"))
@@ -327,9 +327,7 @@ def upsert_account_meta(db: Session, store: Store, data: dict):
     note.brand = get_or_create_brand(db, brand_name) if brand_name else None
     note.group = get_or_create_group(db, group_name) if group_name else None
     note.login_account = clean(data.get("login_account") or data.get("登录账号"))
-    plain_password = clean(data.get("plain_password"))
-    if plain_password:
-        note.encrypted_password = hash_password(plain_password)
+    note.encrypted_password = None
     note.cookie_status = cookie_status
     note.login_status = status
     note.account_status = status
@@ -420,12 +418,10 @@ def group_to_dict(row: StoreGroup):
     }
 
 
-def reject_forbidden_sensitive_payload(data: dict, allow_plain_password: bool = False):
+def reject_forbidden_sensitive_payload(data: dict):
     blocked = []
     for key in data:
         normalized = normalize_field_name(key)
-        if allow_plain_password and normalized == "plain_password":
-            continue
         if is_sensitive_field(normalized):
             blocked.append(str(key))
     if blocked:

@@ -1,0 +1,932 @@
+name: R297 Windows Workbench Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      pagehide_workflow_run_id:
+        description: GitHub Actions run ID that produced the bound same-HEAD native pagehide artifact
+        required: true
+        type: string
+      pagehide_workflow_run_attempt:
+        description: Attempt number of the bound same-HEAD native pagehide artifact
+        required: true
+        type: string
+  pull_request:
+    branches:
+      - main
+      - codex/r297-cloud-integration
+      - codex/r297-jd-multistore-autosync
+    paths:
+      - desktop/jd-workbench/**
+      - tests/test_r291_jd_workbench_client_static.py
+      - tests/test_r297_jd_workbench_auto_sync_static.py
+      - tests/test_r297_windows_release_gate.py
+      - ops/r297_windows_acceptance.ps1
+      - ops/r297_windows_event_signer.py
+      - ops/r297_acceptance_run.py
+      - ops/r297_evidence_preflight.py
+      - ops/r297_evidence_events.py
+      - ops/r297_evidence_trust_manifest.test.json
+      - ops/r297_ci_redact.py
+      - ops/r297_trusted_windows_observer.py
+      - ops/r297_windows_file_security.py
+      - ops/r297_windows_recovery_probe.py
+      - ops/r297_windows_job_supervisor.py
+      - ops/install_r297_trusted_windows_observer.ps1
+      - ops/install_r297_windows_relay_receipt.ps1
+      - ops/install_r297_trusted_linux_host.sh
+      - ops/provision_r297_observer_database.sh
+      - ops/r297_authenticated_observer.py
+      - ops/r297_evidence_broker.py
+      - ops/r297_broker_client.py
+      - ops/r297_event_receipt.py
+      - ops/r297_evidence_storage.py
+      - ops/r297_evidence_role_service.py
+      - ops/r297_role_client.py
+      - ops/r297_evidence_bundle.py
+      - ops/r297_trusted_orchestrator.py
+      - backend/__init__.py
+      - backend/services/__init__.py
+      - backend/services/jd_runtime_contract.py
+      - requirements.txt
+      - tests/test_r297_windows_file_security.py
+      - tests/test_r297_windows_recovery.py
+      - tests/test_r297_trusted_windows_observer.py
+      - tests/test_r297_trusted_host_installers.py
+      - tests/r297_windows_native_boundary.ps1
+      - .gitattributes
+      - .github/workflows/r291-windows-workbench.yml
+  push:
+    branches:
+      - codex/r297-cloud-integration
+      - codex/r297-jd-multistore-autosync
+      - codex/r297-release-gates
+      - codex/r297-takeover-infra-evidence-r2
+      - codex/r297-takeover-infra-evidence-r3
+      - codex/r297-windows-workflow-wiring-r1
+      - codex/r297-windows-workflow-wiring-r2
+    paths:
+      - desktop/jd-workbench/**
+      - tests/test_r291_jd_workbench_client_static.py
+      - tests/test_r297_jd_workbench_auto_sync_static.py
+      - tests/test_r297_windows_release_gate.py
+      - ops/r297_windows_acceptance.ps1
+      - ops/r297_windows_event_signer.py
+      - ops/r297_acceptance_run.py
+      - ops/r297_evidence_preflight.py
+      - ops/r297_evidence_events.py
+      - ops/r297_evidence_trust_manifest.test.json
+      - ops/r297_ci_redact.py
+      - ops/r297_trusted_windows_observer.py
+      - ops/r297_windows_file_security.py
+      - ops/r297_windows_recovery_probe.py
+      - ops/r297_windows_job_supervisor.py
+      - ops/install_r297_trusted_windows_observer.ps1
+      - ops/install_r297_windows_relay_receipt.ps1
+      - ops/install_r297_trusted_linux_host.sh
+      - ops/provision_r297_observer_database.sh
+      - ops/r297_authenticated_observer.py
+      - ops/r297_evidence_broker.py
+      - ops/r297_broker_client.py
+      - ops/r297_event_receipt.py
+      - ops/r297_evidence_storage.py
+      - ops/r297_evidence_role_service.py
+      - ops/r297_role_client.py
+      - ops/r297_evidence_bundle.py
+      - ops/r297_trusted_orchestrator.py
+      - backend/__init__.py
+      - backend/services/__init__.py
+      - backend/services/jd_runtime_contract.py
+      - requirements.txt
+      - tests/test_r297_windows_file_security.py
+      - tests/test_r297_windows_recovery.py
+      - tests/test_r297_trusted_windows_observer.py
+      - tests/test_r297_trusted_host_installers.py
+      - tests/r297_windows_native_boundary.ps1
+      - .gitattributes
+      - .github/workflows/r291-windows-workbench.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    defaults:
+      run:
+        working-directory: desktop/jd-workbench
+
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/jd-workbench/package-lock.json
+
+      - name: Set up Python for signed evidence
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run syntax and security policy checks
+        run: npm run check
+
+      - name: Build Windows x64 NSIS installer and portable ZIP
+        run: npm run dist:win
+
+      - name: Verify packaged Chromium runtime
+        shell: pwsh
+        run: |
+          $executables = @(Get-ChildItem -Path dist/win-unpacked -Filter *.exe -File)
+          if ($executables.Count -ne 1) {
+            throw "Expected one packaged Electron executable, found $($executables.Count)"
+          }
+
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          $infoPath = Join-Path (Resolve-Path dist) 'chromium-info.json'
+          $probePath = Join-Path (Resolve-Path dist) 'chromium-probe.cjs'
+          'const fs=require("node:fs");fs.writeFileSync(process.argv[2],JSON.stringify({chromiumExecutablePath:process.execPath,chromiumVersion:process.versions.chrome,electronVersion:process.versions.electron}))' |
+            Set-Content -LiteralPath $probePath -Encoding utf8NoBOM
+          $probe = Start-Process -FilePath $executables[0].FullName -ArgumentList @($probePath, $infoPath) -Wait -PassThru
+          Remove-Item -LiteralPath $probePath
+          if ($probe.ExitCode -ne 0) {
+            throw "Packaged Chromium runtime probe failed with exit code $($probe.ExitCode)"
+          }
+          $info = Get-Content -Raw -LiteralPath $infoPath | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace($info.chromiumVersion)) {
+            throw 'Packaged Chromium version is missing'
+          }
+          $expectedPath = [IO.Path]::GetFullPath($executables[0].FullName)
+          $actualPath = [IO.Path]::GetFullPath($info.chromiumExecutablePath)
+          if (-not [string]::Equals($actualPath, $expectedPath, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Packaged Chromium path mismatch: expected $expectedPath, got $actualPath"
+          }
+          Write-Host "Packaged Chromium executable: $actualPath"
+          Write-Host "Packaged Chromium version: $($info.chromiumVersion)"
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path dist -File | Where-Object { $_.Extension -in '.exe', '.zip' }
+          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $expectedNames = @(
+            "TiantongAI-JD-Workbench-$version-x64.exe",
+            "TiantongAI-JD-Workbench-$version-x64.zip"
+          )
+          $actualNames = @($files.Name | Sort-Object)
+          if ($files.Count -ne 2 -or (Compare-Object ($expectedNames | Sort-Object) $actualNames)) {
+            throw "Expected one NSIS installer and one portable ZIP named $($expectedNames -join ', '); found $($actualNames -join ', ')"
+          }
+          $lines = foreach ($file in $files | Sort-Object Name) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path (Resolve-Path dist) 'SHA256SUMS.txt'),
+            $lines,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tiantong-ai-jd-workbench-r297-build-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            desktop/jd-workbench/dist/*.exe
+            desktop/jd-workbench/dist/*.zip
+            desktop/jd-workbench/dist/SHA256SUMS.txt
+            desktop/jd-workbench/dist/chromium-info.json
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-native-recovery-tests:
+    name: windows-native-recovery-tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install locked Python dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Parse protected PowerShell entry points
+        shell: pwsh
+        run: |
+          @(
+            'ops/install_r297_trusted_windows_observer.ps1',
+            'ops/install_r297_windows_relay_receipt.ps1',
+            'ops/r297_windows_acceptance.ps1',
+            'tests/r297_windows_native_boundary.ps1'
+          ) | ForEach-Object {
+            [void][scriptblock]::Create([IO.File]::ReadAllText((Resolve-Path $_)))
+          }
+
+      - name: Run complete Windows recovery regressions
+        id: native_reports
+        shell: pwsh
+        env:
+          ASSET_STORAGE_ROOT: ${{ runner.temp }}\r297-assets
+        run: |
+          Write-Output 'R297_EVIDENCE_CLASS=TEST_ONLY'
+          Write-Output 'R297_FORMAL_EVIDENCE=false'
+          Write-Output 'R297_NATIVE_POWER_LOSS_REBOOT=NOT_TESTED'
+          $stepOutput = $env:GITHUB_OUTPUT
+          Remove-Item Env:GITHUB_OUTPUT
+          $nonce = [Guid]::NewGuid().ToString('N')
+          $work = Join-Path $env:RUNNER_TEMP "r297-windows-native-work-$nonce"
+          $stage = Join-Path $env:RUNNER_TEMP "r297-windows-native-stage-$nonce"
+          $publish = Join-Path $env:RUNNER_TEMP "r297-windows-native-publish-$nonce"
+          $log = Join-Path $work 'r297-windows-native-pytest.log'
+          $junit = Join-Path $work 'r297-windows-native-junit.xml'
+          $boundaryLog = Join-Path $work 'boundary.log'
+          $boundaryGate = Join-Path $work 'boundary-supervisor.gate'
+          $boundarySupervisorResultPath = Join-Path $work 'boundary-supervisor-result.json'
+          $pytestGate = Join-Path $work 'pytest-supervisor.gate'
+          $pytestSupervisorResultPath = Join-Path $work 'pytest-supervisor-result.json'
+          $safeLog = Join-Path $stage 'r297-windows-native-pytest.log'
+          $safeJunit = Join-Path $stage 'r297-windows-native-junit.xml'
+          $safeClassification = Join-Path $stage 'r297-windows-native-classification.txt'
+          $status = 1
+          $publicationReady = $false
+          $copyComplete = $false
+          $reportsComplete = $false
+          $boundarySupervisionComplete = $false
+          $workOwned = $false
+          $stageOwned = $false
+          $primaryErrorCode = $null
+          $publicationErrorCode = $null
+          $cleanupErrorCode = $null
+          $boundaryResult = 'BLOCK'
+          function Remove-OwnedTree([string]$Path, [string]$ExpectedLeaf) {
+            try {
+              $full = [IO.Path]::GetFullPath($Path).TrimEnd([IO.Path]::DirectorySeparatorChar)
+              $root = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
+              if (-not [string]::Equals([IO.Path]::GetDirectoryName($full), $root, [StringComparison]::OrdinalIgnoreCase) -or
+                  -not [string]::Equals([IO.Path]::GetFileName($full), $ExpectedLeaf, [StringComparison]::Ordinal) -or
+                  -not (Test-Path -LiteralPath $full -PathType Container)) {
+                throw 'R297_NATIVE_REPORT_CLEANUP_OWNERSHIP_INVALID'
+              }
+              $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw 'R297_NATIVE_REPORT_CLEANUP_OWNERSHIP_INVALID'
+              }
+              $marker = Join-Path $full '.r297-owner'
+              if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or
+                  ([IO.File]::ReadAllText($marker) -cne $nonce)) {
+                throw 'R297_NATIVE_REPORT_CLEANUP_OWNERSHIP_INVALID'
+              }
+              Remove-Item -LiteralPath $full -Recurse -Force -ErrorAction Stop
+              if (Test-Path -LiteralPath $full) { throw 'R297_NATIVE_REPORT_CLEANUP_FAILED' }
+              return $null
+            } catch {
+              return 'R297_NATIVE_REPORT_CLEANUP_FAILED'
+            }
+          }
+          if ((Test-Path -LiteralPath $work) -or (Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $publish)) {
+            $publicationErrorCode = 'R297_NATIVE_REPORT_TARGET_NOT_FRESH'
+          } else {
+            try {
+              New-Item -ItemType Directory -Path $work -ErrorAction Stop | Out-Null
+              [IO.File]::WriteAllText((Join-Path $work '.r297-owner'), $nonce, [Text.Encoding]::ASCII)
+              $workOwned = $true
+            } catch {
+              $publicationErrorCode = 'R297_NATIVE_REPORT_WORKDIR_FAILED'
+            }
+          }
+          if (-not $publicationErrorCode) {
+            python ops/r297_windows_job_supervisor.py `
+              --gate $boundaryGate --log $boundaryLog --result $boundarySupervisorResultPath `
+              --timeout-seconds 300 -- pwsh -NoProfile -NonInteractive -File tests/r297_windows_native_boundary.ps1
+            $boundarySupervisorStatus = $LASTEXITCODE
+            if (-not (Test-Path -LiteralPath $boundarySupervisorResultPath -PathType Leaf)) {
+              $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+            } else {
+              try {
+                $boundarySupervisorResult = Get-Content -LiteralPath $boundarySupervisorResultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($boundarySupervisorResult.cleanup_error) { $cleanupErrorCode = [string]$boundarySupervisorResult.cleanup_error }
+                if ($boundarySupervisorResult.supervisor_error) {
+                  $primaryErrorCode = [string]$boundarySupervisorResult.supervisor_error
+                } elseif ($null -eq $boundarySupervisorResult.process_exit_code) {
+                  $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+                } else {
+                  $boundaryExit = [int]$boundarySupervisorResult.process_exit_code
+                  $boundaryPrimary = Select-String -LiteralPath $boundaryLog -Pattern '^R297_NATIVE_PRIMARY_ERROR=(R297_NATIVE_[A-Z_]+)$' | Select-Object -First 1
+                  $boundaryCleanup = Select-String -LiteralPath $boundaryLog -Pattern '^R297_NATIVE_CLEANUP_ERROR=R297_NATIVE_FIXTURE_CLEANUP_FAILED$' | Select-Object -First 1
+                  $boundaryComplete = Select-String -LiteralPath $boundaryLog -Pattern '^R297_NATIVE_PROBE_COMPLETE=true$' | Select-Object -First 1
+                  if ($boundaryCleanup) { $cleanupErrorCode = 'R297_NATIVE_FIXTURE_CLEANUP_FAILED' }
+                  if ($boundaryComplete) { $boundarySupervisionComplete = $true }
+                  else { $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED' }
+                  if ($boundaryExit -eq 0 -and $boundaryComplete -and -not $boundaryCleanup) {
+                    $boundaryResult = 'PASS'
+                  } elseif (-not $primaryErrorCode) {
+                    $primaryErrorCode = if ($boundaryPrimary) { [string]$boundaryPrimary.Matches[0].Groups[1].Value } else { 'R297_NATIVE_BOUNDARY_FAILED' }
+                  }
+                }
+              } catch {
+                $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+              }
+            }
+            if ($boundarySupervisorStatus -ne 0 -and -not $primaryErrorCode) {
+              $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+            }
+          }
+          if (-not $publicationErrorCode -and -not $cleanupErrorCode -and $boundarySupervisionComplete) {
+            python ops/r297_windows_job_supervisor.py `
+              --gate $pytestGate --log $log --result $pytestSupervisorResultPath `
+              --timeout-seconds 1200 -- python -m pytest -q `
+              tests/test_r297_windows_file_security.py `
+              tests/test_r297_windows_recovery.py `
+              tests/test_r297_trusted_windows_observer.py `
+              tests/test_r297_trusted_host_installers.py::test_windows_producer_permissions_reach_children_with_inheritance_disabled `
+              tests/test_r297_trusted_host_installers.py::test_windows_installer_separates_candidate_from_fixed_observer `
+              tests/test_r297_trusted_host_installers.py::test_windows_relay_receipt_is_admin_installed_into_protected_root `
+              tests/test_r297_trusted_host_installers.py::test_windows_installer_rejects_acl_bypass_privileges_and_stale_logons `
+              --junitxml=$junit
+            $supervisorStatus = $LASTEXITCODE
+            if (-not (Test-Path -LiteralPath $pytestSupervisorResultPath -PathType Leaf)) {
+              if (-not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED' }
+            } else {
+              try {
+                $supervisorResult = Get-Content -LiteralPath $pytestSupervisorResultPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                if ($supervisorResult.cleanup_error) { $cleanupErrorCode = [string]$supervisorResult.cleanup_error }
+                if ($supervisorResult.supervisor_error) {
+                  if (-not $primaryErrorCode) { $primaryErrorCode = [string]$supervisorResult.supervisor_error }
+                } elseif ($null -eq $supervisorResult.process_exit_code) {
+                  if (-not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED' }
+                } else {
+                  $status = [int]$supervisorResult.process_exit_code
+                  $reportsComplete = $true
+                  if ($status -ne 0 -and -not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_TEST_FAILED' }
+                }
+              } catch {
+                if (-not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED' }
+              }
+            }
+            if ($supervisorStatus -ne 0 -and -not $primaryErrorCode) {
+              $primaryErrorCode = 'R297_NATIVE_PROCESS_OWNERSHIP_FAILED'
+            }
+            if ($reportsComplete -and $status -eq 0 -and $boundaryResult -ne 'PASS') {
+              $status = 1
+              if (-not $primaryErrorCode) { $primaryErrorCode = 'R297_NATIVE_BOUNDARY_FAILED' }
+            }
+          }
+          if (-not $publicationErrorCode -and -not $cleanupErrorCode -and $boundarySupervisionComplete -and $reportsComplete) {
+            try {
+              if (-not (Test-Path -LiteralPath $log -PathType Leaf) -or -not (Test-Path -LiteralPath $junit -PathType Leaf)) {
+                throw 'R297_NATIVE_REPORT_MISSING'
+              }
+              New-Item -ItemType Directory -Path $stage -ErrorAction Stop | Out-Null
+              [IO.File]::WriteAllText((Join-Path $stage '.r297-owner'), $nonce, [Text.Encoding]::ASCII)
+              $stageOwned = $true
+              Copy-Item -LiteralPath $log -Destination $safeLog -ErrorAction Stop
+              Copy-Item -LiteralPath $junit -Destination $safeJunit -ErrorAction Stop
+              [IO.File]::WriteAllText(
+                $safeClassification,
+                "R297_EVIDENCE_CLASS=TEST_ONLY`nR297_FORMAL_EVIDENCE=false`nR297_NATIVE_SOURCE_SHA=$env:RELEASE_SOURCE_SHA`nR297_NATIVE_RUN_ID=${{ github.run_id }}`nR297_NATIVE_RUN_ATTEMPT=${{ github.run_attempt }}`nR297_NATIVE_BOUNDARY_RESULT=$boundaryResult`n",
+                [Text.UTF8Encoding]::new($false)
+              )
+              python ops/r297_ci_redact.py $safeLog $safeJunit
+              if ($LASTEXITCODE -ne 0) { throw 'R297_NATIVE_REPORT_REDACTION_FAILED' }
+              $before = @(
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $safeLog).Hash,
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $safeJunit).Hash
+              )
+              python ops/r297_ci_redact.py $safeLog $safeJunit
+              $after = @(
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $safeLog).Hash,
+                (Get-FileHash -Algorithm SHA256 -LiteralPath $safeJunit).Hash
+              )
+              if ($LASTEXITCODE -ne 0 -or $before[0] -cne $after[0] -or $before[1] -cne $after[1]) {
+                throw 'R297_NATIVE_REPORT_REDACTION_UNSTABLE'
+              }
+              python -c "import sys,xml.etree.ElementTree as E;r=E.parse(sys.argv[1]).getroot();s=[r] if r.tag=='testsuite' else r.findall('testsuite');sys.exit(0 if s and sum(int(x.attrib.get('tests','0')) for x in s)>0 else 1)" $safeJunit
+              if ($LASTEXITCODE -ne 0) { throw 'R297_NATIVE_JUNIT_INVALID' }
+              $validatedDigests = @{
+                'r297-windows-native-pytest.log' = $after[0]
+                'r297-windows-native-junit.xml' = $after[1]
+                'r297-windows-native-classification.txt' = (Get-FileHash -Algorithm SHA256 -LiteralPath $safeClassification).Hash
+              }
+              New-Item -ItemType Directory -Path $publish -ErrorAction Stop | Out-Null
+              foreach ($name in @('r297-windows-native-pytest.log', 'r297-windows-native-junit.xml', 'r297-windows-native-classification.txt')) {
+                $source = Join-Path $stage $name
+                $destination = Join-Path $publish $name
+                $sourceItem = Get-Item -LiteralPath $source -Force -ErrorAction Stop
+                if ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                  throw 'R297_NATIVE_REPORT_PATH_INVALID'
+                }
+                $stream = [IO.File]::Open($source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+                try {
+                  $memory = [IO.MemoryStream]::new()
+                  try {
+                    $stream.CopyTo($memory)
+                    $bytes = $memory.ToArray()
+                  } finally {
+                    $memory.Dispose()
+                  }
+                } finally {
+                  $stream.Dispose()
+                }
+                [IO.File]::WriteAllBytes($destination, $bytes)
+                if ((Get-FileHash -Algorithm SHA256 -LiteralPath $destination).Hash -cne $validatedDigests[$name]) {
+                  throw 'R297_NATIVE_REPORT_DIGEST_MISMATCH'
+                }
+              }
+              if (@(Get-ChildItem -LiteralPath $publish -Force).Count -ne 3) {
+                throw 'R297_NATIVE_REPORT_FILE_SET_INVALID'
+              }
+              $logDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-pytest.log')).Hash
+              $junitDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-junit.xml')).Hash
+              $classificationDigest = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-classification.txt')).Hash
+              $copyComplete = $true
+            } catch {
+              $code = [string]$_.Exception.Message
+              if ($code -notmatch '^R297_NATIVE_[A-Z_]+$') {
+                $code = 'R297_NATIVE_REPORT_PUBLICATION_FAILED'
+              }
+              if (-not $publicationErrorCode) { $publicationErrorCode = $code }
+              $status = 1
+            }
+          }
+          if ($workOwned) {
+            $workCleanupError = Remove-OwnedTree $work "r297-windows-native-work-$nonce"
+            if (-not $cleanupErrorCode) { $cleanupErrorCode = $workCleanupError }
+          }
+          if ($stageOwned) {
+            $stageCleanupError = Remove-OwnedTree $stage "r297-windows-native-stage-$nonce"
+            if (-not $cleanupErrorCode) { $cleanupErrorCode = $stageCleanupError }
+          }
+          if ($cleanupErrorCode) { $status = 1 }
+          $publicationReady = $copyComplete -and $boundarySupervisionComplete -and $reportsComplete -and -not $publicationErrorCode -and -not $cleanupErrorCode
+          if ($publicationReady) {
+            "publication_ready=true" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "publish_path=$publish" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "publish_nonce=$nonce" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "log_sha256=$logDigest" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "junit_sha256=$junitDigest" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "classification_sha256=$classificationDigest" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+          } else {
+            "publication_ready=false" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+            "publish_path=" | Out-File -FilePath $stepOutput -Append -Encoding utf8
+          }
+          if ($primaryErrorCode) { Write-Output "R297_NATIVE_PRIMARY_ERROR=$primaryErrorCode" }
+          if ($publicationErrorCode) { Write-Output "R297_NATIVE_PUBLICATION_ERROR=$publicationErrorCode" }
+          if ($cleanupErrorCode) { Write-Output "R297_NATIVE_CLEANUP_ERROR=$cleanupErrorCode" }
+          Write-Output "R297_NATIVE_BOUNDARY_RESULT=$boundaryResult"
+          if ($publicationReady) {
+            Get-Content -LiteralPath (Join-Path $publish 'r297-windows-native-pytest.log')
+          }
+          exit $status
+
+      - name: Revalidate fixed native Windows publication
+        id: native_publication
+        if: ${{ always() && !cancelled() && steps.native_reports.outputs.publication_ready == 'true' }}
+        shell: pwsh
+        env:
+          R297_NATIVE_PUBLISH_PATH: ${{ steps.native_reports.outputs.publish_path }}
+          R297_NATIVE_PUBLISH_NONCE: ${{ steps.native_reports.outputs.publish_nonce }}
+        run: |
+          $publicationOutput = $env:GITHUB_OUTPUT
+          Remove-Item Env:GITHUB_OUTPUT
+          $rawPublish = [string]$env:R297_NATIVE_PUBLISH_PATH
+          $nonce = [string]$env:R297_NATIVE_PUBLISH_NONCE
+          if ([string]::IsNullOrWhiteSpace($rawPublish) -or
+              -not [IO.Path]::IsPathFullyQualified($rawPublish) -or
+              $nonce -notmatch '^[0-9a-f]{32}$') {
+            throw 'R297_NATIVE_REPORT_PATH_INVALID'
+          }
+          $publish = [IO.Path]::GetFullPath($rawPublish).TrimEnd([IO.Path]::DirectorySeparatorChar)
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
+          $publishParent = [IO.Path]::GetDirectoryName($publish)
+          $expectedLeaf = "r297-windows-native-publish-$nonce"
+          if ($publish -eq [IO.Path]::GetPathRoot($publish) -or
+              -not [string]::Equals($publishParent, $runnerTemp, [StringComparison]::OrdinalIgnoreCase) -or
+              -not [string]::Equals([IO.Path]::GetFileName($publish), $expectedLeaf, [StringComparison]::Ordinal)) {
+            throw 'R297_NATIVE_REPORT_PATH_INVALID'
+          }
+          $publishItem = Get-Item -LiteralPath $publish -Force
+          if (-not $publishItem.PSIsContainer -or ($publishItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'R297_NATIVE_REPORT_PATH_INVALID'
+          }
+          $expected = @(
+            'r297-windows-native-classification.txt',
+            'r297-windows-native-junit.xml',
+            'r297-windows-native-pytest.log'
+          )
+          $actual = @(Get-ChildItem -LiteralPath $publish -Force | ForEach-Object Name | Sort-Object)
+          if (Compare-Object $expected $actual) { throw 'R297_NATIVE_REPORT_FILE_SET_INVALID' }
+          foreach ($name in $expected) {
+            $item = Get-Item -LiteralPath (Join-Path $publish $name) -Force
+            if (-not $item.PSIsContainer -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+              throw 'R297_NATIVE_REPORT_REPARSE_REJECTED'
+            }
+          }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-pytest.log')).Hash -cne '${{ steps.native_reports.outputs.log_sha256 }}' -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-junit.xml')).Hash -cne '${{ steps.native_reports.outputs.junit_sha256 }}' -or
+              (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $publish 'r297-windows-native-classification.txt')).Hash -cne '${{ steps.native_reports.outputs.classification_sha256 }}') {
+            throw 'R297_NATIVE_REPORT_DIGEST_MISMATCH'
+          }
+          python -c "import sys,xml.etree.ElementTree as E;r=E.parse(sys.argv[1]).getroot();s=[r] if r.tag=='testsuite' else r.findall('testsuite');sys.exit(0 if s and sum(int(x.attrib.get('tests','0')) for x in s)>0 else 1)" (Join-Path $publish 'r297-windows-native-junit.xml')
+          if ($LASTEXITCODE -ne 0) { throw 'R297_NATIVE_JUNIT_INVALID' }
+          foreach ($name in $expected) {
+            Set-ItemProperty -LiteralPath (Join-Path $publish $name) -Name IsReadOnly -Value $true
+          }
+          "publication_complete=true" | Out-File -FilePath $publicationOutput -Append -Encoding utf8
+
+      - name: Upload sanitized native Windows reports
+        if: ${{ always() && !cancelled() && steps.native_publication.outcome == 'success' && steps.native_publication.outputs.publication_complete == 'true' && steps.native_reports.outputs.publication_ready == 'true' && steps.native_reports.outputs.publish_path != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-only-r297-windows-native-recovery-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.native_reports.outputs.publish_path }}/r297-windows-native-pytest.log
+            ${{ steps.native_reports.outputs.publish_path }}/r297-windows-native-junit.xml
+            ${{ steps.native_reports.outputs.publish_path }}/r297-windows-native-classification.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  formal-windows-acceptance:
+    name: formal-windows-acceptance
+    if: github.event_name == 'workflow_dispatch'
+    needs: [build-windows, windows-native-recovery-tests]
+    environment: r297-controlled-canary
+    runs-on: [self-hosted, Windows, X64, r297-controlled-canary]
+    timeout-minutes: 45
+    env:
+      RELEASE_SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Download exact-SHA Windows build artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: tiantong-ai-jd-workbench-r297-build-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: desktop/jd-workbench/dist
+
+      - name: Invoke fixed protected acceptance controller
+        shell: pwsh
+        env:
+          R297_EVIDENCE_NAMESPACE: ${{ vars.R297_EVIDENCE_NAMESPACE }}
+          R297_EVIDENCE_TENANT_ID: ${{ vars.R297_EVIDENCE_TENANT_ID }}
+          R297_EVIDENCE_COMPANY_ID: ${{ vars.R297_EVIDENCE_COMPANY_ID }}
+          R297_EVIDENCE_STORE_ID: ${{ vars.R297_EVIDENCE_STORE_ID }}
+          R297_EVIDENCE_PLATFORM: jd
+          R297_TRUSTED_WINDOWS_CONTROLLER_PATH: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_PATH }}
+          R297_TRUSTED_WINDOWS_CONTROLLER_SHA256: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_SHA256 }}
+          R297_TRUSTED_WINDOWS_CONTROLLER_SID: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_SID }}
+          R297_TRUSTED_WINDOWS_CONTROLLER_SERVICE_NAME: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_SERVICE_NAME }}
+          R297_TRUSTED_WINDOWS_CONTROLLER_PIPE_NAME: ${{ vars.R297_TRUSTED_WINDOWS_CONTROLLER_PIPE_NAME }}
+          R297_TRUSTED_WINDOWS_RESULT_ROOT: ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}
+          R297_TRUSTED_SIGNER_SHA: ${{ vars.R297_TRUSTED_SIGNER_SHA }}
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -cne 'self-hosted') {
+            throw 'R297_FORMAL_SELF_HOSTED_RUNNER_REQUIRED'
+          }
+          $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+          if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'R297_FORMAL_CANDIDATE_RUNNER_MUST_NOT_BE_ADMIN'
+          }
+          $controller = [IO.Path]::GetFullPath($env:R297_TRUSTED_WINDOWS_CONTROLLER_PATH)
+          if (-not (Test-Path -LiteralPath $controller -PathType Leaf)) { throw 'R297_FORMAL_CONTROLLER_MISSING' }
+          $programFiles = [IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
+          if (-not $controller.StartsWith($programFiles, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'R297_FORMAL_CONTROLLER_PATH_INVALID'
+          }
+          $controllerSid = $env:R297_TRUSTED_WINDOWS_CONTROLLER_SID
+          if ($controllerSid -notmatch '^S-1-5-21-[0-9-]+$') { throw 'R297_FORMAL_CONTROLLER_SID_INVALID' }
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $runnerSids = @($identity.User.Value) + @($identity.Groups | ForEach-Object Value)
+          if ($runnerSids -contains $controllerSid) { throw 'R297_FORMAL_IDENTITY_COLLISION' }
+          if ($env:R297_TRUSTED_WINDOWS_CONTROLLER_SERVICE_NAME -notmatch '^[A-Za-z0-9._-]{1,128}$' -or
+              $env:R297_TRUSTED_WINDOWS_CONTROLLER_PIPE_NAME -notmatch '^[A-Za-z0-9._-]{1,128}$') {
+            throw 'R297_FORMAL_CONTROLLER_SERVICE_NAME_INVALID'
+          }
+          $serviceName = $env:R297_TRUSTED_WINDOWS_CONTROLLER_SERVICE_NAME
+          $escapedServiceName = $serviceName.Replace("'", "''")
+          $controllerService = Get-CimInstance -ClassName Win32_Service -Filter "Name='$escapedServiceName'"
+          if ($null -eq $controllerService -or $controllerService.State -cne 'Running') {
+            throw 'R297_FORMAL_CONTROLLER_SERVICE_NOT_RUNNING'
+          }
+          $serviceSid = $controllerService.StartName
+          try {
+            if ($serviceSid -notmatch '^S-1-') {
+              $serviceSid = ([Security.Principal.NTAccount]$serviceSid).Translate([Security.Principal.SecurityIdentifier]).Value
+            }
+          } catch { throw 'R297_FORMAL_CONTROLLER_SERVICE_IDENTITY_INVALID' }
+          if ($serviceSid -cne $controllerSid) { throw 'R297_FORMAL_CONTROLLER_SERVICE_IDENTITY_MISMATCH' }
+          $localAdministrator = @(Get-LocalUser | Where-Object { $_.SID.Value -match '-500$' })
+          if ($localAdministrator.Count -ne 1) { throw 'R297_FORMAL_LOCAL_ACCOUNT_DOMAIN_UNAVAILABLE' }
+          $machineSid = $localAdministrator[0].SID.AccountDomainSid.Value
+          if (-not $controllerSid.StartsWith("$machineSid-", [StringComparison]::Ordinal)) {
+            throw 'R297_FORMAL_CONTROLLER_LOCAL_ACCOUNT_REQUIRED'
+          }
+          $administratorMembers = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop |
+            ForEach-Object { $_.SID.Value })
+          if ($administratorMembers -contains $controllerSid) {
+            throw 'R297_FORMAL_CONTROLLER_SERVICE_MUST_NOT_BE_ADMIN'
+          }
+          $pipeName = $env:R297_TRUSTED_WINDOWS_CONTROLLER_PIPE_NAME
+          $expectedServiceCommand = "`"$controller`" --service --pipe `"$pipeName`""
+          if ($controllerService.PathName -cne $expectedServiceCommand) {
+            throw 'R297_FORMAL_CONTROLLER_SERVICE_COMMAND_MISMATCH'
+          }
+          $trustedInstaller = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+          $protectedOwners = @('S-1-5-18','S-1-5-32-544',$trustedInstaller)
+          $trustedWriters = @($protectedOwners) + $controllerSid
+          $protectedPaths = @($controller)
+          $parent = Split-Path $controller -Parent
+          while ($parent.StartsWith($programFiles.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+            $protectedPaths += $parent
+            if ($parent.TrimEnd('\') -ceq $programFiles.TrimEnd('\')) { break }
+            $parent = Split-Path $parent -Parent
+          }
+          foreach ($path in $protectedPaths) {
+            $item = Get-Item -Force -LiteralPath $path
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw 'R297_FORMAL_CONTROLLER_REPARSE_REJECTED'
+            }
+            $acl = Get-Acl -LiteralPath $path
+            $owner = $acl.Owner
+            try { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+            if ($protectedOwners -notcontains $owner) {
+              throw 'R297_FORMAL_CONTROLLER_OWNER_INVALID'
+            }
+            foreach ($entry in $acl.Access) {
+              if ($entry.AccessControlType -ne 'Allow') { continue }
+              try { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+              catch { throw 'R297_FORMAL_CONTROLLER_ACL_INVALID' }
+              $write = [int]([Security.AccessControl.FileSystemRights]::WriteData -bor
+                [Security.AccessControl.FileSystemRights]::AppendData -bor
+                [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+                [Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+                [Security.AccessControl.FileSystemRights]::Delete -bor
+                [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+                [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+                [Security.AccessControl.FileSystemRights]::TakeOwnership)
+              if (([int]$entry.FileSystemRights -band $write) -ne 0 -and
+                  $protectedOwners -notcontains $sid) {
+                throw 'R297_FORMAL_CONTROLLER_WRITABLE_BY_CANDIDATE'
+              }
+            }
+          }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $controller).Hash.ToLowerInvariant() -cne
+              $env:R297_TRUSTED_WINDOWS_CONTROLLER_SHA256.ToLowerInvariant()) {
+            throw 'R297_FORMAL_CONTROLLER_DIGEST_MISMATCH'
+          }
+          $resultBase = [IO.Path]::GetFullPath($env:R297_TRUSTED_WINDOWS_RESULT_ROOT)
+          if (-not (Test-Path -LiteralPath $resultBase -PathType Container)) {
+            throw 'R297_FORMAL_RESULT_ROOT_MISSING'
+          }
+          $approvedBase = [IO.Path]::GetFullPath((Join-Path $env:ProgramData 'TiantongAI\R297FormalAcceptance\outbox'))
+          if ($resultBase -cne $approvedBase) { throw 'R297_FORMAL_RESULT_ROOT_INVALID' }
+          $applicationRoot = [IO.Path]::GetFullPath((Join-Path $env:ProgramData 'TiantongAI'))
+          $preflightPaths = @($resultBase)
+          $parent = Split-Path $resultBase -Parent
+          while ($parent.StartsWith($applicationRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            $preflightPaths += $parent
+            if ($parent -ceq $applicationRoot) { break }
+            $parent = Split-Path $parent -Parent
+          }
+          foreach ($path in $preflightPaths) {
+            $item = Get-Item -Force -LiteralPath $path
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw 'R297_FORMAL_RESULT_REPARSE_REJECTED'
+            }
+            $acl = Get-Acl -LiteralPath $path
+            $owner = $acl.Owner
+            try { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+            if ($trustedWriters -notcontains $owner) {
+              throw 'R297_FORMAL_RESULT_OWNER_INVALID'
+            }
+            foreach ($entry in $acl.Access) {
+              if ($entry.AccessControlType -ne 'Allow') { continue }
+              try { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+              catch { throw 'R297_FORMAL_RESULT_ACL_INVALID' }
+              if (([int]$entry.FileSystemRights -band $write) -ne 0 -and
+                  $trustedWriters -notcontains $sid) {
+                throw 'R297_FORMAL_RESULT_WRITABLE_BY_CANDIDATE'
+              }
+            }
+          }
+          $programDataItem = Get-Item -Force -LiteralPath $env:ProgramData
+          if (($programDataItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'R297_FORMAL_RESULT_REPARSE_REJECTED'
+          }
+          $programDataAcl = Get-Acl -LiteralPath $env:ProgramData
+          $programDataOwner = $programDataAcl.Owner
+          try { $programDataOwner = ([Security.Principal.NTAccount]$programDataOwner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+          if ($protectedOwners -notcontains $programDataOwner) {
+            throw 'R297_FORMAL_RESULT_OWNER_INVALID'
+          }
+          $replaceRights = [int]([Security.AccessControl.FileSystemRights]::Delete -bor
+            [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+            [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+            [Security.AccessControl.FileSystemRights]::TakeOwnership)
+          foreach ($entry in $programDataAcl.Access) {
+            if ($entry.AccessControlType -ne 'Allow' -or
+                ([int]$entry.PropagationFlags -band 2) -ne 0) { continue }
+            try { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+            catch { throw 'R297_FORMAL_RESULT_ACL_INVALID' }
+            if ($runnerSids -contains $sid -and ([int]$entry.FileSystemRights -band $replaceRights) -ne 0) {
+              throw 'R297_FORMAL_RESULT_PARENT_REPLACE_ACCESS'
+            }
+          }
+          $resultRoot = Join-Path $resultBase "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $resultRoot) { throw 'R297_FORMAL_RESULT_RUN_ALREADY_EXISTS' }
+          $request = [ordered]@{
+            schema_version = 1
+            release_sha = $env:RELEASE_SOURCE_SHA
+            source_workflow_run_id = [long]'${{ inputs.pagehide_workflow_run_id }}'
+            source_workflow_run_attempt = [long]'${{ inputs.pagehide_workflow_run_attempt }}'
+            workflow_run_id = [long]$env:GITHUB_RUN_ID
+            workflow_run_attempt = [long]$env:GITHUB_RUN_ATTEMPT
+            artifact_directory = [IO.Path]::GetFullPath((Resolve-Path 'desktop/jd-workbench/dist'))
+            result_directory = [IO.Path]::GetFullPath($resultRoot)
+          }
+          $requestJson = $request | ConvertTo-Json -Compress
+          $requestBytes = [Text.UTF8Encoding]::new($false).GetBytes($requestJson)
+          $requestDigest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($requestBytes)).ToLowerInvariant()
+          $pipe = [IO.Pipes.NamedPipeClientStream]::new(
+            '.', $pipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::WriteThrough)
+          try {
+            $pipe.Connect(10000)
+            $writer = [IO.StreamWriter]::new($pipe, [Text.UTF8Encoding]::new($false), 4096, $true)
+            $reader = [IO.StreamReader]::new($pipe, [Text.UTF8Encoding]::new($false), $false, 4096, $true)
+            $writer.WriteLine($requestJson)
+            $writer.Flush()
+            $ackTask = $reader.ReadLineAsync()
+            if (-not $ackTask.Wait([TimeSpan]::FromSeconds(10))) {
+              throw 'R297_FORMAL_CONTROLLER_ACK_TIMEOUT'
+            }
+            $ack = $ackTask.Result | ConvertFrom-Json
+          } finally { $pipe.Dispose() }
+          $ackFields = @('schema_version','result','request_sha256','workflow_run_id','workflow_run_attempt')
+          if ($null -eq $ack -or
+              (Compare-Object @($ack.psobject.Properties.Name | Sort-Object) @($ackFields | Sort-Object)) -or
+              $ack.schema_version -ne 1 -or $ack.result -cne 'ACCEPTED' -or
+              $ack.request_sha256 -cne $requestDigest -or
+              [long]$ack.workflow_run_id -ne [long]$env:GITHUB_RUN_ID -or
+              [long]$ack.workflow_run_attempt -ne [long]$env:GITHUB_RUN_ATTEMPT) {
+            throw 'R297_FORMAL_CONTROLLER_ACK_INVALID'
+          }
+          $serviceDeadline = [DateTime]::UtcNow.AddMinutes(35)
+          $completionPath = Join-Path $resultRoot 'formal-complete.json'
+          $completionSidecar = "$completionPath.sha256"
+          while ((-not (Test-Path -LiteralPath $completionPath -PathType Leaf) -or
+                  -not (Test-Path -LiteralPath $completionSidecar -PathType Leaf)) -and
+                 [DateTime]::UtcNow -lt $serviceDeadline) {
+            Start-Sleep -Seconds 2
+            $controllerService = Get-CimInstance -ClassName Win32_Service -Filter "Name='$escapedServiceName'"
+            if ($null -eq $controllerService -or $controllerService.State -cne 'Running') {
+              throw 'R297_FORMAL_CONTROLLER_SERVICE_STOPPED'
+            }
+          }
+          if (-not (Test-Path -LiteralPath $completionPath -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $completionSidecar -PathType Leaf)) {
+            throw 'R297_FORMAL_CONTROLLER_TIMEOUT'
+          }
+          $resultRoot = [IO.Path]::GetFullPath($resultRoot)
+          $resultPaths = @($resultRoot)
+          $parent = Split-Path $resultRoot -Parent
+          while ($parent.StartsWith($applicationRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            $resultPaths += $parent
+            if ($parent -ceq $applicationRoot) { break }
+            $parent = Split-Path $parent -Parent
+          }
+          foreach ($path in $resultPaths) {
+            $item = Get-Item -Force -LiteralPath $path
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+              throw 'R297_FORMAL_RESULT_REPARSE_REJECTED'
+            }
+            $acl = Get-Acl -LiteralPath $path
+            $owner = $acl.Owner
+            try { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+            if ($trustedWriters -notcontains $owner) {
+              throw 'R297_FORMAL_RESULT_OWNER_INVALID'
+            }
+            foreach ($entry in $acl.Access) {
+              if ($entry.AccessControlType -ne 'Allow') { continue }
+              try { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+              catch { throw 'R297_FORMAL_RESULT_ACL_INVALID' }
+              if (([int]$entry.FileSystemRights -band $write) -ne 0 -and
+                  $trustedWriters -notcontains $sid) {
+                throw 'R297_FORMAL_RESULT_WRITABLE_BY_CANDIDATE'
+              }
+            }
+          }
+          $expectedFiles = @(
+            'formal-result.json', 'signed-event-bundle.json',
+            'r297-process-evidence.json', 'r297-windows-evidence.json'
+          )
+          $publishedFiles = @($expectedFiles) + 'formal-complete.json'
+          $digests = @{}
+          foreach ($name in $publishedFiles) {
+            $body = Join-Path $resultRoot $name
+            $sidecar = "$body.sha256"
+            foreach ($path in @($body,$sidecar)) {
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'R297_FORMAL_RESULT_FILE_MISSING' }
+              $item = Get-Item -Force -LiteralPath $path
+              if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'R297_FORMAL_RESULT_REPARSE_REJECTED'
+              }
+              if ($item.LinkType -eq 'HardLink') {
+                throw 'R297_FORMAL_RESULT_HARDLINK_REJECTED'
+              }
+              $acl = Get-Acl -LiteralPath $path
+              $owner = $acl.Owner
+              try { $owner = ([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+              if ($trustedWriters -notcontains $owner) {
+                throw 'R297_FORMAL_RESULT_OWNER_INVALID'
+              }
+              foreach ($entry in $acl.Access) {
+                if ($entry.AccessControlType -ne 'Allow') { continue }
+                try { $sid = $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+                catch { throw 'R297_FORMAL_RESULT_ACL_INVALID' }
+                if (([int]$entry.FileSystemRights -band $write) -ne 0 -and
+                    $trustedWriters -notcontains $sid) {
+                  throw 'R297_FORMAL_RESULT_WRITABLE_BY_CANDIDATE'
+                }
+              }
+            }
+            $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $body).Hash.ToLowerInvariant()
+            if ((Get-Content -Raw -LiteralPath $sidecar).Trim() -cne "$digest  $name") {
+              throw 'R297_FORMAL_RESULT_SIDECAR_INVALID'
+            }
+            $digests[$name] = $digest
+          }
+          $result = Get-Content -Raw -LiteralPath (Join-Path $resultRoot 'formal-result.json') | ConvertFrom-Json
+          $fields = @('schema_version','result','release_sha','source_workflow_run_id',
+            'source_workflow_run_attempt','workflow_run_id','workflow_run_attempt','acceptance_run_id',
+            'acceptance_run_attempt','signer_sha','bundle_sha256','process_evidence_sha256',
+            'windows_evidence_sha256')
+          if (Compare-Object @($result.psobject.Properties.Name | Sort-Object) @($fields | Sort-Object)) {
+            throw 'R297_FORMAL_RESULT_SCHEMA_INVALID'
+          }
+          if ($result.schema_version -ne 1 -or $result.result -cne 'PASS' -or
+              $result.release_sha -cne $env:RELEASE_SOURCE_SHA -or
+              [long]$result.source_workflow_run_id -ne [long]'${{ inputs.pagehide_workflow_run_id }}' -or
+              [long]$result.source_workflow_run_attempt -ne [long]'${{ inputs.pagehide_workflow_run_attempt }}' -or
+              [long]$result.workflow_run_id -ne [long]$env:GITHUB_RUN_ID -or
+              [long]$result.workflow_run_attempt -ne [long]$env:GITHUB_RUN_ATTEMPT -or
+              $result.acceptance_run_id -notmatch '^[A-Za-z0-9._:-]{16,128}$' -or
+              [long]$result.acceptance_run_attempt -le 0 -or
+              $result.signer_sha -cne $env:R297_TRUSTED_SIGNER_SHA -or
+              $result.bundle_sha256 -cne $digests['signed-event-bundle.json'] -or
+              $result.process_evidence_sha256 -cne $digests['r297-process-evidence.json'] -or
+              $result.windows_evidence_sha256 -cne $digests['r297-windows-evidence.json']) {
+            throw 'R297_FORMAL_RESULT_BINDING_INVALID'
+          }
+          $completion = Get-Content -Raw -LiteralPath $completionPath | ConvertFrom-Json
+          $completionFields = @('schema_version','result','request_sha256','workflow_run_id','workflow_run_attempt','files')
+          if ($null -eq $completion -or
+              (Compare-Object @($completion.psobject.Properties.Name | Sort-Object) @($completionFields | Sort-Object)) -or
+              $completion.schema_version -ne 1 -or $completion.result -cne 'COMPLETE' -or
+              $completion.request_sha256 -cne $requestDigest -or
+              [long]$completion.workflow_run_id -ne [long]$env:GITHUB_RUN_ID -or
+              [long]$completion.workflow_run_attempt -ne [long]$env:GITHUB_RUN_ATTEMPT -or
+              (Compare-Object @($completion.files.psobject.Properties.Name | Sort-Object) @($expectedFiles | Sort-Object))) {
+            throw 'R297_FORMAL_COMPLETION_INVALID'
+          }
+          foreach ($name in $expectedFiles) {
+            if ($completion.files.$name -cne $digests[$name]) { throw 'R297_FORMAL_COMPLETION_INVALID' }
+          }
+
+      - name: Upload same-run protected result
+        uses: actions/upload-artifact@v7
+        with:
+          name: r297-formal-windows-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/formal-result.json
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/formal-result.json.sha256
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/signed-event-bundle.json
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/signed-event-bundle.json.sha256
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/r297-process-evidence.json
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/r297-process-evidence.json.sha256
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/r297-windows-evidence.json
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/r297-windows-evidence.json.sha256
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/formal-complete.json
+            ${{ vars.R297_TRUSTED_WINDOWS_RESULT_ROOT }}/${{ github.run_id }}-${{ github.run_attempt }}/formal-complete.json.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -1,10 +1,71 @@
 import json
+import pytest
 
 from backend.security.tian_brain.audit_analyzer import analyze_audit_records
 from backend.security.tian_brain.policy_optimizer import build_policy_update, self_learning_loop
 from backend.security.tian_brain.risk_predictor import predict_risk
 from backend.security.tian_shen import APPROVAL_GREEN, APPROVAL_RED, APPROVAL_YELLOW, evaluate_command
 from backend.security.tian_shen.audit import read_audit_records
+
+
+def test_risk_history_excludes_foreign_scope_before_applying_window(monkeypatch, tmp_path):
+    from backend.security.tian_shen.audit import record_audit
+
+    monkeypatch.setenv("TIAN_SHEN_AUDIT_LOG", str(tmp_path / "scoped-audit.jsonl"))
+    scope = {"tenant_id": 1, "company_id": 2, "requester_id": 3,
+             "store_scope_key": "store:4", "ownership_scope_key": "owner:3"}
+    event = {"source": "employee_organization", "action": "review_permission_change",
+             "audit_scope": scope}
+    for _ in range(2):
+        record_audit(event, {"allowed": False})
+    for _ in range(205):
+        record_audit({**event, "audit_scope": {**scope, "tenant_id": 9}}, {"allowed": False})
+
+    assert predict_risk(event)["historical_blocks"] == 2
+    assert len(read_audit_records()) == 207
+
+
+@pytest.mark.parametrize("field,value", [
+    ("tenant_id", 9), ("company_id", 9), ("requester_id", 9),
+    ("store_scope_key", "store:9"), ("ownership_scope_key", "owner:9"),
+    ("tenant_id", True), ("company_id", "2"), ("store_scope_key", None),
+])
+def test_risk_history_requires_exact_complete_scope(monkeypatch, tmp_path, field, value):
+    from backend.security.tian_shen.audit import record_audit
+
+    monkeypatch.setenv("TIAN_SHEN_AUDIT_LOG", str(tmp_path / "audit.jsonl"))
+    scope = {"tenant_id": 1, "company_id": 2, "requester_id": 3,
+             "store_scope_key": "store:4", "ownership_scope_key": "owner:3"}
+    event = {"source": "employee_organization", "action": "review_permission_change", "audit_scope": scope}
+    record_audit({**event, "audit_scope": {**scope, field: value}}, {"allowed": False})
+    record_audit({**event, "audit_scope": None}, {"allowed": False})
+    assert predict_risk(event)["historical_blocks"] == 0
+    assert predict_risk(event, audit_records=read_audit_records())["historical_blocks"] == 0
+
+
+def test_risk_history_window_can_decrease_only_with_matching_decisions(monkeypatch, tmp_path):
+    from backend.security.tian_shen.audit import record_audit
+
+    monkeypatch.setenv("TIAN_SHEN_AUDIT_LOG", str(tmp_path / "audit.jsonl"))
+    event = {"source": "employee_organization", "action": "review_permission_change", "audit_scope": {
+        "tenant_id": 1, "company_id": 2, "requester_id": 3,
+        "store_scope_key": "store:4", "ownership_scope_key": "owner:3",
+    }}
+    for index in range(200):
+        record_audit(event, {"allowed": index >= 92})
+    assert predict_risk(event)["historical_blocks"] == 92
+    for unrelated in ({**event, "source": "other"}, {**event, "action": "other"}):
+        record_audit(unrelated, {"allowed": False})
+    assert predict_risk(event)["historical_blocks"] == 92
+    for _ in range(2):
+        record_audit(event, {"allowed": True})
+    assert predict_risk(event)["historical_blocks"] == 90
+    assert predict_risk(event, audit_records=read_audit_records())["historical_blocks"] == 90
+    for _ in range(205):
+        record_audit(event, {"allowed": False})
+    assert predict_risk(event)["historical_blocks"] == 200
+    assert predict_risk({**event, "audit_scope": None})["historical_blocks"] == 0
+    assert len(read_audit_records()) == 409
 
 
 def test_audit_analyzer_detects_repeated_yellow_candidates():

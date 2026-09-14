@@ -14,6 +14,7 @@ from ..auth import (
     verify_password,
 )
 from ..database import get_db
+from ..config import get_settings
 from ..models import EmployeeLog, User
 
 
@@ -34,8 +35,24 @@ async def login(request: Request, response: Response, db: Session = Depends(get_
     db.add(EmployeeLog(user_id=user.id, action="login", detail="员工登录", ip_address=request.client.host if request.client else None))
     db.commit()
 
-    response.set_cookie("tiantong_session", session_token, httponly=True, samesite="lax", max_age=7 * 24 * 3600)
-    response.set_cookie("tiantong_jwt", jwt_token, httponly=True, samesite="lax", max_age=7 * 24 * 3600)
+    secure_cookie = get_settings().IS_PRODUCTION
+    response.headers["Cache-Control"] = "no-store"
+    response.set_cookie(
+        "tiantong_session",
+        session_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="lax",
+        max_age=7 * 24 * 3600,
+    )
+    response.set_cookie(
+        "tiantong_jwt",
+        jwt_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="lax",
+        max_age=7 * 24 * 3600,
+    )
     return {"ok": True, "token": jwt_token, "user": serialize_user(db, user)}
 
 
