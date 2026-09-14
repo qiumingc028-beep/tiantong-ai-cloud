@@ -3,11 +3,18 @@
 Run as root in an ephemeral CI job/container. No accounts or policy are changed.
 This is not the process supervisor and does not claim descendant reaping.
 """
-import ctypes
-import os
-from pathlib import Path
-import stat
-import sys
+# Trust the initialized Linux interpreter's built-in exit primitive, not imports
+# that may load extensions. Import failure must not flush the caller's streams.
+from posix import _exit
+
+try:
+    import ctypes
+    import os
+    from pathlib import Path
+    import stat
+    import sys
+except BaseException:
+    _exit(2)
 
 
 def main() -> None:
